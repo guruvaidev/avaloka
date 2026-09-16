@@ -1,0 +1,99 @@
+# deploy/docker/Dockerfile.api
+# Avaloka API image: FastAPI (app.api.server:app) served by uvicorn on :9000.
+# This is the workload the deploy/helm/avaloka chart runs (R1) — NOT Streamlit.
+# Build context = repo root:
+#   docker build -f deploy/docker/Dockerfile.api -t avaloka-api:latest .
+#
+# Multi-stage + CPU-only torch keeps the image lean:
+#   * torch/torchvision come from the CPU wheel index, so the ~4-5GB of nvidia-cu*
+#     CUDA libraries a CPU API pod never uses are never pulled in;
+#   * build toolchain (build-essential) lives only in the builder stage;
+#   * a .dockerignore keeps .git/artifacts/.env out of the context (size + secrets).
+
+# ---------- builder: compile/install everything into a venv ----------
+FROM python:3.11-slim AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential libpq-dev curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# A Rust toolchain, in the BUILDER ONLY.
+#
+# Nothing here should need it: pip installs with --prefer-binary below, which
+# picks the newest version of a package that actually ships a wheel rather than
+# the newest version full stop. Without that, pip falls back to a source
+# distribution whenever the latest release has no wheel for this platform -- and
+# for `cryptography` that is a Rust build wanting rustc >= 1.83, failing with a
+# compiler error many screens from its cause.
+#
+# It is here so that when a dependency legitimately has no wheel for
+# linux/arm64, the image still builds instead of failing the release. The
+# runtime stage copies only the venv, so none of this reaches the shipped image.
+ENV RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo
+RUN curl -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path --default-toolchain stable \
+    && /opt/cargo/bin/rustc --version
+ENV PATH="/opt/cargo/bin:$PATH"
+
+# Isolated venv so the runtime stage can copy a single self-contained tree.
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+RUN pip install --no-cache-dir --upgrade pip
+
+# CPU-only torch FIRST, so the subsequent requirements install sees torch already
+# satisfied and never resolves the default (CUDA) wheel from PyPI.
+# A floor, not an equality pin. `torch==2.11.0` names a release that has no
+# wheel on every platform this image is built for, and an unbuildable image is
+# worse than a slightly floating one. requirements.txt carries the same floor.
+RUN pip install --no-cache-dir --prefer-binary \
+        --index-url https://download.pytorch.org/whl/cpu \
+        "torch>=2.0.0" torchvision
+
+COPY requirements.txt /tmp/requirements.txt
+# --extra-index-url keeps any torch-family resolutions on the CPU index too.
+# --prefer-binary: see the Rust note above. This is what keeps the build from
+# silently turning into a compile.
+RUN pip install --no-cache-dir --prefer-binary \
+        --extra-index-url https://download.pytorch.org/whl/cpu \
+        -r /tmp/requirements.txt
+
+# ---------- bake the embedding model into the image ----------
+# The memory plane embeds every query with sentence-transformers. Left to
+# itself it fetches the model from huggingface.co ON THE FIRST QUERY, which
+# is slow enough to trip the retrieval circuit breaker and simply impossible
+# in an air-gapped install -- the learning loop then looks empty rather than
+# blocked.
+#
+# Downloading at BUILD time makes the image self-contained: no network at
+# query time, no first-call penalty, and identical behaviour offline and on.
+# ~90 MB for all-MiniLM-L6-v2.
+ARG SENTENCE_TRANSFORMER_MODEL=all-MiniLM-L6-v2
+ENV HF_HOME=/opt/hf
+RUN python -c "import os; from sentence_transformers import SentenceTransformer; n=os.environ.get('SENTENCE_TRANSFORMER_MODEL','all-MiniLM-L6-v2'); SentenceTransformer(n); print('baked embedding model:', n)"
+
+# ---------- runtime: slim, no build toolchain ----------
+FROM python:3.11-slim AS runtime
+
+WORKDIR /app
+
+# Runtime libs (libpq for psycopg2), curl for health checks, and the graphviz
+# SYSTEM package -- the python binding shells out to `dot`.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libpq5 curl graphviz \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /opt/venv /opt/venv
+# The model cache baked in the builder stage. Without this the runtime
+# image goes back to fetching from huggingface.co on the first query.
+COPY --from=builder /opt/hf /opt/hf
+ENV PATH="/opt/venv/bin:$PATH" \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    HF_HOME=/opt/hf
+
+COPY . /app
+
+EXPOSE 9000
+
+# /health returns 200 with {status, redis_connected, graph_ready} even when Redis
+# is down, so it is a valid readiness signal for the chart's probes.
+CMD ["uvicorn", "app.api.server:app", "--host", "0.0.0.0", "--port", "9000"]

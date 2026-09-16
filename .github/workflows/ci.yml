@@ -1,0 +1,65 @@
+# The gate, run on every pull request.
+#
+# Deliberately the SAME script a contributor runs locally -- scripts/ci.sh --
+# rather than a parallel list of steps that drifts from it. If CI passes and
+# your machine does not, that is a difference worth finding, and it can only be
+# found if both run the same thing.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The range docs/INSTALL.md claims to support. Claiming it and not
+        # testing it is how 3.12 quietly stops working.
+        python: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+
+      - name: Install
+        # The same installer a user runs, so a break in it fails CI rather than
+        # being discovered by the first person to clone the repository.
+        run: PYTHON=python ./scripts/install.sh --no-venv
+
+      - name: Environment check
+        run: python scripts/doctor.py
+
+      - name: Test gate
+        # --fast drops the multi-minute and Kaggle-dependent tests; the full
+        # gate including the benchmark runs on the release workflow.
+        run: PYTHON=python ./scripts/ci.sh --fast
+
+  benchmark:
+    # The benchmark is the slow stage, so it runs once rather than per version.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: PYTHON=python ./scripts/install.sh --no-venv
+      - name: Benchmark
+        run: python -m avaloka.benchmark run --json scorecard.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: benchmark-scorecard
+          path: scorecard.json

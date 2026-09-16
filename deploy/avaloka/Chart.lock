@@ -1,0 +1,12 @@
+dependencies:
+- name: avaloka-backend
+  repository: file://./charts/avaloka-backend
+  version: 0.2.0
+- name: avaloka-frontend
+  repository: file://./charts/avaloka-frontend
+  version: 0.2.0
+- name: redis
+  repository: https://charts.bitnami.com/bitnami
+  version: 23.2.2
+digest: sha256:8ea7c8ccd5823c93f88715d9eda9a20c1a7a00870bf7ba4827c51732f723eea4
+generated: "2026-06-21T15:59:45.537145-07:00"

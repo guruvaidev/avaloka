@@ -1,0 +1,85 @@
+# Avaloka Customer-Facing MCP Integration Requirements
+# Core framework dependencies
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+
+# Database connectivity
+psycopg2-binary>=2.9.7
+asyncpg>=0.29.0  # Optional: for async PostgreSQL operations
+
+# Data processing
+pandas>=2.1.0
+numpy>=1.24.0
+pyarrow>=14.0.0  # For better CSV/Parquet performance
+
+# MCP (Model Context Protocol) - Client & Server
+mcp[cli]>=1.0.0
+
+# HTTP client for API requests
+httpx>=0.25.0
+requests>=2.31.0
+
+# Environment and configuration
+python-dotenv>=1.0.0
+
+# LangChain ecosystem for agents
+langchain>=0.1.0
+langchain-experimental>=0.0.47
+langchain-google-genai>=1.0.0
+langchain-community>=0.0.13
+
+# Google AI
+google-generativeai>=0.3.0
+
+# Graph orchestration
+langgraph>=0.0.32
+
+# Utility libraries
+tabulate>=0.9.0  # For pretty table printing
+rich>=13.7.0     # Enhanced terminal output
+click>=8.1.0     # CLI interface
+
+# Visualization
+graphviz>=0.20.1  # For plan visualization
+matplotlib>=3.7.0  # Optional: for data visualization
+plotly>=5.17.0     # Optional: for interactive plots
+
+# Security and authentication
+cryptography>=41.0.0  # For secure connections
+bcrypt>=4.1.0         # For password hashing
+python-jose>=3.3.0    # For JWT tokens
+
+# JSON handling improvements
+orjson>=3.9.0  # Faster JSON serialization
+
+# Monitoring and observability
+structlog>=23.2.0        # Structured logging
+prometheus-client>=0.19.0 # Metrics collection
+
+# Testing dependencies
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+pytest-cov>=4.1.0
+pytest-mock>=3.12.0
+
+# Code quality tools
+black>=23.0.0
+isort>=5.12.0
+flake8>=6.1.0
+mypy>=1.7.0
+
+# Development tools
+jupyter>=1.0.0  # For notebooks and exploration
+ipython>=8.17.0  # Enhanced REPL
+
+# Kubernetes integration
+kubernetes>=28.1.0      # For K8s deployment and management
+pyyaml>=6.0.1           # For YAML config parsing
+
+# Additional utilities for customer management
+validators>=0.22.0      # For connection string validation
+python-multipart>=0.0.6 # For file uploads in FastAPI
+pymongo
+dnspython

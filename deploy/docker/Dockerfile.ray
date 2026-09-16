@@ -1,0 +1,24 @@
+# deploy/docker/Dockerfile.ray
+# Ray worker/head image for avaloka: Ray runtime + avaloka compute deps + app code,
+# so RayCluster nodes can run sampling/transform/training and the Serve app.
+# Build context = repo root:  docker build -f deploy/docker/Dockerfile.ray -t avaloka-ray:latest .
+#
+# Pin the Ray base image to the Ray version compatible with the KubeRay operator
+# installed by app/infra/ray_manager.py (KUBERAY_OPERATOR_VERSION=1.4.2, which
+# supports Ray 2.38.0+ per the KubeRay compatibility matrix; 2.9.3 predated it).
+FROM rayproject/ray:2.49.2-py311
+
+USER root
+
+# The general RayCluster executes transformations and scheduled MTA training.
+# Keep its Ray runtime aligned with the KubeRay RayCluster spec, and install the
+# exact training environment used by the standalone training image.  The MTA
+# entrypoint itself is copied below as part of ``COPY app ./app``.
+COPY app/agents/mta_v2/training_docker_image/requirements.txt /tmp/mta-requirements.txt
+RUN pip install --no-cache-dir -r /tmp/mta-requirements.txt tabulate
+
+WORKDIR /home/ray/app
+COPY app ./app
+ENV PYTHONPATH=/home/ray/app
+
+USER ray

@@ -1,0 +1,29 @@
+# deploy/cloudbuild.yaml — build the avaloka + ray images in Google Cloud Build
+# (amd64-native, no local Docker/disk needed) and push to GCR.
+#   gcloud builds submit --project <PROJECT> --config deploy/cloudbuild.yaml .
+steps:
+  - name: gcr.io/cloud-builders/docker
+    id: build-avaloka
+    args:
+      - build
+      - -f
+      - deploy/docker/Dockerfile.avaloka
+      - -t
+      - gcr.io/$PROJECT_ID/avaloka:latest
+      - .
+  - name: gcr.io/cloud-builders/docker
+    id: build-ray
+    args:
+      - build
+      - -f
+      - deploy/docker/Dockerfile.ray
+      - -t
+      - gcr.io/$PROJECT_ID/avaloka-ray:latest
+      - .
+images:
+  - gcr.io/$PROJECT_ID/avaloka:latest
+  - gcr.io/$PROJECT_ID/avaloka-ray:latest
+options:
+  machineType: E2_HIGHCPU_8
+  diskSizeGb: 100
+timeout: 2400s

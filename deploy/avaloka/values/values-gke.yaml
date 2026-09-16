@@ -1,0 +1,60 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Google Kubernetes Engine (GKE) overlay.
+#
+# Identity: GKE Workload Identity (no key file mounted).
+# Registry: Artifact Registry / GCR.
+# Storage:  GCS.
+#
+#   helm install avaloka deploy/avaloka -n avaloka --create-namespace \
+#       -f deploy/avaloka/values/values-gke.yaml \
+#       --set avaloka-backend.serviceAccount.annotations."iam\.gke\.io/gcp-service-account"=avaloka@PROJECT.iam.gserviceaccount.com
+# ─────────────────────────────────────────────────────────────────────────────
+
+avaloka-backend:
+  replicaCount: 2
+
+  image:
+    langgraph:
+      repository: REGION-docker.pkg.dev/PROJECT/avaloka/avaloka-langgraph
+      tag: latest
+      pullPolicy: Always
+    api:
+      repository: REGION-docker.pkg.dev/PROJECT/avaloka/avaloka-api
+      tag: latest
+      pullPolicy: Always
+
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+  # Workload Identity: bind this KSA to a GSA via the annotation below.
+  serviceAccount:
+    create: true
+    annotations:
+      iam.gke.io/gcp-service-account: "avaloka@PROJECT.iam.gserviceaccount.com"
+
+  # No key file — credentials come from Workload Identity.
+  gcpKeySecret:
+    enabled: false
+
+  ingress:
+    enabled: true
+    className: nginx   # or "gce" for a GCLB; set host fields per environment
+
+avaloka-frontend:
+  enabled: true
+  image:
+    repository: REGION-docker.pkg.dev/PROJECT/avaloka/avaloka-frontend
+    tag: latest
+
+redis:
+  enabled: true
+  architecture: standalone
+  auth:
+    enabled: false

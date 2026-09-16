@@ -1,0 +1,618 @@
+{{- $fullname := include "avaloka.fullname" . -}}
+{{- $pw := .Values.supabase.db.password -}}
+{{- $dbHost := printf "%s-supabase-db" $fullname -}}
+
+# ============================================================================
+# Supabase persistent storage
+#
+# These PVCs intentionally live outside supabase.enabled so that disabling
+# Supabase does not remove the persistent volume claims from the rendered
+# manifests / release lifecycle.
+# ============================================================================
+
+---
+# ---- Postgres persistent storage ----
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $fullname }}-supabase-db
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: supabase-db
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: {{ .Values.supabase.db.storageClassName | default "standard" }}
+  resources:
+    requests:
+      storage: {{ .Values.supabase.db.storageSize | default "20Gi" }}
+---
+# ---- Supabase storage persistent storage ----
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $fullname }}-supabase-storage-pvc
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: supabase-storage
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: {{ .Values.supabase.db.storageClassName | default "standard" }}
+  resources:
+    requests:
+      storage: {{ .Values.supabase.storage.storageSize | default "10Gi" }}
+
+{{- if .Values.supabase.enabled }}
+
+# ============================================================================
+# Local Supabase (self-hosted core): db + auth(gotrue) + rest(postgrest) + kong.
+# ============================================================================
+
+---
+# ---- Postgres (supabase/postgres: bundles auth/storage schemas + roles) ----
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-supabase-db
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: supabase-db
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "avaloka.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: supabase-db
+  template:
+    metadata:
+      labels:
+        {{- include "avaloka.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: supabase-db
+    spec:
+      containers:
+        - name: db
+          image: {{ .Values.supabase.db.image | quote }}
+          # listen_addresses=* so gotrue/postgrest/migrate can reach it over the
+          # Service (the image otherwise binds localhost only).
+          args: ["postgres", "-c", "wal_level=logical", "-c", "listen_addresses=*"]
+          env:
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+            - name: POSTGRES_PASSWORD
+              value: {{ $pw | quote }}
+            - name: POSTGRES_DB
+              value: "postgres"
+            - name: JWT_SECRET
+              value: {{ .Values.supabase.jwtSecret | quote }}
+            - name: JWT_EXP
+              value: "3600"
+          ports:
+            - name: postgres
+              containerPort: {{ .Values.supabase.db.port }}
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-h", "127.0.0.1", "-U", "postgres"]
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          resources:
+            {{- toYaml .Values.supabase.resources | nindent 12 }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ $fullname }}-supabase-db
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-supabase-db
+  labels: {{- include "avaloka.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "avaloka.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: supabase-db
+  ports:
+    - { name: postgres, port: {{ .Values.supabase.db.port }}, targetPort: postgres }
+---
+# ============================================================================
+# Custom Auth email template
+#
+# GoTrue does NOT read custom email templates directly from a mounted file.
+# It fetches the template using HTTP. This ConfigMap contains the HTML and the
+# template-server Deployment below serves it privately inside the cluster.
+# ============================================================================
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fullname }}-supabase-email-templates
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+data:
+  magic_link.html: |
+{{ .Files.Get "files/supabase-email/magic-link.html" | indent 4 }}
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-supabase-email-templates
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: supabase-email-templates
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "avaloka.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: supabase-email-templates
+  template:
+    metadata:
+      labels:
+        {{- include "avaloka.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: supabase-email-templates
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 80
+          volumeMounts:
+            - name: email-templates
+              mountPath: /usr/share/nginx/html
+              readOnly: true
+      volumes:
+        - name: email-templates
+          configMap:
+            name: {{ $fullname }}-supabase-email-templates
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-supabase-email-templates
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: supabase-email-templates
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "avaloka.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: supabase-email-templates
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-supabase-auth
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: supabase-auth
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "avaloka.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: supabase-auth
+  template:
+    metadata:
+      labels:
+        {{- include "avaloka.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: supabase-auth
+    spec:
+      containers:
+        - name: gotrue
+          image: {{ .Values.supabase.auth.image | quote }}
+          env:
+            - { name: GOTRUE_API_HOST, value: "0.0.0.0" }
+            - { name: GOTRUE_API_PORT, value: "9999" }
+            - { name: API_EXTERNAL_URL, value: {{ .Values.supabase.externalUrl | quote }} }
+            - { name: GOTRUE_DB_DRIVER, value: "postgres" }
+            - name: GOTRUE_DB_DATABASE_URL
+              value: "postgres://postgres:{{ $pw }}@{{ $dbHost }}:{{ .Values.supabase.db.port }}/postgres?search_path=auth"
+            - { name: GOTRUE_SITE_URL, value: {{ .Values.supabase.auth.siteUrl | quote }} }
+            - { name: GOTRUE_URI_ALLOW_LIST, value: "*" }
+            - { name: GOTRUE_DISABLE_SIGNUP, value: {{ .Values.supabase.auth.disableSignup | quote }} }
+            - { name: GOTRUE_JWT_SECRET, value: {{ .Values.supabase.jwtSecret | quote }} }
+            - { name: GOTRUE_JWT_EXP, value: "3600" }
+            - { name: GOTRUE_JWT_AUD, value: "authenticated" }
+            - { name: GOTRUE_JWT_DEFAULT_GROUP_NAME, value: "authenticated" }
+            - { name: GOTRUE_MAILER_AUTOCONFIRM, value: {{ .Values.supabase.auth.autoconfirm | quote }} }
+            - { name: GOTRUE_MAILER_URLPATHS_CONFIRMATION, value: "/auth/v1/verify" }
+            - { name: GOTRUE_MAILER_URLPATHS_INVITE, value: "/auth/v1/verify" }
+            - { name: GOTRUE_MAILER_URLPATHS_RECOVERY, value: "/auth/v1/verify" }
+            - { name: GOTRUE_MAILER_URLPATHS_EMAIL_CHANGE, value: "/auth/v1/verify" }
+            - { name: GOTRUE_MAILER_TEMPLATES_MAGIC_LINK, value: "http://{{ $fullname }}-supabase-email-templates/magic_link.html" }
+            - { name: GOTRUE_MAILER_SUBJECTS_MAGIC_LINK, value: {{ .Values.supabase.auth.emailSubject | quote }} }
+            - { name: GOTRUE_SMTP_HOST, value: {{ .Values.supabase.auth.smtp.host | quote }} }
+            - { name: GOTRUE_SMTP_PORT, value: {{ .Values.supabase.auth.smtp.port | quote }} }
+            - { name: GOTRUE_SMTP_SENDER_NAME, value: {{ .Values.supabase.auth.smtp.senderName | quote }} }
+            - { name: GOTRUE_SMTP_USER, value: {{ .Values.supabase.auth.smtp.user | quote }} }
+            - { name: GOTRUE_SMTP_PASS, value: {{ .Values.supabase.auth.smtp.pass | quote }} }
+            - { name: GOTRUE_SMTP_SENDER, value: {{ .Values.supabase.auth.smtp.sender | quote }} }
+            - { name: GOTRUE_SMTP_ADMIN_EMAIL, value: {{ .Values.supabase.auth.smtp.adminEmail | quote }} }
+          ports:
+            - { name: http, containerPort: 9999 }
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 20
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-supabase-auth
+  labels: {{- include "avaloka.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "avaloka.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: supabase-auth
+  ports:
+    - { name: http, port: 9999, targetPort: http }
+---
+# ---- postgrest (rest) ----
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-supabase-rest
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: supabase-rest
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "avaloka.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: supabase-rest
+  template:
+    metadata:
+      labels:
+        {{- include "avaloka.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: supabase-rest
+    spec:
+      containers:
+        - name: postgrest
+          image: {{ .Values.supabase.rest.image | quote }}
+          env:
+            - name: PGRST_DB_URI
+              value: "postgres://postgres:{{ $pw }}@{{ $dbHost }}:{{ .Values.supabase.db.port }}/postgres"
+            - { name: PGRST_DB_SCHEMAS, value: "public,storage,graphql_public" }
+            - { name: PGRST_DB_ANON_ROLE, value: "anon" }
+            - { name: PGRST_JWT_SECRET, value: {{ .Values.supabase.jwtSecret | quote }} }
+            - { name: PGRST_DB_USE_LEGACY_GUCS, value: "false" }
+          ports:
+            - { name: http, containerPort: 3000 }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-supabase-rest
+  labels: {{- include "avaloka.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "avaloka.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: supabase-rest
+  ports:
+    - { name: http, port: 3000, targetPort: http }
+---
+{{- if .Values.supabase.functions.enabled }}
+# ---- edge functions (supabase/edge-runtime) ----
+# The UI calls supabase.functions.invoke(...) for MCP credential encryption, health
+# checks and billing. Without this the gateway 404s every /functions/v1/* call and
+# SQL Warehouse registration rolls itself back at the encrypt step.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-supabase-functions
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: supabase-functions
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "avaloka.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: supabase-functions
+  template:
+    metadata:
+      labels:
+        {{- include "avaloka.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: supabase-functions
+    spec:
+      containers:
+        - name: functions
+          image: {{ .Values.supabase.functions.image | quote }}
+          imagePullPolicy: {{ .Values.supabase.functions.pullPolicy | quote }}
+          env:
+            # Server-side (pod-to-pod) gateway, NOT the browser-facing externalUrl.
+            - name: SUPABASE_URL
+              value: "http://{{ $fullname }}-supabase-kong:{{ .Values.supabase.kong.port }}"
+            - { name: SUPABASE_ANON_KEY, value: {{ .Values.supabase.anonKey | quote }} }
+            - { name: SUPABASE_SERVICE_ROLE_KEY, value: {{ .Values.supabase.serviceKey | quote }} }
+            - name: SUPABASE_DB_URL
+              value: "postgres://postgres:{{ $pw }}@{{ $dbHost }}:{{ .Values.supabase.db.port }}/postgres"
+            # AES-256-GCM key material for encrypt-mcp-credentials / encrypt-cloud-credentials.
+            # Rotating this orphans every existing ciphertext (decrypt fails the auth tag).
+            - { name: DB_ENCRYPTION_KEY, value: {{ .Values.supabase.functions.dbEncryptionKey | quote }} }
+            # Kong already terminates the request; the functions verify the JWT themselves.
+            - { name: VERIFY_JWT, value: "false" }
+          ports:
+            - { name: http, containerPort: {{ .Values.supabase.functions.port }} }
+          resources:
+            {{- toYaml .Values.supabase.functions.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-supabase-functions
+  labels: {{- include "avaloka.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "avaloka.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: supabase-functions
+  ports:
+    - { name: http, port: {{ .Values.supabase.functions.port }}, targetPort: http }
+---
+{{- end }}
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-supabase-storage
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: supabase-storage
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "avaloka.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: supabase-storage
+  template:
+    metadata:
+      labels:
+        {{- include "avaloka.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: supabase-storage
+    spec:
+      containers:
+        - name: storage
+          image: {{ .Values.supabase.storage.image | quote }}
+          env:
+            - { name: ANON_KEY, value: {{ .Values.supabase.anonKey | quote }} }
+            - { name: SERVICE_KEY, value: {{ .Values.supabase.serviceKey | quote }} }
+            - { name: POSTGREST_URL, value: "http://{{ $fullname }}-supabase-rest:3000" }
+            - { name: AUTH_JWT_SECRET, value: {{ .Values.supabase.jwtSecret | quote }} }
+            - { name: PGRST_JWT_SECRET, value: {{ .Values.supabase.jwtSecret | quote }} }
+            - { name: DATABASE_URL, value: "postgres://postgres:{{ $pw }}@{{ $dbHost }}:{{ .Values.supabase.db.port }}/postgres" }
+            - { name: PGOPTIONS, value: "-c search_path=storage,public" }
+            - { name: FILE_SIZE_LIMIT, value: "52428800" }
+            - { name: STORAGE_BACKEND, value: "file" }
+            - { name: FILE_STORAGE_BACKEND_PATH, value: "/var/lib/storage" }
+            - { name: TENANT_ID, value: "stub" }
+            - { name: REGION, value: "stub" }
+            - { name: GLOBAL_S3_BUCKET, value: "stub" }
+          ports:
+            - name: http
+              containerPort: 5000
+          volumeMounts:
+            - name: storage
+              mountPath: /var/lib/storage
+      volumes:
+        - name: storage
+          persistentVolumeClaim:
+            claimName: {{ $fullname }}-supabase-storage-pvc
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-supabase-storage
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: supabase-storage
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "avaloka.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: supabase-storage
+  ports:
+    - name: http
+      port: 5000
+      targetPort: http
+
+---
+# ---- kong (API gateway; DB-less declarative) ----
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fullname }}-supabase-kong
+  labels: {{- include "avaloka.labels" . | nindent 4 }}
+data:
+  kong.yml: |
+    _format_version: "2.1"
+    services:
+      - name: auth-v1
+        url: http://{{ $fullname }}-supabase-auth:9999
+        routes:
+          - name: auth-v1
+            strip_path: true
+            paths: ["/auth/v1"]
+        plugins:
+          - name: cors
+      - name: rest-v1
+        url: http://{{ $fullname }}-supabase-rest:3000
+        routes:
+          - name: rest-v1
+            strip_path: true
+            paths: ["/rest/v1"]
+        plugins:
+          - name: cors
+      - name: storage-v1
+        url: http://{{ $fullname }}-supabase-storage:5000
+        routes:
+          - name: storage-v1
+            strip_path: true
+            paths: ["/storage/v1"]
+        plugins:
+          - name: cors
+      {{- if .Values.supabase.functions.enabled }}
+      # strip_path so /functions/v1/<name> reaches the edge runtime as /<name>,
+      # which is what the main dispatcher routes on.
+      - name: functions-v1
+        url: http://{{ $fullname }}-supabase-functions:{{ .Values.supabase.functions.port }}
+        routes:
+          - name: functions-v1
+            strip_path: true
+            paths: ["/functions/v1"]
+        plugins:
+          - name: cors
+      {{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-supabase-kong
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: supabase-kong
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "avaloka.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: supabase-kong
+  template:
+    metadata:
+      labels:
+        {{- include "avaloka.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: supabase-kong
+    spec:
+      containers:
+        - name: kong
+          image: {{ .Values.supabase.kong.image | quote }}
+          env:
+            - { name: KONG_DATABASE, value: "off" }
+            - { name: KONG_DECLARATIVE_CONFIG, value: "/kong/kong.yml" }
+            - { name: KONG_PROXY_LISTEN, value: "0.0.0.0:8000" }
+            - { name: KONG_PLUGINS, value: "request-transformer,cors,key-auth,acl" }
+            - { name: KONG_NGINX_WORKER_PROCESSES, value: "1" }
+          ports:
+            - { name: proxy, containerPort: 8000 }
+          readinessProbe:
+            tcpSocket: { port: proxy }
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          volumeMounts:
+            - { name: kong-config, mountPath: /kong }
+      volumes:
+        - name: kong-config
+          configMap:
+            name: {{ $fullname }}-supabase-kong
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-supabase-kong
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+  {{- with .Values.supabase.kong.annotations }}
+  annotations:
+{{ toYaml . | indent 4 }}
+  {{- end }}
+    app.kubernetes.io/component: supabase-kong
+spec:
+  type: {{ .Values.supabase.kong.serviceType }}
+  selector:
+    {{- include "avaloka.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: supabase-kong
+  ports:
+    - name: proxy
+      port: {{ .Values.supabase.kong.port }}
+      protocol: TCP
+      targetPort: proxy
+      {{- if and (eq .Values.supabase.kong.serviceType "NodePort") .Values.supabase.kong.nodePort }}
+      nodePort: {{ .Values.supabase.kong.nodePort }}
+      {{- end }}
+---
+# ---- migrations Job (apply the UI's SQL to the local DB) ----
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fullname }}-supabase-migrations
+  labels: {{- include "avaloka.labels" . | nindent 4 }}
+data:
+  {{- range $path, $_ := .Files.Glob "files/supabase-migrations/*.sql" }}
+  {{ base $path }}: |
+{{ $.Files.Get $path | indent 4 }}
+  {{- end }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $fullname }}-supabase-migrate
+  labels: {{- include "avaloka.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: 10
+  template:
+    metadata:
+      labels: {{- include "avaloka.selectorLabels" . | nindent 8 }}
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: migrate
+          image: {{ .Values.supabase.db.image | quote }}
+          env:
+            - name: PGPASSWORD
+              value: {{ $pw | quote }}
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              echo "waiting for db..."
+              until pg_isready -h {{ $dbHost }} -U postgres -d postgres >/dev/null 2>&1; do sleep 3; done
+              # The app migrations create RLS policies on storage.objects that
+              # reference storage.foldername(). storage-api's own first migration
+              # DROPs and recreates that function, which fails once a policy
+              # depends on it -- so on a fresh cluster the ordering matters:
+              # storage-api must finish its schema migrations before ours run.
+              # It only starts listening on :5000 after they complete, so a TCP
+              # connect is the signal. Bounded, because this is a post-install
+              # hook and helm blocks on it.
+              echo "waiting for storage-api schema migrations..."
+              i=0
+              until timeout 2 bash -c 'exec 3<>/dev/tcp/{{ $fullname }}-supabase-storage/{{ .Values.supabase.storage.port }}' 2>/dev/null; do
+                i=$((i+1))
+                if [ "$i" -ge 120 ]; then
+                  echo "  storage-api not up after 10 minutes; applying migrations anyway"
+                  break
+                fi
+                sleep 5
+              done
+              for f in $(ls /migrations/*.sql | sort); do
+                echo "applying $f"
+                psql -h {{ $dbHost }} -U postgres -d postgres -v ON_ERROR_STOP=0 -f "$f" || echo "  (non-fatal errors in $f ignored)"
+              done
+              echo "migrations complete"
+          volumeMounts:
+            - { name: migrations, mountPath: /migrations }
+      volumes:
+        - name: migrations
+          configMap:
+            name: {{ $fullname }}-supabase-migrations
+{{- end }}

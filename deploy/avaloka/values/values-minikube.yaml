@@ -1,0 +1,71 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Minikube / local Kubernetes overlay for the Avaloka stack.
+#
+#   minikube start
+#   minikube addons enable ingress
+#   eval $(minikube docker-env)        # build images straight into the cluster
+#   docker build -t avaloka-langgraph:latest \
+#       -f deploy/avaloka/charts/avaloka-backend/docker/Dockerfile.langgraph .
+#   docker build -t avaloka-api:latest \
+#       -f deploy/avaloka/charts/avaloka-backend/docker/Dockerfile.api .
+#   helm dependency build deploy/avaloka
+#   helm install avaloka deploy/avaloka -n avaloka --create-namespace \
+#       -f deploy/avaloka/values/values-minikube.yaml
+#
+# `make minikube-up` automates all of the above.
+# ─────────────────────────────────────────────────────────────────────────────
+
+avaloka-backend:
+  # Run more than one instance with: --set avaloka-backend.replicaCount=N
+  replicaCount: 1
+
+  # Images are built directly into minikube's docker, so never pull from a
+  # remote registry — IfNotPresent uses the locally-built image.
+  image:
+    langgraph:
+      repository: avaloka-langgraph
+      tag: latest
+      pullPolicy: IfNotPresent
+    api:
+      repository: avaloka-api
+      tag: latest
+      pullPolicy: IfNotPresent
+
+  # HPA off by default locally; enable after `minikube addons enable metrics-server`.
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 3
+
+  # Smaller footprint for a laptop. Limits are still generous because the app
+  # imports torch/ray/pyspark at startup (memory-heavy); too-low a limit OOMKills
+  # the container during import.
+  resources:
+    langgraph:
+      requests: {cpu: 100m, memory: 384Mi}
+      limits:   {cpu: "1",  memory: 2Gi}
+    api:
+      requests: {cpu: 100m, memory: 384Mi}
+      limits:   {cpu: "1",  memory: 2Gi}
+
+  # No cloud identity locally — the app runs without GCS/S3/Azure credentials.
+  gcpKeySecret:
+    enabled: false
+  serviceAccount:
+    create: true
+    annotations: {}
+
+  ingress:
+    enabled: true
+    className: nginx
+
+avaloka-frontend:
+  # Frontend image is built/published separately; keep it disabled for
+  # backend-only local testing unless you have the image.
+  enabled: false
+
+redis:
+  enabled: true
+  architecture: standalone
+  auth:
+    enabled: false

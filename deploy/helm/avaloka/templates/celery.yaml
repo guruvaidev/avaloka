@@ -1,0 +1,119 @@
+{{- if .Values.celery.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ printf "%s-celery" (include "avaloka.fullname" .) }}
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: celery
+spec:
+  replicas: {{ .Values.celery.replicas | default 1 }}
+  selector:
+    matchLabels:
+      {{- include "avaloka.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: celery
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+      labels:
+        {{- include "avaloka.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: celery
+    spec:
+      serviceAccountName: {{ include "avaloka.serviceAccountName" . }}
+      containers:
+        - name: celery
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["celery"]
+          args:
+            - "-A"
+            - "app.core.celery_app"
+            - "worker"
+            - "-l"
+            - "info"
+          envFrom:
+            - configMapRef:
+                name: {{ include "avaloka.fullname" . }}-config
+            - secretRef:
+                name: {{ include "avaloka.secretName" . }}
+          {{- if .Values.gcp.existingSecret }}
+          volumeMounts:
+            - name: gcp-sa
+              mountPath: {{ .Values.gcp.mountPath | quote }}
+              readOnly: true
+          {{- end }}
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - kill -0 1
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            timeoutSeconds: 10
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - kill -0 1
+            initialDelaySeconds: 40
+            periodSeconds: 30
+            timeoutSeconds: 10
+          resources:
+            {{- toYaml .Values.celery.resources | nindent 12 }}
+      {{- if .Values.gcp.existingSecret }}
+      volumes:
+        - name: gcp-sa
+          secret:
+            secretName: {{ .Values.gcp.existingSecret | quote }}
+      {{- end }}
+
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ printf "%s-celery-redbeat" (include "avaloka.fullname" .) }}
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: celery-redbeat
+spec:
+  replicas: {{ .Values.celery.redbeat.replicas | default 1 }}
+  selector:
+    matchLabels:
+      {{- include "avaloka.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: celery-redbeat
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+      labels:
+        {{- include "avaloka.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: celery-redbeat
+    spec:
+      serviceAccountName: {{ include "avaloka.serviceAccountName" . }}
+      containers:
+        - name: celery-redbeat
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["celery"]
+          args:
+            - "-A"
+            - "app.core.celery_app"
+            - "beat"
+            - "-S"
+            - "app.core.celery_app.AvalokaScheduler"
+            - "-l"
+            - "info"
+          envFrom:
+            - configMapRef:
+                name: {{ include "avaloka.fullname" . }}-config
+            - secretRef:
+                name: {{ include "avaloka.secretName" . }}
+          resources:
+            {{- toYaml .Values.celery.redbeat.resources | nindent 12 }}
+{{- end }}

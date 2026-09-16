@@ -1,0 +1,132 @@
+{{- if .Values.mlflow.enabled }}
+{{- if not (include "avaloka.mlflowBackendStoreUri" .) }}
+{{- fail "mlflow.enabled=true requires mlflow.backendStoreUri or a configured PostgreSQL backend" }}
+{{- end }}
+{{- if not (include "avaloka.mlflowArtifactsDestination" .) }}
+{{- fail "mlflow.enabled=true requires mlflow.artifactsDestination, an enabled MinIO store, or config.storageBackend=gcs with config.gcsBucket" }}
+{{- end }}
+{{- $fullname := include "avaloka.fullname" . }}
+{{- $repository := default .Values.image.repository .Values.mlflow.image.repository }}
+{{- $tag := default .Values.image.tag .Values.mlflow.image.tag }}
+{{- $pullPolicy := default .Values.image.pullPolicy .Values.mlflow.image.pullPolicy }}
+{{- $artifactsDestination := include "avaloka.mlflowArtifactsDestination" . }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-mlflow
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mlflow
+spec:
+  replicas: {{ .Values.mlflow.replicas }}
+  selector:
+    matchLabels:
+      {{- include "avaloka.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: mlflow
+  template:
+    metadata:
+      annotations:
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+      labels:
+        {{- include "avaloka.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: mlflow
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "avaloka.serviceAccountName" . }}
+      containers:
+        - name: mlflow
+          image: "{{ $repository }}:{{ $tag }}"
+          imagePullPolicy: {{ $pullPolicy }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              exec mlflow server \
+                --backend-store-uri "$MLFLOW_BACKEND_STORE_URI" \
+                --artifacts-destination "$MLFLOW_ARTIFACTS_DESTINATION" \
+                --host 0.0.0.0 \
+                --port "$MLFLOW_PORT" \
+                --workers "$MLFLOW_WORKERS" \
+                --allowed-hosts "$MLFLOW_ALLOWED_HOSTS"
+          env:
+            - name: MLFLOW_BACKEND_STORE_URI
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "avaloka.secretName" . }}
+                  key: MLFLOW_BACKEND_STORE_URI
+            - name: MLFLOW_ARTIFACTS_DESTINATION
+              value: {{ $artifactsDestination | quote }}
+            {{- if and .Values.minio.enabled (hasPrefix "s3://" $artifactsDestination) }}
+            - name: MLFLOW_S3_ENDPOINT_URL
+              value: {{ include "avaloka.minioEndpoint" . | quote }}
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $fullname }}-minio
+                  key: MINIO_ROOT_USER
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $fullname }}-minio
+                  key: MINIO_ROOT_PASSWORD
+            - name: AWS_REGION
+              value: "us-east-1"
+            - name: AWS_DEFAULT_REGION
+              value: "us-east-1"
+            {{- end }}
+            - name: MLFLOW_PORT
+              value: {{ .Values.mlflow.port | quote }}
+            - name: MLFLOW_WORKERS
+              value: {{ .Values.mlflow.workers | quote }}
+            - name: MLFLOW_ALLOWED_HOSTS
+              value: {{ include "avaloka.mlflowAllowedHosts" . | quote }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.mlflow.port }}
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+              httpHeaders:
+                - name: Host
+                  value: {{ $fullname }}-mlflow
+            failureThreshold: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+              httpHeaders:
+                - name: Host
+                  value: {{ $fullname }}-mlflow
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+              httpHeaders:
+                - name: Host
+                  value: {{ $fullname }}-mlflow
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.mlflow.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-mlflow
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mlflow
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "avaloka.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: mlflow
+  ports:
+    - name: http
+      port: {{ .Values.mlflow.port }}
+      targetPort: http
+      protocol: TCP
+{{- end }}

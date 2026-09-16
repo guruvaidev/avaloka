@@ -1,0 +1,76 @@
+graph TD
+    subgraph "User Interface"
+        A[Streamlit UI]
+        B[FastAPI Backend]
+    end
+
+    subgraph "Agentic Workflow"
+        C[LangGraph Runtime]
+        D[Planner]
+        E[Planner Graph]
+        F[Summariser]
+        G[Coder]
+        H[Validator]
+        I[Infrastructure]
+        J[Execution]
+        K[Sampling & Profiling]
+        L[Scheduler]
+        M[MTA v1 PyTorch/ONNX]
+        M2[MTA v2 Ray/Inference]
+        N[Visualization]
+        O2[MCP Server]
+        P2[RAG Engine]
+    end
+
+    subgraph "Execution Substrate"
+        O[GCP GKE]
+        P[AWS EKS]
+        Q[Kubernetes Jobs]
+        RC[Ray Cluster]
+    end
+
+    subgraph "Inference Service"
+        IS[Inference Service Container]
+        AG[GCP API Gateway]
+    end
+
+    subgraph "Storage & Services"
+        GS[GCS / S3 Blob Store]
+        RD[Redis Cache]
+        SB[Supabase]
+        ML[MLflow]
+        GH[GitHub Job Registry]
+    end
+
+    A --> B --> C
+    C --> D
+    C --> E
+    C --> F
+    C --> G
+    C --> H
+    C --> I
+    C --> J
+    C --> K
+    C --> L
+    C --> M
+    C --> M2
+    C --> N
+    D --> C
+    F --> G
+    G --> H
+    I --> Q
+    J --> Q
+    J --> RC
+    Q --> O
+    Q --> P
+    RC --> O
+    RC --> P
+    M2 --> IS
+    IS --> AG
+    IS --> RC
+    B --> GS
+    B --> RD
+    B --> GH
+    K --> SB
+    M --> ML
+    M2 --> ML

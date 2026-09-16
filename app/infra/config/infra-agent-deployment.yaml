@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: infra-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: infra-agent
+  template:
+    metadata:
+      labels:
+        app: infra-agent
+    spec:
+      containers:
+      - name: infra-agent
+        image: infra-agent-python-app:latest
+        imagePullPolicy: Always # Always to pull from registry
+        ports:
+        - containerPort: 5000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: infra-agent-service
+spec:
+  selector:
+    app: infra-agent
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 5000
+  type: LoadBalancer # Use LoadBalancer for external access, or ClusterIP for internal

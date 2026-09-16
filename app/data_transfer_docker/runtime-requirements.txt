@@ -1,0 +1,51 @@
+# Data Processing Engine.
+# NEVER install the `getdaft` package: it is the abandoned pre-rename name, frozen
+# on PyPI at 0.5.0. Unpinned it silently baked a daft whose GCS overwrite path can't
+# delete existing objects ("DaftError: Deletes is not yet supported") and whose
+# flotilla runner needs a newer ray than the old 2.10 base — the combo that broke
+# local D2C overwrites. Pin the real `daft` package to the family the app env runs
+# (requirements.txt: daft>=0.7.1,<0.8; the GKE cluster images bake 0.7.14/0.7.19).
+daft[ray]>=0.7.6,<0.8
+# Match the app env (requirements.txt pins pyarrow==16.1.0). The ray 2.53 base no
+# longer has the pa.PyExtensionType removal problem that forced the old <16 pin.
+pyarrow==16.1.0
+
+# Data Handling & Transformation
+pandas
+
+# SQL Infrastructure
+sqlalchemy
+pymysql        # MySQL driver
+psycopg2-binary  # Postgres driver
+# Floors that guard against a stale base image pairing an old pyOpenSSL with a
+# new cryptography ("module 'lib' has no attribute 'GEN_EMAIL'" broke `import
+# boto3` on the old 2.10 base). The 2.53 base ships a modern compatible pair;
+# these floors just keep a rebuild from ever resolving below it.
+cryptography>=43.0.0   # required by pymysql auth plugins
+pyOpenSSL>=24.2.0
+sqlglot        # SQL parsing/translation
+connectorx     # daft.read_sql() backend for DB sources. Baking it into the image
+               # is what lets the GKE runner drop runtime_env.pip entirely (see
+               # DTA_RAY_USE_IMAGE_ENV in app/infra/ray_job_runner.py) so jobs
+               # start with no per-job pip install.
+
+# Docker SDK (used in docker_runner.py)
+docker
+
+# Cloud storage SDKs — needed by the generated `_upload_file_to_cloud` helper for
+# CSV/JSON cloud writes (parquet uses daft's native writer and needs none of these).
+# Without them a cloud CSV/JSON destination forced onto the local Docker runner
+# (e.g. a d2c transfer whose DB source is VPC-private) fails with ImportError.
+google-cloud-storage   # GCS uploads
+boto3                  # S3 uploads
+azure-storage-blob     # Azure Blob uploads
+
+# Extra output-format writers (materialized via pandas → local temp file → upload).
+# csv/tsv/json/parquet/orc need nothing beyond pandas + the pinned pyarrow above;
+# these three enable the remaining destination formats:
+openpyxl               # pandas.to_excel  → .xlsx destinations
+lxml                   # pandas.to_xml    → .xml destinations
+fastavro               # _write_avro       → .avro destinations
+
+# Environment & Utilities
+python-dotenv

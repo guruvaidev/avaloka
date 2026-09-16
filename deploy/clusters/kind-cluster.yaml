@@ -1,0 +1,35 @@
+# deploy/clusters/kind-cluster.yaml
+# Local Kubernetes cluster for avaloka (kind = Kubernetes-in-Docker).
+# Used by app/infra/providers/local_kind.py: `kind create cluster --config <this>`.
+#
+# One control-plane + one worker. The control-plane maps a NodePort range to the
+# host so the avaloka UI / Ray dashboard can be reached without a cloud LoadBalancer
+# (the avaloka Helm chart can expose itself as NodePort 30085; otherwise use
+# `kubectl port-forward`).
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: avaloka
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 30085   # avaloka API (NodePort) -> http://localhost:9010
+        hostPort: 9010
+        listenAddress: "127.0.0.1"
+        protocol: TCP
+      - containerPort: 30265   # Ray dashboard (NodePort)
+        hostPort: 8265
+        listenAddress: "127.0.0.1"
+        protocol: TCP
+      - containerPort: 30090   # avaloka web UI (NodePort) -> http://localhost:30090
+        hostPort: 30090
+        listenAddress: "127.0.0.1"
+        protocol: TCP
+      - containerPort: 30091   # local Supabase gateway (kong) -> http://localhost:30091
+        hostPort: 30091
+        listenAddress: "127.0.0.1"
+        protocol: TCP
+      - containerPort: 30092   # MinIO console -> http://localhost:30092 (browse buckets)
+        hostPort: 30092
+        listenAddress: "127.0.0.1"
+        protocol: TCP
+  - role: worker

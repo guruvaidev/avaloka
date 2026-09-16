@@ -1,0 +1,20 @@
+# Optional LLM providers for AWS Bedrock and GCP Vertex.
+#
+# Kept out of requirements.txt because langchain-google-vertexai requires
+# google-cloud-storage<3 while the base file requires >=3.4 (for the storage
+# client the data plane uses). Pinning both makes the API image unbuildable —
+# pip reports ResolutionImpossible and no version in any range satisfies it.
+#
+# app/core/inference.py imports these lazily, so their absence disables only
+# INFERENCE_PROVIDER=bedrock and =vertex; groq, local, openai, openrouter and
+# azure are unaffected.
+#
+# To use them you must also relax google-cloud-storage to <3, which means
+# checking the storage code paths in app/core/storage.py still work. That is the
+# trade this file exists to make explicit rather than to hide.
+#
+#     pip install -r requirements.txt -r requirements-cloud-llm.txt \
+#         'google-cloud-storage<3'
+
+langchain-aws>=0.2,<0.3
+langchain-google-vertexai>=2.0,<3.0

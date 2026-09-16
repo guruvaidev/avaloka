@@ -1,0 +1,164 @@
+{{- if .Values.localLLM.enabled }}
+# -----------------------------------------------------------------------------
+# In-cluster, OpenAI-spec local LLM (custom inference stack).
+#
+# Renders the CPU (Ollama) tier by default and the GPU (vLLM) tier when
+# localLLM.engine=vllm. Either way it exposes an OpenAI-compatible /v1 API that
+# the backend reaches via INFERENCE_LOCAL_BASE_URL (set in the ConfigMap from
+# these same values), so the agents are provider-agnostic and unchanged.
+# -----------------------------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "avaloka.fullname" . }}-local-llm
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: local-llm
+spec:
+  replicas: 1
+  # A single model volume must never attach to two pods at once.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "avaloka.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: local-llm
+  template:
+    metadata:
+      labels:
+        {{- include "avaloka.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: local-llm
+    spec:
+      {{- if eq .Values.localLLM.engine "vllm" }}
+      {{- with .Values.localLLM.vllm.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.localLLM.vllm.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: vllm
+          image: {{ .Values.localLLM.vllm.image | quote }}
+          imagePullPolicy: {{ .Values.localLLM.vllm.pullPolicy }}
+          args:
+            - "--model"
+            - {{ .Values.localLLM.model | quote }}
+            - "--served-model-name"
+            - {{ .Values.localLLM.servedModelName | quote }}
+            - "--max-model-len"
+            - {{ .Values.localLLM.vllm.maxModelLen | quote }}
+            - "--gpu-memory-utilization"
+            - {{ .Values.localLLM.vllm.gpuMemoryUtilization | quote }}
+          ports:
+            - name: http
+              containerPort: 8000
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 15
+            failureThreshold: 80
+          resources:
+            {{- toYaml .Values.localLLM.vllm.resources | nindent 12 }}
+          volumeMounts:
+            - name: hf-cache
+              mountPath: /root/.cache/huggingface
+            - name: shm
+              mountPath: /dev/shm
+      volumes:
+        - name: hf-cache
+          {{- if .Values.localLLM.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "avaloka.fullname" . }}-local-llm-cache
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: {{ .Values.localLLM.vllm.shmSize | quote }}
+      {{- else }}
+      # ---- CPU / Ollama tier (laptop / kind default) ----
+      containers:
+        - name: ollama
+          image: {{ .Values.localLLM.ollama.image | quote }}
+          imagePullPolicy: {{ .Values.localLLM.ollama.pullPolicy }}
+          env:
+            - name: OLLAMA_HOST
+              value: "0.0.0.0:11434"
+            - name: OLLAMA_KEEP_ALIVE
+              value: "-1"
+            - name: MODEL
+              value: {{ .Values.localLLM.model | quote }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              ollama serve &
+              pid=$!
+              until ollama ls >/dev/null 2>&1; do sleep 1; done
+              ollama pull "$MODEL"
+              wait $pid
+          ports:
+            - name: http
+              containerPort: 11434
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 60
+          resources:
+            {{- toYaml .Values.localLLM.ollama.resources | nindent 12 }}
+          volumeMounts:
+            - name: models
+              mountPath: /root/.ollama
+      volumes:
+        - name: models
+          {{- if .Values.localLLM.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "avaloka.fullname" . }}-local-llm-models
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "avaloka.localLLMServiceName" . }}
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: local-llm
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "avaloka.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: local-llm
+  ports:
+    - name: http
+      port: {{ include "avaloka.localLLMPort" . }}
+      targetPort: http
+{{- if .Values.localLLM.persistence.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "avaloka.fullname" . }}-local-llm-{{ if eq .Values.localLLM.engine "vllm" }}cache{{ else }}models{{ end }}
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: local-llm
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: {{ .Values.localLLM.persistence.size | quote }}
+  {{- with .Values.localLLM.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+{{- end }}
+{{- end }}

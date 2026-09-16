@@ -1,0 +1,1 @@
+ALTER TABLE public.analyses ALTER COLUMN project_id DROP NOT NULL;

@@ -1,0 +1,10 @@
+# Set to YOUR Supabase project ref before running `supabase link`.
+# Left unset deliberately: a committed project id links every clone of this
+# repository to one deployment.
+project_id = ""
+
+[functions.send-analysis-email]
+verify_jwt = false
+
+[functions.send-smtp-email]
+verify_jwt = false

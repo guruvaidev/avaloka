@@ -1,0 +1,421 @@
+{
+ "suite": "v1",
+ "source": "Google Doc Tab 1 \u2014 Kaggle Dataset Test Prompt Suite",
+ "batches": [
+  {
+   "name": "ieee-fraud",
+   "description": "IEEE-CIS Fraud Detection (Kaggle competition ieee-fraud-detection) \u2014 arc assumes train_transaction.csv (590,540 \u00d7 394), train_identity.csv (144,233 \u00d7 41), test_transaction.csv, test_identity.csv, sample_submission.csv; target isFraud (~3.5% positive).",
+   "files_assumed": [
+    "train_transaction.csv",
+    "train_identity.csv",
+    "test_transaction.csv",
+    "test_identity.csv",
+    "sample_submission.csv"
+   ],
+   "items": [
+    {
+     "id": "v1-ieee-fraud-01",
+     "order": 1,
+     "kind": "chat",
+     "prompt": "I've loaded train_transaction.csv. Before I do anything else, show me the schema \u2014 how many columns are there, what are the dtypes, and give me the first 10 rows so I can eyeball it.",
+     "purpose": "Sampling / schema inference \u2014 train_transaction.csv",
+     "depends_on_prior": false
+    },
+    {
+     "id": "v1-ieee-fraud-02",
+     "order": 2,
+     "kind": "chat",
+     "prompt": "Profile this for me. I mainly want the class balance on isFraud and the top 20 columns by missing-value percentage \u2014 with 394 columns I need to know what's actually usable.",
+     "purpose": "Profiling (quick) \u2014 train_transaction.csv",
+     "depends_on_prior": false
+    },
+    {
+     "id": "v1-ieee-fraud-03",
+     "order": 3,
+     "kind": "chat",
+     "prompt": "Run a full profile now. Flag every column that's more than 90% null, and separately tell me which columns are constant or near-constant \u2014 I want a drop list before I start modelling.",
+     "purpose": "Profiling (full) / data quality \u2014 train_transaction.csv",
+     "depends_on_prior": false
+    },
+    {
+     "id": "v1-ieee-fraud-04",
+     "order": 4,
+     "kind": "chat",
+     "prompt": "I'm new to this fraud data. Given what you've seen, what are the three or four analyses you'd run first to figure out what actually separates fraud from legit? Don't run them yet, just tell me.",
+     "purpose": "Context / conversational planning \u2014 train_transaction.csv",
+     "depends_on_prior": false
+    },
+    {
+     "id": "v1-ieee-fraud-05",
+     "order": 5,
+     "kind": "chat",
+     "prompt": "Remember for this whole project: always report fraud rate as a percentage to 3 decimal places, never drop TransactionID, and treat any column that's >95% null as excluded by default.",
+     "purpose": "Context / memory (store preference) \u2014 (session-level)",
+     "depends_on_prior": false
+    },
+    {
+     "id": "v1-ieee-fraud-06",
+     "order": 6,
+     "kind": "chat",
+     "prompt": "Give me fraud rate and mean TransactionAmt broken down by ProductCD, with the transaction count per group, sorted by fraud rate descending.",
+     "purpose": "Data transformation (aggregation) \u2014 train_transaction.csv",
+     "depends_on_prior": false
+    },
+    {
+     "id": "v1-ieee-fraud-07",
+     "order": 7,
+     "kind": "chat",
+     "prompt": "Join train_transaction.csv to train_identity.csv on TransactionID \u2014 left join, I don't want to lose the transactions with no identity record. Then give me fraud rate by DeviceType, and include a bucket for the rows where identity is missing.",
+     "purpose": "Data transformation (multi-file join) \u2014 train_transaction.csv + train_identity.csv",
+     "depends_on_prior": false
+    },
+    {
+     "id": "v1-ieee-fraud-08",
+     "order": 8,
+     "kind": "chat",
+     "prompt": "TransactionDT is seconds offset from some reference point, not a real timestamp. Derive hour-of-day and day-of-week from it and show me fraud rate by hour \u2014 I want to see if fraud clusters overnight.",
+     "purpose": "Data transformation (feature engineering) \u2014 train_transaction.csv",
+     "depends_on_prior": false
+    },
+    {
+     "id": "v1-ieee-fraud-09",
+     "order": 9,
+     "kind": "chat",
+     "prompt": "Bucket TransactionAmt into deciles, then give me fraud rate and row count per decile. Also collapse P_emaildomain \u2014 group gmail/yahoo/hotmail/aol/outlook into \"free_provider\", nulls into \"missing\", everything else into \"other\" \u2014 and give me fraud rate by that bucket too.",
+     "purpose": "Data transformation (binning + categorical grouping) \u2014 train_transaction.csv",
+     "depends_on_prior": false
+    },
+    {
+     "id": "v1-ieee-fraud-10",
+     "order": 10,
+     "kind": "chat",
+     "prompt": "The sample-based numbers won't survive risk review. Re-run fraud rate by card4 and card6 over the entire dataset, not a sample, and confirm in the output which mode you used.",
+     "purpose": "Analysis fidelity (entire_dataset) \u2014 train_transaction.csv",
+     "depends_on_prior": false
+    },
+    {
+     "id": "v1-ieee-fraud-11",
+     "order": 11,
+     "kind": "chat",
+     "prompt": "Run a full correlation scan of all the V columns (V1 through V339) against isFraud on the Ray cluster and hand me back the top 25 by absolute correlation. This is too wide to do locally.",
+     "purpose": "Distributed execution (Ray) \u2014 train_transaction.csv",
+     "depends_on_prior": false
+    },
+    {
+     "id": "v1-ieee-fraud-12",
+     "order": 12,
+     "kind": "chat",
+     "prompt": "This is going to be a recurring workload \u2014 spin up a GKE cluster with autoscaling so I can run the wide scans without babysitting my laptop.",
+     "purpose": "Infrastructure (GKE provisioning) \u2014 (cluster-level)",
+     "depends_on_prior": false
+    },
+    {
+     "id": "v1-ieee-fraud-13",
+     "order": 13,
+     "kind": "chat",
+     "prompt": "Chart it: fraud rate by hour of day as a line chart, and TransactionAmt distribution for fraud vs non-fraud as overlaid histograms on a log x-axis.",
+     "purpose": "Visualization \u2014 train_transaction.csv",
+     "depends_on_prior": true
+    },
+    {
+     "id": "v1-ieee-fraud-14",
+     "order": 14,
+     "kind": "chat",
+     "prompt": "Reloading a 590k-row 394-column CSV every session is killing me. Convert train_transaction.csv to Parquet with snappy compression and keep the column names as-is.",
+     "purpose": "Data transfer (format conversion CSV\u2192Parquet) \u2014 train_transaction.csv",
+     "depends_on_prior": false
+    },
+    {
+     "id": "v1-ieee-fraud-17",
+     "order": 17,
+     "kind": "chat",
+     "prompt": "Train a binary classifier for isFraud. Features: TransactionAmt, ProductCD, card1, card4, card6, addr1 and C1 through C14. The classes are badly imbalanced so I want precision/recall and AUC, not accuracy. Show me the training plan first \u2014 don't run it yet.",
+     "purpose": "Model training (plan generation) \u2014 train_transaction.csv",
+     "depends_on_prior": true
+    },
+    {
+     "id": "v1-ieee-fraud-18",
+     "order": 18,
+     "kind": "chat",
+     "prompt": "Plan looks good but bump it: 30 epochs, learning rate 0.0005, batch size 512, Adam, and run it on two Ray workers. Go ahead and train, then tell me the AUC.",
+     "purpose": "Model training (hyperparameter tuning + execute) \u2014 train_transaction.csv",
+     "depends_on_prior": true
+    },
+    {
+     "id": "v1-ieee-fraud-20",
+     "order": 20,
+     "kind": "chat",
+     "prompt": "Schedule the fraud-rate-by-ProductCD job to run every 24 hours starting tomorrow morning, give me the task id, and then show me all my scheduled tasks so I can confirm it registered.",
+     "purpose": "Scheduling (schedule_task + list_tasks) \u2014 train_transaction.csv",
+     "depends_on_prior": true
+    }
+   ]
+  },
+  {
+   "name": "walmart-sales",
+   "description": "Walmart Recruiting \u2014 Store Sales Forecasting (Kaggle competition walmart-recruiting-store-sales-forecasting) \u2014 arc assumes train.csv (421,570 rows), test.csv, features.csv, stores.csv, sampleSubmission.csv; target Weekly_Sales (continuous regression).",
+   "files_assumed": [
+    "train.csv",
+    "test.csv",
+    "features.csv",
+    "stores.csv",
+    "sampleSubmission.csv"
+   ],
+   "items": [
+    {
+     "id": "v1-walmart-sales-01",
+     "order": 1,
+     "kind": "chat",
+     "prompt": "Loaded train.csv. Show me the schema and a sample \u2014 I want to know the date range covered, how many distinct Store and Dept values there are, and whether the panel is balanced.",
+     "purpose": "Sampling / schema inference \u2014 train.csv",
+     "depends_on_prior": false
+    },
+    {
+     "id": "v1-walmart-sales-03",
+     "order": 3,
+     "kind": "chat",
+     "prompt": "Full profile on train.csv. I've noticed Weekly_Sales has negative values \u2014 before you flag those as errors, check whether they're plausible returns/markdowns and tell me how many rows and which departments they hit.",
+     "purpose": "Profiling (full) / data quality \u2014 train.csv",
+     "depends_on_prior": false
+    },
+    {
+     "id": "v1-walmart-sales-05",
+     "order": 5,
+     "kind": "chat",
+     "prompt": "Have I looked at Walmart store sales before in this workspace? Pull up whatever prior analysis you have on weekly sales seasonality so I don't redo work.",
+     "purpose": "Context / memory (historical retrieval) \u2014 (session-level)",
+     "depends_on_prior": false
+    },
+    {
+     "id": "v1-walmart-sales-06",
+     "order": 6,
+     "kind": "chat",
+     "prompt": "Total and average Weekly_Sales by Store, plus the number of weeks each store reports. Sort by total descending and show me the top 15.",
+     "purpose": "Data transformation (aggregation) \u2014 train.csv",
+     "depends_on_prior": false
+    },
+    {
+     "id": "v1-walmart-sales-08",
+     "order": 8,
+     "kind": "chat",
+     "prompt": "From Date, derive year, month, ISO week number, and a is_december flag. Then show me average weekly sales by month across all stores \u2014 I'm expecting a November/December spike.",
+     "purpose": "Data transformation (feature engineering / dates) \u2014 train.csv",
+     "depends_on_prior": false
+    },
+    {
+     "id": "v1-walmart-sales-09",
+     "order": 9,
+     "kind": "chat",
+     "prompt": "For each Store/Dept pair, compute a 4-week trailing average of Weekly_Sales and the year-over-year change versus the same week last year. Return the 20 store/dept pairs with the biggest YoY drop.",
+     "purpose": "Data transformation (window functions) \u2014 train.csv",
+     "depends_on_prior": false
+    },
+    {
+     "id": "v1-walmart-sales-10",
+     "order": 10,
+     "kind": "chat",
+     "prompt": "The rolling averages need to be right, not approximate \u2014 recompute the YoY table over the entire dataset rather than a sample, and tell me explicitly which fidelity mode you ran in.",
+     "purpose": "Analysis fidelity (entire_dataset) \u2014 train.csv",
+     "depends_on_prior": true
+    },
+    {
+     "id": "v1-walmart-sales-11",
+     "order": 11,
+     "kind": "chat",
+     "prompt": "Run the full store \u00d7 department \u00d7 week pivot on the cluster \u2014 421k rows pivoted wide is more than I want to do locally. Give me back the matrix shape and write the result out.",
+     "purpose": "Distributed execution (Ray / K8s) \u2014 train.csv",
+     "depends_on_prior": false
+    },
+    {
+     "id": "v1-walmart-sales-20",
+     "order": 20,
+     "kind": "chat",
+     "prompt": "Schedule the store-level weekly rollup to run every Monday at 6am and give me the task id. Then check the status of it.",
+     "purpose": "Scheduling (schedule_task + task_status) \u2014 train.csv",
+     "depends_on_prior": true
+    }
+   ]
+  },
+  {
+   "name": "nyc-taxi-duration",
+   "description": "NYC Taxi Trip Duration (Kaggle competition nyc-taxi-trip-duration) \u2014 arc assumes train.csv (1,458,644 rows), test.csv (625,134 rows), sample_submission.csv; target trip_duration (seconds, continuous).",
+   "files_assumed": [
+    "train.csv",
+    "test.csv",
+    "sample_submission.csv"
+   ],
+   "items": [
+    {
+     "id": "v1-nyc-taxi-duration-01",
+     "order": 1,
+     "kind": "chat",
+     "prompt": "Loaded train.csv \u2014 1.4 million rows. Give me the schema, dtypes, and 10 sample rows. I specifically want to know whether pickup_datetime came in as a string or a real timestamp.",
+     "purpose": "Sampling / schema inference \u2014 train.csv",
+     "depends_on_prior": false
+    },
+    {
+     "id": "v1-nyc-taxi-duration-02",
+     "order": 2,
+     "kind": "chat",
+     "prompt": "Quick profile. I want min/max/median/p95/p99 on trip_duration and passenger_count, and the value distribution for vendor_id and store_and_fwd_flag.",
+     "purpose": "Profiling (quick) \u2014 train.csv",
+     "depends_on_prior": false
+    },
+    {
+     "id": "v1-nyc-taxi-duration-03",
+     "order": 3,
+     "kind": "chat",
+     "prompt": "Full profile with a focus on garbage: how many trips have trip_duration under 60 seconds, over 6 hours, or exactly 86400? And how many have passenger_count of 0? Give me counts and percentages \u2014 I want to know what I'm about to throw away.",
+     "purpose": "Profiling (full) / outlier detection \u2014 train.csv",
+     "depends_on_prior": false
+    },
+    {
+     "id": "v1-nyc-taxi-duration-04",
+     "order": 4,
+     "kind": "chat",
+     "prompt": "The goal is predicting trip duration. Talk me through your approach before we build anything \u2014 what features would you engineer from raw pickup/dropoff coordinates and timestamps, and what would you exclude?",
+     "purpose": "Context / conversational planning \u2014 train.csv",
+     "depends_on_prior": false
+    },
+    {
+     "id": "v1-nyc-taxi-duration-05",
+     "order": 5,
+     "kind": "chat",
+     "prompt": "From here on, always exclude trips shorter than 60 seconds or longer than 6 hours, and drop rows where passenger_count is 0. Apply that filter to everything unless I say otherwise.",
+     "purpose": "Context / memory (store preference) \u2014 (session-level)",
+     "depends_on_prior": false
+    },
+    {
+     "id": "v1-nyc-taxi-duration-06",
+     "order": 6,
+     "kind": "chat",
+     "prompt": "Average and median trip_duration by vendor_id and passenger_count, with trip counts. Does vendor 2 genuinely run longer trips or do they just carry more passengers?",
+     "purpose": "Data transformation (aggregation) \u2014 train.csv",
+     "depends_on_prior": false
+    },
+    {
+     "id": "v1-nyc-taxi-duration-08",
+     "order": 8,
+     "kind": "chat",
+     "prompt": "Compute haversine distance in kilometres between pickup and dropoff coordinates, then derive average speed in km/h from that and trip_duration. Flag anything over 100 km/h as impossible and tell me how many there are.",
+     "purpose": "Data transformation (geospatial feature engineering) \u2014 train.csv",
+     "depends_on_prior": false
+    },
+    {
+     "id": "v1-nyc-taxi-duration-09",
+     "order": 9,
+     "kind": "chat",
+     "prompt": "From pickup_datetime derive hour, day of week, and month. Then give me a table of average trip duration by hour \u00d7 day-of-week \u2014 I'm looking for the rush hour signature.",
+     "purpose": "Data transformation (datetime feature engineering) \u2014 train.csv",
+     "depends_on_prior": false
+    },
+    {
+     "id": "v1-nyc-taxi-duration-10",
+     "order": 10,
+     "kind": "chat",
+     "prompt": "Round pickup lat/lon to 3 decimal places to make a grid, then give me the top 20 pickup cells by trip volume with their average duration. Label them by neighbourhood if you can infer it from the coordinates.",
+     "purpose": "Data transformation (geospatial binning) \u2014 train.csv",
+     "depends_on_prior": false
+    },
+    {
+     "id": "v1-nyc-taxi-duration-11",
+     "order": 11,
+     "kind": "chat",
+     "prompt": "Rerun the hour \u00d7 day-of-week duration table across all 1.46 million rows, not a sample \u2014 I need the real numbers for the ops deck. Confirm which fidelity mode you used.",
+     "purpose": "Analysis fidelity (entire_dataset) \u2014 train.csv",
+     "depends_on_prior": true
+    },
+    {
+     "id": "v1-nyc-taxi-duration-12",
+     "order": 12,
+     "kind": "chat",
+     "prompt": "Run the full haversine + speed computation over the entire file on the Ray cluster and write the enriched dataset out. This is the one I'll be modelling on.",
+     "purpose": "Distributed execution (Ray) \u2014 train.csv",
+     "depends_on_prior": true
+    },
+    {
+     "id": "v1-nyc-taxi-duration-13",
+     "order": 13,
+     "kind": "chat",
+     "prompt": "Chart the demand pattern: trips per hour of day as a line, and a 2D density heatmap of pickup locations over Manhattan.",
+     "purpose": "Visualization \u2014 train.csv",
+     "depends_on_prior": true
+    },
+    {
+     "id": "v1-nyc-taxi-duration-14",
+     "order": 14,
+     "kind": "chat",
+     "prompt": "Convert the enriched dataset to Parquet partitioned by pickup month. The raw CSV parse is the slowest part of my loop.",
+     "purpose": "Data transfer (format conversion + partitioning) \u2014 train.csv",
+     "depends_on_prior": true
+    },
+    {
+     "id": "v1-nyc-taxi-duration-18",
+     "order": 18,
+     "kind": "chat",
+     "prompt": "Build a regression model for trip_duration. Features: haversine distance, passenger_count, vendor_id, pickup hour, pickup day of week, and store_and_fwd_flag. Predict on log1p of duration since it's heavily right-skewed. And do not use dropoff_datetime \u2014 it isn't in the test set. Show me the plan first.",
+     "purpose": "Model training (plan generation + leakage guard) \u2014 train.csv",
+     "depends_on_prior": true
+    },
+    {
+     "id": "v1-nyc-taxi-duration-19",
+     "order": 19,
+     "kind": "chat",
+     "prompt": "Run that training on Ray with 4 workers, 40 epochs, learning rate 0.001, batch size 1024. Report RMSLE on the holdout.",
+     "purpose": "Model training (distributed execute) \u2014 train.csv",
+     "depends_on_prior": true
+    }
+   ]
+  },
+  {
+   "name": "instacart",
+   "description": "Instacart Market Basket Analysis (Kaggle competition instacart-market-basket-analysis) \u2014 arc assumes orders.csv (3.4M rows), order_products__prior.csv (32.4M rows), order_products__train.csv (1.38M rows), products.csv (49,688 rows), aisles.csv (134 rows), departments.csv (21 rows), sample_submission.csv; target reordered (binary).",
+   "files_assumed": [
+    "orders.csv",
+    "order_products__prior.csv",
+    "order_products__train.csv",
+    "products.csv",
+    "aisles.csv",
+    "departments.csv",
+    "sample_submission.csv"
+   ],
+   "items": [
+    {
+     "id": "v1-instacart-03",
+     "order": 3,
+     "kind": "chat",
+     "prompt": "Full profile on orders.csv. days_since_prior_order has nulls \u2014 check whether they line up exactly with order_number = 1. If they do, that's structural, don't tell me to impute it. Also give me the eval_set split.",
+     "purpose": "Profiling (full) / structural nulls \u2014 orders.csv",
+     "depends_on_prior": false
+    },
+    {
+     "id": "v1-instacart-05",
+     "order": 5,
+     "kind": "chat",
+     "prompt": "Note for this project: I only care about departments with more than 100,000 order lines, and always show product names rather than raw product_id. Apply that everywhere.",
+     "purpose": "Context / memory (store preference) \u2014 (session-level)",
+     "depends_on_prior": false
+    },
+    {
+     "id": "v1-instacart-13",
+     "order": 13,
+     "kind": "chat",
+     "prompt": "Register my Postgres warehouse as a connection so I can push results there, then list everything I've got connected.",
+     "purpose": "Cloud connections (register_database + list_databases) \u2014 (session-level)",
+     "depends_on_prior": false
+    }
+   ]
+  }
+ ],
+ "caveats": [
+  "Connection aliases must be registered (UI: Cloud Datasets / Databases) before the data-transfer prompts, or swapped for existing names: analytics_lake = GCS or S3 bucket connection (write access); analytics_warehouse = Postgres or MySQL connection (write access); s3_archive = a second cloud bucket connection, ideally a different provider than analytics_lake \u2014 that difference is what makes the cross-cloud path real.",
+  "Ordering (doc \u00a71.3): prompts are stateful within a dataset \u2014 run each batch's 20 prompts in order, in one session. Slots 15\u201320 in particular depend on earlier turns: DTA prompts assume a transformed result exists (the DTA treats the active dataset as the implicit source); inference (slot 19) assumes training (17\u201318) completed and a model is registered; scheduling (slot 20) assumes a generated job exists to schedule.",
+  "depends_on_prior encoding: true for all slots 15\u201320 per \u00a71.3's blanket rule, plus earlier slots whose text references an artifact built in a prior turn (ieee-fraud 13 'Chart it'; walmart-sales 10 'the YoY table', 13, 14 'the joined table'; nyc-taxi-duration 11 'the hour \u00d7 day-of-week table', 12 'the full haversine + speed computation', 13, 14 'the enriched dataset'; instacart 11 'the association rules', 12 'the full user-feature build', 14 'Visualise it'). Some true-marked slots are nevertheless self-contained in wording (e.g., nyc-taxi-duration 17, instacart 15).",
+  "Purpose field encodes two doc columns as '<Testing part> \u2014 <Data file name>'; '(session-level)' / '(cluster-level)' are the doc's own file-column values for non-file-scoped prompts.",
+  "Pass criteria (doc \u00a71.4): for each prompt record (a) which planner tool was called, (b) which graph node executed, (c) whether generated code passed all three validators, (d) whether the numeric answer is correct \u2014 a plausible-looking wrong number is a failure, not a pass.",
+  "Kaggle setup (doc \u00a71.1): all four are competition datasets (kaggle competitions download, not datasets); each requires accepting the competition rules on the Kaggle site once. Walmart ships .csv.zip members inside the outer zip (needs a second unzip pass); Instacart ships a nested instacart_2017_05_01/ folder (flatten it or point Avaloka at the nested path). The repo helper tests/download_kaggle_datasets.py will not fetch these four.",
+  "Coverage gaps (doc \u00a77): EKS provisioning untested (only GKE, ieee-fraud 12 \u2014 duplicate with AWS wording against Walmart); cross-cloud C2C only real if s3_archive (walmart-sales 15) is on a different provider than analytics_lake \u2014 worth an explicit GCS\u2192S3 prompt; only CSV\u2192Parquet DTA format exercised (Avro, Delta, Iceberg, XML, Excel untested \u2014 repeat slot-14-style prompts with other target formats); no validator failure paths (all prompts well-formed \u2014 add deliberately broken prompts: nonexistent column, impossible join key, ambiguous target).",
+  "Suggested execution order (doc \u00a78), escalating cost/infra: (1) prompts 1\u201310 all datasets, local only; (2) fidelity + distributed 10\u201312 (needs Ray; nyc-taxi and instacart are the ones big enough to show the difference); (3) cloud transfer 14\u201317 (needs the three connections registered); (4) training + inference 17\u201320 (IEEE first \u2014 imbalanced binary classification is the harshest metric test); (5) scheduling 20 (needs Celery worker and Redis up).",
+  "Pruned 32 items referencing files/connections absent from the test bucket (v1 was written vs public Kaggle schemas: walmart-recruiting features.csv/stores.csv, instacart order_products__*, and alias connections analytics_lake/warehouse/s3_archive). Remaining items use only files present in the bucket."
+ ]
+}

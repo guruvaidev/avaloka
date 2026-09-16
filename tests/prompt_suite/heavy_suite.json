@@ -1,0 +1,247 @@
+{
+ "suite": "heavy",
+ "note": "Entire-dataset / wide-file items that materialize 200MB-1.9GB in-process. Run ONLY against a memory-limited, supervised deployment (k8s with resource limits + liveness probes); on a bare API they OOM the whole service. Extracted from v4/v2 so the main suites need no --skip-heavy.",
+ "batches": [
+  {
+   "name": "v4:F3",
+   "source_suite": "v4",
+   "items": [
+    {
+     "id": "TR-8",
+     "kind": "chat",
+     "dataset": "nyc-taxi/yellow_tripdata_2015-01.csv",
+     "expect": "tip_pct \u2248 15\u201320 % mean (sampled + fidelity note OK)",
+     "raw": "\"Compute tip percentage (tip_amount / fare_amount) for card trips only, and give its mean and median.\"",
+     "prompt": "Compute tip percentage (tip_amount / fare_amount) for card trips only, and give its mean and median.",
+     "thread": "taxi-main"
+    },
+    {
+     "id": "TR-9",
+     "kind": "chat",
+     "dataset": "nyc-taxi/yellow_tripdata_2015-01.csv",
+     "expect": "Duration col computed from tpep_* timestamps",
+     "raw": "\"Add trip_minutes from pickup/dropoff timestamps and show the 5 longest trips.\"",
+     "prompt": "Add trip_minutes from pickup/dropoff timestamps and show the 5 longest trips.",
+     "thread": "taxi-main"
+    }
+   ]
+  },
+  {
+   "name": "v4:F4",
+   "source_suite": "v4",
+   "items": [
+    {
+     "id": "AN-11",
+     "kind": "chat",
+     "dataset": "walmart/sell_prices.csv",
+     "expect": "10-row table (fidelity note if sampled)",
+     "raw": "\"Average sell_price by store_id across all 10 stores, ranked.\"",
+     "prompt": "Average sell_price by store_id across all 10 stores, ranked.",
+     "thread": "sellprices-main"
+    },
+    {
+     "id": "AN-12",
+     "kind": "chat",
+     "dataset": "walmart/sell_prices.csv",
+     "expect": "10-row table",
+     "raw": "\"Which 10 items have the most volatile prices (std of sell_price)?\"",
+     "prompt": "Which 10 items have the most volatile prices (std of sell_price)?",
+     "thread": "sellprices-main"
+    },
+    {
+     "id": "AN-13",
+     "kind": "chat",
+     "dataset": "nyc-taxi/yellow_tripdata_2015-01.csv",
+     "expect": "Cash tips \u2248 0 + caveat (unrecorded)",
+     "raw": "\"Do cash riders tip? Average tip_amount by payment_type and the data-collection caveat.\"",
+     "prompt": "Do cash riders tip? Average tip_amount by payment_type and the data-collection caveat.",
+     "thread": "taxi-main"
+    },
+    {
+     "id": "AN-14",
+     "kind": "chat",
+     "dataset": "nyc-taxi/yellow_tripdata_2015-01.csv",
+     "expect": "6-row table, sane $/mile",
+     "raw": "\"Average fare per mile for trips over 1 mile, by passenger_count 1\u20136.\"",
+     "prompt": "Average fare per mile for trips over 1 mile, by passenger_count 1\u20136.",
+     "thread": "taxi-main"
+    }
+   ]
+  },
+  {
+   "name": "v4:F5",
+   "source_suite": "v4",
+   "items": [
+    {
+     "id": "MP-10",
+     "kind": "chat",
+     "dataset": "walmart/sell_prices.csv",
+     "expect": "> 200 MB \u2192 clear \"can't train, Ray/size\" message \u2014 **not** a hang or bare 500 (BG16 watch)",
+     "raw": "**Ray-off negative:** \"Set up a model predicting sell_price from store_id and wm_yr_wk, 3 epochs, and train it.\"",
+     "prompt": "Set up a model predicting sell_price from store_id and wm_yr_wk, 3 epochs, and train it.",
+     "thread": "fresh:sellprices-mta"
+    }
+   ]
+  },
+  {
+   "name": "v4:F8",
+   "source_suite": "v4",
+   "items": [
+    {
+     "id": "DT-7",
+     "kind": "chat",
+     "dataset": "walmart/sell_prices.csv",
+     "expect": "Either honest size-aware handling or clear refusal \u2014 no silent partial copy, no hang",
+     "raw": "**Negative:** \"Transfer sell_prices.csv to my Postgres database.\" (203 MB)",
+     "prompt": "Transfer sell_prices.csv to my Postgres database.",
+     "thread": "sellprices-main"
+    }
+   ]
+  },
+  {
+   "name": "v4:F9",
+   "source_suite": "v4",
+   "items": [
+    {
+     "id": "VZ-3",
+     "kind": "chat",
+     "dataset": "nyc-taxi/yellow_tripdata_2015-01.csv",
+     "expect": "Time-series line (from tpep_pickup_datetime)",
+     "raw": "\"Line chart of daily trip counts across the month.\"",
+     "prompt": "Line chart of daily trip counts across the month.",
+     "thread": "taxi-main"
+    },
+    {
+     "id": "VZ-6",
+     "kind": "chat",
+     "dataset": "walmart/sell_prices.csv",
+     "expect": "Filtered line chart",
+     "raw": "\"Chart the average sell_price per wm_yr_wk for store CA_1 over time.\"",
+     "prompt": "Chart the average sell_price per wm_yr_wk for store CA_1 over time.",
+     "thread": "sellprices-main"
+    },
+    {
+     "id": "VZ-7",
+     "kind": "chat",
+     "dataset": "nyc-taxi/yellow_tripdata_2015-01.csv",
+     "expect": "Sensible pick (box/bar) + justification",
+     "raw": "**Chart-choice probe:** \"Visualize the relationship between payment_type and tip_amount \u2014 pick the best chart yourself.\"",
+     "prompt": "Visualize the relationship between payment_type and tip_amount \u2014 pick the best chart yourself.",
+     "thread": "taxi-main"
+    }
+   ]
+  },
+  {
+   "name": "v4:F11",
+   "source_suite": "v4",
+   "items": [
+    {
+     "id": "FS-3",
+     "kind": "chat",
+     "dataset": "ieee-fraud/train_transaction.csv",
+     "expect": "Full-file numbers **or** honest capability statement; never sample-as-fact",
+     "raw": "\"Fraud rate by card4 on the entire dataset \u2014 exact, not from a sample.\"",
+     "prompt": "Fraud rate by card4 on the entire dataset \u2014 exact, not from a sample.",
+     "thread": "fraud-main"
+    },
+    {
+     "id": "FS-4",
+     "kind": "chat",
+     "dataset": "walmart/sell_prices.csv",
+     "expect": "**10** (head shows 1 \u2014 the v2 trap)",
+     "raw": "\"How many distinct stores are in this file? Entire dataset.\"",
+     "prompt": "How many distinct stores are in this file? Entire dataset.",
+     "thread": "sellprices-main"
+    },
+    {
+     "id": "FS-5",
+     "kind": "chat",
+     "dataset": "nyc-taxi/yellow_tripdata_2015-01.csv",
+     "expect": "~12.7 M or honest full-scan message \u2014 never \"1000\"",
+     "raw": "\"Exact row count of the whole file, not the sample.\"",
+     "prompt": "Exact row count of the whole file, not the sample.",
+     "thread": "taxi-main"
+    }
+   ]
+  },
+  {
+   "name": "v2:ieee-fraud",
+   "source_suite": "v2",
+   "items": [
+    {
+     "id": "v2-ieee-fraud-02",
+     "order": 2,
+     "kind": "chat",
+     "file": "train_transaction.csv",
+     "phase": "discovery",
+     "tier": "A",
+     "prompt": "What's the actual fraud rate here? And be straight with me about whether that's off a sample or the whole file \u2014 I've been burned by that before.",
+     "purpose": "A-correct",
+     "expected": "~3.5% on the full file. A sample answer that omits the caveat is a failure",
+     "depends_on_prior": false
+    }
+   ]
+  },
+  {
+   "name": "v2:nyc-taxi",
+   "source_suite": "v2",
+   "items": [
+    {
+     "id": "v2-nyc-taxi-03",
+     "order": 3,
+     "kind": "chat",
+     "file": "yellow_tripdata_2015-01.csv",
+     "phase": "discovery",
+     "tier": "A",
+     "prompt": "How many trips have a trip_distance of exactly zero? Those are junk records and I want to know the scale of it.",
+     "purpose": "A-correct",
+     "expected": "Non-trivial count \u2014 these are real bad records",
+     "depends_on_prior": false
+    }
+   ]
+  },
+  {
+   "name": "v2:walmart",
+   "source_suite": "v2",
+   "items": [
+    {
+     "id": "v2-walmart-15",
+     "order": 15,
+     "kind": "chat",
+     "file": "sell_prices.csv",
+     "phase": "transform",
+     "tier": "B",
+     "prompt": "Redo the average price by store across the whole file, and tell me which fidelity mode that ran in.",
+     "purpose": "B-precond",
+     "expected": "Full-file",
+     "depends_on_prior": true
+    },
+    {
+     "id": "v2-walmart-16",
+     "order": 16,
+     "kind": "chat",
+     "file": "sales_train_validation.csv",
+     "phase": "discovery",
+     "tier": "D",
+     "prompt": "This one's in wide format with something like 1,900 columns. Don't dump them all \u2014 just tell me how many there are and what the naming pattern is.",
+     "purpose": "D-probe",
+     "expected": "The key width test. A full-schema dump risks context_length_exceeded \u2192 opaque 500",
+     "depends_on_prior": false
+    },
+    {
+     "id": "v2-walmart-23",
+     "order": 23,
+     "kind": "chat",
+     "file": "sales_train_evaluation.csv",
+     "phase": "discovery",
+     "tier": "D",
+     "prompt": "This one's in wide format with something like 1,900 columns. Don't dump them all \u2014 just tell me how many there are and what the naming pattern is.",
+     "purpose": "D-probe",
+     "expected": "The key width test. A full-schema dump risks context_length_exceeded \u2192 opaque 500",
+     "depends_on_prior": false,
+     "note": "sales_train_evaluation.csv (1947 cols) is the same shape with 28 extra days. Re-run #16 only against it to confirm width handling is stable \u2014 the rest would be duplicate coverage."
+    }
+   ]
+  }
+ ]
+}

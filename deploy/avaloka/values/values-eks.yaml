@@ -1,0 +1,60 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Amazon EKS overlay.
+#
+# Identity: IRSA (IAM Roles for Service Accounts) — no key file mounted.
+# Registry: ECR.
+# Storage:  S3.
+#
+#   helm install avaloka deploy/avaloka -n avaloka --create-namespace \
+#       -f deploy/avaloka/values/values-eks.yaml \
+#       --set avaloka-backend.serviceAccount.annotations."eks\.amazonaws\.com/role-arn"=arn:aws:iam::ACCOUNT:role/avaloka
+# ─────────────────────────────────────────────────────────────────────────────
+
+avaloka-backend:
+  replicaCount: 2
+
+  image:
+    langgraph:
+      repository: ACCOUNT.dkr.ecr.REGION.amazonaws.com/avaloka-langgraph
+      tag: latest
+      pullPolicy: Always
+    api:
+      repository: ACCOUNT.dkr.ecr.REGION.amazonaws.com/avaloka-api
+      tag: latest
+      pullPolicy: Always
+
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+  # IRSA: annotate the KSA with the IAM role ARN.
+  serviceAccount:
+    create: true
+    annotations:
+      eks.amazonaws.com/role-arn: "arn:aws:iam::ACCOUNT:role/avaloka"
+
+  # No GCP key on AWS.
+  gcpKeySecret:
+    enabled: false
+
+  ingress:
+    enabled: true
+    className: alb   # AWS Load Balancer Controller; use "nginx" if you run ingress-nginx
+
+avaloka-frontend:
+  enabled: true
+  image:
+    repository: ACCOUNT.dkr.ecr.REGION.amazonaws.com/avaloka-frontend
+    tag: latest
+
+redis:
+  enabled: true
+  architecture: standalone
+  auth:
+    enabled: false

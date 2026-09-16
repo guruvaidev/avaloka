@@ -1,0 +1,50 @@
+version: "3.9"
+
+services:
+  redis:
+    image: redis:7
+    container_name: avaloka-redis
+    ports:
+      - "6380:6379"
+
+  celery-worker:
+    image: python:3.11-slim
+    environment:
+      # Required only when a selected training column needs keyed PII
+      # pseudonymisation/tokenisation. Compose does not inherit host variables
+      # unless they are declared here.
+      AVALOKA_PII_KEY: ${AVALOKA_PII_KEY:-}
+    command: >
+      bash -c "
+        chown -R root:root /root/.config &&
+        chown -R root:root /root/.ssh &&
+        apt-get update &&
+        apt-get install -y --no-install-recommends openssh-client curl ca-certificates &&
+        curl -fsSL -o /usr/local/bin/kubectl https://dl.k8s.io/release/$(curl -fsSL https://dl.k8s.io/release/stable.txt)/bin/linux/$(dpkg --print-architecture)/kubectl &&
+        chmod +x /usr/local/bin/kubectl &&
+        cd /app &&
+        pip install -r requirements.txt &&
+        celery -A app.core.celery_app worker -l info
+      "
+    volumes:
+      - .:/app
+      - .config:/root/.config
+      - .ssh:/root/.ssh
+      - .kube/config:/root/.kube/config:ro
+    network_mode: "host"
+    depends_on:
+      - redis
+
+  celery-redbeat-worker:
+    image: python:3.11-slim
+    command: >
+      bash -c "
+        cd /app &&
+        pip install -r requirements.txt &&
+        celery -A app.core.celery_app beat -S app.core.celery_app.AvalokaScheduler -l info
+      "
+    volumes:
+      - .:/app
+    network_mode: "host"
+    depends_on:
+      - celery-worker

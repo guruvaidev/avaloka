@@ -1,0 +1,153 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "avaloka-backend.fullname" . }}
+  labels:
+    {{- include "avaloka-backend.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
+    {{- if .Values.color }}
+    avaloka.io/color: {{ .Values.color | quote }}
+    {{- end }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "avaloka-backend.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "avaloka-backend.labels" . | nindent 8 }}
+        app.kubernetes.io/component: backend
+        {{- if .Values.color }}
+        avaloka.io/color: {{ .Values.color | quote }}
+        {{- end }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- if .Values.serviceAccount.create }}
+      serviceAccountName: {{ include "avaloka-backend.serviceAccountName" . }}
+      {{- end }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.gracefulShutdown.enabled }}
+      terminationGracePeriodSeconds: {{ .Values.gracefulShutdown.terminationGracePeriodSeconds }}
+      {{- end }}
+      containers:
+        - name: langgraph
+          image: "{{ .Values.image.langgraph.repository }}:{{ .Values.image.langgraph.tag }}"
+          imagePullPolicy: {{ .Values.image.langgraph.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.service.langgraph.port }}
+              name: langgraph
+          envFrom:
+            - configMapRef:
+                name: {{ include "avaloka-backend.fullname" . }}-config
+            # Legacy externally-managed ConfigMap (created by run.sh). Optional
+            # so a plain `helm install` works without it; when present its keys
+            # override the chart defaults above.
+            - configMapRef:
+                name: avaloka-backend-env
+                optional: true
+          {{- with .Values.resources.langgraph }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- if .Values.probes.enabled }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.probes.langgraph.readiness.path }}
+              port: {{ .Values.service.langgraph.port }}
+            initialDelaySeconds: {{ .Values.probes.langgraph.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.langgraph.readiness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.langgraph.readiness.failureThreshold }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.probes.langgraph.liveness.path }}
+              port: {{ .Values.service.langgraph.port }}
+            initialDelaySeconds: {{ .Values.probes.langgraph.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.langgraph.liveness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.langgraph.liveness.failureThreshold }}
+          {{- end }}
+          {{- if .Values.gracefulShutdown.enabled }}
+          lifecycle:
+            preStop:
+              exec:
+                # Sleep gives in-flight requests time to drain before SIGTERM
+                # propagates. Celery workers running in the api container have
+                # their own ack-late+visibility-timeout handling.
+                command: ["/bin/sh", "-c", "sleep {{ .Values.gracefulShutdown.preStopSleepSeconds }}"]
+          {{- end }}
+
+        - name: api
+          image: "{{ .Values.image.api.repository }}:{{ .Values.image.api.tag }}"
+          imagePullPolicy: {{ .Values.image.api.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.service.api.port }}
+              name: api
+          envFrom:
+            - configMapRef:
+                name: {{ include "avaloka-backend.fullname" . }}-config
+            # Legacy externally-managed ConfigMap (created by run.sh). Optional
+            # so a plain `helm install` works without it; when present its keys
+            # override the chart defaults above.
+            - configMapRef:
+                name: avaloka-backend-env
+                optional: true
+          {{- with .Values.resources.api }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- if .Values.gcpKeySecret.enabled }}
+          volumeMounts:
+            - name: gcp-credentials
+              mountPath: /secrets/gcp-key.json
+              subPath: gcp-key.json
+              readOnly: true
+          {{- end }}
+          {{- if .Values.probes.enabled }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.probes.api.readiness.path }}
+              port: {{ .Values.service.api.port }}
+            initialDelaySeconds: {{ .Values.probes.api.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.api.readiness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.api.readiness.failureThreshold }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.probes.api.liveness.path }}
+              port: {{ .Values.service.api.port }}
+            initialDelaySeconds: {{ .Values.probes.api.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.api.liveness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.api.liveness.failureThreshold }}
+          {{- end }}
+          {{- if .Values.gracefulShutdown.enabled }}
+          lifecycle:
+            preStop:
+              exec:
+                # Drain in-flight HTTP requests. Celery scheduler / workers
+                # rely on graceful_shutdown_timeout in app code (existing).
+                command: ["/bin/sh", "-c", "sleep {{ .Values.gracefulShutdown.preStopSleepSeconds }}"]
+          {{- end }}
+      {{- if .Values.gcpKeySecret.enabled }}
+      volumes:
+        - name: gcp-credentials
+          secret:
+            secretName: {{ .Values.gcpKeySecret.secretName }}
+      {{- end }}

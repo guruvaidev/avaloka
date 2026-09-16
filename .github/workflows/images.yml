@@ -1,0 +1,173 @@
+# Build Avaloka's own images and publish them to GHCR, so that installing does
+# not require building.
+#
+# Until this existed, the chart referenced bare names -- `avaloka-api:latest`,
+# `avaloka-ui:latest` -- with pullPolicy IfNotPresent. That works on kind, where
+# `make images` side-loads them onto the node, and nowhere else: a bare name
+# resolves to Docker Hub, which has no such image, so every other cluster gets
+# ImagePullBackOff. kind is exactly the environment in which the problem is
+# invisible.
+#
+# GHCR rather than Docker Hub: it is free for public repositories, it lives
+# beside the code, it needs no second account or billing relationship, and
+# GITHUB_TOKEN can push to it with no secret to manage.
+name: images
+
+on:
+  push:
+    # develop-1.6 and oss/1.6 build too, so a deployment from either pulls an
+    # image that already exists instead of building one.
+    branches: [main, develop-1.6, "oss/**"]
+    tags: ["v*"]
+    # Only when something that actually goes into an image changes. A docs-only
+    # commit should not spend twenty minutes rebuilding four images.
+    paths:
+      - "app/**"
+      - "avaloka/**"
+      - "file_handler/**"
+      - "ui/**"
+      - "requirements.txt"
+      - "pyproject.toml"
+      - "deploy/docker/**"
+      - ".github/workflows/images.yml"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Rebuild even when the source tag already exists"
+        type: boolean
+        default: false
+
+env:
+  REGISTRY: ghcr.io
+
+permissions:
+  contents: read
+  packages: write
+  # Needed for build provenance attestation.
+  id-token: write
+  attestations: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      # One failing image should not hide the state of the others.
+      fail-fast: false
+      matrix:
+        include:
+          - name: avaloka-api
+            key: api
+            dockerfile: deploy/docker/Dockerfile.api
+          - name: avaloka-ray
+            key: ray
+            dockerfile: deploy/docker/Dockerfile.ray
+          - name: avaloka-ui
+            key: ui
+            dockerfile: ui/Dockerfile
+          - name: avaloka-functions
+            key: functions
+            dockerfile: deploy/docker/Dockerfile.functions
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Skip if the Dockerfile is not in this tree
+        id: exists
+        run: |
+          if [[ -f "${{ matrix.dockerfile }}" ]]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::${{ matrix.dockerfile }} is absent; skipping ${{ matrix.name }}"
+          fi
+
+      # The tag is a digest of the files that build this image, so an
+      # unchanged image is not rebuilt at all -- which is the difference
+      # between a two-minute deployment and a twenty-minute one.
+      - name: Compute content tags
+        id: tags
+        if: steps.exists.outputs.found == 'true'
+        run: |
+          python scripts/image_tag.py --all
+          echo "deps=$(python scripts/image_tag.py ${{ matrix.key }})" >> "$GITHUB_OUTPUT"
+          echo "src=$(python scripts/image_tag.py ${{ matrix.key }} --source)" >> "$GITHUB_OUTPUT"
+
+      - name: Already published?
+        id: published
+        if: steps.exists.outputs.found == 'true'
+        run: |
+          image="${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.name }}"
+          tag="${{ steps.tags.outputs.src }}"
+          if [[ "${{ inputs.force }}" == "true" ]]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::force requested; rebuilding $image:$tag"
+          elif docker manifest inspect "$image:$tag" >/dev/null 2>&1; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::$image:$tag already exists — nothing in this image changed"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: docker/setup-qemu-action@v3
+        if: steps.exists.outputs.found == 'true' && steps.published.outputs.skip != 'true'
+
+      - uses: docker/setup-buildx-action@v3
+        if: steps.exists.outputs.found == 'true' && steps.published.outputs.skip != 'true'
+
+      - uses: docker/login-action@v3
+        if: steps.exists.outputs.found == 'true' && steps.published.outputs.skip != 'true'
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tags and labels
+        id: meta
+        if: steps.exists.outputs.found == 'true' && steps.published.outputs.skip != 'true'
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.name }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ steps.tags.outputs.src }}
+            type=raw,value=${{ steps.tags.outputs.deps }}
+
+      - name: Build and push
+        id: push
+        if: steps.exists.outputs.found == 'true' && steps.published.outputs.skip != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          # arm64 matters: Apple Silicon is most of the likely audience, and a
+          # single-arch image fails there in a way that reads as a broken chart
+          # rather than a missing architecture.
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Registry cache as well as the Actions cache. The Actions cache is
+          # scoped to this repository and evicted after a week; a registry
+          # cache persists, is shared across branches, and can be used by a
+          # local `docker build` too -- so develop-1.6 reuses main's layers
+          # instead of rebuilding them.
+          cache-from: |
+            type=gha,scope=${{ matrix.name }}
+            type=registry,ref=${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.name }}:buildcache
+          cache-to: |
+            type=gha,mode=max,scope=${{ matrix.name }}
+            type=registry,ref=${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.name }}:buildcache,mode=max
+          provenance: true
+          sbom: true
+
+      - name: Attest the build
+        if: steps.exists.outputs.found == 'true' && steps.published.outputs.skip != 'true'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.name }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true

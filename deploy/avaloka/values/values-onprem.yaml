@@ -1,0 +1,64 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# On-premises / self-managed Kubernetes overlay.
+#
+# Identity: no cloud IAM — provide credentials via a mounted Secret if the app
+#           needs object storage (S3-compatible/MinIO, etc.).
+# Registry: your private registry (Harbor, Nexus, etc.); set imagePullSecrets.
+# Autoscaling needs a metrics-server installed in the cluster.
+#
+#   kubectl create secret docker-registry regcred --docker-server=REGISTRY ...
+#   helm install avaloka deploy/avaloka -n avaloka --create-namespace \
+#       -f deploy/avaloka/values/values-onprem.yaml
+# ─────────────────────────────────────────────────────────────────────────────
+
+avaloka-backend:
+  replicaCount: 2
+
+  image:
+    langgraph:
+      repository: REGISTRY/avaloka-langgraph
+      tag: latest
+      pullPolicy: Always
+    api:
+      repository: REGISTRY/avaloka-api
+      tag: latest
+      pullPolicy: Always
+
+  imagePullSecrets:
+    - name: regcred
+
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 8
+    targetCPUUtilizationPercentage: 75
+
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+  serviceAccount:
+    create: true
+    annotations: {}
+
+  # On-prem: if you need GCS specifically, keep this enabled and create the
+  # gcp-key secret; for S3-compatible storage, leave it off and inject creds
+  # via the backend ConfigMap/Secret env (AWS_*/S3_*).
+  gcpKeySecret:
+    enabled: false
+
+  ingress:
+    enabled: true
+    className: nginx
+
+avaloka-frontend:
+  enabled: true
+  image:
+    repository: REGISTRY/avaloka-frontend
+    tag: latest
+
+redis:
+  enabled: true
+  architecture: standalone
+  auth:
+    enabled: false

@@ -1,0 +1,885 @@
+{
+ "suite": "v4",
+ "source": "/Users/mehebubalom/Desktop/GuruvaiSciences/ssh-workstation/avaloka-test-results/TEST_PLAN_v4.md",
+ "thread_datasets": {
+  "housing-main": "upload:housing.csv",
+  "housing-mta": "upload:housing.csv",
+  "housing-mta2": "upload:housing.csv",
+  "housing-mta3": "upload:housing.csv",
+  "titanic-main": "upload:train.csv",
+  "titanic-mta": "upload:train.csv",
+  "titanic-mta2": "upload:train.csv",
+  "titanic-mta3": "upload:train.csv",
+  "titanic-mta4": "upload:train.csv",
+  "aisles-main": "register:instacart-mba/aisles.csv",
+  "departments-main": "register:instacart-mba/departments.csv",
+  "products-main": "register:instacart-mba/products.csv",
+  "orders-main": "register:instacart-mba/orders.csv",
+  "orders-mta": "register:instacart-mba/orders.csv",
+  "calendar-main": "register:walmart/calendar.csv",
+  "sellprices-main": "register:walmart/sell_prices.csv",
+  "sellprices-mta": "register:walmart/sell_prices.csv",
+  "fraud-main": "register:ieee-fraud/train_transaction.csv",
+  "identity-main": "register:ieee-fraud/train_identity.csv",
+  "taxi-main": "register:nyc-taxi/yellow_tripdata_2015-01.csv"
+ },
+ "batches": [
+  {
+   "name": "F1",
+   "title": "Ingestion & catalog",
+   "items": [
+    {
+     "id": "ING-1",
+     "kind": "ingest",
+     "dataset": "housing.csv (local)",
+     "expect": "200 \u00b7 schema (10 cols) + preview rows",
+     "raw": "Upload housing.csv via `/api/upload`",
+     "op": "upload",
+     "file": "housing.csv"
+    },
+    {
+     "id": "ING-2",
+     "kind": "ingest",
+     "dataset": "train.csv (Titanic, local)",
+     "expect": "200 \u00b7 schema (12 cols) + preview",
+     "raw": "Upload train.csv via `/api/upload`",
+     "op": "upload",
+     "file": "train.csv"
+    },
+    {
+     "id": "ING-3",
+     "kind": "ingest",
+     "dataset": "instacart-mba/aisles.csv",
+     "expect": "200 \u00b7 thread_id + 2-col schema + samples",
+     "raw": "Register from bucket (register-existing-storage)",
+     "op": "register",
+     "conn": "instacart-mba",
+     "file": "aisles.csv"
+    },
+    {
+     "id": "ING-4",
+     "kind": "ingest",
+     "dataset": "instacart-mba/orders.csv",
+     "expect": "200 \u00b7 schema; full local copy downloaded (<1 GB rule)",
+     "raw": "Register mid-size file",
+     "op": "register",
+     "conn": "instacart-mba",
+     "file": "orders.csv"
+    },
+    {
+     "id": "ING-5",
+     "kind": "ingest",
+     "dataset": "nyc-taxi/yellow_tripdata_2015-01.csv",
+     "expect": "200 (long-running OK) \u00b7 head-based samples; background task visible via `/api/datasets/{id}/background-task-status`",
+     "raw": "Register large file",
+     "op": "register",
+     "conn": "nyc-taxi",
+     "file": "yellow_tripdata_2015-01.csv"
+    },
+    {
+     "id": "ING-6",
+     "kind": "chat",
+     "dataset": "\u2014",
+     "expect": "Connections/datasets table via `list_cloud_datasets` \u2014 **no codegen**",
+     "raw": "\"What datasets and cloud connections do I have right now? Show them in a table.\"",
+     "prompt": "What datasets and cloud connections do I have right now? Show them in a table.",
+     "thread": "housing-main"
+    },
+    {
+     "id": "ING-7",
+     "kind": "api",
+     "dataset": "instacart-mba connection",
+     "expect": "200 \u00b7 object listing (correct params this time)",
+     "raw": "`GET /buckets/list?backend=gcs&bucket=avaloka-test-user-filestore&\u2026&connection_id=<id>`",
+     "op": "buckets_list",
+     "conn": "instacart-mba"
+    },
+    {
+     "id": "ING-8",
+     "kind": "ingest",
+     "dataset": "talkingdata-adtracking-fraud/<file> (0 B)",
+     "expect": "Graceful validation error (\"empty file\") \u2014 not a 500, not a hang",
+     "raw": "**Negative:** register the 0-byte file in `talkingdata-adtracking-fraud/` (exact key from ING-7 listing)",
+     "op": "register_negative",
+     "conn": "talkingdata-adtracking-fraud"
+    },
+    {
+     "id": "ING-9",
+     "kind": "chat",
+     "dataset": "\u2014",
+     "expect": "Catalog answer from metadata, no codegen",
+     "raw": "\"Which of my datasets is the largest, and when did I register each?\"",
+     "prompt": "Which of my datasets is the largest, and when did I register each?",
+     "thread": "housing-main"
+    }
+   ]
+  },
+  {
+   "name": "F2",
+   "title": "General query & discovery",
+   "items": [
+    {
+     "id": "GQ-1",
+     "kind": "chat",
+     "dataset": "housing.csv (local)",
+     "expect": "10-col schema table",
+     "raw": "\"What's in this dataset? Give me the schema with types and one example value per column.\"",
+     "prompt": "What's in this dataset? Give me the schema with types and one example value per column.",
+     "thread": "housing-main"
+    },
+    {
+     "id": "GQ-2",
+     "kind": "chat",
+     "dataset": "housing.csv (local)",
+     "expect": "20,640 rows \u00b7 total_bedrooms \u2248 207 nulls",
+     "raw": "\"How many rows are there, and which columns have missing values and how many?\"",
+     "prompt": "How many rows are there, and which columns have missing values and how many?",
+     "thread": "housing-main"
+    },
+    {
+     "id": "GQ-3",
+     "kind": "chat",
+     "dataset": "train.csv (Titanic, local)",
+     "expect": "891 \u00b7 Cabin \u2248 23 % non-null",
+     "raw": "\"How many passengers are in here, and what fraction have a Cabin recorded?\"",
+     "prompt": "How many passengers are in here, and what fraction have a Cabin recorded?",
+     "thread": "titanic-main"
+    },
+    {
+     "id": "GQ-4",
+     "kind": "chat",
+     "dataset": "instacart-mba/aisles.csv",
+     "expect": "**134**",
+     "raw": "\"How many distinct aisles are there?\"",
+     "prompt": "How many distinct aisles are there?",
+     "thread": "aisles-main"
+    },
+    {
+     "id": "GQ-5",
+     "kind": "chat",
+     "dataset": "instacart-mba/departments.csv",
+     "expect": "21-row list",
+     "raw": "\"List all departments alphabetically.\"",
+     "prompt": "List all departments alphabetically.",
+     "thread": "departments-main"
+    },
+    {
+     "id": "GQ-6",
+     "kind": "chat",
+     "dataset": "walmart/calendar.csv",
+     "expect": "2011\u21922016-ish range \u00b7 one row = one day",
+     "raw": "\"What date range does this file cover, and what granularity is one row?\"",
+     "prompt": "What date range does this file cover, and what granularity is one row?",
+     "thread": "calendar-main"
+    },
+    {
+     "id": "GQ-7",
+     "kind": "chat",
+     "dataset": "ieee-fraud/train_identity.csv",
+     "expect": "`suggest_analysis`: sensible suggestions (device split, id_* nullity)",
+     "raw": "\"I've never seen this dataset before \u2014 what analyses would you suggest?\"",
+     "prompt": "I've never seen this dataset before \u2014 what analyses would you suggest?",
+     "thread": "identity-main"
+    },
+    {
+     "id": "GQ-8",
+     "kind": "chat",
+     "dataset": "\u2014",
+     "expect": "Capability answer via `respond_to_user` \u2014 no codegen, no error",
+     "raw": "\"What can you actually do with my data? Summarize your capabilities.\"",
+     "prompt": "What can you actually do with my data? Summarize your capabilities.",
+     "thread": "housing-main"
+    },
+    {
+     "id": "GQ-9",
+     "kind": "chat",
+     "dataset": "ieee-fraud/train_transaction.csv",
+     "expect": "Reasoned answer (it's a timedelta from a reference point)",
+     "raw": "\"Is TransactionDT a real timestamp or seconds from some reference? What would you treat it as?\"",
+     "prompt": "Is TransactionDT a real timestamp or seconds from some reference? What would you treat it as?",
+     "thread": "fraud-main"
+    }
+   ]
+  },
+  {
+   "name": "F3",
+   "title": "Data transformation",
+   "items": [
+    {
+     "id": "TR-1",
+     "kind": "chat",
+     "dataset": "housing.csv (local)",
+     "expect": "Transform runs \u00b7 \u2248 207 filled",
+     "raw": "\"Fill the missing total_bedrooms with the column median and tell me how many rows you fixed.\"",
+     "prompt": "Fill the missing total_bedrooms with the column median and tell me how many rows you fixed.",
+     "thread": "housing-main"
+    },
+    {
+     "id": "TR-2",
+     "kind": "chat",
+     "dataset": "housing.csv (local)",
+     "expect": "New cols present in preview",
+     "raw": "\"Add two engineered columns: rooms_per_household = total_rooms/households and bedrooms_per_room = total_bedrooms/total_rooms. Show 5 rows.\"",
+     "prompt": "Add two engineered columns: rooms_per_household = total_rooms/households and bedrooms_per_room = total_bedrooms/total_rooms. Show 5 rows.",
+     "thread": "housing-main"
+    },
+    {
+     "id": "TR-3",
+     "kind": "chat",
+     "dataset": "train.csv (Titanic, local)",
+     "expect": "\u2248 177 filled \u00b7 sensible median",
+     "raw": "\"Impute Age with the median age of each Pclass \u00d7 Sex group, then report how many were filled and the new overall median.\"",
+     "prompt": "Impute Age with the median age of each Pclass \u00d7 Sex group, then report how many were filled and the new overall median.",
+     "thread": "titanic-main"
+    },
+    {
+     "id": "TR-4",
+     "kind": "chat",
+     "dataset": "train.csv (Titanic, local)",
+     "expect": "New features + 2-row comparison",
+     "raw": "\"Create family_size = SibSp + Parch + 1 and is_alone flag; show survival rate for alone vs not.\"",
+     "prompt": "Create family_size = SibSp + Parch + 1 and is_alone flag; show survival rate for alone vs not.",
+     "thread": "titanic-main"
+    },
+    {
+     "id": "TR-5",
+     "kind": "chat",
+     "dataset": "train.csv (Titanic, local)",
+     "expect": "10-col schema back",
+     "raw": "\"Drop Cabin and Ticket, keep everything else, and show the resulting schema.\"",
+     "prompt": "Drop Cabin and Ticket, keep everything else, and show the resulting schema.",
+     "thread": "titanic-main"
+    },
+    {
+     "id": "TR-6",
+     "kind": "chat",
+     "dataset": "train.csv (Titanic, local)",
+     "expect": "Works \u2014 original session **not** silently replaced by the column-dropping output",
+     "raw": "**Guard probe:** (right after TR-5) \"What's the average Fare by Embarked?\"",
+     "prompt": "What's the average Fare by Embarked?",
+     "thread": "titanic-main"
+    },
+    {
+     "id": "TR-7",
+     "kind": "chat",
+     "dataset": "instacart-mba/products.csv",
+     "expect": "Count of changed rows",
+     "raw": "\"Standardize product_name to lowercase and strip whitespace; how many names changed?\"",
+     "prompt": "Standardize product_name to lowercase and strip whitespace; how many names changed?",
+     "thread": "products-main"
+    },
+    {
+     "id": "TR-10",
+     "kind": "chat",
+     "dataset": "walmart/calendar.csv",
+     "expect": "year \u00d7 3-state pivot",
+     "raw": "\"Pivot SNAP days: for each year, how many SNAP days per state (CA/TX/WI)?\"",
+     "prompt": "Pivot SNAP days: for each year, how many SNAP days per state (CA/TX/WI)?",
+     "thread": "calendar-main"
+    },
+    {
+     "id": "TR-11",
+     "kind": "chat",
+     "dataset": "instacart-mba/products.csv + instacart-mba/aisles.csv",
+     "expect": "Joined result **or** clear one-dataset limitation message (record which)",
+     "raw": "**Join probe:** \"Join products with aisles on aisle_id and show the top 10 aisles by product count with aisle names.\"",
+     "prompt": "Join products with aisles on aisle_id and show the top 10 aisles by product count with aisle names.",
+     "thread": "products-main"
+    }
+   ]
+  },
+  {
+   "name": "F4",
+   "title": "Analytics & statistics",
+   "items": [
+    {
+     "id": "AN-1",
+     "kind": "chat",
+     "dataset": "housing.csv (local)",
+     "expect": "median_income top (~0.69)",
+     "raw": "\"Which 5 columns correlate most strongly with median_house_value? Values included.\"",
+     "prompt": "Which 5 columns correlate most strongly with median_house_value? Values included.",
+     "thread": "housing-main"
+    },
+    {
+     "id": "AN-2",
+     "kind": "chat",
+     "dataset": "housing.csv (local)",
+     "expect": "5-group table, ISLAND highest",
+     "raw": "\"Average median_house_value by ocean_proximity, highest first, with row counts.\"",
+     "prompt": "Average median_house_value by ocean_proximity, highest first, with row counts.",
+     "thread": "housing-main"
+    },
+    {
+     "id": "AN-3",
+     "kind": "chat",
+     "dataset": "housing.csv (local)",
+     "expect": "5 numbers",
+     "raw": "\"Min, max, median, p90, p99 of median_income.\"",
+     "prompt": "Min, max, median, p90, p99 of median_income.",
+     "thread": "housing-main"
+    },
+    {
+     "id": "AN-4",
+     "kind": "chat",
+     "dataset": "train.csv (Titanic, local)",
+     "expect": "2\u00d73 table \u00b7 female 1st \u2248 96.8 %",
+     "raw": "\"Cross-tab survival rate by Sex and Pclass \u2014 the classic table.\"",
+     "prompt": "Cross-tab survival rate by Sex and Pclass \u2014 the classic table.",
+     "thread": "titanic-main"
+    },
+    {
+     "id": "AN-5",
+     "kind": "chat",
+     "dataset": "train.csv (Titanic, local)",
+     "expect": "\u03c7\u00b2/Fisher \u00b7 p \u226a 0.001",
+     "raw": "\"Is the male/female survival difference statistically significant? Run the right test, give the p-value.\"",
+     "prompt": "Is the male/female survival difference statistically significant? Run the right test, give the p-value.",
+     "thread": "titanic-main"
+    },
+    {
+     "id": "AN-6",
+     "kind": "chat",
+     "dataset": "instacart-mba/orders.csv",
+     "expect": "Peak ~10:00\u201315:00 (+ fidelity note if sampled)",
+     "raw": "\"What are the peak ordering hours? Distribution of order_hour_of_day, top 3 called out.\"",
+     "prompt": "What are the peak ordering hours? Distribution of order_hour_of_day, top 3 called out.",
+     "thread": "orders-main"
+    },
+    {
+     "id": "AN-7",
+     "kind": "chat",
+     "dataset": "instacart-mba/orders.csv",
+     "expect": "7-row table + reading",
+     "raw": "\"Median days_since_prior_order by order_dow \u2014 do weekend shoppers reorder faster?\"",
+     "prompt": "Median days_since_prior_order by order_dow \u2014 do weekend shoppers reorder faster?",
+     "thread": "orders-main"
+    },
+    {
+     "id": "AN-8",
+     "kind": "chat",
+     "dataset": "ieee-fraud/train_transaction.csv",
+     "expect": "\u2248 1.5 % on sample **with fidelity note** (\u2248 3.5 % if full)",
+     "raw": "\"Overall fraud rate, and fraud rate by ProductCD.\"",
+     "prompt": "Overall fraud rate, and fraud rate by ProductCD.",
+     "thread": "fraud-main"
+    },
+    {
+     "id": "AN-9",
+     "kind": "chat",
+     "dataset": "ieee-fraud/train_transaction.csv",
+     "expect": "2-row comparison",
+     "raw": "\"Compare TransactionAmt for fraud vs legit: mean, median, p95 for each.\"",
+     "prompt": "Compare TransactionAmt for fraud vs legit: mean, median, p95 for each.",
+     "thread": "fraud-main"
+    },
+    {
+     "id": "AN-10",
+     "kind": "chat",
+     "dataset": "ieee-fraud/train_identity.csv",
+     "expect": "Share + mobile/desktop split",
+     "raw": "\"What share of transactions have a matching identity record? Of those, DeviceType split?\"",
+     "prompt": "What share of transactions have a matching identity record? Of those, DeviceType split?",
+     "thread": "identity-main"
+    },
+    {
+     "id": "AN-15",
+     "kind": "chat",
+     "dataset": "walmart/calendar.csv",
+     "expect": "Reasonable unprompted profile/summary \u2014 no error",
+     "raw": "**Ambiguity probe:** \"Analyze this dataset.\"",
+     "prompt": "Analyze this dataset.",
+     "thread": "calendar-main"
+    }
+   ]
+  },
+  {
+   "name": "F5",
+   "title": "Model training",
+   "items": [
+    {
+     "id": "MP-1",
+     "kind": "chat",
+     "dataset": "housing.csv (local)",
+     "expect": "Plan: target=median_house_value \u00b7 **regression** (float dtype)",
+     "raw": "\"Set up a model to predict median_house_value from median_income, housing_median_age, total_rooms, population. 3 epochs. Plan only \u2014 don't run.\"",
+     "prompt": "Set up a model to predict median_house_value from median_income, housing_median_age, total_rooms, population. 3 epochs. Plan only \u2014 don't run.",
+     "thread": "fresh:housing-mta"
+    },
+    {
+     "id": "MP-2",
+     "kind": "chat",
+     "dataset": "train.csv (Titanic, local)",
+     "expect": "Plan: target=Survived \u00b7 **classification**",
+     "raw": "\"I want to predict Survived using Pclass, Sex, Age and Fare. 3 epochs. Show the plan first.\"",
+     "prompt": "I want to predict Survived using Pclass, Sex, Age and Fare. 3 epochs. Show the plan first.",
+     "thread": "fresh:titanic-mta"
+    },
+    {
+     "id": "MP-3",
+     "kind": "chat",
+     "dataset": "train.csv (Titanic, local)",
+     "expect": "Updated plan re-presented \u2014 **not** trained",
+     "raw": "(same thread) \"Add SibSp as a feature too.\"",
+     "prompt": "Add SibSp as a feature too.",
+     "thread": "titanic-mta"
+    },
+    {
+     "id": "MP-4",
+     "kind": "chat",
+     "dataset": "train.csv (Titanic, local)",
+     "expect": "Maps words \u2192 Survived target",
+     "raw": "(fresh thread) \"Build me a model that tells me which passengers survive.\"",
+     "prompt": "Build me a model that tells me which passengers survive.",
+     "thread": "fresh:titanic-mta2"
+    },
+    {
+     "id": "MP-5",
+     "kind": "chat",
+     "dataset": "train.csv (Titanic, local)",
+     "expect": "Excludes PassengerId/Name/Ticket",
+     "raw": "(same thread) \"Pick sensible features yourself and show the plan.\"",
+     "prompt": "Pick sensible features yourself and show the plan.",
+     "thread": "titanic-mta2"
+    },
+    {
+     "id": "MP-6",
+     "kind": "chat",
+     "dataset": "housing.csv (local)",
+     "expect": "model_type=**classification** (user word beats float dtype)",
+     "raw": "\"Classify median_house_value into low/mid/high price buckets. Plan only.\"",
+     "prompt": "Classify median_house_value into low/mid/high price buckets. Plan only.",
+     "thread": "fresh:housing-mta2"
+    },
+    {
+     "id": "MP-7",
+     "kind": "chat",
+     "dataset": "housing.csv (local)",
+     "expect": "Refusal naming the missing column \u2014 no run, no 500",
+     "raw": "**Negative:** \"Train a model to predict house_price from median_income.\"",
+     "prompt": "Train a model to predict house_price from median_income.",
+     "thread": "fresh:housing-mta3"
+    },
+    {
+     "id": "MP-8",
+     "kind": "chat",
+     "dataset": "train.csv (Titanic, local)",
+     "expect": "Missing-feature error, not silent drop",
+     "raw": "**Negative:** \"Train Survived using Pclass and CabinDeck. Plan first.\"",
+     "prompt": "Train Survived using Pclass and CabinDeck. Plan first.",
+     "thread": "fresh:titanic-mta3"
+    },
+    {
+     "id": "MP-9",
+     "kind": "chat",
+     "dataset": "instacart-mba/orders.csv",
+     "expect": "Plan: regression, correct target (cloud trainable)",
+     "raw": "\"Predict days_since_prior_order from order_dow, order_hour_of_day and order_number. 3 epochs. Plan first.\"",
+     "prompt": "Predict days_since_prior_order from order_dow, order_hour_of_day and order_number. 3 epochs. Plan first.",
+     "thread": "fresh:orders-mta"
+    }
+   ]
+  },
+  {
+   "name": "F6",
+   "title": "Training execution & model registry",
+   "items": [
+    {
+     "id": "MX-1",
+     "kind": "chat",
+     "dataset": "housing.csv (local)",
+     "expect": "FINISHED \u00b7 run id \u00b7 RMSE/MAE-family metrics",
+     "raw": "(after MP-1) \"Looks good \u2014 go ahead and train it.\"",
+     "prompt": "Looks good \u2014 go ahead and train it.",
+     "thread": "housing-mta"
+    },
+    {
+     "id": "MX-2",
+     "kind": "chat",
+     "dataset": "train.csv (Titanic, local)",
+     "expect": "FINISHED \u00b7 accuracy/F1-family metrics",
+     "raw": "(after MP-3) \"Good \u2014 train it.\"",
+     "prompt": "Good \u2014 train it.",
+     "thread": "titanic-mta"
+    },
+    {
+     "id": "MX-3",
+     "kind": "chat",
+     "dataset": "train.csv (Titanic, local)",
+     "expect": "Single-turn change+train \u2014 record outcome (v2-era known-flaky)",
+     "raw": "**Combined probe:** (fresh plan first) \"Change it to 5 epochs and train it now.\"",
+     "prompt": "Change it to 5 epochs and train it now.",
+     "thread": "fresh:titanic-mta4"
+    },
+    {
+     "id": "MX-4",
+     "kind": "chat",
+     "dataset": "instacart-mba/orders.csv",
+     "expect": "FINISHED locally (109 MB < 200 MB threshold)",
+     "raw": "(after MP-9) \"Confirm \u2014 train it.\"",
+     "prompt": "Confirm \u2014 train it.",
+     "thread": "orders-mta"
+    },
+    {
+     "id": "MX-5",
+     "kind": "api",
+     "dataset": "\u2014",
+     "expect": "Registry list incl. run ids for MX-1/2/4",
+     "raw": "\"What models do I have registered now?\"",
+     "op": "models_get",
+     "note": "MTA rule: registry read via /api/models, not chat"
+    },
+    {
+     "id": "MX-6",
+     "kind": "api",
+     "dataset": "\u2014",
+     "expect": "200 \u00b7 metadata matches chat answer",
+     "raw": "`GET /api/models` then `GET /api/models/{run_id}`",
+     "op": "models_get"
+    },
+    {
+     "id": "MX-7",
+     "kind": "chat",
+     "dataset": "housing.csv (local)",
+     "expect": "Trains on correct columns \u2014 session guard \u00d7 trainer",
+     "raw": "**Post-transform training:** (in the F3 housing thread, after TR-1/TR-2) \"Now train the same median_house_value model again, 3 epochs.\"",
+     "prompt": "Now train the same median_house_value model again, 3 epochs.",
+     "thread": "housing-main"
+    },
+    {
+     "id": "MX-8",
+     "kind": "api",
+     "dataset": "\u2014",
+     "expect": "200 \u00b7 gone from MX-5-style listing",
+     "raw": "`DELETE /api/models/{run_id}` on a throwaway run",
+     "op": "model_delete_throwaway"
+    }
+   ]
+  },
+  {
+   "name": "F7",
+   "title": "Inference & serving",
+   "items": [
+    {
+     "id": "IN-1",
+     "kind": "api",
+     "dataset": "housing.csv model (MX-1)",
+     "expect": "20-row predictions table",
+     "raw": "\"Score the first 20 rows with that model and show predictions next to actual median_house_value.\"",
+     "op": "batch_inference",
+     "model_of": "MX-1",
+     "rows": 20,
+     "note": "MTA rule: inference-tab API, not prompt"
+    },
+    {
+     "id": "IN-2",
+     "kind": "api",
+     "dataset": "train.csv (Titanic) model (MX-2)",
+     "expect": "Ranked misclassification list",
+     "raw": "\"Which 10 passengers in the file does the model most confidently predict to die, who actually survived?\"",
+     "op": "batch_inference",
+     "model_of": "MX-2",
+     "rows": 20,
+     "note": "MTA rule: inference-tab API, not prompt"
+    },
+    {
+     "id": "IN-3",
+     "kind": "api",
+     "dataset": "housing.csv model (MX-1)",
+     "expect": "200 \u00b7 5 predictions",
+     "raw": "`POST /api/models/{run_id}/inference` with 5 JSON rows (batch inference API)",
+     "op": "batch_inference",
+     "model_of": "MX-1",
+     "rows": 5
+    },
+    {
+     "id": "IN-4",
+     "kind": "api",
+     "dataset": "housing.csv model (MX-1)",
+     "expect": "4xx with a clear message naming the column \u2014 not a 500",
+     "raw": "Batch inference with a **missing feature column** in the payload",
+     "op": "batch_inference_missing_col",
+     "model_of": "MX-1"
+    },
+    {
+     "id": "IN-5",
+     "kind": "api",
+     "dataset": "housing.csv model (MX-1)",
+     "expect": "Ray off \u2192 clear unavailability message (BG16 watch: bare error = FAIL)",
+     "raw": "\"Expose the housing model as a real-time inference service.\"",
+     "op": "configure_inference_service",
+     "model_of": "MX-1",
+     "note": "MTA rule: serving via inference-tab API; expect clear Ray-off message"
+    },
+    {
+     "id": "IN-6",
+     "kind": "api",
+     "dataset": "\u2014",
+     "expect": "Graceful \"nothing running\" response",
+     "raw": "`POST /api/models/{run_id}/stop-inference-service` when none running",
+     "op": "stop_inference_service"
+    }
+   ]
+  },
+  {
+   "name": "F8",
+   "title": "Data transfer agent",
+   "items": [
+    {
+     "id": "DT-1",
+     "kind": "chat",
+     "dataset": "instacart-mba/aisles.csv (2 KB)",
+     "expect": "Transfer initiated + completion/status message; object appears at destination",
+     "raw": "\"Transfer aisles.csv from the instacart-mba connection to the walmart connection under transfers/aisles_copy.csv.\"",
+     "prompt": "Transfer aisles.csv from the instacart-mba connection to the walmart connection under transfers/aisles_copy.csv.",
+     "thread": "aisles-main"
+    },
+    {
+     "id": "DT-2",
+     "kind": "chat",
+     "dataset": "housing.csv TR-1 output",
+     "expect": "Transfer of a **produced artifact** \u2014 or clear capability message (record)",
+     "raw": "\"Move my cleaned housing dataset (the TR-1 output) to the nyc-taxi bucket connection.\"",
+     "prompt": "Move my cleaned housing dataset (the TR-1 output) to the nyc-taxi bucket connection.",
+     "thread": "fresh:dt-2"
+    },
+    {
+     "id": "DT-3",
+     "kind": "chat",
+     "dataset": "\u2014",
+     "expect": "`register_database` acks \u00b7 shows in `list_databases`",
+     "raw": "\"Register my Postgres database\" (in-cluster supabase-db conn string)",
+     "prompt": "Register my Postgres database",
+     "thread": "departments-main"
+    },
+    {
+     "id": "DT-4",
+     "kind": "chat",
+     "dataset": "instacart-mba/departments.csv (1 KB)",
+     "expect": "GCS\u2192DB transfer completes; table exists",
+     "raw": "\"Copy departments.csv into the Postgres database as table dept_dim.\"",
+     "prompt": "Copy departments.csv into the Postgres database as table dept_dim.",
+     "thread": "departments-main"
+    },
+    {
+     "id": "DT-5",
+     "kind": "chat",
+     "dataset": "Postgres",
+     "expect": "**21** + 3 names \u2014 closes the loop on DT-4",
+     "raw": "`POST /api/v1/database/query`: \"How many rows are in dept_dim and what are 3 example departments?\"",
+     "prompt": "How many rows are in dept_dim and what are 3 example departments?",
+     "thread": "fresh:dt-5"
+    },
+    {
+     "id": "DT-6",
+     "kind": "chat",
+     "dataset": "\u2014",
+     "expect": "`list_databases` listing incl. DT-3",
+     "raw": "\"What databases do I have registered?\"",
+     "prompt": "What databases do I have registered?",
+     "thread": "departments-main"
+    }
+   ]
+  },
+  {
+   "name": "F9",
+   "title": "Visualization",
+   "items": [
+    {
+     "id": "VZ-1",
+     "kind": "chat",
+     "dataset": "housing.csv (local)",
+     "expect": "Histogram config/render",
+     "raw": "\"Histogram of median_income with a sensible bin count.\"",
+     "prompt": "Histogram of median_income with a sensible bin count.",
+     "thread": "housing-main"
+    },
+    {
+     "id": "VZ-2",
+     "kind": "chat",
+     "dataset": "train.csv (Titanic, local)",
+     "expect": "3-bar chart",
+     "raw": "\"Bar chart: survival rate by Pclass.\"",
+     "prompt": "Bar chart: survival rate by Pclass.",
+     "thread": "titanic-main"
+    },
+    {
+     "id": "VZ-4",
+     "kind": "chat",
+     "dataset": "instacart-mba/orders.csv",
+     "expect": "7\u00d724 heatmap config",
+     "raw": "\"Heatmap of order volume: order_dow vs order_hour_of_day.\"",
+     "prompt": "Heatmap of order volume: order_dow vs order_hour_of_day.",
+     "thread": "orders-main"
+    },
+    {
+     "id": "VZ-5",
+     "kind": "chat",
+     "dataset": "housing.csv (local)",
+     "expect": "Scatter + visible positive trend",
+     "raw": "\"Scatter of median_income vs median_house_value with a trend line.\"",
+     "prompt": "Scatter of median_income vs median_house_value with a trend line.",
+     "thread": "housing-main"
+    }
+   ]
+  },
+  {
+   "name": "F10",
+   "title": "Scheduling & task management",
+   "items": [
+    {
+     "id": "SC-1",
+     "kind": "chat",
+     "dataset": "ieee-fraud/train_transaction.csv",
+     "expect": "This deploy has no Celery \u2192 the exact clear \"Scheduling isn't available\u2026\" message \u2014 instantly, **before** any codegen",
+     "raw": "\"Every Monday 9am, recompute the fraud rate by ProductCD and store the result.\"",
+     "prompt": "Every Monday 9am, recompute the fraud rate by ProductCD and store the result.",
+     "thread": "fraud-main"
+    },
+    {
+     "id": "SC-2",
+     "kind": "chat",
+     "dataset": "\u2014",
+     "expect": "Clean empty/none answer \u2014 no error",
+     "raw": "\"List my scheduled tasks.\"",
+     "prompt": "List my scheduled tasks.",
+     "thread": "fraud-main"
+    },
+    {
+     "id": "SC-3",
+     "kind": "api",
+     "dataset": "\u2014",
+     "expect": "200 \u00b7 consistent with SC-2",
+     "raw": "`GET /tasks`",
+     "op": "tasks_list"
+    },
+    {
+     "id": "SC-4",
+     "kind": "chat",
+     "dataset": "\u2014",
+     "expect": "Graceful none-exists answer",
+     "raw": "\"What's the status of my last scheduled task?\"",
+     "prompt": "What's the status of my last scheduled task?",
+     "thread": "fraud-main"
+    },
+    {
+     "id": "SC-5",
+     "kind": "chat",
+     "dataset": "\u2014",
+     "expect": "Graceful no-such-task handling \u2014 no stacktrace",
+     "raw": "\"Cancel the weekly fraud report task.\"",
+     "prompt": "Cancel the weekly fraud report task.",
+     "thread": "fraud-main"
+    }
+   ]
+  },
+  {
+   "name": "F11",
+   "title": "Fidelity & scale",
+   "items": [
+    {
+     "id": "FS-1",
+     "kind": "chat",
+     "dataset": "instacart-mba/aisles.csv",
+     "expect": "134 **with** fidelity note if sampled path, or clean 134 via full copy",
+     "raw": "\"How many distinct aisles are there?\" *(cloud registration, first ask)*",
+     "prompt": "How many distinct aisles are there?",
+     "thread": "aisles-main"
+    },
+    {
+     "id": "FS-2",
+     "kind": "chat",
+     "dataset": "instacart-mba/aisles.csv",
+     "expect": "**134**, no fidelity note",
+     "raw": "*(immediately after)* \"Now compute that on the entire dataset.\" *(direct phrasing \u2014 the vague \"run this\" is a known drift quirk)*",
+     "prompt": "Now compute that on the entire dataset.\" *(direct phrasing \u2014 the vague \"run this",
+     "thread": "aisles-main"
+    },
+    {
+     "id": "FS-6",
+     "kind": "k8s",
+     "dataset": "any",
+     "expect": "Session survives (RC13) \u00b7 known open: pod-local work files may need re-register \u2014 record which occurs",
+     "raw": "Restart API pod, then re-ask a question in an existing thread",
+     "op": "restart_api_then_reask",
+     "thread": "housing-main"
+    }
+   ]
+  },
+  {
+   "name": "F12",
+   "title": "Memory, preferences & history",
+   "items": [
+    {
+     "id": "ME-1",
+     "kind": "chat",
+     "dataset": "\u2014",
+     "expect": "Preference stored + acked",
+     "raw": "\"Preference: always include row counts in any table you show me.\"",
+     "prompt": "Preference: always include row counts in any table you show me.",
+     "thread": "housing-main"
+    },
+    {
+     "id": "ME-2",
+     "kind": "chat",
+     "dataset": "housing.csv (local)",
+     "expect": "Row counts present \u2014 preference applied",
+     "raw": "*(next analytical ask, e.g. AN-2 rerun)*",
+     "prompt": "Average median_house_value by ocean_proximity, highest first, with row counts.",
+     "thread": "housing-main"
+    },
+    {
+     "id": "ME-3",
+     "kind": "chat",
+     "dataset": "\u2014",
+     "expect": "Recalls prior finding via history \u2014 or honest \"no stored history\"",
+     "raw": "\"What did we find about fraud rates in earlier analyses?\"",
+     "prompt": "What did we find about fraud rates in earlier analyses?",
+     "thread": "housing-main"
+    },
+    {
+     "id": "ME-4",
+     "kind": "chat",
+     "dataset": "any active thread",
+     "expect": "Faithful thread summary \u2014 no codegen",
+     "raw": "\"Summarize everything we did in this thread for my team, 5 bullets max.\"",
+     "prompt": "Summarize everything we did in this thread for my team, 5 bullets max.",
+     "thread": "housing-main"
+    }
+   ]
+  },
+  {
+   "name": "F13",
+   "title": "Plan graph & job summaries",
+   "items": [
+    {
+     "id": "PG-1",
+     "kind": "chat",
+     "dataset": "housing.csv (local)",
+     "expect": "Artifact-reference reply \u2014 **no codegen**, no Path(None) crash",
+     "raw": "*(after any F4 analysis)* \"Show me the plan graph for this analysis.\"",
+     "prompt": "Show me the plan graph for this analysis.",
+     "thread": "housing-main"
+    },
+    {
+     "id": "PG-2",
+     "kind": "chat",
+     "dataset": "same thread",
+     "expect": "Plan narration matching what ran",
+     "raw": "\"Explain step by step what your plan was for the last answer.\"",
+     "prompt": "Explain step by step what your plan was for the last answer.",
+     "thread": "housing-main"
+    },
+    {
+     "id": "PG-3",
+     "kind": "chat",
+     "dataset": "housing.csv model (MX-1)",
+     "expect": "Accurate job summary (run id + metrics consistent with MX-1)",
+     "raw": "*(after MX-1)* \"Summarize that training job: data used, params, metrics.\"",
+     "prompt": "Summarize that training job: data used, params, metrics.",
+     "thread": "housing-mta"
+    }
+   ]
+  }
+ ]
+}

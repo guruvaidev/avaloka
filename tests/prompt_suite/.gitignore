@@ -1,0 +1,7 @@
+# runtime residue — never commit
+state.json
+results/
+env.sh
+hosted_env.sh
+*.bak
+__pycache__/

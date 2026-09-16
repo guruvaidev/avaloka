@@ -1,0 +1,14 @@
+# deploy/docker/Dockerfile.functions — Supabase Edge Functions for the in-cluster
+# Supabase. Build context = repo root:
+#   docker build -f deploy/docker/Dockerfile.functions -t avaloka-functions:latest .
+#
+# The chart's Supabase is db + auth + rest + kong only, so every
+# supabase.functions.invoke(...) in the UI 404s at the gateway. This image bakes
+# the UI's function sources plus the main dispatcher (deploy/docker/functions-main)
+# that the edge-runtime image doesn't ship.
+FROM supabase/edge-runtime:v1.67.4
+
+COPY ui/supabase/functions /home/deno/functions
+COPY deploy/docker/functions-main /home/deno/functions/main
+
+CMD ["start", "--main-service", "/home/deno/functions/main"]

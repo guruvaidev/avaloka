@@ -1,0 +1,58 @@
+{
+  "DEF-001": {
+    "title": "Shipping code reaches a private Kamalii GCS bucket at runtime",
+    "severity": "P1 for OSS launch",
+    "where": "app/agents/data_transfer_agent/daft_validator.py:26 (SYSDOCS_GCS_PATH), read at line 82",
+    "detail": "SYSDOCS_GCS_PATH = gs://avaloka-test-user-filestore/... is a hardcoded private bucket that the DTA validator lists and reads on every logical-validation run. Observed live: gcsfs raised 'Anonymous caller does not have storage.objects.list access ... 401'. It degrades gracefully (returns {}), so the failure is silent - but every OSS install makes an outbound call to Kamalii infrastructure, logs a full exception traceback, and then validates WITHOUT the system documentation the validator was designed to use. Validation quality is quietly reduced and nobody is told.",
+    "fix": "Make the path configurable, ship the sysdocs in the image or repo, and downgrade the failure to a single INFO line naming the missing config."
+  },
+  "DEF-002": {
+    "title": "A real Supabase project token is hardcoded in edge-function source",
+    "severity": "P1 for OSS launch",
+    "where": "ui/supabase/functions/send-analysis-email/index.ts:442 and send-report-email/index.ts:550",
+    "detail": "A JWT with iss=supabase, ref=yqsrqpfulmtplvqjckaz, role=anon, exp 2036. The anon key is public by design so this is NOT a credential compromise, but it hardcodes YOUR project into code about to be open-sourced: every OSS user's edge functions would call Kamalii's Supabase project. Same class as PR #327 / #314; still present on temp-develop-1.6.",
+    "fix": "Read from the environment; fail with a named error when unset."
+  },
+  "DEF-003": {
+    "title": "Helm chart defaults to Supabase's published demo credentials with no warning",
+    "severity": "P1 for OSS launch",
+    "where": "deploy/helm/avaloka/values.yaml (anonKey, serviceKey, jwtSecret)",
+    "detail": "The defaults carry iss=supabase-demo and the literal jwtSecret 'super-secret-jwt-token-with-at-least-32-characters-long'. These are Supabase's PUBLIC local-dev keys - not a leak - but the chart ships them as defaults including a service_role token, with no change-me warning. A user who deploys without overriding them is running with credentials printed in Supabase's public documentation.",
+    "fix": "Leave them empty and fail the chart render with a message, or add a prominent warning plus a preflight that refuses to start with demo values outside a dev profile."
+  },
+  "DEF-004": {
+    "title": "Conversational ambiguity handling is unstable, not merely weak",
+    "severity": "P2",
+    "where": "track6_conversational, probe conv_ambiguous_revenue",
+    "detail": "pass@1 measured 0.20 in one run and 0.00 in another, against best-of-5 = 1.00. The behaviour exists and fires inconsistently. Part of the gap is a harness artifact (the adapter binds no dataset, so the agent answers 'I don't have data loaded' rather than asking which reading was meant) - fix the adapter before attributing all of it to the agent. Re-measured after the fixes: conv_ambiguous_revenue pass@1 0.20 and conv_bad_news_baseline 0.40 (it measured 0.80 in an earlier run). Both probes move run to run, which is itself the finding -- these are not stable scores, and a single run of either should not be quoted as one.",
+    "fix": "Bind a dataset in the adapter, re-measure, then address determinism in the prompt."
+  },
+  "DEF-005": {
+    "title": "Provider misconfiguration degrades silently to canned text",
+    "severity": "P1 for first-run experience",
+    "where": "app/agents/avaloka_agent/agent.py _get_reply_llm(), app/core/inference.py",
+    "detail": "With INFERENCE_PROVIDER=groq and an EMPTY Groq key but a populated OpenRouter key, the reply LLM fails to build, returns None, and every turn silently falls to the deterministic fallback. Measured effect: four semantically different under-specified prompts returned byte-identical table dumps with zero clarifying questions. With the provider correctly configured the same four prompts produced two grounded answers and two clarifying questions. The operator supplied a valid key and was never told the configured provider was unusable.",
+    "fix": "Fail loudly at startup when INFERENCE_PROVIDER has no usable key, naming the variable that is missing."
+  },
+  "DEF-006": {
+    "title": "Small datasets are sampled when they should be read whole",
+    "severity": "P2",
+    "where": "app/agents/avaloka_agent/execution_profile.py",
+    "detail": "SMALL_THRESHOLD (100 MB) is defined but never used in the fidelity decision, which branches on MEDIUM_THRESHOLD (1 GB). Anything under 1 GB is therefore quick_sample - including a 12-row CSV, which is reported to the user as 'computed on a 12-row sample'. Contradicts the intended policy of sizing first and running whole unless the data is genuinely large.",
+    "fix": "Below SMALL_THRESHOLD choose entire_dataset locally; reserve the confirmation prompt for genuinely large inputs."
+  },
+  "DEF-007": {
+    "title": "/version reported 1.5 on the 1.6 line; five conflicting version strings in the repo",
+    "severity": "P2",
+    "where": "app/api/server.py (fixed on this branch), VERSION, Chart.yaml, pyproject.toml",
+    "detail": "APP_VERSION defaulted to the literal '1.5' and nothing set it in the chart, so /version answered 1.5 for the whole 1.6 line. Now reads the VERSION file. The repo still holds five different version strings (VERSION 0.2.0, Chart version 0.1.0, appVersion 0.2.0, pyproject 0.3.0, server 1.5-as-was) and none is 1.6. Choosing the release number is a release decision, not a code fix.",
+    "fix": "Pick the number, set VERSION, and let the chart and pyproject follow it."
+  },
+  "DEF-008": {
+    "title": "Two advertised upload formats return HTTP 500",
+    "severity": "P1",
+    "where": "POST /api/upload; SUPPORTED_UPLOAD_EXTS in app/api/server.py vs the sampling layer",
+    "detail": "The API advertises csv, tsv, json, xml, parquet, avro, orc, xls, xlsx. Measured against the live deployment: csv 200, json 200, parquet 200, xlsx 200, but .tsv -> HTTP 500 and .xml -> HTTP 500, both with 'Failed to sample .<ext> file. File type not supported or sampling failed.' The advertised contract and the implementation disagree, and the mismatch surfaces as a 500 (server fault) rather than a 415/400 (unsupported input), so it reads as a crash to any client.",
+    "fix": "Either implement sampling for tsv/xml or remove them from SUPPORTED_UPLOAD_EXTS; in both cases return 415 with a named list of what IS supported, never a 500."
+  }
+}

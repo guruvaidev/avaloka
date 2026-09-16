@@ -1,0 +1,19 @@
+apiVersion: v2
+name: avaloka
+description: Full Avaloka stack (frontend + backend + redis)
+version: 0.2.0
+type: application
+
+dependencies:
+  - name: avaloka-backend
+    version: 0.2.0
+    repository: "file://./charts/avaloka-backend"
+    condition: avaloka-backend.enabled
+  - name: avaloka-frontend
+    version: 0.2.0
+    repository: "file://./charts/avaloka-frontend"
+    condition: avaloka-frontend.enabled
+  - name: redis
+    version: 23.2.2
+    repository: "https://charts.bitnami.com/bitnami"
+    condition: redis.enabled

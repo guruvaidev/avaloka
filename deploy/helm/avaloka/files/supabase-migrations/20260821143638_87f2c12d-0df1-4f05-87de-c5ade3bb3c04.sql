@@ -1,0 +1,1 @@
+REVOKE ALL ON FUNCTION public.set_row_organization() FROM PUBLIC, anon, authenticated;

@@ -1,0 +1,37 @@
+graph TD
+    A[Start] --> B(plan_etl)
+    B --> C{route_planner_output}
+    C -->|continue planning| V[End]
+    C -->|provision infra| D(provision_infra)
+    D --> B
+    C -->|summarise| E(summarize_etl)
+    E --> F[generate_planner_graph]
+    F --> G[code_etl]
+    C -->|prepare code| G
+    C -->|train models| P[train_models]
+    C -->|task operation / schedule| Q[schedule_task]
+    C -->|execute on ray| R2[execute_on_ray]
+    subgraph "Coding Subgraph"
+        G --> H[coder]
+        H --> I[validator_syntax]
+        I --> J[validator_static]
+        J --> K[validator_logical]
+        K --> L{check_validation_status}
+        L -->|refine| H
+    end
+    L -->|approved| M{route_after_code}
+    M -->|train models| P
+    M -->|schedule task| Q
+    M -->|execute locally| R[execute_locally]
+    M -->|execute on k8s| S[execute_on_k8s]
+    M -->|execute on ray| R2
+    P --> T{route_after_training}
+    T -->|schedule task| Q
+    T -->|end| V
+    R --> W{route_after_execution}
+    S --> W
+    R2 --> W
+    W -->|visualize| U[visualize]
+    W -->|end| V
+    U --> V
+    Q --> V

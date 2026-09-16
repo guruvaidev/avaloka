@@ -1,0 +1,171 @@
+# Core Agent Framework Dependencies
+langchain>=0.3.27,<0.4
+langchain-groq>=0.3.8,<0.4
+langgraph>=0.6.7,<0.7
+langgraph-cli>=0.4.2,<0.5 ; python_version < "3.11"
+langgraph-cli[inmem]>=0.4.2,<0.5 ; python_version >= "3.11"
+
+# Data Processing and Analysis
+pandas>=2.0.0
+# torch wheels before 2.3 were compiled against numpy 1.x, and importing such a
+# build under numpy 2 fails with "Failed to initialize NumPy: _ARRAY_API not
+# found" -- as a warning, after which things break later and elsewhere. Where
+# only those older wheels exist, numpy has to stay behind with them.
+numpy>=1.24.0,<2; platform_system == "Darwin" and platform_machine == "x86_64"
+numpy>=1.24.0; platform_system != "Darwin" or platform_machine != "x86_64"
+openpyxl>=3.1.0        # pd.read_excel/ExcelWriter engine for .xlsx (ExcelConnector)
+# pyspark removed: schema/DDL inference now uses PyArrow (Ray Data's engine); no JVM.
+# Large-file distributed processing runs on Ray/daft, not Spark.
+
+# Web Interface and Visualization
+streamlit>=1.28.0
+plotly
+# Imported by generated analysis code. Keep in sync with the AVAILABLE LIBRARIES
+# section of the coder system prompt in app/agents/coder.py.
+seaborn>=0.13.0
+statsmodels>=0.14.0
+# Previously only transitive (via scikit-learn/seaborn); generated code imports
+# them directly, so pin them.
+scipy>=1.11.0
+matplotlib>=3.7.0
+
+# Cloud and Infrastructure
+boto3==1.41.5
+botocore==1.41.5
+aiobotocore==2.26.0
+kubernetes
+
+graphviz>=0.20.1
+fastapi~=0.116
+uvicorn[standard]~=0.35
+python-multipart~=0.0.20
+httpx>=0.27
+pydantic>=2.7
+starlette>=0.37
+langchain-core>=0.3.79,<0.4
+redis>=5.0.4
+cachetools>=5.0
+
+google-cloud-container>=1.0.0
+google-cloud-storage>=3.4
+google-cloud-iam>=2.21.0
+google-cloud-resource-manager>=1.16.0
+google-cloud-api-keys>=0.3.0
+grpc-google-iam-v1>=0.14.3
+fastavro>=1.9            # Avro connector
+fastparquet>=2024.5.0    # Parquet connector (your code imports fastparquet)
+ijson>=3.2               # streaming JSON
+lxml>=5.2                # XML connector
+xlrd>=2.0.1
+
+# --- lakehouse connectors ---
+deltalake>=0.17.2        # used by Delta connector (DeltaTable)
+pyiceberg>=0.5.1         # used by Iceberg connector
+
+# --- UI / app ---
+pyarrow==16.1.0
+kaggle
+
+
+# Configuration and Environment
+python-dotenv>=1.0.0
+pyyaml>=6.0
+
+# Testing Framework
+pytest>=8.4.1
+pytest-cov>=4.1.0
+
+# Utilities
+tabulate>=0.9.0
+
+# Model Training Agent (MTA) Dependencies
+# torch is pinned by floor, not by equality. `torch==2.11.0` made a plain
+# install impossible on macOS x86_64, where PyTorch's last wheel is 2.2.2:
+#   ERROR: Could not find a version that satisfies the requirement torch==2.11.0
+# A floor lets each platform take the newest build it actually has.
+torch>=2.0.0
+torchvision>=0.15.0
+scikit-learn>=1.3.0
+mlflow==3.14.0
+ray[ml]==2.49.2
+getdaft>=0.5.0,<0.6
+onnx>=1.15.0
+onnxruntime>=1.16.0
+onnxscript
+
+# Advanced ML Libraries
+xgboost>=2.0.0
+lightgbm>=4.0.0
+
+# MLOps and Experiment Management
+hydra-core>=1.3.0
+dvc>=3.0.0
+kedro>=0.19.0
+
+# Database and Cloud Storage
+psycopg2-binary>=2.9.0
+pymysql>=1.1.0 
+google-auth>=2.23.0
+
+
+celery==5.5.3
+celery-redbeat==2.3.3
+azure-storage-blob
+supabase>=2.0.0
+
+cryptography>=42.0.0
+
+
+# GCS streaming (register-existing-storage fast path)
+gcsfs==2025.9.0
+
+#data transfer
+sentence_transformers>=3.2.1
+daft>=0.7.1,<0.8
+sqlglot
+connectorx
+markdownify
+chromadb
+beautifulsoup4
+sqlalchemy
+# JWT authentication  
+PyJWT>=2.8.0
+
+#data transfer agent
+langchain_anthropic>=0.3.21,<0.4
+# urllib3 / charset-normalizer must be compatible with requests
+urllib3>=1.21.1,<2.0
+charset-normalizer>=3.0.0   # MIT; replaces chardet (LGPL, ASF Category X)
+psutil>=5.9.0              # for memory stats in test scripts
+s3fs==2025.9.0
+
+
+# WBS 0.6 — Integration test dependencies
+pytest>=7.4.0
+pytest-asyncio>=0.23.0
+pytest-mock>=3.12.0
+
+# Vector DB
+pymilvus>=2.3.0
+# OpenRouter backup provider (app/core/model_fallback.py) speaks the OpenAI
+# wire protocol, so ChatOpenAI is the whole integration. Capped below 1.0:
+# langchain-openai 1.x pulls langchain-core 1.x, which langchain 0.3.28 and
+# langchain-groq 0.3.8 both refuse.
+langchain-openai>=0.3,<1.0
+
+# Custom inference stack: provider-agnostic agent LLMs (app/core/inference.py).
+# langchain-openai powers the OpenAI-spec providers: local (in-cluster vLLM/
+# Ollama), openai, openrouter and azure — it is pinned once, above.
+#
+# Bedrock and Vertex are NOT pinned here. Both are imported lazily, so a
+# Groq-only or local-only install works without them, and pinning them makes the
+# image unbuildable: langchain-google-vertexai requires google-cloud-storage<3
+# while line 45 of this file requires >=3.4, which no version can satisfy.
+# Install them alongside this file when you actually deploy to Bedrock or Vertex:
+#
+#     pip install -r requirements.txt -r requirements-cloud-llm.txt
+#
+# See requirements-cloud-llm.txt for the constraint that has to be relaxed.
+mcp==1.9.4
+pymongo
+dnspython

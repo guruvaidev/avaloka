@@ -1,0 +1,864 @@
+# Default values for the avaloka chart.
+# The chart deploys the avaloka **API** (FastAPI / uvicorn on :9000) as the primary
+# workload (R1), Redis, PostgreSQL, MinIO, and an internal MLflow tracking
+# server. The Streamlit UI remains opt-in. Ray wiring (RAY_ADDRESS/RBAC) is
+# preserved.
+
+replicaCount: 1
+
+# Avaloka's own images, published to GHCR by .github/workflows/images.yml.
+#
+# These used to be bare names -- `avaloka-api:latest` -- which resolve to Docker
+# Hub, where they do not exist. That worked on kind, because `make images`
+# side-loads them onto the node and pullPolicy IfNotPresent then never pulls,
+# and it failed everywhere else with ImagePullBackOff. kind is precisely the
+# environment in which the problem is invisible.
+#
+# Building locally instead? Point these back at the bare names and side-load:
+#   make images PROVIDER=local
+#   helm upgrade --install avaloka deploy/helm/avaloka \
+#     --set image.repository=avaloka-api --set webui.image.repository=avaloka-ui
+image:
+  repository: ghcr.io/guruvaidev/avaloka-api
+  tag: "1.0.0"
+  # IfNotPresent still suits a side-loaded local build; the registry path above
+  # means a cluster that cannot side-load can pull instead of failing.
+  pullPolicy: IfNotPresent
+
+# The API listens on 9000 (uvicorn app.api.server:app).
+service:
+  # ClusterIP (default, use `kubectl port-forward`), NodePort (local kind), or LoadBalancer (cloud).
+  # Behind a Gateway (see `gateway:` below) this drops to ClusterIP — the load
+  # balancer reaches pods through NEGs/target groups, not through a second public IP.
+  type: NodePort
+  port: 9000
+  targetPort: 9000
+  # Must match deploy/clusters/kind-cluster.yaml extraPortMappings when type=NodePort.
+  nodePort: 30085
+  # Provider hooks, e.g. GKE container-native load balancing:
+  #   cloud.google.com/neg: '{"ingress": true}'
+  annotations: {}
+
+# Redis: the API degrades hard without it (/api/upload, /threads, inference all 503
+# when session_service.cache is unset). Ship a minimal in-cluster Redis by default
+# and inject REDIS_URL. Set enabled=false to point at an external Redis via
+# externalUrl instead.
+redis:
+  enabled: true
+  image: redis:7-alpine
+  pullPolicy: IfNotPresent
+  port: 6379
+  externalUrl: ""   # used only when redis.enabled=false, e.g. redis://my-redis:6379
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+
+# Chroma vector store (layer-2 usage context). When enabled the API talks to it as
+# an HttpClient via CHROMA_HOST/CHROMA_PORT instead of the local embedded store.
+# Memory plane tuning. The four tiers themselves are configured above
+# (redis / chroma / postgres / milvus); these are the cross-cutting knobs.
+memory:
+  # Seconds before a retrieval is abandoned. Measured on a healthy deployment:
+  # 5.8s cold, 4.4s warm. The historical 3.0 default aborted EVERY call, so the
+  # memory plane always looked empty -- indistinguishable from having learned
+  # nothing. Raise further only if a backend is genuinely slow.
+  circuitBreakerTimeout: 20.0
+  # Refuse to fetch embedding models from huggingface.co at query time. The
+  # model is baked into the API image at build (deploy/docker/Dockerfile.api),
+  # so this is ON by default: a runtime fetch now means something is wrong, and
+  # failing fast beats silently hanging until the circuit breaker fires.
+  # Air-gapped installs REQUIRE this, since the fetch cannot succeed at all.
+  offlineEmbeddings: true
+
+chroma:
+  enabled: true
+  image: chromadb/chroma:latest
+  pullPolicy: IfNotPresent
+  port: 8000
+  externalHost: ""   # used only when chroma.enabled=false
+  # Tier L2 of the memory plane. Without this the collection lives in an
+  # emptyDir and every restart erases what the system learned.
+  persistence:
+    enabled: true
+    size: 5Gi
+  # Optional one-shot seed, run as a Helm post-install/upgrade hook. Point
+  # sourceUri at an archive of a Chroma storage directory (s3:// via the MinIO
+  # this chart deploys, or https://) to preload a usage-context corpus instead
+  # of starting cold. Leave empty for a fresh install.
+  seed:
+    enabled: false
+    sourceUri: ""
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+
+# Postgres (layer-3 artifact store / relational metadata). When enabled the API uses
+# POSTGRES_URL pointed at this service instead of the dev-only SQLite fallback.
+postgres:
+  enabled: true
+  image: postgres:16-alpine
+  pullPolicy: IfNotPresent
+  port: 5432
+  user: avaloka
+  password: avaloka
+  database: avaloka
+  externalUrl: ""   # used only when postgres.enabled=false
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+# MinIO — in-cluster S3-compatible object store (layer-1 dataset/artifact plane).
+#
+# This is the local/on-prem answer to "where do datasets live". The alternative on
+# a single cluster is a shared filesystem, which does not work here: Ray spreads
+# workers across nodes and neither kind nor Docker Desktop offers a ReadWriteMany
+# storage class, so a second worker cannot mount the same volume. Object storage
+# sidesteps that — every worker reaches the same s3:// URI over the network.
+#
+# MinIO rather than Ceph/Rook because Ray, PyArrow and fsspec already speak S3, so
+# nothing in the app changes between MinIO here and real S3/GCS in cloud; and
+# because Rook-Ceph needs 3+ nodes with raw block devices, which cannot run on a
+# laptop. Same manifest scales from `kind` to a datacenter (raise replicas and
+# give MinIO real disks for distributed erasure coding).
+#
+# When enabled, the chart points STORAGE_BACKEND=s3 at this Service — for the API,
+# LangGraph, MCP and the Ray workers alike — unless config.storageBackend has been
+# set to a real cloud backend, which always wins.
+minio:
+  # MLflow uses this store for model artifacts in local/on-prem installations.
+  # Cloud overlays may disable MinIO and point mlflow.artifactsDestination at a
+  # managed object store such as GCS.
+  enabled: true
+  image:
+    # quay.io, not Docker Hub: minio/minio on Hub is no longer pullable
+    # anonymously — even :latest returns "pull access denied, repository does
+    # not exist or may require authorization". Uploads fail with HTTP 500
+    # ("Failed to upload to storage") when this pod cannot start, so the wrong
+    # registry here breaks the first thing any user does.
+    repository: quay.io/minio/minio
+    tag: RELEASE.2025-09-07T16-13-09Z
+    pullPolicy: IfNotPresent
+  # `mc` client image used by the bucket-creation hook.
+  # Same story as the server image above: Docker Hub no longer serves this
+  # anonymously, and without `mc` the bucket-creation hook never runs - so a
+  # perfectly healthy MinIO still has nowhere to put an upload. The two images
+  # moved for different reasons, and this one is the easier to undo by accident.
+  mcImage:
+    repository: quay.io/minio/mc
+    tag: RELEASE.2025-08-13T08-35-41Z
+    pullPolicy: IfNotPresent
+  port: 9000
+  consolePort: 9001
+  bucket: avaloka
+  createBucket: true
+  # Dev credentials for a ClusterIP Service. These become AWS_ACCESS_KEY_ID /
+  # AWS_SECRET_ACCESS_KEY for every S3 client in the stack — override them before
+  # exposing MinIO outside the cluster.
+  auth:
+    accessKey: avaloka
+    secretKey: avaloka-minio-dev
+  service:
+    type: ClusterIP
+    nodePort: ""
+    consoleNodePort: ""
+  # Unlike the rest of the in-cluster data plane, this one is durable: losing it
+  # means losing uploaded datasets and trained model artifacts, not just a cache.
+  persistence:
+    size: 20Gi
+    storageClass: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+
+# Milvus (vector/timeseries insights). OFF by default: Milvus standalone also needs
+# etcd + MinIO, which is heavy for a 2-node kind cluster. The API tolerates its
+# absence (it connects lazily). Enable + point MILVUS_HOST/PORT at a real Milvus for
+# the full experience.
+milvus:
+  # Tier L4 of the memory plane: episodic recall by vector similarity, i.e. the
+  # part that makes the learning loop a loop. With this off, MemoryOrchestrator
+  # still constructs a Milvus client, episodic recall returns nothing, and a
+  # live analysis comes back with memory_hints=None -- the code was always
+  # present, the backend was not.
+  #
+  # Still OFF by default because standalone Milvus adds an etcd and a ~2Gi pod,
+  # which is more than a laptop kind cluster should carry unnoticed. Setting
+  # `enabled: true` now DEPLOYS it (templates/milvus.yaml) rather than merely
+  # expecting one to exist elsewhere; `host` remains for pointing at an external
+  # Milvus instead.
+  enabled: false
+  host: ""           # e.g. avaloka-milvus; empty = use the in-chart deployment
+  port: 19530
+  image: milvusdb/milvus:v2.5.4
+  etcdImage: quay.io/coreos/etcd:v3.5.16
+  # Milvus creates this bucket in the shared MinIO on first start.
+  bucket: milvus
+  pullPolicy: IfNotPresent
+  persistence:
+    enabled: true
+    size: 10Gi
+    etcdSize: 2Gi
+  resources:
+    requests:
+      cpu: 500m
+      memory: 2Gi
+    limits:
+      cpu: "2"
+      memory: 4Gi
+  etcdResources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 300m
+      memory: 512Mi
+
+# LangGraph runs-API server (`langgraph dev`) that hosts the avaloka agent graph
+# (app/api/langgraph_app.py:graph). The API's /threads routes proxy to it, so it is
+# required for the conversational/thread endpoints. Runs from the same API image.
+langgraph:
+  enabled: true
+  port: 2024
+  externalUrl: ""    # used only when langgraph.enabled=false
+  # Runs the same agent graph as the API, so it loads the same embedding models.
+  # See the note on `resources:` below — 2Gi is not enough for the DTA pipeline.
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 4Gi
+
+# Multi-tenant MCP server (SQL Warehouse backend + DTA connection registry).
+# Same image as the API, different uvicorn target. Port 8010 serves the onboarding
+# routes and /call_tool, so config.mcpServerUrl and config.onboardingApiUrl both
+# point at this Service.
+mcp:
+  enabled: true
+  port: 8010
+  service:
+    type: ClusterIP
+    nodePort: ""
+    annotations: {}
+  persistence:
+    size: 1Gi
+    storageClass: ""
+    mountPath: /app/registry
+  resources:
+    requests:
+      cpu: 50m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+# Local Supabase (self-hosted) so the UI can authenticate + read/write app data
+# entirely in-cluster — the k8s analogue of Lovable's `supabase start`. Ships the
+# core services (db + auth/gotrue + rest/postgrest + kong gateway) with the standard
+# self-hosted DEMO keys (public, not secrets). Off by default; enable for the full
+# app. When enabled, the avaloka API's SUPABASE_JWT_SECRET is set to supabase.jwtSecret
+# so it accepts UI-issued JWTs.
+supabase:
+  # Disabled in the general chart because the bundled credentials below are for
+  # loopback-only development. The local bootstrap enables it explicitly.
+  enabled: true
+  # WARNING - PUBLIC DEMO CREDENTIALS, SAFE FOR LOCAL DEVELOPMENT ONLY.
+  #
+  # These three values are Supabase's PUBLISHED self-hosted demo keys. They are
+  # printed in Supabase's own documentation, so anyone can mint a service_role
+  # token against a deployment that still uses them - full read/write on every
+  # table, bypassing row-level security.
+  #
+  # They are defaulted here so `helm install` yields a working local cluster
+  # with no setup. That convenience is the only reason they exist.
+  #
+  # BEFORE ANY SHARED OR INTERNET-REACHABLE DEPLOYMENT, replace all three:
+  #   jwtSecret=$(openssl rand -base64 48 | tr -d '\n')
+  #   then mint anonKey and serviceKey signed with it (HS256):
+  #     header  {"alg":"HS256","typ":"JWT"}
+  #     payload {"role":"anon","iss":"supabase","iat":<now>,"exp":<later>}
+  #     payload {"role":"service_role","iss":"supabase","iat":<now>,"exp":<later>}
+  #   helm upgrade ... --set supabase.jwtSecret=... \
+  #                    --set supabase.anonKey=... --set supabase.serviceKey=...
+  #
+  # Set supabase.requireOwnCredentials=true to make the chart REFUSE to render
+  # while these demo values are still in place.
+  #
+  # Standard Supabase self-hosted demo secret + keys (public demo values).
+  # anonKey/serviceKey MUST be HS256-signed with jwtSecret above — PostgREST verifies
+  # the signature (PGRST_JWT_SECRET) and answers PGRST301 JWSInvalidSignature otherwise,
+  # which makes the UI able to log in but unable to read a single table. Regenerate with:
+  #   header  {"alg":"HS256","typ":"JWT"}
+  #   payload {"role":"anon","iss":"supabase-demo","iat":1641769200,"exp":1799535600}
+  # Refuse to render while the demo credentials below are still in place.
+  # Turn this on for any deployment that is not a throwaway local cluster.
+  requireOwnCredentials: false
+  jwtSecret: "super-secret-jwt-token-with-at-least-32-characters-long"
+  anonKey: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlLWRlbW8iLCJpYXQiOjE2NDE3NjkyMDAsImV4cCI6MTc5OTUzNTYwMH0.F_rDxRTPE8OU83L_CNgEGXfmirMXmMMugT29Cvc8ygQ"
+  serviceKey: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIiwiaXNzIjoic3VwYWJhc2UtZGVtbyIsImlhdCI6MTY0MTc2OTIwMCwiZXhwIjoxNzk5NTM1NjAwfQ.5z-pJI1qwZg1LE5yavGLqum65WOnnaaI5eZ3V00pLww"
+  # Browser-reachable gateway URL (kong NodePort). Must match the host the browser
+  # uses — for kind that's the mapped localhost port.
+  externalUrl: "http://localhost:30091"
+  db:
+    image: supabase/postgres:15.8.1.060
+    password: postgres
+    port: 5432
+    storageSize: 20Gi
+    storageClassName: standard
+  auth:
+    image: supabase/gotrue:v2.177.0
+    # Where the UI is reached (for redirect/confirm URLs).
+    siteUrl: "http://localhost:30090"
+    disableSignup: false
+    # When false, gotrue will send confirmation / magic links via SMTP. For
+    # local dev the chart previously autoconfirmed (no email delivery);
+    # set to false for real email flow.
+    autoconfirm: true
+    # SMTP configuration for gotrue mail delivery. Fill these or set the
+    # corresponding keys in `secrets` (recommended for credentials).
+    smtp:
+      host: ""
+      port: 587
+      # Optional: leave user/pass empty and provide them in `secrets` instead
+      # for Helm/Secret-based injection.
+      user: ""
+      pass: ""
+      # From address shown in outbound mail
+      sender: ""
+      senderName: "Avaloka Ai"
+      emailSubject: "Sign in to Avaloka Ai"
+      # Administrative reply-to address
+      adminEmail: ""
+
+  rest:
+    image: postgrest/postgrest:v12.2.12
+    port: 3000
+  kong:
+    image: kong:2.8.1
+    serviceType: NodePort
+    port: 8000
+    nodePort: 30091
+  # Edge Functions (supabase/edge-runtime + the UI's ui/supabase/functions, baked by
+  # deploy/docker/Dockerfile.functions). Build/load with:
+  #   docker build -f deploy/docker/Dockerfile.functions -t avaloka-functions:latest .
+  #   kind load docker-image avaloka-functions:latest --name avaloka
+  functions:
+    enabled: true
+    image: ghcr.io/guruvaidev/avaloka-functions:1.0.0
+    pullPolicy: IfNotPresent
+    port: 9000
+    # Dev-only key. Changing it makes every previously stored ciphertext
+    # undecryptable (AES-GCM auth-tag failure) — rotate only with a re-encrypt plan.
+    dbEncryptionKey: "avaloka-local-dev-encryption-key"
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: "1"
+        memory: 512Mi
+  storage:
+    image: supabase/storage-api:v1.11.13
+    port: 5000
+    storageSize: 20Gi
+    storageClassName: standard
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+# React/Vite web UI (Lovable) served by nginx. It reverse-proxies the avaloka API
+# routes (same-origin) and reads Supabase config at runtime, so the browser only
+# talks to the UI NodePort.
+webui:
+  enabled: true
+  image:
+    repository: ghcr.io/guruvaidev/avaloka-ui
+    tag: "1.0.0"
+    pullPolicy: IfNotPresent
+  # The SSR (Node) UI listens on this port inside the container.
+  containerPort: 3000
+  service:
+    type: NodePort
+    port: 80
+    nodePort: 30090
+    # Provider hooks, e.g. GKE container-native load balancing:
+    #   cloud.google.com/neg: '{"ingress": true}'
+    annotations: {}
+  # Legacy nginx-sidecar upstream. The webui image is now the Node SSR app and
+  # ignores this and the mounted nginx config.
+  apiUpstream: ""   # empty => FQDN http://<fullname>.<ns>.svc.cluster.local:9000
+  # Upstream the SSR server proxies browser calls to. Empty => in-cluster FQDN.
+  # Read INSIDE the pod, so a browser-reachable URL is wrong here.
+  apiBase: ""
+  # Supabase the browser authenticates against. Empty => the chart wires it to the
+  # in-cluster Supabase (supabase.enabled) via its NodePort; set explicitly for cloud.
+  supabaseUrl: ""
+  # Server-side SSR/admin connection. Empty => in-cluster Service DNS for bundled
+  # Supabase, otherwise the same external project as supabaseUrl.
+  supabaseInclusterUrl: ""
+  supabaseAnonKey: ""
+  mcp:
+    apiBase: ""
+    toolBase: ""
+  resources:
+    requests:
+      cpu: 50m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+
+# Optional Streamlit UI. Off by default (opt-in) — the API is the primary workload.
+# When enabled, renders a second Deployment+Service on 8501.
+ui:
+  enabled: false
+  image:
+    repository: ghcr.io/guruvaidev/avaloka-ray
+    tag: "1.0.0"
+    pullPolicy: IfNotPresent
+  service:
+    type: NodePort
+    port: 8501
+    targetPort: 8501
+    nodePort: 30086
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+# ---------------------------------------------------------------------------
+# Enterprise ingress: a cloud Application Load Balancer, via the Gateway API.
+#
+# Off by default so local/kind installs keep their NodePorts. Turning it on is what
+# takes avaloka off a bare `LoadBalancer` IP:port and onto a real L7 front door:
+# one anycast/static IP, managed TLS for named hosts, HTTP->HTTPS redirect,
+# per-backend health checks and timeouts, and a hook for WAF.
+#
+# The same three resources (Gateway + HTTPRoute) drive every provider — only the
+# GatewayClass and the certificate mechanism differ. See the cloud overlays under
+# values/ and the "Enterprise load balancing" section of deploy/README.md.
+gateway:
+  enabled: false
+  # gcp | aws | azure. Selects the default GatewayClass and, for gcp, the
+  # networking.gke.io policy objects in templates/gateway-policies-gcp.yaml.
+  provider: ""
+  # Override the GatewayClass chosen from `provider`.
+  className: ""
+  # Gateway object name; defaults to <fullname>-gateway.
+  name: ""
+  # Hostnames this load balancer serves. Every one needs an A record pointing at
+  # the frontend IP and a matching SAN on the certificate.
+  hosts: []
+  # Extra annotations on the Gateway (AWS/Azure tuning lives here).
+  annotations: {}
+
+  tls:
+    enabled: true
+    # certmap  — GCP Certificate Manager map via the networking.gke.io/certmap
+    #            annotation. Google-managed, auto-renewing, and the only option that
+    #            works with the global external class. Mutually exclusive with
+    #            certificateRefs, so the listener carries no tls block at all.
+    # secret   — a kubernetes.io/tls Secret referenced by listeners[].tls.certificateRefs.
+    #            Standard Gateway API. Use on Azure, or on GCP with a self-managed cert.
+    # external — certificates come from a provider object rather than the listener.
+    #            Required on AWS: the Load Balancer Controller does not read
+    #            certificateRefs and takes ACM ARNs through LoadBalancerConfiguration.
+    mode: certmap
+    certMapName: ""
+    secretName: ""
+  # Open port 80 at all. Leave true and the load balancer serves :80 purely to 301
+  # it to :443 (see redirectHttpToHttps). Set false for strict HTTPS-only: no HTTP
+  # listener is created, so http:// is refused rather than redirected.
+  #
+  # Turning this off does NOT affect Google-managed certificates — Certificate
+  # Manager provisions and renews over 443. It does mean a user typing a bare
+  # hostname gets a connection error instead of being bounced to https, so it is a
+  # hardening choice, not a free one.
+  httpEnabled: true
+  # Serve :80 only to 301 it to :443. Ignored when httpEnabled is false.
+  redirectHttpToHttps: true
+
+  # Pre-reserved frontend IP. Reserving it out of band keeps the address (and the
+  # DNS records pointing at it) stable across `helm uninstall`/reinstall.
+  #   GCP: gcloud compute addresses create avaloka-lb-ip --global --ip-version=IPV4
+  # e.g. [{type: NamedAddress, value: avaloka-lb-ip}]
+  addresses: []
+
+  # Gateway API spec.infrastructure passthrough — provider frontend config that has
+  # no vendor-neutral field. Leave empty on AWS to let the chart render (and point
+  # at) its own LoadBalancerConfiguration from gateway.aws below.
+  #   parametersRef: {group: gateway.k8s.aws, kind: LoadBalancerConfiguration, name: my-config}
+  infrastructure:
+    parametersRef: {}
+
+  # Route the API paths straight to the API Service instead of letting them travel
+  # through the web UI's nginx. Saves a hop and, critically, isolates the API
+  # backend so it can carry a long timeout independently of the SPA backend.
+  routeApiDirect: true
+  apiRoutes:
+    - { type: PathPrefix, value: /threads }
+    - { type: PathPrefix, value: /docs }
+    - { type: Exact, value: /health }
+    - { type: Exact, value: /version }
+    - { type: Exact, value: /openapi.json }
+
+  # Additional path -> Service rules, e.g. exposing the MCP onboarding API:
+  #   - matches: [{ type: PathPrefix, value: /mcp }]
+  #     service: '{{ include "avaloka.fullname" . }}-mcp'   # rendered with tpl
+  #     port: 8010
+  #     rewritePrefix: /            # optional, strips the matched prefix
+  # These get no GCP HealthCheckPolicy/GCPBackendPolicy — add your own if the
+  # defaults do not suit the backend.
+  extraRoutes: []
+
+  # Vendor-neutral Gateway API per-rule timeout (e.g. "3600s"). Left empty on GCP,
+  # where GCPBackendPolicy.timeoutSec below is the native control; set it on
+  # AWS/Azure so long-running agent requests are not cut off mid-stream.
+  routeTimeout: ""
+
+  # --- GCP-only (networking.gke.io/v1 policies; ignored for other providers) ---
+  gcp:
+    healthCheck:
+      enabled: true
+      checkIntervalSec: 15
+      timeoutSec: 10
+      healthyThreshold: 2
+      unhealthyThreshold: 3
+      logging: false
+    api:
+      # The GCP default is 30s. Mission planning and DTA runs routinely exceed it,
+      # and the load balancer answers 504 while the pod is still working — so the
+      # API backend gets an hour.
+      timeoutSec: 3600
+      sessionAffinity: ""
+    webui:
+      timeoutSec: 120
+      # nginx serves this unconditionally; it is what the pod probes already use.
+      healthPath: /
+      sessionAffinity: ""
+    # Cloud Armor policy name (WAF, rate limiting, IP allowlists), created out of band.
+    securityPolicy: ""
+    # SSL policy name, e.g. one created with --profile=MODERN --min-tls-version=1.2.
+    sslPolicy: ""
+    accessLogging:
+      enabled: true
+      sampleRate: 1000000
+
+  # --- AWS-only (rendered into a gateway.k8s.aws/v1 LoadBalancerConfiguration) ---
+  aws:
+    # ACM certificate ARNs. The first is the listener default, the rest are SNI
+    # alternates. Setting any of them makes the chart render the
+    # LoadBalancerConfiguration and wire spec.infrastructure.parametersRef to it.
+    certificateArns: []
+    scheme: internet-facing
+    loadBalancerName: ""
+    sslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06
+
+  # --- Azure-only --- Application Gateway for Containers is selected by annotation:
+  #   ALB-managed: alb.networking.azure.io/alb-name + alb-namespace
+  #   Bring-your-own: alb.networking.azure.io/alb-id
+  # Set them through gateway.annotations above; the overlay shows both forms.
+
+# Agent chat-model provider. Per-role/per-agent environment overrides still
+# take precedence inside app/core/inference.py.
+inference:
+  provider: "groq"                # groq|local|openai|openrouter|bedrock|vertex|azure
+
+# Optional in-cluster OpenAI-compatible model endpoint. Enable Ollama for
+# CPU/kind development or vLLM for GPU clusters, then set
+# inference.provider=local so the API and LangGraph pods use it.
+localLLM:
+  enabled: false
+  engine: "ollama"                # ollama|vllm
+  model: "qwen2.5:3b-instruct"    # Ollama tag or HuggingFace repo for vLLM
+  servedModelName: "qwen2.5:3b-instruct"
+  persistence:
+    enabled: false
+    size: 20Gi
+    storageClass: ""
+  ollama:
+    image: "ollama/ollama:latest"
+    pullPolicy: IfNotPresent
+    resources:
+      requests:
+        cpu: "500m"
+        memory: 4Gi
+      limits:
+        cpu: "4"
+        memory: 8Gi
+  vllm:
+    image: "vllm/vllm-openai:latest"
+    pullPolicy: IfNotPresent
+    maxModelLen: "16384"
+    gpuMemoryUtilization: "0.90"
+    shmSize: 8Gi
+    nodeSelector:
+      nvidia.com/gpu.present: "true"
+    tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
+    resources:
+      requests:
+        cpu: "2"
+        memory: 16Gi
+        nvidia.com/gpu: "1"
+      limits:
+        nvidia.com/gpu: "1"
+
+# App runtime config surfaced through the ConfigMap.
+config:
+  # GCP project identity injected into API/Celery/Ray-facing workloads. The
+  # deployment helper fills this from GCP_PROJECT_ID for PROVIDER=gcp.
+  gcpProjectId: ""
+  # Default to LOCAL filesystem storage so the stack is self-contained on any cluster
+  # without cloud credentials. Cloud overlays (values/values-{gke,eks,aks}.yaml) set
+  # this to gcs/s3/azure and supply Workload Identity.
+  storageBackend: "local"          # local|gcs|s3|azure
+  localStorageRoot: "/app/data/filestore"
+  gcsBucket: ""                    # GCS_BUCKET (only when storageBackend=gcs)
+  s3Bucket: ""                     # S3_BUCKET (only when storageBackend=s3)
+  s3Prefix: ""                     # optional key prefix inside the bucket
+  awsRegion: ""                    # AWS_REGION / AWS_DEFAULT_REGION
+  # Point the S3 client at an S3-compatible store instead of AWS. Left empty the
+  # chart fills it in automatically when minio.enabled adopts the storage backend;
+  # set it explicitly for an external MinIO or Ceph RGW.
+  s3EndpointUrl: ""
+  langgraphApiUrl: "http://localhost:2024/"
+  # In-cluster Ray Serve inference service DNS (D3). The API POSTs predictions here
+  # when INFERENCE_BACKEND=rayserve.
+  inferenceBackend: "rayserve"     # rayserve|gateway
+  rayServeUrl: "http://avaloka-inference-serve-svc:8000"
+  # Server-side Supabase URL for the API (pod-to-pod, NOT browser-facing). Empty =>
+  # the in-cluster kong Service when supabase.enabled; set explicitly for cloud.
+  supabaseUrl: ""
+  # Multi-tenant MCP server. Not deployed by this chart — point at wherever it runs.
+  # For a host-run MCP under Docker Desktop: http://host.docker.internal:8010
+  mcpServerUrl: ""
+  # customer_dbs onboarding API (ONBOARDING_API_URL in app/agents/planner.py). Not
+  # deployed by this chart; without it the planner falls back to localhost:8011 and
+  # every DB-destination credential lookup fails with connection refused.
+  # Host-run under Docker Desktop: http://host.docker.internal:8011
+  onboardingApiUrl: ""
+  # Ray dashboard (the agents read this for job submission/links).
+  rayDashboardUrl: ""
+  # In-cluster Ray dashboard, used ONLY for transfers whose source or destination is
+  # a cluster-local database (a bare Service name or *.svc.cluster.local). A remote
+  # Ray cluster cannot resolve those names, so such jobs must run next to the DB;
+  # cloud-to-cloud transfers keep using rayDashboardUrl. Leave empty to disable the
+  # split and send everything to rayDashboardUrl.
+  # With deploy/helm/ray/raycluster.yaml applied:
+  #   http://avaloka-raycluster-head-svc:8265
+  rayDashboardUrlInCluster: ""
+  # MTA scheduled training can reuse the dedicated general-purpose RayCluster
+  # instead of creating a new GKE namespace and RayCluster for every run. Leave
+  # empty to retain the legacy per-run GKE provisioning path. Do not point this
+  # at avaloka-inference-*-head-svc; that RayService is reserved for inference.
+  mtaRayDashboardUrl: ""
+  # Namespace containing the shared RayCluster. Empty uses the Helm release
+  # namespace.
+  mtaRayNamespace: ""
+  # Training command baked into deploy/docker/Dockerfile.ray.
+  mtaRayTrainingEntrypoint: "python /home/ray/app/app/agents/mta_v2/training_docker_image/ray_job.py"
+  # Ray's JobSubmissionClient IGNORES the address passed in code when RAY_ADDRESS is
+  # set — see get_address_for_submission_client() in ray/dashboard/utils.py: "address
+  # is always overridden by the RAY_ADDRESS environment variable". RAY_ADDRESS is the
+  # ray:// bootstrap address used by ray.init(), which is NOT a job-submission
+  # endpoint, so DTA submissions fail with "ray client connection timeout".
+  # RAY_API_SERVER_ADDRESS takes precedence over both and must be the dashboard HTTP
+  # URL. Set it whenever rayDashboardUrl points somewhere other than RAY_ADDRESS.
+  rayApiServerAddress: ""
+  # Above this size the training path goes to Ray instead of running in-process.
+  datasetSizeThresholdBytes: ""
+  # Full registry URI for the standalone MTA Ray training image. Override this
+  # whenever training_docker_image changes; empty preserves the application default.
+  rayTrainingDockerUri: ""
+  # JSON array of SSH server names for the Celery scheduler, e.g. '["Celery-Kamali-Gcp"]'
+  celerySshServers: ""
+  # ── Byte-aware analysis routing (app/core/analysis_limits.py) ──
+  # Master flag: "1" routes over-budget datasets to a scheduled job instead of
+  # sampling; "0" (default) keeps the legacy row-tier behaviour. Set per env
+  # here so it no longer has to be exported by hand each deploy.
+  byteRouting: "0"                 # AVALOKA_BYTE_ROUTING
+  # Log-only shadow mode: "1" emits per-request routing telemetry with no
+  # behaviour change; "0" (default) off.
+  routingShadow: "0"               # AVALOKA_ROUTING_SHADOW
+  # Cap on estimated in-memory working-set bytes for a synchronous analysis.
+  # Empty => derived at runtime from the container memory limit (see
+  # analysis_limits.py). Set an explicit byte count to pin it per environment.
+  analysisMaxInmemoryBytes: ""     # ANALYSIS_MAX_INMEMORY_BYTES
+
+# Celery worker for async jobs and background task processing. It shares the same
+# app image and config/secret references as the API and runs the celery app in
+# app.core.celery_app.
+celery:
+  enabled: true
+  replicas: 1
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+  redbeat:
+    replicas: 1
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: "1"
+        memory: 512Mi
+
+# Internal MLflow tracking server. It is enabled by default and proxies artifacts
+# to the chart-managed MinIO, so API/Ray clients need only its HTTP endpoint.
+# Set backendStoreUri to a managed PostgreSQL database in production. When empty,
+# the chart uses the same PostgreSQL service/URL as the Avaloka API.
+mlflow:
+  enabled: true
+  replicas: 1
+  port: 5000
+  workers: 1
+  image:
+    # Empty values reuse image.repository/image.tag/image.pullPolicy.
+    repository: ""
+    tag: ""
+    pullPolicy: ""
+  backendStoreUri: ""
+  trackingUri: ""                  # defaults to http://<release>-mlflow:5000
+  registryUri: ""                  # defaults to trackingUri
+  artifactsDestination: ""         # defaults to s3://<minio.bucket>/mlflow-artifacts
+  defaultArtifactRoot: ""          # optional direct-client override; normally leave empty
+  allowedHosts: ""                 # defaults to the short and full in-cluster Service names
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 3Gi
+
+# Ray wiring. When connectExisting=true the app talks to an external Ray cluster;
+# otherwise it uses the in-cluster RayCluster provisioned by KubeRay.
+ray:
+  connectExisting: false
+  address: ""                       # e.g. ray://my-ray-head:10001 (used when connectExisting=true)
+  # In-cluster head service created by the RayCluster CR (deploy/helm/ray/raycluster.yaml).
+  inClusterAddress: "ray://avaloka-raycluster-head-svc:10001"
+
+# Secrets. Provide at install time, e.g.:
+#   helm install ... --set-string secrets.groqPlanningKey=$GROQ_API_KEY_PLANNING_AGENT
+# Leave empty to reference a pre-existing Secret via existingSecret instead.
+secrets:
+  groqPlanningKey: ""
+  groqCodingKey: ""
+  # Required only when selected training columns need keyed PII protection.
+  # Supply with --set-string secrets.piiKey="$AVALOKA_PII_KEY".
+  piiKey: ""
+  stripeTestApiKey: ""
+  stripeSecretKey: ""
+  stripeWebhookSecret: ""
+  paypalWebhookId: ""
+  # Optional OpenRouter key. Arms the Planner's fallback for Groq 429 (the
+  # org-wide token-per-minute ceiling), 404 and 5xx. Empty = no backup, which
+  # is the pre-existing behaviour.
+  openrouterKey: ""
+  # The API validates HS256 JWTs against SUPABASE_JWT_SECRET (app/api/server.py).
+  jwtSecret: ""
+  # Service-role key the API uses to read cloud storage connection rows for
+  # /buckets/list. Defaults to supabase.serviceKey when in-cluster Supabase is on;
+  # set explicitly when pointing at a cloud Supabase project.
+  supabaseServiceRoleKey: ""
+  # Bare GROQ_API_KEY — separate from the planning/coding agent keys above.
+  # app/agents/visualization_agent.py reads this one.
+  groqApiKey: ""
+  # S3 credentials for an EXTERNAL S3/S3-compatible store. Leave empty on EKS
+  # (IRSA supplies them) and when minio.enabled, where the chart injects MinIO's
+  # root credentials instead.
+  awsAccessKeyId: ""
+  awsSecretAccessKey: ""
+  # AES-GCM key the encrypt-cloud-credentials edge function encrypts cloud
+  # credentials with; the API needs the same value to decrypt them. Without it
+  # /buckets/list falls back to the pod's own ADC and browses empty.
+  # Defaults to supabase.functions.dbEncryptionKey; must match the edge functions'
+  # value when pointing at a cloud Supabase project.
+  dbEncryptionKey: ""
+
+# GCP service account credentials, mounted as a file so GOOGLE_APPLICATION_CREDENTIALS
+# can point at it. The key never goes in values.yaml — create the Secret out of band:
+#   kubectl -n <ns> create secret generic avaloka-gcp-sa \
+#     --from-file=key.json=/path/to/service-account.json
+# then install with --set gcp.existingSecret=avaloka-gcp-sa
+# On GKE prefer Workload Identity (serviceAccount.annotations) and leave this empty.
+gcp:
+  existingSecret: ""
+  secretKey: "key.json"
+  mountPath: "/var/secrets/gcp"
+# When set, this Secret must also contain MLFLOW_BACKEND_STORE_URI because the
+# chart-managed MLflow Deployment reads the database URI from the same Secret.
+existingSecret: ""                  # name of a pre-created Secret holding the above keys
+
+# RBAC so the in-cluster app can submit Ray jobs / patch RayServices / read status.
+rbac:
+  create: true
+serviceAccount:
+  create: true
+  name: ""
+  # Cloud Workload Identity annotations, e.g. GKE iam.gke.io/gcp-service-account,
+  # EKS eks.amazonaws.com/role-arn, or AKS azure.workload.identity/client-id.
+  annotations: {}
+
+# Extra pod labels, e.g. AKS Workload Identity's azure.workload.identity/use: "true".
+podLabels: {}
+
+# The agent pipeline loads embedding models in-process (sentence-transformers
+# all-MiniLM-L6-v2, mixedbread-ai/mxbai-embed-large-v1 ~1.3GB fp32, plus a chroma
+# ONNX model). 1Gi is not enough — the container is OOMKilled (exit 137) mid-run,
+# which surfaces as the request simply hanging and the pod restarting.
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    cpu: "2"
+    memory: 6Gi
+
+# Cache for downloaded models. Mounted at /root/.cache, which covers BOTH the
+# HuggingFace cache (~/.cache/huggingface) and chroma's ONNX cache (~/.cache/chroma).
+# Without it every container restart re-downloads ~1.5GB, which is what makes the
+# first request after a restart appear to hang.
+# emptyDir survives container restarts within a pod (so an OOM kill keeps the cache)
+# but not pod replacement. Swap for a PVC to make it durable across deploys.
+modelCache:
+  enabled: true
+  sizeLimit: "8Gi"
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

@@ -1,0 +1,40 @@
+replicaCount: 1
+
+# Blue-green color. Leave empty for legacy single-release deploys.
+color: ""
+
+image:
+  repository: avaloka-frontend
+  tag: latest
+  pullPolicy: IfNotPresent
+
+# Backend API URL injected into the frontend container at runtime. The
+# avaloka-router stable Service hostname is the right value for blue-green.
+config:
+  apiBaseUrl: ""
+  langgraphBaseUrl: ""
+
+service:
+  port: 8080
+
+serviceAccount:
+  create: false
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+  hosts:
+    - host: localhost
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+httpRoute:
+  enabled: false
+
+autoscaling:
+  enabled: false

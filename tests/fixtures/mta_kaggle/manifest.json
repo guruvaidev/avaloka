@@ -1,0 +1,105 @@
+{
+  "fixtures": {
+    "instacart_prior_sample.csv": {
+      "source": "mba_order_products__prior.csv",
+      "source_bytes": 577550706,
+      "rows": 512,
+      "columns": [
+        "order_id",
+        "product_id",
+        "add_to_cart_order",
+        "reordered"
+      ],
+      "sha256": "3c06f9952b65394bc01f50ffaed78355dbfa21269dfb9ca5662448e0d8766a83"
+    },
+    "instacart_train_sample.csv": {
+      "source": "mba_order_products__train.csv",
+      "source_bytes": 24680147,
+      "rows": 512,
+      "columns": [
+        "order_id",
+        "product_id",
+        "add_to_cart_order",
+        "reordered"
+      ],
+      "sha256": "1e3292e70686a1d59704d4ea23ee2eeb7b43c2e92ccf6201d179e02562cfc048"
+    },
+    "ieee_fraud_train_sample.csv": {
+      "source": "train_transaction.csv",
+      "source_bytes": 683351067,
+      "rows": 384,
+      "columns": [
+        "TransactionID",
+        "isFraud",
+        "TransactionDT",
+        "TransactionAmt",
+        "ProductCD",
+        "card1",
+        "card4",
+        "card6",
+        "C1",
+        "D1"
+      ],
+      "sha256": "4b0e9b3724d6326ab88bac6f784ee0906ab48cb15c5344a5c7a3a73c6999d648"
+    },
+    "ieee_fraud_test_sample.csv": {
+      "source": "test_transaction.csv",
+      "source_bytes": 613194934,
+      "rows": 256,
+      "columns": [
+        "TransactionID",
+        "TransactionDT",
+        "TransactionAmt",
+        "ProductCD",
+        "card1",
+        "card4",
+        "card6",
+        "C1",
+        "D1"
+      ],
+      "sha256": "b4471ea0f82ab047f9b791de499297a35bf206d6d7fc377d9ac8652858d09baf"
+    },
+    "walmart_validation_sample.csv": {
+      "source": "walmart_sales_train_validation.csv",
+      "source_bytes": 120007726,
+      "rows": 512,
+      "columns": [
+        "id",
+        "item_id",
+        "dept_id",
+        "cat_id",
+        "store_id",
+        "state_id",
+        "d_1907",
+        "d_1908",
+        "d_1909",
+        "d_1910",
+        "d_1911",
+        "d_1912",
+        "d_1913"
+      ],
+      "sha256": "7257168e99b9a281038e7bc67074703adc8a3edb451b47fd76372dea3cb2b0dc"
+    },
+    "walmart_evaluation_sample.csv": {
+      "source": "walmart_sales_train_evaluation.csv",
+      "source_bytes": 121736518,
+      "rows": 512,
+      "columns": [
+        "id",
+        "item_id",
+        "dept_id",
+        "cat_id",
+        "store_id",
+        "state_id",
+        "d_1935",
+        "d_1936",
+        "d_1937",
+        "d_1938",
+        "d_1939",
+        "d_1940",
+        "d_1941"
+      ],
+      "sha256": "558cf9781d138bfb2ffc3faca74df5da1809839b03624f5541608e00d8361309"
+    }
+  }
+}

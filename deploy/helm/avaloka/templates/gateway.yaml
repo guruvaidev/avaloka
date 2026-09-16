@@ -1,0 +1,239 @@
+{{- if .Values.gateway.enabled }}
+{{- $g := .Values.gateway }}
+{{- $fullname := include "avaloka.fullname" . }}
+{{- $gwName := include "avaloka.gatewayName" . }}
+{{- if not $g.hosts }}
+{{- fail "gateway.enabled=true requires at least one hostname in gateway.hosts (e.g. [test.example.com, app.example.com])" }}
+{{- end }}
+{{- /* Resolve the GatewayClass up front so a missing provider reports itself rather
+       than surfacing later as a confusing certificate error. */}}
+{{- $_ := include "avaloka.gatewayClassName" . }}
+{{- $certmap := and $g.tls.enabled (eq $g.tls.mode "certmap") }}
+{{- if and $certmap (not $g.tls.certMapName) }}
+{{- fail "gateway.tls.mode=certmap requires gateway.tls.certMapName (the Certificate Manager map created out of band; see deploy/README.md)" }}
+{{- end }}
+{{- if and $g.tls.enabled (eq $g.tls.mode "secret") (not $g.tls.secretName) }}
+{{- fail "gateway.tls.mode=secret requires gateway.tls.secretName (a kubernetes.io/tls Secret in this namespace)" }}
+{{- end }}
+{{- if and $g.tls.enabled (not (has $g.tls.mode (list "certmap" "secret" "external"))) }}
+{{- fail (printf "gateway.tls.mode must be certmap|secret|external, got %q" $g.tls.mode) }}
+{{- end }}
+{{- if and (not $g.httpEnabled) (not $g.tls.enabled) }}
+{{- fail "gateway.httpEnabled=false with gateway.tls.enabled=false leaves the Gateway with no listener at all" }}
+{{- end }}
+{{- /* :80 is served only when httpEnabled. With it off the load balancer opens no
+       HTTP port, so http:// is refused outright rather than redirected — HTTPS-only
+       in the strict sense. Safe for Google-managed certs either way: Certificate
+       Manager validates and renews over 443, not 80. */}}
+{{- $redirect := and $g.httpEnabled $g.tls.enabled $g.redirectHttpToHttps }}
+# Cloud Application Load Balancer fronting avaloka, expressed in the Gateway API so
+# one template drives all three providers:
+#   GCP   gke-l7-global-external-managed -> global external Application Load Balancer
+#   AWS   gateway.k8s.aws/alb            -> Application Load Balancer
+#   Azure azure-alb-external             -> Application Gateway for Containers
+#
+# This replaces the raw `service.type: LoadBalancer` public IP the cloud overlays
+# used to hand out: the backing Services drop to ClusterIP and the only public
+# entry point becomes this Gateway's static anycast IP, terminating TLS for
+# .Values.gateway.hosts.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: {{ $gwName }}
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+  {{- if or $certmap $g.annotations }}
+  annotations:
+    {{- if $certmap }}
+    # GCP only. Certificate Manager owns the certs (Google-managed, auto-renewing);
+    # it is mutually exclusive with listeners[].tls.certificateRefs — setting both
+    # is rejected by the GKE controller — and works only with GLOBAL gateway classes.
+    networking.gke.io/certmap: {{ $g.tls.certMapName | quote }}
+    {{- end }}
+    {{- with $g.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- end }}
+spec:
+  gatewayClassName: {{ include "avaloka.gatewayClassName" . }}
+  {{- if or $g.infrastructure.parametersRef (and (eq $g.provider "aws") $g.aws.certificateArns) }}
+  # Provider-specific frontend config that has no vendor-neutral Gateway API field.
+  # On AWS this is where the ACM certificates live — the controller explicitly does
+  # NOT read listeners[].tls.certificateRefs.
+  infrastructure:
+    parametersRef:
+      {{- if $g.infrastructure.parametersRef }}
+      {{- toYaml $g.infrastructure.parametersRef | nindent 6 }}
+      {{- else }}
+      group: gateway.k8s.aws
+      kind: LoadBalancerConfiguration
+      name: {{ include "avaloka.gatewayName" . }}
+      {{- end }}
+  {{- end }}
+  {{- with $g.addresses }}
+  # Pre-reserved frontend IP, so the address survives `helm uninstall` and the DNS
+  # A records for gateway.hosts keep resolving across redeploys. On GCP this is
+  # `gcloud compute addresses create <name> --global --ip-version=IPV4`.
+  addresses:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  listeners:
+    # Hostnames are pinned on the HTTPRoutes rather than the listeners, so adding a
+    # host is a values-only change and the redirect route stays a single resource.
+    {{- if $g.httpEnabled }}
+    - name: http
+      protocol: HTTP
+      port: 80
+      allowedRoutes:
+        namespaces:
+          from: Same
+    {{- end }}
+    {{- if $g.tls.enabled }}
+    - name: https
+      protocol: HTTPS
+      port: 443
+      allowedRoutes:
+        namespaces:
+          from: Same
+      {{- if eq $g.tls.mode "secret" }}
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - kind: Secret
+            group: ""
+            name: {{ $g.tls.secretName | quote }}
+      {{- end }}
+      {{- /* certmap (GCP Certificate Manager) and external (AWS ACM via
+             LoadBalancerConfiguration) both carry no tls block: those controllers
+             reject a listener that declares certificateRefs as well. */}}
+    {{- end }}
+---
+{{- if $redirect }}
+# Everything arriving on :80 is bounced to https before it reaches a pod, so the
+# app never has to reason about scheme. Bound to the `http` listener only.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ $fullname }}-https-redirect
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+spec:
+  parentRefs:
+    - name: {{ $gwName }}
+      sectionName: http
+  hostnames:
+    {{- range $g.hosts }}
+    - {{ . | quote }}
+    {{- end }}
+  rules:
+    - filters:
+        - type: RequestRedirect
+          requestRedirect:
+            scheme: https
+            statusCode: 301
+---
+{{- end }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+spec:
+  parentRefs:
+    {{- if $g.tls.enabled }}
+    - name: {{ $gwName }}
+      sectionName: https
+    {{- end }}
+    {{- /* Attach to :80 only when it exists and is not purely a redirect. */}}
+    {{- if and $g.httpEnabled (not $redirect) }}
+    - name: {{ $gwName }}
+      sectionName: http
+    {{- end }}
+  hostnames:
+    {{- range $g.hosts }}
+    - {{ . | quote }}
+    {{- end }}
+  # Gateway API resolves rules most-specific-match-first regardless of order, so the
+  # catch-all `/` rule below cannot shadow the API prefixes above it.
+  rules:
+    {{- range $g.extraRoutes }}
+    - matches:
+        {{- range .matches }}
+        - path:
+            type: {{ .type | default "PathPrefix" }}
+            value: {{ .value | quote }}
+        {{- end }}
+      {{- with .rewritePrefix }}
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplacePrefixMatch
+              replacePrefixMatch: {{ . | quote }}
+      {{- end }}
+      backendRefs:
+        - name: {{ tpl .service $ }}
+          port: {{ .port }}
+      {{- with $g.routeTimeout }}
+      timeouts:
+        request: {{ . | quote }}
+        backendRequest: {{ . | quote }}
+      {{- end }}
+    {{- end }}
+    {{- if and $g.routeApiDirect .Values.webui.enabled }}
+    # The webui nginx already same-origin-proxies these paths to the API. Matching
+    # them at the load balancer instead skips that hop, and — more importantly —
+    # gives the API its own backend so agent requests can carry a timeout measured
+    # in minutes without loosening the one guarding the static SPA.
+    - matches:
+        {{- range $g.apiRoutes }}
+        - path:
+            type: {{ .type | default "PathPrefix" }}
+            value: {{ .value | quote }}
+        {{- end }}
+      backendRefs:
+        - name: {{ $fullname }}
+          port: {{ $.Values.service.port }}
+      {{- with $g.routeTimeout }}
+      timeouts:
+        request: {{ . | quote }}
+        backendRequest: {{ . | quote }}
+      {{- end }}
+    {{- end }}
+    {{- if and $g.routeApiDirect .Values.supabase.enabled }}
+    # Supabase API gateway. These paths must bypass the WebUI nginx and go
+    # directly to Kong.
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /auth/v1
+        - path:
+            type: PathPrefix
+            value: /rest/v1
+        - path:
+            type: PathPrefix
+            value: /functions/v1
+        - path:
+            type: PathPrefix
+            value: /storage/v1
+      backendRefs:
+        - name: avaloka-supabase-kong
+          port: 8000
+    {{- end }}
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: {{ include "avaloka.gatewayDefaultBackend" . }}
+          port: {{ include "avaloka.gatewayDefaultBackendPort" . }}
+      {{- with $g.routeTimeout }}
+      timeouts:
+        request: {{ . | quote }}
+        backendRequest: {{ . | quote }}
+      {{- end }}
+{{- end }}

@@ -1,0 +1,150 @@
+{{- include "avaloka.checkSupabaseCredentials" . -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "avaloka.fullname" . }}-config
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+data:
+  {{- with .Values.config.gcpProjectId }}
+  CLOUD_PROVIDER: "gcp"
+  GCP_PROJECT_ID: {{ . | quote }}
+  GOOGLE_CLOUD_PROJECT: {{ . | quote }}
+  {{- end }}
+  RAY_ADDRESS: {{ include "avaloka.rayAddress" . | quote }}
+  RAY_CONNECT_EXISTING: {{ .Values.ray.connectExisting | quote }}
+  # Ray Serve inference (D3): the API POSTs predictions to this in-cluster service.
+  RAY_SERVE_URL: {{ .Values.config.rayServeUrl | quote }}
+  INFERENCE_BACKEND: {{ .Values.config.inferenceBackend | quote }}
+  {{- with (include "avaloka.mlflowTrackingUri" .) }}
+  MLFLOW_TRACKING_URI: {{ . | quote }}
+  {{- end }}
+  {{- with (include "avaloka.mlflowRegistryUri" .) }}
+  MLFLOW_REGISTRY_URI: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.mlflow.defaultArtifactRoot }}
+  # Optional direct-client override. It stays empty for the chart-managed server,
+  # whose --artifacts-destination makes clients proxy artifacts over HTTP.
+  MLFLOW_DEFAULT_ARTIFACT_ROOT: {{ . | quote }}
+  {{- end }}
+  # Agent LLM provider (separate from the trained-model inference backend).
+  INFERENCE_PROVIDER: {{ .Values.inference.provider | quote }}
+  {{- if .Values.localLLM.enabled }}
+  INFERENCE_LOCAL_BASE_URL: {{ include "avaloka.localLLMBaseUrl" . | quote }}
+  INFERENCE_LOCAL_MODEL_LARGE: {{ .Values.localLLM.servedModelName | quote }}
+  INFERENCE_LOCAL_MODEL_SMALL: {{ .Values.localLLM.servedModelName | quote }}
+  {{- end }}
+
+  # Redis: chart-managed service DNS when redis.enabled, else the external URL.
+  REDIS_URL: {{ include "avaloka.redisUrl" . | quote }}
+  {{- if or .Values.chroma.enabled .Values.chroma.externalHost }}
+  # Chroma HttpClient (layer-2). Presence of CHROMA_HOST switches the client off the
+  # embedded PersistentClient onto the in-cluster server.
+  CHROMA_HOST: {{ include "avaloka.chromaHost" . | quote }}
+  CHROMA_PORT: {{ .Values.chroma.port | quote }}
+  {{- end }}
+  {{- if or .Values.postgres.enabled .Values.postgres.externalUrl }}
+  POSTGRES_URL: {{ include "avaloka.postgresUrl" . | quote }}
+  {{- end }}
+  {{- if .Values.milvus.enabled }}
+  # Point at the in-chart Milvus when one is deployed, unless an external host
+  # is named explicitly. Previously this was whatever `milvus.host` said, which
+  # defaulted to "" -- so even a running Milvus went unused.
+  MILVUS_HOST: {{ .Values.milvus.host | default (ternary (printf "%s-milvus" (include "avaloka.fullname" .)) "" .Values.milvus.enabled) | quote }}
+  MILVUS_PORT: {{ .Values.milvus.port | quote }}
+  # Hard timeout for a memory retrieval. A successful one measures 4-6s on a
+  # healthy deployment, so the previous 3s default aborted every call and made
+  # the learning loop look empty rather than slow.
+  MEMORY_CIRCUIT_BREAKER_TIMEOUT: {{ .Values.memory.circuitBreakerTimeout | quote }}
+  # Keep the embedding model on-disk in the image where possible: reaching
+  # huggingface.co at query time is both slow and impossible in an air-gapped
+  # install.
+  HF_HUB_OFFLINE: {{ .Values.memory.offlineEmbeddings | ternary "1" "0" | quote }}
+  {{- end }}
+  {{- with (include "avaloka.mcpServerUrl" .) }}
+  MCP_SERVER_URL: {{ . | quote }}
+  {{- end }}
+  {{- with (include "avaloka.onboardingApiUrl" .) }}
+  ONBOARDING_API_URL: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.config.rayDashboardUrl }}
+  RAY_DASHBOARD_URL: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.config.rayDashboardUrlInCluster }}
+  # Used ONLY for transfers whose source/destination is a cluster-local DB (a bare
+  # Service name or *.svc.cluster.local) — a remote Ray cluster cannot resolve those.
+  # Cloud-to-cloud transfers keep using RAY_DASHBOARD_URL above.
+  RAY_DASHBOARD_URL_INCLUSTER: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.config.mtaRayDashboardUrl }}
+  # Ray Jobs API used only by scheduled/distributed MTA training. This targets
+  # the general RayCluster, never the Ray Serve inference cluster.
+  MTA_RAY_DASHBOARD_URL: {{ . | quote }}
+  MTA_RAY_NAMESPACE: {{ default $.Release.Namespace $.Values.config.mtaRayNamespace | quote }}
+  MTA_RAY_TRAINING_ENTRYPOINT: {{ $.Values.config.mtaRayTrainingEntrypoint | quote }}
+  {{- end }}
+  {{- with .Values.config.rayApiServerAddress }}
+  # Overrides RAY_ADDRESS for job submission (see values.yaml for why).
+  RAY_API_SERVER_ADDRESS: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.config.datasetSizeThresholdBytes }}
+  DATASET_SIZE_BYTES_THRESHOLD_FOR_RAY_TRAINING: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.config.rayTrainingDockerUri }}
+  # Standalone image executed by Ray-on-GKE for MTA training jobs.
+  RAY_TRAINING_DOCKER_URI: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.config.celerySshServers }}
+  CELERY_SSH_SERVERS: {{ . | quote }}
+  {{- end }}
+  # Byte-aware analysis routing (app/core/analysis_limits.py). Flags are always
+  # set so the behaviour is deterministic per deploy (no manual export); the cap
+  # is set only when non-empty, otherwise the app derives it from container memory.
+  AVALOKA_BYTE_ROUTING: {{ .Values.config.byteRouting | quote }}
+  AVALOKA_ROUTING_SHADOW: {{ .Values.config.routingShadow | quote }}
+  {{- with .Values.config.analysisMaxInmemoryBytes }}
+  ANALYSIS_MAX_INMEMORY_BYTES: {{ . | quote }}
+  {{- end }}
+  {{- if .Values.gcp.existingSecret }}
+  # Both names point at the mounted service account key (app code reads either).
+  GOOGLE_APPLICATION_CREDENTIALS: {{ printf "%s/%s" .Values.gcp.mountPath .Values.gcp.secretKey | quote }}
+  GCP_SERVICE_ACCOUNT_JSON_PATH: {{ printf "%s/%s" .Values.gcp.mountPath .Values.gcp.secretKey | quote }}
+  {{- end }}
+  {{- with (include "avaloka.apiSupabaseUrl" .) }}
+  # Server-side Supabase (pod-to-pod via kong). The API reads cloud storage
+  # connection rows from here for /buckets/list.
+  SUPABASE_URL: {{ . | quote }}
+  {{- end }}
+  # s3 when the in-cluster MinIO is adopted (see avaloka.minioIsStorageBackend),
+  # otherwise exactly what config.storageBackend asks for.
+  STORAGE_BACKEND: {{ include "avaloka.storageBackend" . | quote }}
+  LOCAL_STORAGE_ROOT: {{ .Values.config.localStorageRoot | quote }}
+  GCS_BUCKET: {{ .Values.config.gcsBucket | quote }}
+  {{- with (include "avaloka.s3Bucket" .) }}
+  S3_BUCKET: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.config.s3Prefix }}
+  S3_PREFIX: {{ . | quote }}
+  {{- end }}
+  {{- with (include "avaloka.s3EndpointUrl" .) }}
+  # Redirects every S3 client to an S3-compatible store. Both names are set: the
+  # app reads S3_ENDPOINT_URL, botocore itself understands AWS_ENDPOINT_URL, and
+  # Ray workers loading s3:// datasets need one of them or they resolve to AWS.
+  S3_ENDPOINT_URL: {{ . | quote }}
+  AWS_ENDPOINT_URL: {{ . | quote }}
+  # MLflow's S3 artifact repository reads its own endpoint variable.
+  MLFLOW_S3_ENDPOINT_URL: {{ . | quote }}
+  {{- end }}
+  # botocore sends CRC32 checksums by default, which MinIO/S3-compatible stores
+  # reject (XAmzContentSHA256Mismatch). Only send checksums when required.
+  AWS_REQUEST_CHECKSUM_CALCULATION: "when_required"
+  AWS_RESPONSE_CHECKSUM_VALIDATION: "when_required"
+  {{- if .Values.config.awsRegion }}
+  AWS_REGION: {{ .Values.config.awsRegion | quote }}
+  AWS_DEFAULT_REGION: {{ .Values.config.awsRegion | quote }}
+  {{- else if include "avaloka.minioIsStorageBackend" . }}
+  # MinIO ignores the region but boto3/pyarrow refuse to sign without one.
+  AWS_REGION: "us-east-1"
+  AWS_DEFAULT_REGION: "us-east-1"
+  {{- end }}
+  LANGGRAPH_API_URL: {{ include "avaloka.langgraphUrl" . | quote }}

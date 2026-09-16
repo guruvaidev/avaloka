@@ -1,0 +1,11 @@
+# Shell scripts run inside Linux containers. With core.autocrlf=true (the common
+# Windows default) git rewrites them to CRLF on checkout, which makes the kernel
+# look for an interpreter named "/bin/sh\r" and fail with a misleading
+# "not found" — see ui/docker-entrypoint.d/*. Pin them to LF.
+*.sh text eol=lf
+*.envsh text eol=lf
+*.bash text eol=lf
+
+# Dockerfiles and entrypoint templates are consumed by Linux tooling too.
+Dockerfile* text eol=lf
+*.conf.template text eol=lf

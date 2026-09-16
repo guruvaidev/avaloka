@@ -1,0 +1,18 @@
+# To be placed in front-end repo and built
+
+FROM node:20-alpine
+
+WORKDIR /app
+
+# Install dependencies first
+COPY package*.json ./
+RUN npm install
+
+# Copy the rest of your code
+COPY . .
+
+# Expose your dev port
+EXPOSE 8080
+
+# Default command runs the dev server
+CMD ["npm", "run", "dev"]

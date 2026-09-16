@@ -1,0 +1,35 @@
+{{- if and .Values.gateway.enabled (eq .Values.gateway.provider "aws") .Values.gateway.aws.certificateArns }}
+{{- $g := .Values.gateway }}
+{{- if $g.infrastructure.parametersRef }}
+{{- fail "set either gateway.aws.certificateArns (chart renders the LoadBalancerConfiguration) or gateway.infrastructure.parametersRef (you supply one), not both" }}
+{{- end }}
+# AWS Load Balancer Controller frontend config. The controller does not read
+# listeners[].tls.certificateRefs, so ACM certificates are attached here and the
+# Gateway points at this object through spec.infrastructure.parametersRef.
+apiVersion: gateway.k8s.aws/v1
+kind: LoadBalancerConfiguration
+metadata:
+  name: {{ include "avaloka.gatewayName" . }}
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+spec:
+  scheme: {{ $g.aws.scheme | quote }}
+  {{- with $g.aws.loadBalancerName }}
+  loadBalancerName: {{ . | quote }}
+  {{- end }}
+  {{- if $g.tls.enabled }}
+  listenerConfigurations:
+    - protocolPort: HTTPS:443
+      # First ARN is the default the listener serves; the rest are SNI alternates,
+      # so every hostname in gateway.hosts needs a cert covering it somewhere here.
+      defaultCertificate: {{ first $g.aws.certificateArns | quote }}
+      {{- with rest $g.aws.certificateArns }}
+      certificates:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $g.aws.sslPolicy }}
+      sslPolicy: {{ . | quote }}
+      {{- end }}
+  {{- end }}
+{{- end }}

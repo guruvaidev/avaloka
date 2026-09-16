@@ -1,0 +1,37 @@
+# On-prem overlay for the avaloka (Part B) chart.
+#   helm upgrade --install avaloka deploy/helm/avaloka -f deploy/helm/avaloka/values/values-onprem.yaml
+# Assumes a private registry mirror and a bare-metal LB / ingress in front.
+image:
+  repository: registry.internal/avaloka-api
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+
+# In-cluster S3-compatible object store — the datacenter equivalent of the cloud
+# bucket, and the same one the laptop/kind install uses, so datasets and model
+# artifacts move between environments unchanged (s3:// either way).
+#
+# For a real datacenter, point persistence.storageClass at your fast local-disk
+# class and give MinIO dedicated disks; scaling to distributed erasure coding is
+# a replica/drive change, not a different system.
+minio:
+  enabled: true
+  service:
+    type: ClusterIP
+  persistence:
+    size: 200Gi
+    storageClass: ""
+  # Root credentials become the S3 credentials for the whole stack — override
+  # these before running anything real.
+  auth:
+    accessKey: avaloka
+    secretKey: CHANGE_ME
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "4"
+      memory: 8Gi

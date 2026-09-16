@@ -1,0 +1,122 @@
+apiVersion: ray.io/v1
+kind: RayJob
+metadata:
+  name: __RAYJOB_NAME__
+spec:
+  entrypoint: python /home/ray/scripts/sample_code.py
+  shutdownAfterJobFinishes: true
+  ttlSecondsAfterFinished: 600
+
+  runtimeEnvYAML: |
+    pip:
+      - pandas
+      - daft
+      - sqlalchemy
+      - psycopg2-binary
+      - PyMySQL
+      - google-cloud-storage
+      - sqlglot
+      - connectorx
+    env_vars:
+      JOB_ID: "__JOB_ID__"
+      PYTHONPATH: "/home/ray"
+
+  rayClusterSpec:
+    rayVersion: "2.10.0"
+    enableInTreeAutoscaling: false
+
+    headGroupSpec:
+      rayStartParams:
+        dashboard-host: "0.0.0.0"
+      template:
+        metadata:
+          labels:
+            app: __RAYJOB_NAME__
+            ray-node-type: head
+        spec:
+          containers:
+            - name: ray-head
+              image: avaloka-dta-ray-cluster:latest
+              imagePullPolicy: Always
+              ports:
+                - containerPort: 6379
+                  name: gcs-server
+                - containerPort: 8265
+                  name: dashboard
+                - containerPort: 10001
+                  name: client
+              resources:
+                requests:
+                  memory: "4Gi"
+                  cpu: "1"
+                limits:
+                  memory: "8Gi"
+                  cpu: "2"
+              env:
+                - name: GOOGLE_APPLICATION_CREDENTIALS
+                  value: /var/secrets/google/key.json
+              volumeMounts:
+                - name: script-volume
+                  mountPath: /home/ray/scripts
+                - name: gcs-sa-key-volume
+                  mountPath: /var/secrets/google
+                  readOnly: true
+          volumes:
+            - name: script-volume
+              configMap:
+                name: __RAYJOB_NAME__-code
+                items:
+                  - key: sample_code.py
+                    path: sample_code.py
+            - name: gcs-sa-key-volume
+              secret:
+                secretName: __GCS_SECRET_NAME__
+
+    workerGroupSpecs:
+      - groupName: small-group
+        replicas: 1
+        minReplicas: 1
+        maxReplicas: 5
+        rayStartParams: {}
+        template:
+          metadata:
+            labels:
+              app: __RAYJOB_NAME__
+              ray-node-type: worker
+          spec:
+            containers:
+              - name: ray-worker
+                image: avaloka-dta-ray-cluster:latest
+                imagePullPolicy: Always
+                resources:
+                  requests:
+                    memory: "4Gi"
+                    cpu: "1"
+                  limits:
+                    memory: "8Gi"
+                    cpu: "2"
+                env:
+                  - name: GOOGLE_APPLICATION_CREDENTIALS
+                    value: /var/secrets/google/key.json
+                volumeMounts:
+                  - name: script-volume
+                    mountPath: /home/ray/scripts
+                  - name: gcs-sa-key-volume
+                    mountPath: /var/secrets/google
+                    readOnly: true
+            volumes:
+              - name: script-volume
+                configMap:
+                  name: __RAYJOB_NAME__-code
+              - name: gcs-sa-key-volume
+                secret:
+                  secretName: __GCS_SECRET_NAME__
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: __RAYJOB_NAME__-code
+data:
+  sample_code.py: |
+__INJECTION_SCRIPT__

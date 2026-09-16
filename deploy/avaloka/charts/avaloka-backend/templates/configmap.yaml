@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "avaloka-backend.fullname" . }}-config
+  labels:
+    {{- include "avaloka-backend.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
+data:
+  {{- /*
+    Sensible, release-aware defaults so a plain `helm install` is self-contained.
+    Anything under .Values.backendEnv overrides these. Secrets (GROQ keys, etc.)
+    should be supplied via --set-string avaloka-backend.backendEnv.KEY=... or an
+    external ConfigMap/Secret.
+  */}}
+  {{- $defaults := dict
+        "REDIS_URL" (printf "redis://%s-redis-master:6379" .Release.Name)
+        "REDIS_CLUSTER" "0"
+        "LANGGRAPH_API_URL" "http://localhost:3000"
+        "CACHE_DEGRADE_SECONDS" "2"
+        "PLANNER_GRAPH_OUTPUT_DIR" "/tmp/planner_graphs/" }}
+  {{- if .Values.gcpKeySecret.enabled }}
+  {{- $_ := set $defaults "GOOGLE_APPLICATION_CREDENTIALS" "/secrets/gcp-key.json" }}
+  {{- end }}
+  {{- $env := mergeOverwrite $defaults (.Values.backendEnv | default dict) }}
+  {{- range $key, $val := $env }}
+  {{ $key }}: {{ $val | quote }}
+  {{- end }}

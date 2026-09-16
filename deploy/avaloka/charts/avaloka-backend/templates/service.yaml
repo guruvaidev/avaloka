@@ -1,0 +1,48 @@
+{{- /*
+Per-color Services. When .Values.color is set, names include the color suffix
+(handled by fullname helper) and the selector includes the color label so each
+release's Service targets only its own pods. The avaloka-router chart owns
+the stable "active" Service that switches between colors.
+*/ -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "avaloka-backend.fullname" . }}-langgraph
+  labels:
+    {{- include "avaloka-backend.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
+    avaloka.io/port: langgraph
+    {{- if .Values.color }}
+    avaloka.io/color: {{ .Values.color | quote }}
+    {{- end }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.service.langgraph.port }}
+      targetPort: {{ .Values.service.langgraph.port }}
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "avaloka-backend.selectorLabels" . | nindent 4 }}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "avaloka-backend.fullname" . }}-api
+  labels:
+    {{- include "avaloka-backend.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
+    avaloka.io/port: api
+    {{- if .Values.color }}
+    avaloka.io/color: {{ .Values.color | quote }}
+    {{- end }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.service.api.port }}
+      targetPort: {{ .Values.service.api.port }}
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "avaloka-backend.selectorLabels" . | nindent 4 }}

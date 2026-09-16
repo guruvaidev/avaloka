@@ -1,0 +1,37 @@
+{{- /*
+Legacy single-release ingress. Skipped automatically in blue-green mode
+(.Values.color set) because the avaloka-router chart owns the active ingress.
+*/ -}}
+{{- if and .Values.ingress.enabled (not .Values.color) }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "avaloka-backend.fullname" . }}
+  labels:
+    {{- include "avaloka-backend.labels" . | nindent 4 }}
+  annotations:
+    {{- toYaml .Values.ingress.annotations | nindent 4 }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  rules:
+    - host: {{ .Values.ingress.langgraph.host }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "avaloka-backend.fullname" . }}-langgraph
+                port:
+                  number: {{ .Values.service.langgraph.port }}
+    - host: {{ .Values.ingress.api.host }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "avaloka-backend.fullname" . }}-api
+                port:
+                  number: {{ .Values.service.api.port }}
+{{- end }}

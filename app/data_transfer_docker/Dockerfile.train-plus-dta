@@ -1,0 +1,38 @@
+# Merged image for the SHARED `ray-gke-cluster` Ray cluster (dashboard 34.132.134.104:8265).
+#
+# That cluster serves ML training workloads AND — via RAY_DASHBOARD_URL — the DTA
+# data-transfer jobs. Its base image (train-docker-image) has no daft/connectorx, so
+# every transfer paid a ~13-minute per-job pip install of ten libraries. Layering the
+# DTA libraries on top lets DTA run with DTA_RAY_USE_IMAGE_ENV=1 (no per-job install)
+# while every training dependency stays exactly as it was.
+#
+# Only the libraries the base image LACKS are installed here. pandas, sqlalchemy,
+# boto3, google-cloud-storage, cryptography and pyOpenSSL are already present and
+# mutually compatible, so they are deliberately left alone.
+#
+# pyarrow is pinned to the version the base image already ships (19.0.1) so pip cannot
+# silently move it — ray.data and torch training depend on it. Daft's own packaging
+# prefers pyarrow<16; if it ever refuses 19.0.1 this build fails loudly here rather
+# than breaking training at runtime.
+#
+# Build:
+#   docker build -f app/data_transfer_docker/Dockerfile.train-plus-dta \
+#     -t gcr.io/.../train-docker-image:test-v0.0.1-dta .
+#
+# Publish under a NEW tag — never overwrite test-v0.0.0, other workloads pin it.
+ARG BASE_IMAGE=gcr.io/.../train-docker-image:test-v0.0.0
+FROM ${BASE_IMAGE}
+
+# NOTE: `daft`, not `getdaft` — the old name is frozen on PyPI at 0.5.0 (no GCS
+# overwrite deletes; flotilla needs a newer ray). A rebuild with `getdaft` would
+# silently regress the shared cluster. The running cluster bakes daft 0.7.19.
+RUN pip install --no-cache-dir \
+      "pyarrow==19.0.1" \
+      "daft>=0.7.6,<0.8" \
+      connectorx \
+      pymysql \
+      psycopg2-binary \
+      sqlglot \
+      azure-storage-blob
+
+# USER, WORKDIR and ENTRYPOINT are inherited from the base image on purpose.

@@ -1,0 +1,86 @@
+{{- if .Values.chroma.enabled }}
+# In-cluster Chroma vector store (layer-2 usage context). Single ephemeral replica —
+# fine for kind/dev; for production use a managed/persistent Chroma via
+# chroma.enabled=false + chroma.externalHost.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "avaloka.fullname" . }}-chroma
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: chroma
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "avaloka.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: chroma
+  template:
+    metadata:
+      labels:
+        {{- include "avaloka.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: chroma
+    spec:
+      containers:
+        - name: chroma
+          image: {{ .Values.chroma.image | quote }}
+          imagePullPolicy: {{ .Values.chroma.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.chroma.port }}
+          readinessProbe:
+            httpGet:
+              path: /api/v2/heartbeat
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          {{- if .Values.chroma.persistence.enabled }}
+          # Tier L2 of the memory plane. Without a volume Chroma's usage-context
+          # collection is an emptyDir: every pod restart silently erased what the
+          # system had learned, which is why the learning loop could never be
+          # observed working across deployments.
+          volumeMounts:
+            - name: chroma-data
+              mountPath: /data
+          {{- end }}
+          resources:
+            {{- toYaml .Values.chroma.resources | nindent 12 }}
+      {{- if .Values.chroma.persistence.enabled }}
+      volumes:
+        - name: chroma-data
+          persistentVolumeClaim:
+            claimName: {{ include "avaloka.fullname" . }}-chroma
+      {{- end }}
+{{- if .Values.chroma.persistence.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "avaloka.fullname" . }}-chroma
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: {{ .Values.chroma.persistence.size }}
+{{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "avaloka.fullname" . }}-chroma
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: chroma
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "avaloka.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: chroma
+  ports:
+    - name: http
+      port: {{ .Values.chroma.port }}
+      targetPort: http
+      protocol: TCP
+{{- end }}

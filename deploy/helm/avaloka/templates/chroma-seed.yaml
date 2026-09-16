@@ -1,0 +1,97 @@
+{{/*
+One-shot Chroma seed, run as a post-install/post-upgrade hook.
+
+Tier L2 of the memory plane starts empty on a fresh install, so the first
+analyses run with no usage context at all. Where a corpus already exists --
+exported from another environment, or built once and kept -- this loads it at
+deploy time instead of paying to rebuild it.
+
+Deliberately a HOOK and not an initContainer: it must run once per release,
+not on every pod restart, and a restart must never re-overwrite a store that
+has since learned something.
+
+Skips cleanly when the archive is absent rather than failing the release: an
+unreachable seed should leave you with a cold cache, not a failed install.
+*/}}
+{{- if and .Values.chroma.enabled .Values.chroma.persistence.enabled .Values.chroma.seed.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "avaloka.fullname" . }}-chroma-seed
+  labels: {{- include "avaloka.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 1
+  template:
+    metadata:
+      labels: {{- include "avaloka.selectorLabels" . | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: seed
+          image: {{ .Values.chroma.seed.image | quote }}
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: SOURCE_URI
+              value: {{ .Values.chroma.seed.sourceUri | quote }}
+            - name: S3_ENDPOINT
+              value: "http://{{ include "avaloka.fullname" . }}-minio:{{ .Values.minio.port }}"
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "avaloka.fullname" . }}-secrets
+                  key: AWS_ACCESS_KEY_ID
+                  optional: true
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "avaloka.fullname" . }}-secrets
+                  key: AWS_SECRET_ACCESS_KEY
+                  optional: true
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -u
+              if [ -z "${SOURCE_URI}" ]; then
+                echo "chroma-seed: no sourceUri configured; starting cold."
+                exit 0
+              fi
+              # Never clobber a store that already holds data. A seed is for a
+              # cold start; re-seeding over a learned corpus loses exactly what
+              # the memory plane exists to keep.
+              if [ -n "$(ls -A /data 2>/dev/null)" ]; then
+                echo "chroma-seed: /data is not empty; leaving the existing store alone."
+                exit 0
+              fi
+              echo "chroma-seed: loading ${SOURCE_URI}"
+              case "${SOURCE_URI}" in
+                s3://*)
+                  mc alias set seedsrc "${S3_ENDPOINT}" "${AWS_ACCESS_KEY_ID:-}" "${AWS_SECRET_ACCESS_KEY:-}" >/dev/null 2>&1 || {
+                    echo "chroma-seed: could not reach the object store; starting cold."; exit 0; }
+                  mc cp "seedsrc/${SOURCE_URI#s3://}" /tmp/seed.tar.gz || {
+                    echo "chroma-seed: archive not found at ${SOURCE_URI}; starting cold."; exit 0; }
+                  ;;
+                http://*|https://*)
+                  wget -q -O /tmp/seed.tar.gz "${SOURCE_URI}" || {
+                    echo "chroma-seed: download failed; starting cold."; exit 0; }
+                  ;;
+                *)
+                  echo "chroma-seed: unsupported scheme in ${SOURCE_URI} (expected s3:// or https://); starting cold."
+                  exit 0
+                  ;;
+              esac
+              tar xzf /tmp/seed.tar.gz -C /data || {
+                echo "chroma-seed: archive could not be unpacked; starting cold."; exit 0; }
+              echo "chroma-seed: loaded $(du -sh /data | cut -f1) into the Chroma store."
+          volumeMounts:
+            - name: chroma-data
+              mountPath: /data
+      volumes:
+        - name: chroma-data
+          persistentVolumeClaim:
+            claimName: {{ include "avaloka.fullname" . }}-chroma
+{{- end }}

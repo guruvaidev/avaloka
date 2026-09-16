@@ -1,0 +1,64 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Azure Kubernetes Service (AKS) overlay.
+#
+# Identity: Azure AD Workload Identity — no key file mounted.
+# Registry: Azure Container Registry (ACR).
+# Storage:  Azure Blob Storage.
+#
+#   helm install avaloka deploy/avaloka -n avaloka --create-namespace \
+#       -f deploy/avaloka/values/values-aks.yaml \
+#       --set avaloka-backend.serviceAccount.annotations."azure\.workload\.identity/client-id"=CLIENT_ID
+# ─────────────────────────────────────────────────────────────────────────────
+
+avaloka-backend:
+  replicaCount: 2
+
+  image:
+    langgraph:
+      repository: ACRNAME.azurecr.io/avaloka-langgraph
+      tag: latest
+      pullPolicy: Always
+    api:
+      repository: ACRNAME.azurecr.io/avaloka-api
+      tag: latest
+      pullPolicy: Always
+
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+  # Azure Workload Identity: the pod label is added below; the KSA annotation
+  # carries the client-id of the user-assigned managed identity.
+  serviceAccount:
+    create: true
+    annotations:
+      azure.workload.identity/client-id: "CLIENT_ID"
+
+  # Workload Identity requires this pod label; it is harmless elsewhere.
+  podLabels:
+    azure.workload.identity/use: "true"
+
+  gcpKeySecret:
+    enabled: false
+
+  ingress:
+    enabled: true
+    className: webapprouting.kubernetes.azure.com   # AKS app routing add-on; or "nginx"
+
+avaloka-frontend:
+  enabled: true
+  image:
+    repository: ACRNAME.azurecr.io/avaloka-frontend
+    tag: latest
+
+redis:
+  enabled: true
+  architecture: standalone
+  auth:
+    enabled: false

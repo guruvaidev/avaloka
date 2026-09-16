@@ -1,0 +1,62 @@
+# AKS overlay for the avaloka (Part B) chart (D5).
+#   helm upgrade --install avaloka deploy/helm/avaloka -f deploy/helm/avaloka/values/values-aks.yaml
+#
+# Fronts the release with Application Gateway for Containers through the Gateway API.
+# Prerequisites, all out of band:
+#   1. ALB Controller installed (AKS add-on or Helm) — it registers the
+#      `azure-alb-external` GatewayClass.
+#   2. An ApplicationLoadBalancer resource (ALB-managed strategy) or an existing
+#      Application Gateway for Containers (bring-your-own) — selected by the
+#      annotations below.
+#   3. A kubernetes.io/tls Secret holding the certificate for gateway.hosts.
+#      Key Vault via the Secrets Store CSI driver is NOT supported here: the
+#      controller requires the cert to be a real in-cluster Secret. cert-manager
+#      with Let's Encrypt is the supported automation path.
+#   4. DNS CNAMEs for those hosts -> the FQDN the Gateway reports in
+#      status.addresses once it is programmed.
+image:
+  # Point at your ACR image, e.g. <registry>.azurecr.io/avaloka-api
+  repository: REGISTRY.azurecr.io/avaloka-api
+  tag: latest
+  pullPolicy: Always
+
+# ClusterIP, not LoadBalancer — the Gateway is the only public entry point.
+service:
+  type: ClusterIP
+
+webui:
+  service:
+    type: ClusterIP
+  apiBase: ""
+  # Managed Supabase project the browser authenticates against.
+  supabaseUrl: ""
+  supabaseAnonKey: ""
+
+gateway:
+  enabled: true
+  provider: azure
+  hosts:
+    - test.example.com
+    - app.example.com
+  annotations:
+    # ALB-managed strategy. For bring-your-own, drop these two and use instead:
+    #   alb.networking.azure.io/alb-id: /subscriptions/.../applicationLoadBalancers/alb-test
+    alb.networking.azure.io/alb-name: alb-avaloka
+    alb.networking.azure.io/alb-namespace: alb-infra
+  tls:
+    enabled: true
+    mode: secret
+    secretName: avaloka-listener-tls
+  redirectHttpToHttps: true
+  routeTimeout: "3600s"
+
+# Azure AD Workload Identity: annotate the KSA with the app-registration client id
+# and label the pods so the mutating webhook injects the projected token.
+serviceAccount:
+  annotations:
+    azure.workload.identity/client-id: CLIENT_ID
+podLabels:
+  azure.workload.identity/use: "true"
+
+config:
+  storageBackend: "azure"

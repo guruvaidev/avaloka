@@ -1,0 +1,12 @@
+[
+  {
+    "op": "replace",
+    "path": "/spec/headGroupSpec/template/spec/containers/0/image",
+    "value": "gcr.io/.../avaloka-dta-ray-cluster@sha256:c5939162bf248200b6cb26f9add585567a1e9cebab8cd3c7f2ce000ebf650488"
+  },
+  {
+    "op": "replace",
+    "path": "/spec/workerGroupSpecs/0/template/spec/containers/0/image",
+    "value": "gcr.io/.../avaloka-dta-ray-cluster@sha256:c5939162bf248200b6cb26f9add585567a1e9cebab8cd3c7f2ce000ebf650488"
+  }
+]

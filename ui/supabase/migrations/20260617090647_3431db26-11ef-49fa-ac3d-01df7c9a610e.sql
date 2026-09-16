@@ -1,0 +1,1 @@
+ALTER TABLE public.teams ADD COLUMN IF NOT EXISTS member_emails text[] NOT NULL DEFAULT '{}';

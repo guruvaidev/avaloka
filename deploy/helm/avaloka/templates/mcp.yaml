@@ -1,0 +1,110 @@
+{{- $fullname := include "avaloka.fullname" . -}} 
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $fullname }}-mcp
+  labels: {{- include "avaloka.labels" . | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: {{ .Values.mcp.persistence.size }}
+  {{- with .Values.mcp.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+
+{{- if .Values.mcp.enabled }}
+# ============================================================================
+# Multi-tenant MCP server (app/mcp_server/multi_tenant_mcp_server.py).
+#
+# Runs the SAME image as the API — the MCP app is in the repo, only the uvicorn
+# target differs. Port 8010 serves BOTH the onboarding routes (/customers/*, the
+# router from customer_dbs.py) and /call_tool, so the API's MCP_SERVER_URL and
+# ONBOARDING_API_URL both point here.
+#
+# Why in-cluster: a host-run MCP registers customer databases with hostnames only
+# the host resolves (localhost:<port-forward>), and the planner then can't reach
+# them from its pod — "Cannot connect to source database ... localhost:5433
+# Connection refused". Running it here means one address space: the MCP pod, the
+# planner pod and the transfer pod all resolve avaloka-postgres:5432 identically.
+# ============================================================================
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-mcp
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mcp
+spec:
+  replicas: 1
+  # The registry is a file on a RWO volume — never run two writers against it.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "avaloka.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: mcp
+  template:
+    metadata:
+      labels:
+        {{- include "avaloka.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: mcp
+    spec:
+      containers:
+        - name: mcp
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["uvicorn", "app.mcp_server.multi_tenant_mcp_server:app"]
+          args: ["--host", "0.0.0.0", "--port", "{{ .Values.mcp.port }}"]
+          env:
+            # customer_dbs forwards a registration to the MCP server's
+            # /admin/customers. Both live in THIS process, so point it at self —
+            # anything else 500s the registration with "All connection attempts failed".
+            - name: MCP_SERVER_URL
+              value: "http://127.0.0.1:{{ .Values.mcp.port }}"
+            # Registry file. Must sit on the volume or every restart drops all
+            # registered customers and /call_tool 401s with "No customer found".
+            - name: CUSTOMERS_FILE
+              value: "{{ .Values.mcp.persistence.mountPath }}/customers.json"
+          ports:
+            - name: http
+              containerPort: {{ .Values.mcp.port }}
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          volumeMounts:
+            - name: registry
+              mountPath: {{ .Values.mcp.persistence.mountPath }}
+          resources:
+            {{- toYaml .Values.mcp.resources | nindent 12 }}
+      volumes:
+        - name: registry
+          persistentVolumeClaim:
+            claimName: {{ $fullname }}-mcp
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-mcp
+  labels: {{- include "avaloka.labels" . | nindent 4 }}
+  {{- with .Values.mcp.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.mcp.service.type }}
+  selector:
+    {{- include "avaloka.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: mcp
+  ports:
+    - name: http
+      port: {{ .Values.mcp.port }}
+      targetPort: http
+      {{- if and (eq .Values.mcp.service.type "NodePort") .Values.mcp.service.nodePort }}
+      nodePort: {{ .Values.mcp.service.nodePort }}
+      {{- end }}
+{{- end }}

@@ -1,0 +1,84 @@
+# deploy/helm/ray/rayservice.yaml
+# KubeRay RayService = Ray Serve app => "inference as a service over k8s".
+# Applied by app/infra/ray_manager.deploy_ray_serve(). The Serve app is defined in
+# app/serve/inference.py (baked into the avaloka-ray image at import path below).
+#
+# Reach it: kubectl port-forward svc/avaloka-inference-serve-svc 8000:8000
+#   GET  http://localhost:8000/        -> readiness
+#   POST http://localhost:8000/  {"features": {...}, "model_uri": "runs:/..."}
+#        -> prediction from the selected MLflow ONNX artifact
+apiVersion: ray.io/v1
+kind: RayService
+metadata:
+  name: avaloka-inference
+  labels:
+    app.kubernetes.io/part-of: avaloka
+spec:
+  serveConfigV2: |
+    applications:
+      - name: avaloka_inference
+        import_path: app.serve.inference:app
+        route_prefix: /
+        runtime_env:
+          env_vars:
+            PYTHONPATH: "/home/ray/app"
+            # ONNX/torch artifact the Serve app loads (MTA's model_artifacts.onnx_path).
+            # Optional startup model. The API normally supplies the selected run's
+            # runs:/.../model_files/model.onnx URI dynamically on each request.
+            MODEL_URI: ""
+        deployments:
+          - name: InferenceService
+            num_replicas: 1
+  rayClusterConfig:
+    rayVersion: "2.49.2"
+    headGroupSpec:
+      rayStartParams:
+        dashboard-host: "0.0.0.0"
+      template:
+        spec:
+          serviceAccountName: avaloka
+          containers:
+            - name: ray-head
+              image: avaloka-ray:latest
+              imagePullPolicy: IfNotPresent
+              envFrom:
+                - configMapRef:
+                    name: avaloka-config
+                    optional: true
+                - secretRef:
+                    name: avaloka-secrets
+                    optional: true
+              env:
+                - name: RAY_DASHBOARD_SUBPROCESS_MODULE_WAIT_READY_TIMEOUT
+                  value: "180"
+              ports:
+                - { containerPort: 6379, name: gcs }
+                - { containerPort: 8265, name: dashboard }
+                - { containerPort: 10001, name: client }
+                - { containerPort: 8000, name: serve }
+              resources:
+                requests: { cpu: "300m", memory: "2Gi" }
+                limits: { cpu: "1", memory: "6Gi" }
+    workerGroupSpecs:
+      - groupName: serve-workers
+        replicas: 1
+        minReplicas: 1
+        maxReplicas: 3
+        rayStartParams: {}
+        template:
+          spec:
+            serviceAccountName: avaloka
+            containers:
+              - name: ray-worker
+                image: avaloka-ray:latest
+                imagePullPolicy: IfNotPresent
+                envFrom:
+                  - configMapRef:
+                      name: avaloka-config
+                      optional: true
+                  - secretRef:
+                      name: avaloka-secrets
+                      optional: true
+                resources:
+                  requests: { cpu: "300m", memory: "1Gi" }
+                  limits: { cpu: "2", memory: "3Gi" }

@@ -1,0 +1,98 @@
+{{- if and .Values.gateway.enabled (eq .Values.gateway.provider "gcp") }}
+{{- $g := .Values.gateway }}
+{{- $fullname := include "avaloka.fullname" . }}
+# GKE-specific Gateway policies (networking.gke.io/v1). These are the knobs the
+# Gateway API itself has no vendor-neutral field for, attached to their target by
+# `targetRef`. A policy must live in the same namespace as the Service it targets.
+#
+# Without them the load balancer falls back to defaults that are wrong for avaloka:
+# a 30s backend timeout (agent/mission requests routinely run longer and would 504)
+# and a health check derived from the Service's first port rather than /health.
+{{- range $backend := (include "avaloka.gatewayGcpBackends" . | fromJsonArray) }}
+---
+{{- if $g.gcp.healthCheck.enabled }}
+apiVersion: networking.gke.io/v1
+kind: HealthCheckPolicy
+metadata:
+  name: {{ printf "%s-hc" $backend.service }}
+  labels:
+    {{- include "avaloka.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: gateway
+spec:
+  default:
+    checkIntervalSec: {{ $g.gcp.healthCheck.checkIntervalSec }}
+    timeoutSec: {{ $g.gcp.healthCheck.timeoutSec }}
+    healthyThreshold: {{ $g.gcp.healthCheck.healthyThreshold }}
+    unhealthyThreshold: {{ $g.gcp.healthCheck.unhealthyThreshold }}
+    logConfig:
+      enabled: {{ $g.gcp.healthCheck.logging }}
+    config:
+{{- if eq $backend.healthPath "" }}
+      type: TCP
+      tcpHealthCheck:
+        portSpecification: USE_FIXED_PORT
+        port: {{ $backend.containerPort }}
+{{- else }}
+      type: HTTP
+      httpHealthCheck:
+        # USE_FIXED_PORT rather than USE_SERVING_PORT: the serving port of a
+        # NEG-backed Service is the container port, which is what we want to probe
+        # explicitly so a Service port renumber cannot silently redirect the check.
+        portSpecification: USE_FIXED_PORT
+        port: {{ $backend.containerPort }}
+        requestPath: {{ $backend.healthPath | quote }}
+{{- end }}
+  targetRef:
+    group: ""
+    kind: Service
+    name: {{ $backend.service }}
+---
+{{- end }}
+apiVersion: networking.gke.io/v1
+kind: GCPBackendPolicy
+metadata:
+  name: {{ printf "%s-backend" $backend.service }}
+  labels:
+    {{- include "avaloka.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: gateway
+spec:
+  default:
+    timeoutSec: {{ $backend.timeoutSec }}
+    {{- if $g.gcp.securityPolicy }}
+    # Cloud Armor policy (WAF / rate limiting / IP allowlists) — created out of band.
+    securityPolicy: {{ $g.gcp.securityPolicy | quote }}
+    {{- end }}
+    logging:
+      enabled: {{ $g.gcp.accessLogging.enabled }}
+      # `| int` matters: Helm reads the YAML number as a float64 and would emit
+      # 1e+06, which the CRD's integer field rejects.
+      sampleRate: {{ $g.gcp.accessLogging.sampleRate | int }}
+    {{- if $backend.sessionAffinity }}
+    sessionAffinity:
+      type: {{ $backend.sessionAffinity }}
+    {{- end }}
+  targetRef:
+    group: ""
+    kind: Service
+    name: {{ $backend.service }}
+{{- end }}
+{{- if $g.gcp.sslPolicy }}
+---
+apiVersion: networking.gke.io/v1
+kind: GCPGatewayPolicy
+metadata:
+  name: {{ printf "%s-gateway" $fullname }}
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+spec:
+  default:
+    # Minimum TLS version / cipher suite profile, e.g. a policy created with
+    #   gcloud compute ssl-policies create avaloka-tls --profile=MODERN --min-tls-version=1.2
+    sslPolicy: {{ $g.gcp.sslPolicy | quote }}
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: Gateway
+    name: {{ include "avaloka.gatewayName" . }}
+{{- end }}
+{{- end }}

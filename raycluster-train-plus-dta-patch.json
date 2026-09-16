@@ -1,0 +1,12 @@
+[
+  {
+    "op": "replace",
+    "path": "/spec/headGroupSpec/template/spec/containers/0/image",
+    "value": "gcr.io/.../train-docker-image@sha256:5f07830014bafe89d98fff886243d483d97b430601ce687ee032b0e90919b5c1"
+  },
+  {
+    "op": "replace",
+    "path": "/spec/workerGroupSpecs/0/template/spec/containers/0/image",
+    "value": "gcr.io/.../train-docker-image@sha256:5f07830014bafe89d98fff886243d483d97b430601ce687ee032b0e90919b5c1"
+  }
+]

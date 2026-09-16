@@ -1,0 +1,19 @@
+# postgres helm values (bitnami/postgresql) — minimal worked example.
+# Installed only when explicitly requested:
+#   python -m app.infra.cluster_bootstrap --provider local --data-stack postgres
+# Override the password for anything beyond a local demo.
+auth:
+  username: avaloka
+  password: avaloka
+  database: avaloka
+primary:
+  persistence:
+    enabled: true
+    size: 1Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi

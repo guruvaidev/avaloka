@@ -1,0 +1,51 @@
+Avaloka
+Copyright 2026 Avaloka.ai Authors
+
+This product includes software developed by Avaloka.ai Authors and
+contributors to the Avaloka project.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not
+use the files in this project except in compliance with the License. You may
+obtain a copy of the License at:
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+--------------------------------------------------------------------------------
+Third-party components
+--------------------------------------------------------------------------------
+
+Avaloka depends on a number of third-party open-source packages that are
+downloaded at install time and are NOT redistributed as part of this source
+tree. Each remains under its own license. The primary runtime dependencies and
+their licenses are:
+
+  - LangChain, LangGraph .......................... MIT
+  - Ray, KubeRay .................................. Apache-2.0
+  - Apache Spark (pyspark), Apache Arrow .......... Apache-2.0
+  - Daft (getdaft) ................................ Apache-2.0
+  - FastAPI, Starlette, Uvicorn, Pydantic ......... MIT / BSD-3-Clause
+  - Streamlit ..................................... Apache-2.0
+  - pandas, NumPy ................................. BSD-3-Clause
+  - PyTorch, torchvision .......................... BSD-3-Clause
+  - ONNX / ONNX Runtime ........................... Apache-2.0 / MIT
+  - MLflow ........................................ Apache-2.0
+  - scikit-learn .................................. BSD-3-Clause
+  - Redis client (redis-py) ....................... MIT
+  - Celery, RedBeat ............................... BSD-3-Clause / Apache-2.0
+  - Kubernetes Python client ...................... Apache-2.0
+  - boto3 (AWS SDK) ............................... Apache-2.0
+  - Model Context Protocol SDK (mcp) .............. MIT
+
+For the authoritative and complete list, see `requirements.txt` and the
+metadata of each installed distribution (`pip show <package>`). This NOTICE is
+informational and does not modify the terms of the Apache License, Version 2.0.
+
+--------------------------------------------------------------------------------
+Trademarks
+--------------------------------------------------------------------------------
+
+Product and company names referenced in this project (including but not limited
+to Groq, Google Cloud / GKE, Amazon Web Services / EKS, Microsoft Azure / AKS,
+Apache Spark, Ray, MLflow, and Supabase) are trademarks or registered
+trademarks of their respective owners and are used for identification purposes
+only. Their use does not imply any affiliation with or endorsement by them.

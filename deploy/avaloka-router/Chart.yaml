@@ -1,0 +1,10 @@
+apiVersion: v2
+name: avaloka-router
+description: |
+  Blue-green router for Avaloka. Owns the stable public Ingress and the
+  "active" Services whose selectors point at whichever color is currently
+  serving traffic. promote.sh / rollback.sh flip the selectors here without
+  touching the colored app releases.
+version: 0.1.0
+appVersion: "1.0"
+type: application

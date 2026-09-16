@@ -1,0 +1,118 @@
+# deploy/inference/ollama-cpu.yaml
+# -----------------------------------------------------------------------------
+# Local, CPU-only OpenAI-spec LLM for laptop / kind development.
+#
+# Serves a small (~3B) instruct model through Ollama's OpenAI-compatible API
+# (POST /v1/chat/completions) so the Avaloka agent stack can run end-to-end with
+# NO cloud dependency and NO GPU. Point the app at it with:
+#
+#     INFERENCE_PROVIDER=local
+#     INFERENCE_LOCAL_BASE_URL=http://avaloka-local-llm:11434/v1
+#     INFERENCE_LOCAL_MODEL_LARGE=qwen2.5:3b-instruct
+#     INFERENCE_LOCAL_MODEL_SMALL=qwen2.5:3b-instruct
+#
+# Default model: Qwen2.5-3B-Instruct. Chosen over Nemotron-Nano-3B and
+# Gemma-3-4B as the best ~3B option for THIS workload because the Avaloka
+# agents drive the model almost entirely through OpenAI tool/function calls and
+# strict JSON: Qwen2.5-Instruct has the strongest, most consistent tool-calling
+# and JSON adherence at this size and is first-class in both Ollama and vLLM.
+# Swap it by editing MODEL below (any Ollama tag) — the agents are unchanged.
+#
+# Quick start (kind):
+#     kubectl apply -f deploy/inference/ollama-cpu.yaml
+#     kubectl rollout status deploy/avaloka-local-llm --timeout=600s
+# First rollout pulls the model (~2 GB) before it becomes Ready.
+# -----------------------------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: avaloka-local-llm
+  labels:
+    app.kubernetes.io/name: avaloka-local-llm
+    app.kubernetes.io/component: local-llm
+spec:
+  replicas: 1
+  # Recreate: a single model volume must never be attached to two pods at once.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: avaloka-local-llm
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: avaloka-local-llm
+        app.kubernetes.io/component: local-llm
+    spec:
+      containers:
+        - name: ollama
+          # Pin to a specific release for reproducible prod-like runs.
+          image: ollama/ollama:latest
+          env:
+            - name: OLLAMA_HOST
+              value: "0.0.0.0:11434"
+            # Keep the model resident so the first agent call is not cold.
+            - name: OLLAMA_KEEP_ALIVE
+              value: "-1"
+            - name: MODEL
+              value: "qwen2.5:3b-instruct"
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              ollama serve &
+              pid=$!
+              echo "waiting for ollama daemon..."
+              until ollama ls >/dev/null 2>&1; do sleep 1; done
+              echo "pulling $MODEL ..."
+              ollama pull "$MODEL"
+              echo "model ready; serving OpenAI API on :11434/v1"
+              wait $pid
+          ports:
+            - name: http
+              containerPort: 11434
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            # Generous: the pull must finish before the model answers.
+            failureThreshold: 60
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "4Gi"
+            limits:
+              cpu: "4"
+              memory: "8Gi"
+          volumeMounts:
+            - name: models
+              mountPath: /root/.ollama
+      volumes:
+        # emptyDir re-pulls the model on every pod restart. For a persistent
+        # cache, replace with a PVC (see deploy/inference/README.md).
+        - name: models
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: avaloka-local-llm
+  labels:
+    app.kubernetes.io/name: avaloka-local-llm
+    app.kubernetes.io/component: local-llm
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: avaloka-local-llm
+  ports:
+    - name: http
+      port: 11434
+      targetPort: http

@@ -1,0 +1,18 @@
+{{- if .Values.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "avaloka-backend.fullname" . }}
+  labels:
+    {{- include "avaloka-backend.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
+    {{- if .Values.color }}
+    avaloka.io/color: {{ .Values.color | quote }}
+    {{- end }}
+spec:
+  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "avaloka-backend.selectorLabels" . | nindent 6 }}
+{{- end }}
+{{- /* PodDisruptionBudget keeps avaloka serving during node drains/upgrades */ -}}

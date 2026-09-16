@@ -1,0 +1,114 @@
+# deploy/inference/vllm-gpu.yaml
+# -----------------------------------------------------------------------------
+# In-cluster, GPU-backed OpenAI-spec LLM for larger local models (14B / 32B).
+#
+# Serves a mid-size instruct model through vLLM's OpenAI-compatible API
+# (POST /v1/chat/completions) on GPU nodes. Same OpenAI-spec contract as the
+# CPU/Ollama tier, so the Avaloka agents are byte-for-byte unchanged — only the
+# served model and endpoint differ. Point the app at it with:
+#
+#     INFERENCE_PROVIDER=local
+#     INFERENCE_LOCAL_BASE_URL=http://avaloka-local-llm:8000/v1
+#     INFERENCE_LOCAL_MODEL_LARGE=qwen-local
+#     INFERENCE_LOCAL_MODEL_SMALL=qwen-local
+#
+# The client-facing model id is the --served-model-name below ("qwen-local"),
+# NOT the HuggingFace repo. Set the two INFERENCE_LOCAL_MODEL_* vars to match it.
+#
+# Model tiers (edit --model + resources):
+#   * 14B (default): Qwen/Qwen2.5-14B-Instruct  — 1x 24-40GB GPU (A10G/L4/A100).
+#   * 32B:           Qwen/Qwen2.5-32B-Instruct  — 1x 80GB GPU, or 2x with
+#                    --tensor-parallel-size 2 and nvidia.com/gpu: 2.
+#
+# Requires a GPU node pool with the NVIDIA device plugin installed. Not for kind
+# (CPU) — use deploy/inference/ollama-cpu.yaml there.
+# -----------------------------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: avaloka-local-llm
+  labels:
+    app.kubernetes.io/name: avaloka-local-llm
+    app.kubernetes.io/component: local-llm
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: avaloka-local-llm
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: avaloka-local-llm
+        app.kubernetes.io/component: local-llm
+    spec:
+      # Schedule onto GPU nodes. Adjust the selector/toleration to your pool
+      # (GKE: cloud.google.com/gke-accelerator; EKS/self-managed vary).
+      nodeSelector:
+        nvidia.com/gpu.present: "true"
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: vllm
+          # Pin to a specific vLLM release for reproducibility.
+          image: vllm/vllm-openai:latest
+          args:
+            - "--model"
+            - "Qwen/Qwen2.5-14B-Instruct"
+            - "--served-model-name"
+            - "qwen-local"
+            - "--max-model-len"
+            - "16384"
+            - "--gpu-memory-utilization"
+            - "0.90"
+          ports:
+            - name: http
+              containerPort: 8000
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 15
+            # Weight download + load can take several minutes on first start.
+            failureThreshold: 80
+          resources:
+            requests:
+              cpu: "2"
+              memory: "16Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: hf-cache
+              mountPath: /root/.cache/huggingface
+            - name: shm
+              mountPath: /dev/shm
+      volumes:
+        # Persist the HF weights cache across restarts in production (PVC).
+        - name: hf-cache
+          emptyDir: {}
+        # vLLM needs a large /dev/shm for tensor-parallel / NCCL.
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 8Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: avaloka-local-llm
+  labels:
+    app.kubernetes.io/name: avaloka-local-llm
+    app.kubernetes.io/component: local-llm
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: avaloka-local-llm
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http

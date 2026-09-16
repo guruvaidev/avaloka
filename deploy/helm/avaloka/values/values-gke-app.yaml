@@ -1,0 +1,49 @@
+# GKE overlay for the PRODUCTION app.example.com instance.
+#
+# A second, fully independent release with its own public IP, its own certificate
+# and its own data plane — so test.example.com can be redeployed, broken and rolled
+# back without touching production.
+#
+# Layered ON TOP of values-gke.yaml, which carries everything the two instances
+# share; this file holds only the deltas:
+#
+#   helm upgrade --install avaloka-app deploy/helm/avaloka \
+#     --namespace avaloka-app --create-namespace \
+#     -f deploy/helm/avaloka/values/values-gke.yaml \
+#     -f deploy/helm/avaloka/values/values-gke-app.yaml
+#
+# THE NAMESPACE IS NOT OPTIONAL. The chart derives every resource name from the
+# CHART name, not the release name (see avaloka.fullname in _helpers.tpl), so two
+# releases in one namespace would both try to own a Service called `avaloka` and
+# the second install fails. Separate namespaces keep them apart. If you must run
+# both in one namespace, set nameOverride here instead — fullname honours it.
+#
+# Prerequisites, created out of band with its OWN IP and certificate map:
+#   ./deploy/gcp-lb-prereqs.sh --project MY_PROJECT --hosts app.example.com \
+#       --ip-name avaloka-app-lb-ip --cert-map avaloka-app-cert-map
+# then point an A record for app.example.com at the IP that prints.
+
+gateway:
+  hosts:
+    - app.example.com
+  # A distinct global IP — this is the separate public address for production.
+  addresses:
+    - type: NamedAddress
+      value: avaloka-app-lb-ip
+  tls:
+    enabled: true
+    mode: certmap
+    certMapName: avaloka-app-cert-map
+  # HTTPS only, same as test.
+  httpEnabled: false
+
+# Production carries real traffic: give the API more headroom than the test
+# instance and keep a second replica so a rolling update is not an outage.
+replicaCount: 2
+
+# Point at the same registry image as test, but pin an explicit tag per release
+# rather than tracking `latest` — production should never change on a pod restart.
+image:
+  repository: gcr.io/PROJECT_ID/avaloka-api
+  tag: latest
+  pullPolicy: Always

@@ -1,0 +1,23 @@
+# Build context MUST be the repository root:
+#   docker build -f deploy/avaloka/charts/avaloka-backend/docker/Dockerfile.langgraph -t avaloka-langgraph:latest .
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Build toolchain for packages without manylinux wheels (psycopg2, etc.).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential libpq-dev curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install deps first so the layer caches across the api/langgraph images.
+COPY requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . /app
+
+EXPOSE 3000
+
+# `langgraph dev` serves the LangGraph runs API + /info + /docs. For a hardened
+# production server, swap to the licensed `langgraph` runtime image; the chart
+# and probes are unchanged.
+CMD ["langgraph", "dev", "--host", "0.0.0.0", "--port", "3000"]

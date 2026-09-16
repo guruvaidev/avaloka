@@ -1,0 +1,12 @@
+apiVersion: v2
+name: avaloka
+description: Avaloka agentic ETL/ML control plane (FastAPI + LangGraph + Ray) on Kubernetes
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+keywords:
+  - avaloka
+  - langgraph
+  - ray
+  - etl
+home: https://bitbucket.org/centific/avaloka

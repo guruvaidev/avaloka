@@ -1,0 +1,33 @@
+# Avaloka router — stable Services + Ingress that flip between blue/green.
+#
+# promote.sh sets --set activeColor=<new>; rollback.sh sets it back.
+# The colored Deployments (avaloka-blue, avaloka-green) keep running through
+# the flip; only the Service selector changes, so in-flight requests on the
+# old color complete inside the soak window before its pods are torn down.
+
+# Active color served to the public. Switch via:
+#   helm upgrade avaloka-router deploy/avaloka-router --set activeColor=green
+activeColor: blue
+
+service:
+  frontend:
+    port: 8080
+  api:
+    port: 9000
+  langgraph:
+    port: 3000
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+    # The router targets are k8s Services, no need for nginx use-regex.
+  hosts:
+    frontend: avaloka.local
+    api: avaloka-api.local
+    langgraph: avaloka-langgraph.local
+  tls: []
+    # - hosts: [avaloka.example.com]
+    #   secretName: avaloka-tls

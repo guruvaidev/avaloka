@@ -1,0 +1,60 @@
+# EKS overlay for the avaloka (Part B) chart.
+#   helm upgrade --install avaloka deploy/helm/avaloka -f deploy/helm/avaloka/values/values-eks.yaml
+#
+# Fronts the release with an AWS Application Load Balancer through the Gateway API.
+# Prerequisites, all out of band:
+#   1. AWS Load Balancer Controller >= v2.14 installed with the Gateway API CRDs
+#      and its ALB controller enabled.
+#   2. A GatewayClass whose controllerName is the controller's ALB controller —
+#      name it below in gateway.className.
+#   3. An ACM certificate covering every host in gateway.hosts.
+#   4. Route 53 (or equivalent) ALIAS records for those hosts -> the ALB DNS name,
+#      readable from `kubectl get gateway avaloka-gateway -o wide` once programmed.
+image:
+  # Point at your ECR image, e.g. <acct>.dkr.ecr.<region>.amazonaws.com/avaloka-api
+  repository: ACCOUNT.dkr.ecr.REGION.amazonaws.com/avaloka-api
+  tag: latest
+  pullPolicy: Always
+
+# ClusterIP, not LoadBalancer: the ALB registers pod IPs as target-group targets,
+# so a second per-Service public address would only bypass the ALB's TLS and WAF.
+service:
+  type: ClusterIP
+
+webui:
+  service:
+    type: ClusterIP
+  apiBase: ""
+  # Managed Supabase project the browser authenticates against.
+  supabaseUrl: ""
+  supabaseAnonKey: ""
+
+gateway:
+  enabled: true
+  provider: aws
+  # Must match the GatewayClass you created for the controller's ALB controller.
+  className: alb
+  hosts:
+    - test.example.com
+    - app.example.com
+  tls:
+    enabled: true
+    # Not `secret`: the AWS controller ignores listeners[].tls.certificateRefs and
+    # reads ACM ARNs from the LoadBalancerConfiguration the chart renders below.
+    mode: external
+  redirectHttpToHttps: true
+  aws:
+    certificateArns:
+      - arn:aws:acm:REGION:ACCOUNT:certificate/CERTIFICATE_ID
+    scheme: internet-facing
+  # The ALB's own idle timeout still applies and defaults to 60s; raise it on the
+  # load balancer as well, or long agent requests are cut off before this fires.
+  routeTimeout: "3600s"
+
+# IRSA: bind the KSA to an IAM role.
+serviceAccount:
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT:role/avaloka
+
+config:
+  storageBackend: "s3"

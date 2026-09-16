@@ -1,0 +1,1 @@
+REVOKE EXECUTE ON FUNCTION public.link_app_user_from_email() FROM PUBLIC, anon, authenticated;

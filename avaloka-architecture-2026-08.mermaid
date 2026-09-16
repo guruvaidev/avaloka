@@ -1,0 +1,49 @@
+%% Avaloka — latest architecture (develop-1.6/1.7 unified design), 2026-08
+%% Renders natively in Bitbucket/GitHub markdown; PNG export at
+%% docs/images/avaloka-architecture-2026-08.png
+flowchart TB
+    subgraph CONV["Conversation & Planning"]
+        CA["Conversational Agent\nintent · session context · execution profile\nswarm = optional capability (import probe)"]
+        PL["Planner\nreasoning effort per query"]
+        SU["Summarizer\nconversation → JSON contract"]
+        SP["Sampling / Profiling\nrandom·stratified·reservoir·domain·adaptive"]
+        PG["Planner Graph\nplan as DAG, inspected pre-run"]
+        CA --> PL --> SU --> SP --> PG
+    end
+
+    subgraph LOOP["Code Loop"]
+        CO["Coder\npseudocode-first · schema-grounded\nretry ≤ AVALOKA_CODER_MAX_RETRIES"]
+        VA["Validator — 3-layer gate\n1 syntactic · 2 static-semantic · 3 logical(LLM)"]
+        CO -- code --> VA
+        VA -. feedback .-> CO
+    end
+
+    subgraph EVID["Evidence Layer"]
+        IN["Integrity\nleakage ≥.98 blocks · duplicates · temporal\n→ safe_to_train"]
+        EV["Evaluation\nsplitter by data shape · mandatory baseline\nCI-gated win"]
+        CV["Claim Verifier\nnarrative vs evidence · deterministic, no LLM"]
+    end
+
+    subgraph EXEC["Execution & Serving"]
+        ER["Execution Router\nquick_sample→local · portfolio→Daft/Ray\nentire_dataset→k8s-Ray"]
+        TS["Training & Serving\nMTA v2 · one shared cluster\nidle scale-to-zero · Spot workers"]
+        ER --> TS
+    end
+
+    subgraph MODEL["Model Routing — single chokepoint"]
+        MC["model_config: which model (env-overridable, live-verified)\nbuild_chat_model: which provider (groq·vLLM·openai·openrouter·bedrock·vertex·azure)\nmodel_fallback: OpenRouter backup, degraded-capability warnings"]
+    end
+
+    subgraph HARN["Benchmark Harness + Smoke Suite"]
+        BH["tracks: adaptive_sampling · swarm_ablation · reliability · DAB (plugin-discovered)\n(Quality, Cost, Latency, Data-Scanned) 4-tuple · resumable journal\npre-flight: harness · prompts · loops · graph · models"]
+    end
+
+    PG --> CO
+    IN -- pre-fit gate --> CO
+    VA -- validated --> ER
+    EV -- scores model --> ER
+    CV -- gates narrative --> TS
+    MC -.every agent LLM.-> CONV
+    MC -.-> LOOP
+    BH -. measures .-> EVID
+    BH -. measures .-> LOOP

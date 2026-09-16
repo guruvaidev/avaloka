@@ -1,0 +1,67 @@
+image: python:3.11
+
+definitions:
+  steps:
+    - step: &build
+        name: Build LangGraph App
+        caches:
+          - pip
+        script:
+          - pip install --upgrade pip
+          - pip install -r requirements.txt
+          - |
+            nohup langgraph dev --no-reload > server.log 2>&1 &
+            for i in {1..10}; do
+              if curl -s http://127.0.0.1:2024/ok; then
+                echo "Server is up!"
+                break
+              fi
+              sleep 5
+            done
+            curl -s http://127.0.0.1:2024/ok || { echo "Health check failed"; cat server.log; pkill -f "langgraph dev"; exit 1; }
+            pkill -f "langgraph dev"
+
+    - step: &test
+        name: Run Tests
+        caches:
+          - pip
+        script:
+          - apt-get update
+          - apt-get install -y graphviz
+          - pip install -r requirements.txt
+          - pytest --continue-on-collection-errors tests/ || true
+
+    - step: &test-context-memory
+        name: Run Context Memory Tests
+        caches:
+          - pip
+        script:
+          - pip install -r requirements.txt
+          - pytest tests/test_memory_semantics.py tests/test_memory_integration.py -q
+
+    - step: &test-mta-kaggle
+        name: Test MTA Kaggle Training and Inference
+        caches:
+          - pip
+        script:
+          - pip install -r requirements.txt
+          - pytest tests/test_mta_v2_kaggle_automation.py tests/test_mta_v2_target_handling.py tests/test_mta_v2_unit.py -m "not kaggle" -q
+
+pipelines:
+  branches:
+    "feature/context-memory":
+      - step: *build
+      - step: *test-context-memory
+    "feature/*":
+      - step: *build
+      - step: *test
+    "bugfix/*":
+      - step: *build
+      - step: *test
+      - step: *test-mta-kaggle
+    "hotfix/*":
+      - step: *build
+      - step: *test
+    "release/*":
+      - step: *build
+      - step: *test

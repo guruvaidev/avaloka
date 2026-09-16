@@ -1,0 +1,24 @@
+# Add this service to your docker-compose.sampledbs.yml (next to avaloka-pg /
+# avaloka-mysql), OR run it standalone with:
+#   docker compose -f docker-compose.mongo.yml up -d
+#
+# mongo-init.js must sit next to this file (same directory).
+ 
+services:
+  avaloka-mongo:
+    image: mongo:7
+    container_name: avaloka-mongo
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: rootpass
+      MONGO_INITDB_DATABASE: analytics_db
+    ports:
+      - "27017:27017"
+    volumes:
+      - ./mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
+      - avaloka-mongo-data:/data/db
+ 
+volumes:
+  avaloka-mongo-data:
+ 

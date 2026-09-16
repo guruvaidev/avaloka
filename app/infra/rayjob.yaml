@@ -1,0 +1,393 @@
+apiVersion: ray.io/v1
+kind: RayJob
+metadata:
+  name: __RAYJOB_NAME__
+  namespace: __RAY_NAMESPACE__
+spec:
+  entrypoint: python /home/ray/samples/sample_code.py
+
+  shutdownAfterJobFinishes: true
+  ttlSecondsAfterFinished: 600
+  backoffLimit: 3
+
+  runtimeEnvYAML: |
+    pip:
+      - requests==2.26.0
+      - pendulum==2.1.2
+      - pandas
+      - numpy
+      - fsspec
+      - s3fs
+      - gcsfs
+      - adlfs
+      - pyarrow
+      - getdaft[ray]==0.2.27
+    env_vars:
+      DATA_SOURCE_URI: "__DATA_SOURCE_URI__"
+      OUTPUT_ARTIFACT_URI: "__OUTPUT_ARTIFACT_URI__"
+      OUTPUT_METRICS_URI: "__OUTPUT_METRICS_URI__"
+      EXPECTED_WORKERS: "2"
+
+  rayClusterSpec:
+    rayVersion: "2.10.0"
+
+    # AUTOSCALING: Ray autoscaler sidecar on head pod
+    enableInTreeAutoscaling: true
+    autoscalerOptions:
+      upscalingMode: Default        # Default | Conservative | Aggressive
+      idleTimeoutSeconds: 60        # scale down workers idle >60s
+      resources:
+        limits:
+          cpu: "500m"
+          memory: "512Mi"
+        requests:
+          cpu: "250m"
+          memory: "256Mi"
+      env:
+        - name: AUTOSCALER_UPDATE_INTERVAL_S
+          value: "5"                # check cluster state every 5s
+
+    headGroupSpec:
+      rayStartParams:
+        dashboard-host: "0.0.0.0"
+        num-cpus: "0"               # no tasks/actors on head
+        object-store-memory: "500000000"
+      template:
+        metadata:
+          labels:
+            app: __RAYJOB_NAME__
+            ray-node-type: head
+        spec:
+          containers:
+            - name: ray-head
+              image: rayproject/ray:2.10.0
+              imagePullPolicy: IfNotPresent
+              ports:
+                - containerPort: 6379
+                  name: gcs-server
+                - containerPort: 8265
+                  name: dashboard
+                - containerPort: 10001
+                  name: client
+                - containerPort: 8080
+                  name: metrics
+              resources:
+                limits:
+                  cpu: "2"
+                  memory: "8Gi"
+                requests:
+                  cpu: "1"
+                  memory: "6Gi"
+              envFrom:
+                - secretRef:
+                    name: __CLOUD_SECRET_NAME__
+                    optional: false
+              env:
+                - name: GOOGLE_APPLICATION_CREDENTIALS
+                  value: /var/secrets/cloud/GCP_SERVICE_ACCOUNT_JSON
+                - name: RAY_SCHEDULER_EVENTS
+                  value: "0"
+                - name: RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO
+                  value: "0"
+                - name: K8S_NODE_NAME
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: spec.nodeName
+                - name: POD_NAME
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.name
+                - name: POD_NAMESPACE
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.namespace
+                - name: POD_IP
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: status.podIP
+              volumeMounts:
+                - mountPath: /dev/shm
+                  name: shared-mem
+                - mountPath: /home/ray/samples
+                  name: code-sample
+                - mountPath: /var/secrets/cloud
+                  name: __CLOUD_SECRET_NAME__-vol
+                  readOnly: true
+          volumes:
+            - name: shared-mem
+              emptyDir:
+                medium: Memory
+                sizeLimit: "2Gi"
+            - name: code-sample
+              configMap:
+                name: __RAYJOB_NAME__-code
+                items:
+                  - key: sample_code.py
+                    path: sample_code.py
+            - name: __CLOUD_SECRET_NAME__-vol
+              secret:
+                secretName: __CLOUD_SECRET_NAME__
+                optional: false
+
+    workerGroupSpecs:
+      - groupName: small-group
+        replicas: 2           # start with 2 workers
+        minReplicas: 1        # scale DOWN to 1 when idle
+        maxReplicas: 10       # scale UP to 10 for large datasets
+        rayStartParams:
+          num-cpus: "2"
+          object-store-memory: "500000000"
+        template:
+          metadata:
+            labels:
+              app: __RAYJOB_NAME__
+              ray-node-type: worker
+          spec:
+            affinity:
+              podAntiAffinity:
+                preferredDuringSchedulingIgnoredDuringExecution:
+                  - weight: 100
+                    podAffinityTerm:
+                      topologyKey: kubernetes.io/hostname
+                      labelSelector:
+                        matchLabels:
+                          app: __RAYJOB_NAME__
+                          ray-node-type: worker
+            containers:
+              - name: ray-worker
+                image: rayproject/ray:2.10.0
+                imagePullPolicy: IfNotPresent
+                resources:
+                  limits:
+                    cpu: "2"
+                    memory: "8Gi"
+                  requests:
+                    cpu: "500m"
+                    memory: "6Gi"
+                envFrom:
+                  - secretRef:
+                      name: __CLOUD_SECRET_NAME__
+                      optional: false
+                env:
+                  - name: GOOGLE_APPLICATION_CREDENTIALS
+                    value: /var/secrets/cloud/GCP_SERVICE_ACCOUNT_JSON
+                  - name: RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO
+                    value: "0"
+                  - name: K8S_NODE_NAME
+                    valueFrom:
+                      fieldRef:
+                        fieldPath: spec.nodeName
+                  - name: POD_NAME
+                    valueFrom:
+                      fieldRef:
+                        fieldPath: metadata.name
+                  - name: POD_NAMESPACE
+                    valueFrom:
+                      fieldRef:
+                        fieldPath: metadata.namespace
+                  - name: POD_IP
+                    valueFrom:
+                      fieldRef:
+                        fieldPath: status.podIP
+                volumeMounts:
+                  - mountPath: /dev/shm
+                    name: worker-shared-mem
+                  - mountPath: /var/secrets/cloud
+                    name: __CLOUD_SECRET_NAME__-vol
+                    readOnly: true
+            volumes:
+              - name: worker-shared-mem
+                emptyDir:
+                  medium: Memory
+                  sizeLimit: "2Gi"
+              - name: __CLOUD_SECRET_NAME__-vol
+                secret:
+                  secretName: __CLOUD_SECRET_NAME__
+                  optional: false
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: __RAYJOB_NAME__-code
+  namespace: __RAY_NAMESPACE__
+data:
+  sample_code.py: |
+    import os
+    import time
+    import math
+    import json
+    import ray
+    import pandas as pd
+    import fsspec
+    import gcsfs
+    import collections
+    from ray.util import get_node_ip_address
+
+    ray.init(address="auto")
+
+    data_uri         = os.getenv("DATA_SOURCE_URI", "").strip()
+    artifact_uri     = os.getenv("OUTPUT_ARTIFACT_URI", "").strip()
+    metrics_uri      = os.getenv("OUTPUT_METRICS_URI", "").strip()
+    expected_workers = int(os.getenv("EXPECTED_WORKERS", "2"))
+
+    ROWS_PER_PARTITION = 2_000_000   # 2M rows per partition
+    BYTES_PER_ROW      = 130         # ~130 bytes/row empirical for this dataset
+    TASK_CPU           = 0.8         # CPU units per partition task
+
+    print("DATA_SOURCE_URI =", repr(data_uri))
+    print("EXPECTED_WORKERS =", expected_workers)
+
+    # ── Wait for minimum workers ──────────────────────────────────────────────
+    deadline = time.time() + 300
+    while True:
+        alive   = [n for n in ray.nodes() if n.get("Alive")]
+        workers = [n for n in alive if float(n.get("Resources", {}).get("CPU", 0) or 0) > 0]
+        worker_ips = sorted({n.get("NodeManagerAddress") for n in workers if n.get("NodeManagerAddress")})
+        print(f"worker_nodes = {worker_ips}  count = {len(workers)}")
+        if len(workers) >= expected_workers:
+            break
+        if time.time() > deadline:
+            raise RuntimeError(f"Workers never reached {expected_workers} within 300s. got={worker_ips}")
+        time.sleep(3)
+
+    print("cluster_resources =", ray.cluster_resources())
+
+    # ── Detect file size → calculate ALL partitions ───────────────────────────
+    def get_file_size(uri: str) -> int:
+        if uri.startswith("gs://"):
+            fs = gcsfs.GCSFileSystem()
+            return fs.info(uri)["size"]
+        with fsspec.open(uri, "rb") as f:
+            f.seek(0, 2)
+            return f.tell()
+
+    total_bytes          = get_file_size(data_uri)
+    estimated_total_rows = total_bytes // BYTES_PER_ROW
+    #  KEY FIX: partitions from file size, NOT worker count
+    total_partitions     = max(1, math.ceil(estimated_total_rows / ROWS_PER_PARTITION))
+
+    print(f"Total file size: {total_bytes:,} bytes")
+    print(f"Estimated total rows: {estimated_total_rows:,}, rows per partition: {ROWS_PER_PARTITION:,}")
+    print(f"Total partitions to submit: {total_partitions}")
+
+    # ── Partition task ────────────────────────────────────────────────────────
+    @ray.remote(num_cpus=TASK_CPU)
+    def process_partition(uri, partition_idx, total_parts, skiprows, nrows):
+        import pandas as pd, time
+        from ray.util import get_node_ip_address
+        t0      = time.time()
+        node_ip = get_node_ip_address()
+        print(f"Partition {partition_idx + 1}/{total_parts} on node {node_ip}: "
+              f"skiprows={skiprows} nrows={nrows}")
+        try:
+            df = pd.read_csv(
+                uri,
+                skiprows=range(1, skiprows + 1) if skiprows > 0 else None,
+                nrows=nrows,
+                encoding="utf-8",
+            )
+        except UnicodeDecodeError:
+            df = pd.read_csv(
+                uri,
+                skiprows=range(1, skiprows + 1) if skiprows > 0 else None,
+                nrows=nrows,
+                encoding="latin1",
+                encoding_errors="replace",
+            )
+        elapsed = time.time() - t0
+        print(f"Partition {partition_idx + 1} done: {len(df)} rows in {elapsed:.1f}s on {node_ip}")
+        return {
+            "partition_idx": partition_idx,
+            "node_ip":       node_ip,
+            "rows":          len(df),
+            "elapsed_s":     round(elapsed, 2),
+            "columns":       list(df.columns),
+            "top_products": (
+                df.groupby(["product_id", "brand", "category_code"])
+                  .size()
+                  .reset_index(name="purchase_count")
+                  .sort_values("purchase_count", ascending=False)
+                  .head(5)
+                  .to_dict(orient="records")
+                if {"product_id", "brand", "category_code"}.issubset(df.columns) else []
+            ),
+        }
+
+    # ── Submit ALL partitions — autoscaler scales workers to handle load ──────
+    t_start = time.time()
+    futures = [
+        process_partition.remote(
+            data_uri, i, total_partitions,
+            i * ROWS_PER_PARTITION, ROWS_PER_PARTITION
+        )
+        for i in range(total_partitions)
+    ]
+    print(f"Submitted {total_partitions} partitions across workers")
+
+    # ── Collect results ───────────────────────────────────────────────────────
+    results       = ray.get(futures)
+    total_runtime = time.time() - t_start
+    total_rows    = sum(r["rows"] for r in results)
+    nodes_used    = sorted({r["node_ip"] for r in results})
+
+    print(f"NODES USED = {nodes_used}")
+    print(f"NUM NODES = {len(nodes_used)}")
+    print(f"TOTAL ROWS PROCESSED = {total_rows:,}")
+    for r in results:
+        print(f"  Partition {r['partition_idx'] + 1}: {r['rows']:,} rows "
+              f"on {r['node_ip']} in {r['elapsed_s']}s")
+
+    throughput_mb_s = round((total_bytes / 1024 / 1024) / total_runtime, 4)
+
+    # ── Aggregate top products across all partitions ──────────────────────────
+    product_counts = collections.defaultdict(
+        lambda: {"brand": "", "category_code": "", "purchase_count": 0}
+    )
+    for r in results:
+        for p in r.get("top_products", []):
+            key = p["product_id"]
+            product_counts[key]["brand"]         = p.get("brand", "")
+            product_counts[key]["category_code"] = p.get("category_code", "")
+            product_counts[key]["purchase_count"] += p.get("purchase_count", 0)
+
+    output_rows = sorted(
+        [{"product_id": k, **v} for k, v in product_counts.items()],
+        key=lambda x: x["purchase_count"], reverse=True
+    )[:20]
+    output_columns = ["product_id", "brand", "category_code", "purchase_count"]
+
+    # ── Write metrics + artifact to GCS ──────────────────────────────────────
+    metrics = {
+        "bytes_processed":  total_bytes,
+        "throughput_mb_s":  throughput_mb_s,
+        "runtime_s":        round(total_runtime, 3),
+        "worker_count":     len(nodes_used),
+        "total_rows":       total_rows,
+        "total_partitions": total_partitions,
+    }
+    artifact = {
+        "metrics":          metrics,
+        "output_rows":      output_rows,
+        "output_columns":   output_columns,
+        "output_row_count": len(output_rows),
+    }
+
+    fs = gcsfs.GCSFileSystem()
+    if metrics_uri:
+        with fs.open(metrics_uri, "w") as f:
+            json.dump(metrics, f)
+        print(f"Wrote {metrics_uri}")
+    if artifact_uri:
+        with fs.open(artifact_uri, "w") as f:
+            json.dump(artifact, f)
+        print(f"Wrote {artifact_uri}")
+
+    print(f"METRIC bytes_processed={total_bytes}")
+    print(f"METRIC throughput_mb_s={throughput_mb_s}")
+    print(f"METRIC runtime_s={round(total_runtime, 3)}")
+    print(f"METRIC worker_count={len(nodes_used)}")
+    print(f"ARTIFACT_URI={artifact_uri}")
+    print(f"METRICS_URI={metrics_uri}")
+
+    ray.shutdown()

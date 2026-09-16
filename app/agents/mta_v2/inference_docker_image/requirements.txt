@@ -1,0 +1,17 @@
+ray[train,data]==2.10.0
+torch>=2.1.0
+scikit-learn>=1.4.0
+numpy>=1.26.0
+fsspec>=2024.2.0
+gcsfs>=2024.2.0
+google-cloud-storage>=2.14.0
+google-auth>=2.27.0
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.9
+PyMySQL>=1.1.0
+pyarrow>=14.0.0
+pandas>=2.2.0
+onnxruntime>=1.17.0
+onnx>=1.17.0
+onnxscript>=0.3.0
+mlflow==3.14.0

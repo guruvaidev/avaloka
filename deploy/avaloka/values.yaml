@@ -1,0 +1,41 @@
+# Avaloka umbrella values.
+#
+# Single-release (legacy):
+#   helm install avaloka deploy/avaloka -n avaloka --create-namespace
+#
+# Blue-green:
+#   helm install avaloka-blue  deploy/avaloka -n avaloka -f values/<cloud>.yaml \
+#       --set color=blue
+#   helm install avaloka-green deploy/avaloka -n avaloka -f values/<cloud>.yaml \
+#       --set color=green --set redis.enabled=false
+#   helm install avaloka-router deploy/avaloka-router -n avaloka \
+#       --set activeColor=blue
+#
+# The avaloka-router release owns the public ingress and the stable Service
+# whose selector flips between colors during a promote.sh.
+
+# Blue-green color. "" disables blue-green (legacy mode). Set to "blue" or
+# "green" to make this release a colored side of a blue-green pair.
+color: ""
+
+avaloka-backend:
+  color: ""   # inherited from umbrella via --set color=<>
+  image:
+    langgraph:
+      repository: avaloka-langgraph
+      tag: latest
+    api:
+      repository: avaloka-api
+      tag: latest
+
+avaloka-frontend:
+  color: ""   # inherited from umbrella via --set color=<>
+  image:
+    repository: avaloka-frontend
+    tag: latest
+
+redis:
+  enabled: true
+  architecture: standalone
+  auth:
+    enabled: false

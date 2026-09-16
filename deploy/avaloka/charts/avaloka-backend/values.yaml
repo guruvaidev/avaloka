@@ -1,0 +1,165 @@
+# Number of backend pod replicas. Each replica is one full instance of the
+# avaloka backend (langgraph + api containers). Override per environment, e.g.
+#   helm upgrade ... --set avaloka-backend.replicaCount=3
+# When autoscaling.enabled=true this value is ignored after the initial deploy
+# (the HPA owns the replica count).
+replicaCount: 1
+
+# Horizontal Pod Autoscaler. Lets the deployment scale to "any number of
+# instances" automatically based on CPU/memory utilisation. Works on every
+# target (minikube needs `minikube addons enable metrics-server`; GKE/EKS/AKS
+# ship a metrics-server by default).
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 75
+  # CPU is the scaling signal. The memory metric is intentionally OFF by default:
+  # the app has a large *fixed* memory baseline (torch/ray/pyspark import) that is
+  # not load-proportional, so a memory-target HPA pegs straight to maxReplicas.
+  # Set a value (e.g. 80) only if you raise memory requests to match real usage.
+  targetMemoryUtilizationPercentage: null
+
+# Resource requests/limits per container. Requests are required for the HPA to
+# compute utilisation. Tune per environment in the cloud values overlays.
+# Memory requests reflect the real ~700Mi+ baseline of the ML import stack so
+# the scheduler reserves enough and pods aren't OOM-packed onto a node.
+resources:
+  langgraph:
+    requests:
+      cpu: 250m
+      memory: 768Mi
+    limits:
+      cpu: "1"
+      memory: 2Gi
+  api:
+    requests:
+      cpu: 250m
+      memory: 768Mi
+    limits:
+      cpu: "1"
+      memory: 2Gi
+
+# Private registry credentials (ECR / GCR / ACR). Reference pre-created
+# imagePullSecrets here in cloud overlays, e.g. [{name: regcred}].
+imagePullSecrets: []
+
+# Extra labels added to every pod (e.g. azure.workload.identity/use: "true").
+podLabels: {}
+
+# Pod scheduling controls — set in cloud overlays to pin to node pools, spread
+# across zones, or tolerate dedicated nodes.
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# PodDisruptionBudget keeps at least one instance serving during voluntary
+# disruptions (node drains, rolling upgrades). Enable for multi-replica HA.
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+
+# Backend runtime environment. Rendered into the chart's ConfigMap and injected
+# into both containers. Release-aware defaults (REDIS_URL, LANGGRAPH_API_URL,
+# …) are filled in by templates/configmap.yaml; anything set here overrides them.
+# Provide secrets (Groq keys, cloud creds) via:
+#   --set-string avaloka-backend.backendEnv.GROQ_API_KEY_PLANNING_AGENT=...
+backendEnv: {}
+
+# Blue-green deployment color. Leave empty for legacy single-release deploys.
+# When set to "blue" or "green", resource names get the color suffix and
+# pods carry the avaloka.io/color label, enabling parallel releases.
+color: ""
+
+image:
+  langgraph:
+    repository: avaloka-langgraph
+    tag: latest
+    pullPolicy: IfNotPresent
+  api:
+    repository: avaloka-api
+    tag: latest
+    pullPolicy: IfNotPresent
+
+service:
+  langgraph:
+    port: 3000
+  api:
+    port: 9000
+
+# Ingress is rendered ONLY when color is empty (legacy mode). For blue-green,
+# the avaloka-router chart owns the public ingress; per-color Services are
+# still emitted for the router to select between and for smoke probes.
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+
+  langgraph:
+    host: avaloka-langgraph.local
+  api:
+    host: avaloka-api.local
+  paths:
+    - path: /langgraph
+      pathType: Prefix
+      serviceName: avaloka-backend-langgraph
+      servicePort: 3000
+    - path: /api
+      pathType: Prefix
+      serviceName: avaloka-backend-api
+      servicePort: 9000
+
+# Readiness/liveness probes — required for blue-green so promote.sh can wait.
+probes:
+  enabled: true
+  api:
+    readiness:
+      path: /health
+      initialDelaySeconds: 15
+      periodSeconds: 5
+      failureThreshold: 6
+    liveness:
+      path: /health
+      initialDelaySeconds: 60
+      periodSeconds: 20
+      failureThreshold: 3
+  langgraph:
+    # LangGraph CLI exposes /info; if missing the probe falls back to TCP.
+    readiness:
+      path: /info
+      initialDelaySeconds: 15
+      periodSeconds: 5
+      failureThreshold: 6
+    liveness:
+      path: /info
+      initialDelaySeconds: 60
+      periodSeconds: 20
+      failureThreshold: 3
+
+# preStop hook — gives in-flight requests / Celery tasks time to drain
+# before the pod is killed during a blue-green cut.
+gracefulShutdown:
+  enabled: true
+  preStopSleepSeconds: 20
+  terminationGracePeriodSeconds: 60
+
+# Workload Identity / IRSA / managed-identity hooks. Per-cloud values files
+# set these; the GCP service-account secret-mount still works as before when
+# they're empty (kind/local datacenter mode).
+serviceAccount:
+  create: true
+  # Override per-cloud (e.g. iam.gke.io/gcp-service-account=... for GKE WI,
+  # eks.amazonaws.com/role-arn=... for AWS IRSA).
+  annotations: {}
+  name: ""
+
+# When true, mount the legacy gcp-key secret. Per-cloud Helm values disable
+# this and rely on Workload Identity / IRSA / managed identity instead.
+gcpKeySecret:
+  enabled: true
+  secretName: gcp-key
+
+httpRoute:
+  enabled: false

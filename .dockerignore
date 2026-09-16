@@ -1,0 +1,50 @@
+# Keep the build context (and image) small, and NEVER bake secrets/artifacts in.
+.git
+.gitignore
+.env
+env_bak
+*.env
+
+# Local dev artifacts / caches (960MB+)
+artifacts/
+**/__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtualenvs / node
+.venv/
+venv/
+node_modules/
+
+# Editor / tool state
+.claude/
+.understand-anything/
+.playwright-mcp/
+.vscode/
+.idea/
+
+# Tests & docs aren't needed at runtime in the API image
+tests/
+docs/
+*.md
+!README.md
+
+# Model/data scratch that shouldn't ship in the image
+*.db
+*.sqlite
+*.onnx
+*.pth
+planner_graphs/
+
+# Runtime data written by docker-compose (Milvus/etcd/MinIO) - root-owned, never build input
+volumes/
+
+ui/
+!ui/supabase
+!ui/supabase/functions
+!ui/supabase/functions/**

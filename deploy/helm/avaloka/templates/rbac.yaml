@@ -1,0 +1,35 @@
+{{- if .Values.rbac.create }}
+# Least-privilege RBAC: the in-cluster avaloka app needs to submit Ray jobs
+# (RayJob/RayService CRs) and read pod/service status to surface progress.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "avaloka.fullname" . }}
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services", "configmaps", "endpoints"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get", "list"]
+  - apiGroups: ["ray.io"]
+    resources: ["rayclusters", "rayjobs", "rayservices"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "avaloka.fullname" . }}
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "avaloka.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: {{ include "avaloka.fullname" . }}
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}

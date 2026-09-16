@@ -1,0 +1,96 @@
+{{- if .Values.langgraph.enabled }}
+# LangGraph runs-API server (`langgraph dev`) hosting the avaloka agent graph
+# (langgraph.json -> app/api/langgraph_app.py:graph). The API's /threads endpoints
+# proxy here. Runs from the same avaloka-api image with a different command.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "avaloka.fullname" . }}-langgraph
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: langgraph
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "avaloka.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: langgraph
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+      labels:
+        {{- include "avaloka.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: langgraph
+    spec:
+      serviceAccountName: {{ include "avaloka.serviceAccountName" . }}
+      containers:
+        - name: langgraph
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["langgraph", "dev", "--host", "0.0.0.0", "--port", "{{ .Values.langgraph.port }}", "--no-browser"]
+          ports:
+            - name: http
+              containerPort: {{ .Values.langgraph.port }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "avaloka.fullname" . }}-config
+            - secretRef:
+                name: {{ include "avaloka.secretName" . }}
+          readinessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.langgraph.resources | nindent 12 }}
+          {{- if or .Values.gcp.existingSecret .Values.modelCache.enabled }}
+          volumeMounts:
+            {{- if .Values.gcp.existingSecret }}
+            - name: gcp-sa
+              mountPath: {{ .Values.gcp.mountPath | quote }}
+              readOnly: true
+            {{- end }}
+            {{- if .Values.modelCache.enabled }}
+            - name: model-cache
+              mountPath: /root/.cache
+            {{- end }}
+          {{- end }}
+      {{- if or .Values.gcp.existingSecret .Values.modelCache.enabled }}
+      volumes:
+        {{- if .Values.gcp.existingSecret }}
+        - name: gcp-sa
+          secret:
+            secretName: {{ .Values.gcp.existingSecret | quote }}
+        {{- end }}
+        {{- if .Values.modelCache.enabled }}
+        - name: model-cache
+          emptyDir:
+            sizeLimit: {{ .Values.modelCache.sizeLimit | quote }}
+        {{- end }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "avaloka.fullname" . }}-langgraph
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: langgraph
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "avaloka.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: langgraph
+  ports:
+    - name: http
+      port: {{ .Values.langgraph.port }}
+      targetPort: http
+      protocol: TCP
+{{- end }}

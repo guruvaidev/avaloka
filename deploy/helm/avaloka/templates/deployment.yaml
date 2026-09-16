@@ -1,0 +1,89 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "avaloka.fullname" . }}
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "avaloka.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: api
+  template:
+    metadata:
+      annotations:
+        # Roll the API pods whenever the ConfigMap/Secret content changes.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+      labels:
+        {{- include "avaloka.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: api
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "avaloka.serviceAccountName" . }}
+      containers:
+        - name: avaloka
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.targetPort }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "avaloka.fullname" . }}-config
+            - secretRef:
+                name: {{ include "avaloka.secretName" . }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 40
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          {{- if or .Values.gcp.existingSecret .Values.modelCache.enabled }}
+          volumeMounts:
+            {{- if .Values.gcp.existingSecret }}
+            - name: gcp-sa
+              mountPath: {{ .Values.gcp.mountPath | quote }}
+              readOnly: true
+            {{- end }}
+            {{- if .Values.modelCache.enabled }}
+            - name: model-cache
+              mountPath: /root/.cache
+            {{- end }}
+          {{- end }}
+      {{- if or .Values.gcp.existingSecret .Values.modelCache.enabled }}
+      volumes:
+        {{- if .Values.gcp.existingSecret }}
+        - name: gcp-sa
+          secret:
+            secretName: {{ .Values.gcp.existingSecret | quote }}
+        {{- end }}
+        {{- if .Values.modelCache.enabled }}
+        - name: model-cache
+          emptyDir:
+            sizeLimit: {{ .Values.modelCache.sizeLimit | quote }}
+        {{- end }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

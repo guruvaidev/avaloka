@@ -1,0 +1,99 @@
+Rk;Squad;Country;LgRk;MP;W;D;L;GF;GA;GD;Pts;Pts/G;xG;xGA;xGD;xGD/90;Attendance;Top Team Scorer;Goalkeeper
+1;Manchester City;ENG;1;38;29;6;3;99;26;73;93;2.45;89;27.2;61.9;1.63;52774;Kevin De Bruyne - 15;Ederson
+2;Liverpool;ENG;2;38;28;8;2;94;26;68;92;2.42;89.2;34.2;55;1.45;53367;Mohamed Salah - 23;Alisson
+3;Bayern Munich;GER;1;34;24;5;5;97;37;60;77;2.26;88.1;37.1;51;1.5;33176;Robert Lewandowski - 35;Manuel Neuer
+4;Paris S-G;FRA;1;38;26;8;4;90;36;54;86;2.26;76.5;38.6;37.9;1;41188;Kylian Mbappé - 28;Keylor Navas
+5;Real Madrid;ESP;1;38;26;8;4;80;31;49;86;2.26;74.3;47;27.3;0.72;41235;Karim Benzema - 27;Thibaut Courtois
+6;Milan;ITA;1;38;26;8;4;69;31;38;86;2.26;63.1;34.8;28.3;0.74;42388;Olivier Giroud Rafael Leão - 11;Mike Maignan
+7;Inter;ITA;2;38;25;9;4;84;32;52;84;2.21;81.4;39.2;42.2;1.11;41407;Lautaro Martínez - 21;Samir Handanovi?
+8;Napoli;ITA;3;38;24;7;7;74;31;43;79;2.08;59.4;31.9;27.6;0.73;26681;Victor Osimhen - 14;David Ospina
+9;Dortmund;GER;2;34;22;3;9;85;52;33;69;2.03;62.8;43.2;19.6;0.58;41800;Erling Haaland - 22;Gregor Kobel
+10;Chelsea;ENG;3;38;21;11;6;76;33;43;74;1.95;67.2;36;31.3;0.82;36443;Mason Mount - 11;Edouard Mendy
+11;Barcelona;ESP;2;38;21;10;7;68;38;30;73;1.92;62.1;35.9;26.2;0.69;53982;Memphis Depay - 12;Marc-André ter Stegen
+12;Leverkusen;GER;3;34;19;7;8;80;47;33;64;1.88;63.3;43.1;20.2;0.59;17356;Patrik Schick - 24;Lukáš Hrádeck?
+13;Tottenham;ENG;4;38;22;5;11;69;40;29;71;1.87;65.1;39.4;25.8;0.68;56523;Son Heung-min - 23;Hugo Lloris
+14;Marseille;FRA;2;38;21;8;9;63;38;25;71;1.87;59.2;40;19.1;0.5;51082;Dimitri Payet - 12;Pau López
+15;Atlético Madrid;ESP;3;38;21;8;9;65;43;22;71;1.87;52.8;33.7;19.1;0.5;48039;Ángel Correa - 12;Jan Oblak
+16;Sevilla;ESP;4;38;18;16;4;53;30;23;70;1.84;43.7;38.4;5.3;0.14;29756;Rafa Mir - 10;Yassine Bounou
+17;Juventus;ITA;4;38;20;10;8;57;37;20;70;1.84;51.5;38;13.4;0.35;21627;Paulo Dybala - 10;Wojciech Szcz?sny
+18;Monaco;FRA;3;38;20;9;9;65;40;25;69;1.82;58;42;16;0.42;5870;Wissam Ben Yedder - 25;Alexander Nübel
+19;Arsenal;ENG;5;38;22;3;13;61;48;13;69;1.82;59.9;47.1;12.8;0.34;59665;Bukayo Saka - 11;Aaron Ramsdale
+20;Rennes;FRA;4;38;20;6;12;82;40;42;66;1.74;62.3;40.7;21.6;0.57;25309;Martin Terrier - 21;Alfred Gomis
+21;Nice;FRA;5;38;20;7;11;52;36;16;66;1.74;57;45.1;11.8;0.31;15478;Andy Delort - 16;Walter Benítez
+22;RB Leipzig;GER;4;34;17;7;10;72;37;35;58;1.71;63.4;41.8;21.6;0.64;22124;Christopher Nkunku - 20;Péter Gulácsi
+23;Betis;ESP;5;38;19;8;11;62;40;22;65;1.71;55.1;44.2;10.9;0.29;41749;Juanmi - 16;Rui Silva
+24;Lazio;ITA;5;38;18;10;10;77;58;19;64;1.68;55.8;48.3;7.6;0.2;21235;Ciro Immobile - 27;Thomas Strakosha
+25;Union Berlin;GER;5;34;16;9;9;50;44;6;57;1.68;50.5;41.6;8.8;0.26;14046;Taiwo Awoniyi - 15;Andreas Luthe
+26;Strasbourg;FRA;6;38;17;12;9;60;43;17;63;1.66;59.3;42.6;16.8;0.44;23462;Ludovic Ajorque - 12;Matz Sels
+27;Roma;ITA;6;38;18;9;11;59;43;16;63;1.66;63.7;38.5;25.2;0.66;40745;Tammy Abraham - 17;Rui Patrício
+28;Lens;FRA;7;38;17;11;10;62;48;14;62;1.63;52.8;42.4;10.4;0.27;28460;Arnaud Kalimuendo - 12;Jean-Louis Leca
+29;Fiorentina;ITA;7;38;19;5;14;59;51;8;62;1.63;58.8;44.1;14.7;0.39;19801;Dušan Vlahovi? - 17;Pietro Terracciano
+30;Real Sociedad;ESP;6;38;17;11;10;40;37;3;62;1.63;53.8;39.8;14;0.37;26813;Mikel Oyarzabal - 9;Álex Remiro
+31;Freiburg;GER;6;34;15;10;9;58;46;12;55;1.62;49.9;45.1;4.8;0.14;18741;Vincenzo Grifo - 9;Mark Flekken
+32;Lyon;FRA;8;38;17;11;10;66;51;15;61;1.61;70.4;54.5;15.9;0.42;31103;Moussa Dembélé - 21;Anthony Lopes
+33;Villarreal;ESP;7;38;16;11;11;63;37;26;59;1.55;62.5;46.5;16;0.42;14293;Arnaut Groeneveld - 10;Gerónimo Rulli
+34;Atalanta;ITA;8;38;16;11;11;65;48;17;59;1.55;66.2;45.2;20.9;0.55;10047;Mario Pašali? - 13;Juan Musso
+35;Köln;GER;7;34;14;10;10;52;49;3;52;1.53;50.9;51.9;-1.1;-0.03;31965;Anthony Modeste - 20;Marvin Schwäbe
+36;Manchester Utd;ENG;6;38;16;10;12;57;57;0;58;1.53;54.8;54.5;0.3;0.01;73150;Cristiano Ronaldo - 18;David de Gea
+37;West Ham;ENG;7;38;16;8;14;60;51;9;56;1.47;49.9;51;-1.1;-0.03;58370;Jarrod Bowen - 12;?ukasz Fabia?ski
+38;Nantes;FRA;9;38;15;10;13;55;48;7;55;1.45;43.9;55.4;-11.5;-0.3;20368;Randal Kolo Muani - 12;Alban Lafont
+39;Athletic Club;ESP;8;38;14;13;11;43;36;7;55;1.45;50.1;38.3;11.8;0.31;32949;Iñaki Williams - 8;Unai Simón
+40;Lille;FRA;10;38;14;13;11;48;48;0;55;1.45;52.4;40.4;12.1;0.32;34025;Jonathan David - 15;Ivo Grbi?
+41;Hellas Verona;ITA;9;38;14;11;13;65;59;6;53;1.39;51.8;48.9;2.9;0.08;12343;Giovanni Simeone - 17;Lorenzo Montipò
+42;Leicester City;ENG;8;38;14;10;14;62;59;3;52;1.37;50.8;61;-10.1;-0.27;32493;Jamie Vardy - 15;Kasper Schmeichel
+43;Mainz 05;GER;8;34;13;7;14;50;45;5;46;1.35;51;46;5;0.15;17978;Jonathan Burkardt - 11;Robin Zentner
+44;Hoffenheim;GER;9;34;13;7;14;58;60;-2;46;1.35;55.1;52.5;2.5;0.07;11227;Georginio Rutter - 8;Oliver Baumann
+45;Brighton;ENG;9;38;12;15;11;42;44;-2;51;1.34;46;45.6;0.4;0.01;30966;Leandro Trossard Neal Maupay - 8;Robert Sánchez
+46;Wolves;ENG;10;38;15;6;17;38;43;-5;51;1.34;35.9;60.3;-24.4;-0.64;30777;Raúl Jiménez - 6;José Sá
+47;Torino;ITA;10;38;13;11;14;46;41;5;50;1.32;48.8;39.9;8.9;0.23;9160;Andrea Belotti - 8;Vanja Milinkovi?-Savi?
+48;Sassuolo;ITA;11;38;13;11;14;64;66;-2;50;1.32;56;67;-10.9;-0.29;7638;Gianluca Scamacca - 16;Andrea Consigli
+49;M'Gladbach;GER;10;34;12;9;13;54;61;-7;45;1.32;57.7;54.7;3;0.09;26539;Jonas Hofmann - 12;Yann Sommer
+50;Newcastle Utd;ENG;11;38;13;10;15;44;62;-18;49;1.29;40.3;55.4;-15.2;-0.4;51487;Callum Wilson - 8;Martin Dúbravka
+51;Crystal Palace;ENG;12;38;11;15;12;50;46;4;48;1.26;46.4;41;5.4;0.14;24541;Wilfried Zaha - 14;Vicente Guaita
+52;Valencia;ESP;9;38;11;15;12;48;53;-5;48;1.26;39.3;47.2;-7.9;-0.21;27349;Gonçalo Guedes Carlos Soler - 11;Giorgi Mamardashvili
+53;Brest;FRA;11;38;13;9;16;49;57;-8;48;1.26;45.2;59.2;-14;-0.37;11629;Franck Honorat - 11;Marco Bizot
+54;Udinese;ITA;12;38;11;14;13;61;58;3;47;1.24;53.1;52;1;0.03;11655;Gerard Deulofeu - 13;Marco Silvestri
+55;Eint Frankfurt;GER;11;34;10;12;12;45;49;-4;42;1.24;44.2;51.5;-7.3;-0.21;26162;Rafael Borré - 8;Kevin Trapp
+56;Wolfsburg;GER;12;34;12;6;16;43;54;-11;42;1.24;48.8;49.8;-1;-0.03;12018;Lukas Nmecha - 8;Koen Casteels
+57;Bochum;GER;13;34;12;6;16;38;52;-14;42;1.24;40.9;56.8;-15.9;-0.47;15125;Sebastian Polter - 10;Manuel Riemann
+58;Osasuna;ESP;10;38;12;11;15;37;51;-14;47;1.24;37.1;45.4;-8.3;-0.22;17107;Ante Budimir - 8;Sergio Herrera
+59;Celta Vigo;ESP;11;38;12;10;16;43;43;0;46;1.21;44.3;46.5;-2.2;-0.06;10014;Iago Aspas - 17;Matías Dituro
+60;Reims;FRA;12;38;11;13;14;43;44;-1;46;1.21;38.7;49.1;-10.4;-0.27;10635;Hugo Ekitike - 10;Predrag Rajkovi?
+61;Brentford;ENG;13;38;13;7;18;48;56;-8;46;1.21;47.8;49.1;-1.3;-0.03;16916;Ivan Toney - 12;David Raya
+62;Bologna;ITA;13;38;12;10;16;44;55;-11;46;1.21;44.1;54.2;-10.1;-0.27;13845;Marko Arnautovi? - 14;?ukasz Skorupski
+63;Aston Villa;ENG;14;38;13;6;19;52;54;-2;45;1.18;44;49.1;-5.1;-0.13;41681;Ollie Watkins - 11;Emiliano Martínez
+64;Montpellier;FRA;13;38;12;7;19;49;61;-12;43;1.13;43.7;58.7;-15;-0.39;10218;Sepe Elye Wahi - 10;Jonas Omlin
+65;Augsburg;GER;14;34;10;8;16;39;56;-17;38;1.12;38.1;58.3;-20.1;-0.59;15197;Michael Gregoritsch - 9;Rafa? Gikiewicz
+66;Rayo Vallecano;ESP;12;38;11;9;18;39;50;-11;42;1.11;45.4;46.7;-1.3;-0.04;7866;Sergi Guardiola - 8;Stole Dimitrievski
+67;Elche;ESP;13;38;11;9;18;40;52;-12;42;1.11;34.9;61.1;-26.2;-0.69;15640;Pere Milla - 8;Édgar Badía
+68;Espanyol;ESP;14;38;10;12;16;40;53;-13;42;1.11;37.9;51.9;-14;-0.37;17277;Raúl de Tomás - 17;Diego López
+69;Angers;FRA;14;38;10;11;17;44;55;-11;41;1.08;44.8;49;-4.2;-0.11;7370;Sofiane Boufal - 8;Danijel Petkovi?
+70;Empoli;ITA;14;38;10;11;17;50;70;-20;41;1.08;46.6;67.8;-21.2;-0.56;6320;Andrea Pinamonti - 13;Guglielmo Vicario
+71;Southampton;ENG;15;38;9;13;16;43;67;-24;40;1.05;46.8;58.6;-11.9;-0.31;30134;James Ward-Prowse - 10;Fraser Forster
+72;Getafe;ESP;15;38;8;15;15;33;41;-8;39;1.03;29.6;39;-9.4;-0.25;8702;Enes Ünal - 16;David Soria
+73;Cádiz;ESP;17;38;8;15;15;35;51;-16;39;1.03;41.5;52.8;-11.3;-0.3;14055;Anthony Lozano Álvaro Negredo - 7;Jeremías Ledesma
+74;Everton;ENG;16;38;11;6;21;43;66;-23;39;1.03;42.8;54.5;-11.7;-0.31;38446;Richarlison - 10;Jordan Pickford
+75;Mallorca;ESP;16;38;10;9;19;36;63;-27;39;1.03;40;48.3;-8.3;-0.22;12712;Vedat Muriqi Salva Sevilla - 5;Manolo Reina
+76;Troyes;FRA;15;38;9;11;18;37;53;-16;38;1;39.5;50.9;-11.4;-0.3;8963;Xavier Chavalerin Ike Ugbo - 5;Gauthier Gallon
+77;Granada;ESP;18;38;8;14;16;44;61;-17;38;1;41.5;61.4;-20;-0.53;13710;Jorge Molina - 10;Luís Maximiano
+78;Leeds United;ENG;17;38;9;11;18;42;79;-37;38;1;47.2;70.1;-23;-0.6;36308;Raphael Dias Belloli - 11;Illan Meslier
+79;Stuttgart;GER;15;34;7;12;15;41;59;-18;33;0.97;45.3;51.5;-6.3;-0.18;27052;Sasa Kalajdzic - 6;Florian Müller
+80;Hertha BSC;GER;16;34;9;6;19;37;71;-34;33;0.97;34.1;55.3;-21.2;-0.62;23500;Stevan Joveti? - 6;Alexander Schwolow
+81;Sampdoria;ITA;15;38;10;6;22;46;63;-17;36;0.95;37;58.5;-21.5;-0.57;8756;Francesco Caputo - 11;Emil Audero
+82;Lorient;FRA;16;38;8;12;18;35;63;-28;36;0.95;43.8;52.1;-8.3;-0.22;12393;Terem Moffi - 8;Paul Nardi
+83;Spezia;ITA;16;38;10;6;22;41;71;-30;36;0.95;39.3;67.6;-28.3;-0.74;6380;Daniele Verde - 8;Ivan Provedel
+84;Clermont Foot;FRA;17;38;9;9;20;38;69;-31;36;0.95;44.9;53;-8.2;-0.21;10425;Mohamed Bayo - 14;Ouparine Djoco
+85;Burnley;ENG;18;38;7;14;17;34;53;-19;35;0.92;39;56.7;-17.7;-0.47;19163;Maxwel Cornet - 9;Nick Pope
+86;Levante;ESP;19;38;8;11;19;51;76;-25;35;0.92;56.5;56.2;0.3;0.01;14961;José Luis Morales - 13;Cárdenas
+87;Saint-Étienne;FRA;18;38;7;11;20;42;77;-35;32;0.84;41;61.2;-20.2;-0.53;21806;Wahbi Khazri - 10;Paul Bernardoni
+88;Arminia;GER;17;34;5;13;16;27;53;-26;28;0.82;28.2;62.3;-34.1;-1;16773;Masaya Okugawa - 8;Stefan Ortega
+89;Alavés;ESP;20;38;8;7;23;31;65;-34;31;0.82;36.9;58.7;-21.8;-0.57;10952;Joselu - 14;Fernando Pacheco
+90;Metz;FRA;19;38;6;13;19;35;69;-34;31;0.82;30.2;63.8;-33.6;-0.88;14413;Nicolas de Préville - 5;Alexandre Oukidja
+91;Bordeaux;FRA;20;38;6;13;19;52;91;-39;31;0.82;44.8;69.6;-24.9;-0.65;22083;Hwang Ui-jo - 11;Benoît Costil
+92;Salernitana;ITA;17;38;7;10;21;33;78;-45;31;0.82;37.7;65.9;-28.2;-0.74;12900;Federico Bonazzoli - 10;Vid Belec
+93;Cagliari;ITA;18;38;6;12;20;34;68;-34;30;0.79;39.5;61.5;-22;-0.58;9400;João Pedro - 13;Alessio Cragno
+94;Genoa;ITA;19;38;4;16;18;27;60;-33;28;0.74;37.8;51.6;-13.8;-0.36;11628;Mattia Destro - 9;Salvatore Sirigu
+95;Venezia;ITA;20;38;6;9;23;34;69;-35;27;0.71;36.1;72.6;-36.5;-0.96;6705;Thomas Henry - 9;Niki Mäenpää
+96;Watford;ENG;19;38;6;5;27;34;77;-43;23;0.61;38.8;66.6;-27.8;-0.73;20614;Emmanuel Dennis - 10;Ben Foster
+97;Norwich City;ENG;20;38;5;7;26;23;84;-61;22;0.58;33.3;77;-43.6;-1.15;26836;Teemu Pukki - 11;Tim Krul
+98;Greuther Fürth;GER;18;34;3;9;22;28;82;-54;18;0.53;30.7;60.3;-29.6;-0.87;7672;Branimir Hrgota - 9;Sascha Burchert

@@ -1,0 +1,1 @@
+REVOKE EXECUTE ON FUNCTION public.app_users_fill_org() FROM PUBLIC, anon, authenticated;

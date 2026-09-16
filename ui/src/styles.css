@@ -1,0 +1,182 @@
+@import "tailwindcss" source(none);
+@source "../src";
+@import "tw-animate-css";
+@import "./styles/theme.css";
+@import "./styles/typography.css";
+
+@plugin "tailwindcss-react-aria-components";
+@plugin "tailwindcss-animate";
+@plugin "@tailwindcss/typography";
+
+@custom-variant dark (&:is(.dark *));
+
+/* ----------------------------------------------------------------------------
+ * Avaloka brand overrides on top of the Untitled UI default theme.
+ * Brand palette is anchored on Figma utility-brand-600 = #1565ef.
+ * Body / display font is General Sans (loaded in __root.tsx via Fontshare).
+ * -------------------------------------------------------------------------- */
+@theme {
+  --font-body: "General Sans", ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-display: "General Sans", ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+
+  --color-brand-50: #eff5ff;
+  --color-brand-100: #dbe7ff;
+  --color-brand-200: #b2ceff;
+  --color-brand-300: #84b0ff;
+  --color-brand-400: #5193fd;
+  --color-brand-500: #2e79fa;
+  --color-brand-600: #1565ef;
+  --color-brand-700: #175cd3;
+  --color-brand-800: #1849a9;
+  --color-brand-900: #194186;
+  --color-brand-950: #102a56;
+}
+
+/* ----------------------------------------------------------------------------
+ * Shadcn token bridge (kept so existing src/components/ui/* still renders).
+ * UUI components above do not depend on these tokens.
+ * -------------------------------------------------------------------------- */
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: oklch(0.58 0.21 258);
+  --color-primary-foreground: oklch(1 0 0);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+}
+
+:root {
+  --radius: 0.5rem;
+
+  /* Figma: bg-primary #ffffff, text-primary #1a1a1e */
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.18 0.005 286);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.18 0.005 286);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.18 0.005 286);
+
+  /* Figma: brand-solid #1565ef */
+  --primary: oklch(0.58 0.21 258);
+  --primary-foreground: oklch(1 0 0);
+
+  --secondary: oklch(0.985 0.002 286);
+  --secondary-foreground: oklch(0.37 0.01 286);
+  --muted: oklch(0.96 0.002 286);
+  --muted-foreground: oklch(0.55 0.01 286);
+  --accent: oklch(0.96 0.002 286);
+  --accent-foreground: oklch(0.27 0.01 286);
+  --destructive: oklch(0.6 0.22 27);
+  --destructive-foreground: oklch(1 0 0);
+
+  /* Figma: border-tertiary #f4f4f5 */
+  --border: oklch(0.96 0.002 286);
+  --input: oklch(0.93 0.005 286);
+  --ring: oklch(0.58 0.21 258);
+
+  /* Figma text scale */
+  --text-secondary: #3f3f46;
+  --text-tertiary: #51525c;
+  --text-placeholder: #70707b;
+}
+
+.dark {
+  /* Figma: bg-primary #131316, text-primary #fafafa */
+  --background: oklch(0.18 0.003 286);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.18 0.003 286);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.18 0.003 286);
+  --popover-foreground: oklch(0.985 0 0);
+
+  --primary: oklch(0.58 0.21 258);
+  --primary-foreground: oklch(1 0 0);
+
+  --secondary: oklch(0.22 0.005 286);
+  --secondary-foreground: oklch(0.86 0.005 286);
+  --muted: oklch(0.22 0.005 286);
+  --muted-foreground: oklch(0.71 0.01 286);
+  --accent: oklch(0.24 0.005 286);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --destructive-foreground: oklch(0.984 0.003 247.858);
+
+  /* Figma: border-tertiary #26272b */
+  --border: oklch(0.27 0.005 286);
+  --input: oklch(0.27 0.005 286);
+  --ring: oklch(0.58 0.21 258);
+
+  /* Figma text scale (dark) */
+  --text-secondary: #d1d1d6;
+  --text-tertiary: #a0a0ab;
+  --text-placeholder: #70707b;
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+
+  html,
+  body {
+    font-family: var(--font-body);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body {
+    background-color: var(--color-bg-primary);
+    color: var(--color-text-primary);
+  }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}
+
+/* ----------------------------------------------------------------------------
+ * Voice mode avatar animations
+ * -------------------------------------------------------------------------- */
+@keyframes voice-listening-ring {
+  0% {
+    transform: scale(0.85);
+    opacity: 0.55;
+  }
+  100% {
+    transform: scale(1.75);
+    opacity: 0;
+  }
+}
+
+@keyframes voice-thinking-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.3;
+  }
+  50% {
+    transform: scale(1.2);
+    opacity: 0.6;
+  }
+}
+

@@ -1,0 +1,201 @@
+{{/*
+Milvus — tier L4 of the memory plane (episodic recall by vector similarity).
+
+Without this the learning loop is inert: MemoryOrchestrator constructs a Milvus
+client that cannot connect, episodic recall silently returns nothing, and a
+live analysis comes back with memory_hints=None. The code was always there; the
+backend was not deployed, so nothing could be learned across sessions.
+
+Runs Milvus in STANDALONE mode, which needs two dependencies:
+  * etcd      — metadata; deployed here, small.
+  * object store — Milvus reuses the MinIO this chart already deploys rather
+    than standing up a second one. One bucket, one credential, one thing to
+    back up.
+
+Disabled by default on constrained clusters via `milvus.enabled`. When it is
+off the memory plane degrades to its lower tiers and SAYS SO through
+memory_context_unavailable, rather than pretending it remembered nothing.
+*/}}
+{{- if .Values.milvus.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "avaloka.fullname" . }}-etcd
+  labels: {{- include "avaloka.labels" . | nindent 4 }}
+spec:
+  ports:
+    - name: client
+      port: 2379
+      targetPort: 2379
+  selector:
+    app.kubernetes.io/name: {{ include "avaloka.name" . }}
+    app.kubernetes.io/component: etcd
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "avaloka.fullname" . }}-etcd
+  labels: {{- include "avaloka.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "avaloka.name" . }}
+      app.kubernetes.io/component: etcd
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "avaloka.name" . }}
+        app.kubernetes.io/component: etcd
+    spec:
+      containers:
+        - name: etcd
+          image: {{ .Values.milvus.etcdImage | quote }}
+          imagePullPolicy: {{ .Values.milvus.pullPolicy }}
+          command:
+            - etcd
+            - --advertise-client-urls=http://127.0.0.1:2379
+            - --listen-client-urls=http://0.0.0.0:2379
+            - --data-dir=/etcd
+          ports:
+            - name: client
+              containerPort: 2379
+          volumeMounts:
+            - name: etcd-data
+              mountPath: /etcd
+          resources: {{- toYaml .Values.milvus.etcdResources | nindent 12 }}
+      volumes:
+        - name: etcd-data
+          {{- if .Values.milvus.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "avaloka.fullname" . }}-etcd
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+{{- if .Values.milvus.persistence.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "avaloka.fullname" . }}-etcd
+  labels: {{- include "avaloka.labels" . | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: {{ .Values.milvus.persistence.etcdSize }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "avaloka.fullname" . }}-milvus
+  labels: {{- include "avaloka.labels" . | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: {{ .Values.milvus.persistence.size }}
+{{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "avaloka.fullname" . }}-milvus
+  labels: {{- include "avaloka.labels" . | nindent 4 }}
+spec:
+  ports:
+    - name: grpc
+      port: {{ .Values.milvus.port }}
+      targetPort: {{ .Values.milvus.port }}
+    - name: metrics
+      port: 9091
+      targetPort: 9091
+  selector:
+    app.kubernetes.io/name: {{ include "avaloka.name" . }}
+    app.kubernetes.io/component: milvus
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "avaloka.fullname" . }}-milvus
+  labels: {{- include "avaloka.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate          # single writer over one PVC
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "avaloka.name" . }}
+      app.kubernetes.io/component: milvus
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "avaloka.name" . }}
+        app.kubernetes.io/component: milvus
+    spec:
+      containers:
+        - name: milvus
+          image: {{ .Values.milvus.image | quote }}
+          imagePullPolicy: {{ .Values.milvus.pullPolicy }}
+          command: ["milvus", "run", "standalone"]
+          env:
+            - name: ETCD_ENDPOINTS
+              value: {{ include "avaloka.fullname" . }}-etcd:2379
+            # Reuse the MinIO this chart already runs rather than a second store.
+            - name: MINIO_ADDRESS
+              value: {{ include "avaloka.fullname" . }}-minio:{{ .Values.minio.port }}
+            # The secret stores these under the AWS_* names, which is what the
+            # rest of the stack reads. Referencing MINIO_ROOT_* here (with
+            # optional: true) left them UNSET, so Milvus fell back to
+            # minioadmin/minioadmin and could not reach the bucket -- a silent
+            # credential mismatch that surfaced only as coordinators failing to
+            # start. Not optional: a missing credential should stop the pod,
+            # not produce a Milvus that is up and cannot store anything.
+            - name: MINIO_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "avaloka.fullname" . }}-secrets
+                  key: AWS_ACCESS_KEY_ID
+            - name: MINIO_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "avaloka.fullname" . }}-secrets
+                  key: AWS_SECRET_ACCESS_KEY
+            - name: MINIO_BUCKET_NAME
+              value: {{ .Values.milvus.bucket | quote }}
+            - name: MINIO_USE_SSL
+              value: "false"
+            - name: COMMON_STORAGETYPE
+              value: minio
+          ports:
+            - name: grpc
+              containerPort: {{ .Values.milvus.port }}
+            - name: metrics
+              containerPort: 9091
+          # Milvus standalone takes a while to become ready; a short probe would
+          # restart it mid-startup forever.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: 9091
+            failureThreshold: 60
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 9091
+            periodSeconds: 15
+          volumeMounts:
+            - name: milvus-data
+              mountPath: /var/lib/milvus
+          resources: {{- toYaml .Values.milvus.resources | nindent 12 }}
+      volumes:
+        - name: milvus-data
+          {{- if .Values.milvus.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "avaloka.fullname" . }}-milvus
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+{{- end }}

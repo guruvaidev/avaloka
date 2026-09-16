@@ -1,0 +1,25 @@
+# minikube overlay for the avaloka (Part B) chart.
+#   helm upgrade --install avaloka deploy/helm/avaloka -f deploy/helm/avaloka/values/values-minikube.yaml
+# Local image built into the minikube docker daemon — never pull.
+image:
+  repository: avaloka-api
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: NodePort
+  nodePort: 30085
+
+# In-cluster S3. Without it a local install has no shared data plane: the API
+# would write to its own pod filesystem and Ray workers on other nodes could not
+# read it back (neither kind nor Docker Desktop has a ReadWriteMany storage
+# class). The chart points STORAGE_BACKEND=s3 at this Service automatically.
+minio:
+  enabled: true
+  service:
+    type: NodePort
+    # Console on http://localhost:30092 — mapped in deploy/clusters/kind-cluster.yaml.
+    consoleNodePort: 30092
+  # Laptop-sized; raise for real datasets.
+  persistence:
+    size: 10Gi

@@ -1,0 +1,104 @@
+# GKE overlay for the avaloka (Part B) chart.
+#   helm upgrade --install avaloka deploy/helm/avaloka -f deploy/helm/avaloka/values/values-gke.yaml
+#
+# Fronts the release with a GLOBAL EXTERNAL APPLICATION LOAD BALANCER via the
+# Gateway API (GatewayClass gke-l7-global-external-managed). Three GCP resources
+# must exist before `helm install` — reserve the IP, mint the certs, point DNS at
+# the IP. `deploy/gcp-lb-prereqs.sh` creates them; see "Enterprise load balancing"
+# in deploy/README.md for the manual gcloud equivalents and the DNS cutover.
+image:
+  # Point at your Artifact Registry / GCR image, e.g.
+  #   us-central1-docker.pkg.dev/<project>/avaloka/avaloka-api
+  repository: gcr.io/PROJECT_ID/avaloka-api
+  tag: latest
+  pullPolicy: Always
+
+# ClusterIP, not LoadBalancer. The Gateway is the only public entry point; a second
+# per-Service public IP would bypass its TLS, WAF and access logs entirely.
+# The NEG annotation turns on container-native load balancing so the load balancer
+# addresses pods directly instead of hopping through kube-proxy on a node.
+service:
+  type: ClusterIP
+  annotations:
+    cloud.google.com/neg: '{"ingress": true}'
+
+supabase:
+  externalUrl: "" # should be siteUrl/auth/v1
+  auth:
+    siteUrl: ""
+  db:
+    storageClassName: standard-rwo
+  storage:
+    storageClassName: standard-rwo
+  kong:
+    serviceType: ClusterIP
+    port: 8000
+    nodePort: null
+    annotations:
+      cloud.google.com/neg: '{"ingress": true}'
+    # Browser-reachable gateway URL. When using LoadBalancer, set this to the external
+    # load balancer address; for local kind dev, use the NodePort mapping below.
+
+webui:
+  service:
+    type: ClusterIP
+    annotations:
+      cloud.google.com/neg: '{"ingress": true}'
+  # Same-origin: the browser calls https://<host>/api/... and the Gateway routes
+  # those paths straight to the API Service (gateway.routeApiDirect).
+  apiBase: ""
+  # Managed Supabase project the browser authenticates against. The bundled
+  # in-cluster Supabase stays off in cloud installs, so these must be set for the
+  # UI to log in — e.g. https://<project-ref>.supabase.co and its anon key.
+  supabaseUrl: ""
+  supabaseAnonKey: ""
+
+gateway:
+  enabled: true
+  provider: gcp
+  # TEST instance only. app.example.com is a separate release with its own public
+  # IP — see values-gke-app.yaml.
+  hosts:
+    - test.example.com
+  # Reserved out of band so the address outlives the release:
+  #   gcloud compute addresses create avaloka-lb-ip --global --ip-version=IPV4
+  addresses:
+    - type: NamedAddress
+      value: avaloka-lb-ip
+  tls:
+    enabled: true
+    # Google-managed, auto-renewing certificates held in a Certificate Manager map.
+    # The map must carry an entry for every host above, or that host serves the
+    # wrong cert and browsers refuse the connection.
+    mode: certmap
+    certMapName: avaloka-cert-map
+  # HTTPS only: no :80 listener is created at all. Certificate Manager still
+  # provisions and renews normally — it validates over 443.
+  httpEnabled: false
+  gcp:
+    # Cloud Armor / TLS policies, created out of band. Left empty so a first install
+    # succeeds without them; set both before calling this production-ready.
+    securityPolicy: ""
+    sslPolicy: ""
+
+# Workload Identity: bind the KSA to a GCP service account.
+serviceAccount:
+  annotations:
+    iam.gke.io/gcp-service-account: avaloka@PROJECT_ID.iam.gserviceaccount.com
+
+# Cloud storage: GCS (bucket + Workload Identity SA above).
+minio:
+  # GKE uses the managed GCS bucket for both datasets and MLflow artifacts.
+  # MinIO remains enabled by the local/minikube overlay only.
+  enabled: false
+
+config:
+  storageBackend: "gcs"
+  gcsBucket: "avaloka-user-filestore"
+
+mlflow:
+  artifactsDestination: "gs://avaloka-user-filestore/mlflow-artifacts"
+
+resources:
+  requests:
+    memory: 3Gi

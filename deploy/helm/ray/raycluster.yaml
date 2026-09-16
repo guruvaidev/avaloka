@@ -1,0 +1,130 @@
+# deploy/helm/ray/raycluster.yaml
+# KubeRay RayCluster for avaloka distributed compute (sampling / transforms / training).
+# Applied by app/infra/ray_manager.apply_ray_cluster(). Head service DNS:
+#   avaloka-raycluster-head-svc  (Ray client port 10001, dashboard 8265)
+apiVersion: ray.io/v1
+kind: RayCluster
+metadata:
+  name: avaloka-raycluster
+  labels:
+    app.kubernetes.io/part-of: avaloka
+spec:
+  rayVersion: "2.49.2"
+  enableInTreeAutoscaling: true
+  # Keep the autoscaler sidecar small so head+sidecar fit on modest nodes.
+  autoscalerOptions:
+    resources:
+      requests: { cpu: "150m", memory: "256Mi" }
+      limits: { cpu: "300m", memory: "512Mi" }
+  headGroupSpec:
+    rayStartParams:
+      dashboard-host: "0.0.0.0"
+    template:
+      metadata:
+        labels:
+          app.kubernetes.io/part-of: avaloka
+      spec:
+        # The Helm chart creates this KSA. On GKE its Workload Identity
+        # annotation grants Ray direct access to GCS without JSON keys.
+        serviceAccountName: avaloka
+        containers:
+          - name: ray-head
+            image: avaloka-ray:latest
+            imagePullPolicy: IfNotPresent
+            # Same storage wiring as the workers — the head runs job supervisors
+            # and Ray Data reads that touch the same s3:// URIs.
+            envFrom:
+              - configMapRef:
+                  name: avaloka-config
+                  optional: true
+              - secretRef:
+                  name: avaloka-secrets
+                  optional: true
+            volumeMounts:
+              - name: gcp-sa
+                mountPath: /var/secrets/gcp
+                readOnly: true
+            ports:
+              - { containerPort: 6379, name: gcs }
+              - { containerPort: 8265, name: dashboard }
+              - { containerPort: 10001, name: client }
+              - { containerPort: 8000, name: serve }
+            # Ray's own head processes (GCS, dashboard, raylet) idle near 2Gi, so a
+            # 2Gi limit left nothing for the JobSupervisor actor: every submitted
+            # job died instantly with "Task was killed due to the node running low
+            # on memory ... 1.99GB / 2.00GB". Keep headroom above the idle baseline.
+            resources:
+              requests: { cpu: "300m", memory: "2Gi" }
+              limits: { cpu: "2", memory: "6Gi" }
+        volumes:
+          # Optional for MinIO/S3 and GKE Workload Identity. Local kind needs
+          # this conventional Secret to read private gs:// training datasets.
+          - name: gcp-sa
+            secret:
+              secretName: avaloka-gcp-sa
+              optional: true
+  workerGroupSpecs:
+    - groupName: cpu-workers
+      replicas: 1
+      minReplicas: 1
+      maxReplicas: 4
+      rayStartParams: {}
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/part-of: avaloka
+        spec:
+          serviceAccountName: avaloka
+          containers:
+            - name: ray-worker
+              image: avaloka-ray:latest
+              imagePullPolicy: IfNotPresent
+              # Ray workers load the datasets the API wrote, so they need the same
+              # storage wiring — STORAGE_BACKEND, S3_BUCKET and, for an in-cluster
+              # MinIO, S3_ENDPOINT_URL/AWS_ENDPOINT_URL plus credentials. Without
+              # the endpoint a worker resolves s3:// against real AWS and fails
+              # with NoSuchBucket. optional: true keeps Ray usable on its own when
+              # the avaloka chart is not installed in this namespace.
+              envFrom:
+                - configMapRef:
+                    name: avaloka-config
+                    optional: true
+                - secretRef:
+                    name: avaloka-secrets
+                    optional: true
+              volumeMounts:
+                - name: gcp-sa
+                  mountPath: /var/secrets/gcp
+                  readOnly: true
+              # Transfer tasks pip-install daft/connectorx into the runtime env and
+              # then hold a DataFrame in memory — 3Gi is tight for both at once.
+              # MTA's default Ray plan reserves three CPUs per Torch worker (four
+              # configured CPUs minus one for input processing), so each pod must
+              # advertise at least that much capacity or the placement group will
+              # remain pending forever.
+              resources:
+                requests: { cpu: "300m", memory: "2Gi" }
+                limits: { cpu: "4", memory: "6Gi" }
+          volumes:
+            - name: gcp-sa
+              secret:
+                secretName: avaloka-gcp-sa
+                optional: true
+---
+# Expose the Ray dashboard on the kind NodePort (matches deploy/clusters/kind-cluster.yaml).
+apiVersion: v1
+kind: Service
+metadata:
+  name: avaloka-ray-dashboard
+  labels:
+    app.kubernetes.io/part-of: avaloka
+spec:
+  type: NodePort
+  selector:
+    ray.io/cluster: avaloka-raycluster
+    ray.io/node-type: head
+  ports:
+    - name: dashboard
+      port: 8265
+      targetPort: 8265
+      nodePort: 30265

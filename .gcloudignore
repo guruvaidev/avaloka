@@ -1,0 +1,17 @@
+# Keep the Cloud Build upload context small.
+.git/
+.claude/
+.venv/
+venv/
+env/
+agents-env/
+__pycache__/
+*.pyc
+.pytest_cache/
+tests/
+node_modules/
+*.log
+.DS_Store
+# data files are not needed to build the images
+app/sample_data/
+*.csv

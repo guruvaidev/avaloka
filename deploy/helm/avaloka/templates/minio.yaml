@@ -1,0 +1,194 @@
+{{- $fullname := include "avaloka.fullname" . }}
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $fullname }}-minio
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: minio
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- with .Values.minio.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.minio.persistence.size | quote }}
+
+{{- if .Values.minio.enabled }}
+# In-cluster S3-compatible object store, so a local/on-prem install has a real
+# shared data plane instead of a per-pod filesystem.
+#
+# Why object storage and not a shared POSIX volume: Ray schedules workers across
+# nodes, and they all have to read the dataset the API wrote. A ReadWriteMany PVC
+# would do it, but neither kind nor Docker Desktop ships an RWX storage class —
+# their default provisioner is node-local hostPath, so a second worker either
+# cannot mount the volume or mounts a different empty one. Every worker can reach
+# the same s3:// URI over the network regardless of where it lands.
+#
+# Why MinIO and not Ceph: Ray/PyArrow/fsspec already speak S3, and Ceph's own S3
+# story is RGW — the same interface at far greater cost. Rook-Ceph wants 3+ nodes
+# with raw block devices and GBs of memory for mon/mgr/osd, which does not fit on
+# a laptop, so the local and datacenter installs could not stay the same shape.
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $fullname }}-minio
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: minio
+type: Opaque
+stringData:
+  # These are also the AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY every S3 client in
+  # the stack authenticates with. The defaults are dev credentials for a cluster-
+  # internal Service; override them for anything reachable beyond the cluster.
+  MINIO_ROOT_USER: {{ .Values.minio.auth.accessKey | quote }}
+  MINIO_ROOT_PASSWORD: {{ .Values.minio.auth.secretKey | quote }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-minio
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: minio
+spec:
+  replicas: 1
+  strategy:
+    # The PVC is ReadWriteOnce: a rolling update would leave the new pod Pending
+    # forever waiting for a volume the old pod still holds.
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "avaloka.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: minio
+  template:
+    metadata:
+      labels:
+        {{- include "avaloka.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: minio
+    spec:
+      containers:
+        - name: minio
+          image: "{{ .Values.minio.image.repository }}:{{ .Values.minio.image.tag }}"
+          imagePullPolicy: {{ .Values.minio.image.pullPolicy }}
+          args:
+            - server
+            - /data
+            - --console-address
+            - ":{{ .Values.minio.consolePort }}"
+          envFrom:
+            - secretRef:
+                name: {{ $fullname }}-minio
+          ports:
+            - name: s3
+              containerPort: {{ .Values.minio.port }}
+            - name: console
+              containerPort: {{ .Values.minio.consolePort }}
+          readinessProbe:
+            httpGet:
+              path: /minio/health/ready
+              port: s3
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /minio/health/live
+              port: s3
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            {{- toYaml .Values.minio.resources | nindent 12 }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ $fullname }}-minio
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-minio
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: minio
+spec:
+  type: {{ .Values.minio.service.type }}
+  selector:
+    {{- include "avaloka.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: minio
+  ports:
+    - name: s3
+      port: {{ .Values.minio.port }}
+      targetPort: s3
+      protocol: TCP
+      {{- if and (eq .Values.minio.service.type "NodePort") .Values.minio.service.nodePort }}
+      nodePort: {{ .Values.minio.service.nodePort }}
+      {{- end }}
+    - name: console
+      port: {{ .Values.minio.consolePort }}
+      targetPort: console
+      protocol: TCP
+      {{- if and (eq .Values.minio.service.type "NodePort") .Values.minio.service.consoleNodePort }}
+      nodePort: {{ .Values.minio.service.consoleNodePort }}
+      {{- end }}
+{{- if .Values.minio.createBucket }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $fullname }}-minio-mb
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: minio
+  annotations:
+    # Runs on install AND upgrade: the bucket must exist before the API's first
+    # write, and a reinstall against a fresh PVC would otherwise have none.
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 10
+  template:
+    metadata:
+      labels:
+        {{- include "avaloka.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: minio
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: mc
+          image: "{{ .Values.minio.mcImage.repository }}:{{ .Values.minio.mcImage.tag }}"
+          imagePullPolicy: {{ .Values.minio.mcImage.pullPolicy }}
+          envFrom:
+            - secretRef:
+                name: {{ $fullname }}-minio
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              # The Deployment may still be rolling when this hook fires.
+              until mc alias set local http://{{ $fullname }}-minio:{{ .Values.minio.port }} \
+                    "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null 2>&1; do
+                echo "waiting for minio..."
+                sleep 3
+              done
+              # --ignore-existing keeps this idempotent across upgrades.
+              mc mb --ignore-existing local/{{ .Values.minio.bucket }}
+              echo "bucket {{ .Values.minio.bucket }} ready"
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
+{{- end }}
+{{- end }}
