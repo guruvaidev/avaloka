@@ -125,3 +125,104 @@ def remember_offered_options(
     options = parse_offered_options(reply_text)
     updates["pending_suggestions"] = options or None
     return updates
+
+
+def looks_like_a_pick(user_input: str) -> bool:
+    """Is this message *entirely* a reference to a numbered option?
+
+    Distinct from :func:`pick_suggestion`, which also needs the list. A message
+    can be unmistakably a pick -- "run 3" is nothing else -- while the list it
+    refers to has been lost. Telling those two cases apart is the whole point:
+    a lost list is a state bug to recover from, not an instruction to guess at.
+    """
+    return bool(SUGGESTION_PICK_RE.match(user_input or ""))
+
+
+def recover_pending_suggestions(messages) -> List[str]:
+    """Re-read the offered options out of the transcript.
+
+    ``pending_suggestions`` lives in the LangGraph checkpointer, which in the
+    API process is a ``MemorySaver`` -- process-local RAM. A restart, a second
+    replica, or a second uvicorn worker loses it, and then "run 3" arrives with
+    nothing to resolve against.
+
+    The transcript does not have that problem: the numbered list is sitting in
+    the last assistant message, and the transcript is what the chat UI replays.
+    So when the checkpoint is empty, read the offer back out of the reply that
+    made it. Same parser that recorded it in the first place, so a list that
+    could be remembered can always be recovered.
+
+    Scans backwards for the most recent assistant message that actually offered
+    a list, rather than only the last one, because a pick can follow a reply
+    that acknowledged something else in between.
+    """
+    for message in reversed(list(messages or [])):
+        if getattr(message, "type", None) == "human":
+            continue
+        text = getattr(message, "content", None)
+        if not isinstance(text, str):
+            continue
+        options = parse_offered_options(text)
+        if options:
+            logger.info("Recovered %d offered options from the transcript.", len(options))
+            return options
+    return []
+
+
+def resolve_pick_with_recovery(user_input: str, state) -> Optional[str]:
+    """The suggestion a pick refers to, from state or from the transcript.
+
+    Order matters. State is authoritative when present -- it is what the turn
+    that made the offer actually recorded. The transcript is the fallback, used
+    only when the checkpoint has lost the list.
+    """
+    chosen = pick_suggestion(user_input, state)
+    if chosen is not None:
+        return chosen
+    if not looks_like_a_pick(user_input):
+        return None
+    recovered = recover_pending_suggestions((state or {}).get("messages"))
+    if not recovered:
+        return None
+    return pick_suggestion(user_input, {"pending_suggestions": recovered})
+
+
+#: Three to five ideas read as advice; a longer list reads as a backlog.
+MAX_OFFERED_SUGGESTIONS = 5
+
+
+def render_suggestions(suggestions) -> str:
+    """Render analysis suggestions as a numbered list that INVITES a choice.
+
+    This used to be a bare `"Here are some suggestions:\n- " + join(...)`, so the
+    reply ended on the final bullet with no way forward. A user who has just
+    been handed nine steps has no idea whether Avaloka can run any of them, and
+    the obvious next move -- "do number 5" -- was never offered.
+
+    Numbering matters as much as the closing line: it gives the user something
+    short to point at. "Run 3" is a reply anyone will type; re-describing a
+    bullet in their own words is not.
+    """
+    items = [str(s).strip() for s in (suggestions or []) if str(s).strip()]
+    if not items:
+        return ("I could not think of a useful analysis for this dataset yet. "
+                "Tell me what you are trying to find out and I will work from "
+                "that.")
+
+    # Three to five. Seven numbered options is a menu to work through, not a
+    # recommendation, and it pushes the reader to skim rather than choose --
+    # the opposite of what a next step is for. The model is asked for its best
+    # ideas first, so truncating keeps the strongest and drops the filler.
+    items = items[:MAX_OFFERED_SUGGESTIONS]
+
+    lines = ["Here is what I would look at first:", ""]
+    lines += [f"{n}. {item}" for n, item in enumerate(items, 1)]
+    lines += [
+        "",
+        f"Would you like me to start with one of these? Say the number "
+        f"(\u201c{1 if len(items) == 1 else '2'}\u201d, or \u201crun "
+        f"{1 if len(items) == 1 else '2'}\u201d) and I will carry it out \u2014 "
+        f"or tell me in your own words what you are after and I will plan from "
+        f"that instead.",
+    ]
+    return "\n".join(lines)

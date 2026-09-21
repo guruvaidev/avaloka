@@ -1,9 +1,14 @@
 {{- if .Values.chroma.enabled }}
-# In-cluster Chroma vector store (layer-2 usage context). Single ephemeral replica —
-# fine for kind/dev; for production use a managed/persistent Chroma via
-# chroma.enabled=false + chroma.externalHost.
+# In-cluster Chroma vector store (layer-2 usage context).
+#
+# A StatefulSet with a volumeClaimTemplate: the claim is now owned by the
+# workload rather than standing beside it, so the volume follows the pod when it
+# is rescheduled and is not left behind on a node that went away.
+#
+# replicas stays 1. Open-source Chroma is single-node; a second replica would
+# serve a different, empty collection.
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: {{ include "avaloka.fullname" . }}-chroma
   labels:
@@ -11,6 +16,7 @@ metadata:
     app.kubernetes.io/component: chroma
 spec:
   replicas: 1
+  serviceName: {{ include "avaloka.fullname" . }}-chroma-hl
   selector:
     matchLabels:
       {{- include "avaloka.selectorLabels" . | nindent 6 }}
@@ -45,26 +51,38 @@ spec:
           {{- end }}
           resources:
             {{- toYaml .Values.chroma.resources | nindent 12 }}
-      {{- if .Values.chroma.persistence.enabled }}
-      volumes:
-        - name: chroma-data
-          persistentVolumeClaim:
-            claimName: {{ include "avaloka.fullname" . }}-chroma
-      {{- end }}
 {{- if .Values.chroma.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: chroma-data
+      spec:
+        accessModes:
+          - {{ include "avaloka.accessMode" (dict "ctx" . "component" .Values.chroma) }}
+        resources:
+          requests:
+            storage: {{ .Values.chroma.persistence.size | quote }}
+        {{- include "avaloka.storageClass" (dict "ctx" . "component" .Values.chroma) | nindent 8 }}
+{{- end }}
 ---
+# Headless companion for stable pod DNS; clients keep using the ClusterIP
+# Service below, so CHROMA_HOST is unchanged.
 apiVersion: v1
-kind: PersistentVolumeClaim
+kind: Service
 metadata:
-  name: {{ include "avaloka.fullname" . }}-chroma
+  name: {{ include "avaloka.fullname" . }}-chroma-hl
   labels:
     {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: chroma
 spec:
-  accessModes: ["ReadWriteOnce"]
-  resources:
-    requests:
-      storage: {{ .Values.chroma.persistence.size }}
-{{- end }}
+  clusterIP: None
+  selector:
+    {{- include "avaloka.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: chroma
+  ports:
+    - name: http
+      port: {{ .Values.chroma.port }}
+      targetPort: http
+      protocol: TCP
 ---
 apiVersion: v1
 kind: Service

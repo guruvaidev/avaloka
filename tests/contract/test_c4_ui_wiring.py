@@ -366,16 +366,6 @@ def test_e9_19_cloud_overlays_do_not_enable_in_cluster_supabase(values_rel: str)
     )
 
 
-@pytest.mark.defect
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEFECT E9.19 (P0, security): deploy/helm/avaloka/values.yaml ships the public demo "
-        "supabase.jwtSecret/anonKey/serviceKey as chart defaults and templates/secret.yaml "
-        "adopts jwtSecret as the API's SUPABASE_JWT_SECRET whenever supabase.enabled=true, so "
-        "one --set makes every HS256 token forgeable. Remove this xfail when fixed."
-    ),
-)
 def test_e9_19a_chart_defaults_do_not_ship_public_demo_credentials() -> None:
     """Chart defaults carry no publicly-known Supabase secret that secret.yaml can adopt."""
     secret_template = _text(_merge_file(f"{_CHART}/templates/secret.yaml"))

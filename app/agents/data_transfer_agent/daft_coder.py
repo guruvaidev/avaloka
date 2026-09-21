@@ -52,7 +52,8 @@ def _get_cached_chroma_collection(db_path: str, collection_name: str, embedding_
 # LLM initialisation
 def _build_coder_llm() -> ChatGroq | None:
     """Construct the coder LLM from environment variables, or return None."""
-    api_key = os.environ.get("GROQ_API_KEY_CODING_AGENT")
+    api_key = (os.environ.get("GROQ_API_KEY_CODING_AGENT")
+               or os.environ.get("GROQ_API_KEY"))
     if not api_key:
         logger.warning(
             "GROQ_API_KEY_CODING_AGENT is not set — code generation will be skipped."

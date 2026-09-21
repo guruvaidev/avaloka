@@ -23,9 +23,15 @@ try:
     from app.agents.planner_graph_agent import planner_graph_agent_node, PlannerGraphAgent, _convert_plan_to_graph_format
     from app.graph.etl_state import ETLState
     logger.info("✓ Successfully imported planner graph agent modules")
-except ImportError as e:
-    logger.error(f"✗ Import error: {e}")
-    sys.exit(1)
+except ImportError as exc:  # pragma: no cover - environment-dependent
+    # `sys.exit(1)` here used to abort the ENTIRE pytest session, not this
+    # module: pytest reports it as INTERNALERROR and no test in the repository
+    # runs, whatever was wrong. This file began life as a standalone script and
+    # kept the script's error handling when it became a test.
+    pytest.skip(
+        f"planner graph agent dependencies unavailable: {exc}",
+        allow_module_level=True,
+    )
 
 
 def test_planner_graph_agent_standalone():

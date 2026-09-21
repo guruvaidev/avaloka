@@ -211,9 +211,18 @@ def _readable_tracked_files() -> Iterable[Tuple[str, str]]:
         yield relpath, text
 
 
+#: The scanner's own source. It necessarily contains the patterns it looks for
+#: and, in the comment explaining the AWS placeholder, a literal
+#: AKIAIOSFODNN7EXAMPLE -- so it matches itself. Excluding one file by exact
+#: path is narrow enough to stay honest; excluding a glob would not be.
+_SCANNER_SOURCE = "tests/contract/test_c1_repo_hygiene.py"
+
+
 def _scan_for_secrets() -> List[str]:
     findings: List[str] = []
     for relpath, text in _readable_tracked_files():
+        if relpath == _SCANNER_SOURCE:
+            continue
         matched: Set[str] = set()
         for name, pattern in SECRET_PATTERNS.items():
             if pattern.search(text):
@@ -234,40 +243,34 @@ def _scan_for_secrets() -> List[str]:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.defect
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEFECT E11.05 (P0): .env is git-tracked and carries a live Supabase "
-        "service_role key plus SUPABASE_JWT_SECRET (.gitignore:56 lists .env but "
-        "ignore rules never apply to already-tracked paths). Remediation: rotate the "
-        "Supabase service_role key and JWT secret, git rm --cached .env, purge it "
-        "from history (git filter-repo / BFG), force-push and re-clone. "
-        "Remove this xfail when fixed."
-    ),
-)
 def test_e11_05_env_file_is_not_tracked() -> None:
-    """.env must never be under version control; git ls-files .env returns nothing."""
+    """.env must never be under version control; git ls-files .env returns nothing.
+
+    Was DEFECT E11.05 (P0), xfail(strict): .env was tracked and carried a live
+    Supabase service_role key and JWT signing secret, which .gitignore could not
+    help with -- ignore rules never apply to already-tracked paths. The 1.0
+    repository was rebuilt without it. The assertion stays, because re-adding
+    the file is exactly the mistake worth catching.
+    """
     assert not _is_tracked(".env"), (
         ".env is tracked by git; anyone with repo read access holds the Supabase "
         "service-role key and the JWT signing secret"
     )
 
 
-@pytest.mark.defect
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEFECT E11.05 (P0): tracked files contain live credentials -- .env holds a "
-        "Supabase service_role JWT and a gsk_ Groq key, app/mcp_server/customers.json "
-        "holds per-customer api_keys and a Postgres DSN with a password and is "
-        "auto-loaded into the MCP registry at startup. Remediation: rotate every "
-        "matched credential, untrack the files, purge from history. "
-        "Remove this xfail when fixed."
-    ),
-)
 def test_e11_05_secret_material_absent_from_tracked_files() -> None:
-    """No tracked file matches a live-credential pattern (paths and pattern names only)."""
+    """No tracked file matches a live-credential pattern (paths and pattern names only).
+
+    Was DEFECT E11.05 (P0), xfail(strict). The tracked material is gone: .env
+    when the 1.0 tree was rebuilt, app/mcp_server/customers.json and its
+    sixteen ak_* keys here, and the literal local Postgres password in
+    test_mcp_server_integration.py, now read from the environment.
+
+    What remains and still matches are documented placeholders -- AWS's own
+    AKIAIOSFODNN7EXAMPLE, "-----BEGIN PRIVATE KEY-----\nABCDEF", and
+    user:pass@host in docstrings. The credentials are still in git history on
+    both branches; this asserts only that the working tree is clean.
+    """
     findings = _scan_for_secrets()
     assert not findings, (
         "tracked files matched credential patterns (values withheld by design):\n  "
@@ -305,21 +308,16 @@ def test_e11_05_credential_files_are_ignored(mechanism: str, candidate: str) -> 
     )
 
 
-@pytest.mark.defect
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEFECT E11.05 (P0): app/mcp_server/customers.json is git-tracked and holds "
-        "16 customer records with ak_* api_keys and a Postgres DSN carrying a "
-        "password; it is loaded into the MCP registry at server startup. Remediation: "
-        "rotate every embedded ak_* api_key and the database password, move the "
-        "registry to a mounted secret/DB, git rm --cached the file (.gitignore "
-        "already lists customers.json) and purge it from history. "
-        "Remove this xfail when fixed."
-    ),
-)
 def test_e11_05_mcp_customers_registry_not_tracked() -> None:
-    """The MCP customer registry, which embeds api_keys and a DB password, is not committed."""
+    """The MCP customer registry, which embeds api_keys and a DB password, is not committed.
+
+    Was DEFECT E11.05 (P0), xfail(strict). .gitignore already listed the file,
+    which did nothing, because ignore rules never apply to an already-tracked
+    path -- the same trap that kept .env in the tree. Untracked now, with
+    customers.example.json committed in its place so the format stays
+    documented. The embedded ak_* keys and database password still want
+    rotating, and the file still wants purging from history.
+    """
     assert not _is_tracked("app/mcp_server/customers.json"), (
         "app/mcp_server/customers.json is tracked; it embeds per-customer API keys "
         "and a database password"
@@ -334,26 +332,32 @@ KEY_SHAPED_LITERALS = {
 }
 
 
-@pytest.mark.defect
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEFECT E11.05 (P2): the tracked repo-root debug script test.py hardcodes an "
-        "MCP api_key literal next to the customer id it belongs to, mirroring an entry "
-        "in app/mcp_server/customers.json. Remediation: delete test.py (or move it "
-        "under scripts/ reading the key from the environment) and rotate that key. "
-        "Remove this xfail when fixed."
-    ),
-)
 def test_e11_05_no_debug_scripts_with_keys_in_repo_root() -> None:
-    """The repo root holds no debug script carrying a key-shaped literal."""
-    script = REPO_ROOT / "test.py"
-    if not script.is_file():
-        return
-    text = script.read_text("utf-8", errors="ignore")
-    matched = sorted(name for name, pattern in KEY_SHAPED_LITERALS.items() if pattern.search(text))
-    assert not matched, (
-        f"test.py contains key-shaped literals (values withheld): {', '.join(matched)}"
+    """The repo root holds no debug script carrying a key-shaped literal.
+
+    DEFECT E11.05 is fixed. test.py was a tracked repo-root debug script
+    hardcoding an MCP api_key next to the customer id it belonged to, and it
+    was deleted while preparing the public 1.0 -- which is the remediation the
+    xfail here prescribed. The marker is gone with it.
+
+    Widened while removing the marker: this now checks every script at the repo
+    root, not just the one that happened to be the offender. The original was
+    a pin on one known file; the property worth holding is that no root-level
+    script carries a key-shaped literal.
+
+    The key itself still needs rotating. Deleting the file removes it from the
+    working tree, not from the history of a repository about to be published.
+    """
+    offenders: list[str] = []
+    for script in sorted(REPO_ROOT.glob("*.py")):
+        text = script.read_text("utf-8", errors="ignore")
+        matched = sorted(name for name, pattern in KEY_SHAPED_LITERALS.items()
+                         if pattern.search(text))
+        if matched:
+            offenders.append(f"{script.name}: {', '.join(matched)}")
+    assert not offenders, (
+        "repo-root scripts contain key-shaped literals (values withheld): "
+        + "; ".join(offenders)
     )
 
 
@@ -408,19 +412,15 @@ EGRESS_CHANNELS: Dict[str, Tuple[re.Pattern, str, Set[str]]] = {
     "groq_llm_prompts": (
         re.compile(r"^[ \t]*(?:from[ \t]+langchain_groq|import[ \t]+langchain_groq)", re.M),
         "agent prompts, which embed sampled rows, schemas and DDL, go to Groq's hosted API",
+        # This set shrank, which is the good direction: nine agents used to
+        # construct a Groq client each, and now build through app/core. The
+        # prompts still carry sampled rows, schemas and DDL -- the egress did
+        # not go away, it moved to one place where it can be seen.
         {
-            "app/agents/coder.py",
             "app/agents/data_transfer_agent/daft_coder.py",
             "app/agents/data_transfer_agent/daft_validator.py",
-            "app/agents/mta/task_builder.py",
             "app/agents/mta_v2/agent.py",
-            "app/agents/planner.py",
-            "app/agents/profiling_agent.py",
-            "app/agents/summarizer.py",
-            "app/agents/validator.py",
-            "app/agents/visualization_agent.py",
-            "app/core/agent_llm.py",
-            "app/services/memory_plane.py",
+            "app/core/inference.py",
         },
     ),
     "embedding_provider": (
@@ -428,6 +428,11 @@ EGRESS_CHANNELS: Dict[str, Tuple[re.Pattern, str, Set[str]]] = {
         "memory/RAG text is embedded by OpenAI when OPENAI_API_KEY is set, otherwise by "
         "local sentence-transformers, otherwise a zero-vector -- only the first leaves the cluster",
         {
+            # The conversational agent reads OPENAI_API_KEY to decide whether a
+            # hosted model is available before it routes a turn.
+            "app/agents/avaloka_agent/agent.py",
+            "app/core/inference.py",
+            "app/core/model_fallback.py",
             "app/services/embedding_utils.py",
             "app/services/memory_runtime.py",
             "app/services/milvus_recorder.py",
@@ -513,4 +518,63 @@ def test_e11_09_pins_supabase_row_egress_is_undocumented_in_the_plan() -> None:
     assert re.search(r"SUPABASE_(?:SERVICE_ROLE_KEY|URL)", text), (
         "sampling_persistence no longer reaches Supabase directly; "
         + EGRESS_INVENTORY_UPDATE_INSTRUCTION
+    )
+
+
+def test_no_test_module_exits_the_interpreter_on_import() -> None:
+    """A `sys.exit()` that runs at import time aborts the whole pytest session.
+
+    Not the module -- the session. pytest reports INTERNALERROR and no test in
+    the repository runs, whatever was actually wrong. One file did this, and it
+    made CI unpassable: `tests/planner_graph_agent/test_planner_graph_agent.py`
+    began as a standalone script and kept the script's `except ImportError:
+    sys.exit(1)` when it became a test.
+
+    `pytest.skip(..., allow_module_level=True)` is the idiom that expresses the
+    same intent without taking everything else down with it.
+
+    Calls inside a function body, or under `if __name__ == "__main__"`, are
+    fine: neither runs on import.
+    """
+    import ast
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent.parent
+
+    def _is_main_guard(node: ast.stmt) -> bool:
+        return (isinstance(node, ast.If) and isinstance(node.test, ast.Compare)
+                and isinstance(node.test.left, ast.Name)
+                and node.test.left.id == "__name__")
+
+    def _import_time(body: list[ast.stmt]):
+        for node in body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                continue
+            if _is_main_guard(node):
+                continue
+            yield node
+            for field in ("body", "orelse", "finalbody"):
+                yield from _import_time(getattr(node, field, []) or [])
+            for handler in getattr(node, "handlers", []) or []:
+                yield from _import_time(handler.body)
+
+    offenders: list[str] = []
+    for path in sorted((root / "tests").rglob("test_*.py")):
+        try:
+            tree = ast.parse(path.read_text("utf-8", errors="ignore"))
+        except SyntaxError:
+            continue
+        for node in _import_time(tree.body):
+            if not (isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)):
+                continue
+            func = node.value.func
+            name = getattr(func, "attr", None) or getattr(func, "id", None)
+            module = getattr(getattr(func, "value", None), "id", None)
+            if name == "exit" and module in (None, "sys", "os"):
+                offenders.append(f"{path.relative_to(root)}:{node.value.lineno}")
+
+    assert not offenders, (
+        "these call exit() at import time, which aborts the entire pytest run "
+        "rather than skipping the module — use pytest.skip(..., "
+        f"allow_module_level=True) instead: {', '.join(offenders)}"
     )

@@ -33,7 +33,8 @@ load_dotenv(os.path.join(project_root, '.env'))
 logger = logging.getLogger(__name__)
 
 # LLM setup (Groq Llama - same as planner)
-_PROFILING_API_KEY = os.environ.get("GROQ_API_KEY_PLANNING_AGENT")
+_PROFILING_API_KEY = (os.environ.get("GROQ_API_KEY_PLANNING_AGENT")
+              or os.environ.get("GROQ_API_KEY"))
 profiling_llm = build_chat_model(
     role="planning",
     agent="PROFILING",

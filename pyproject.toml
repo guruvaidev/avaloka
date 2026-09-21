@@ -15,7 +15,16 @@ requires-python = ">=3.10"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Avaloka" }]
-keywords = ["automl", "data-science", "agents", "cli", "mlops"]
+# PyPI keywords. Search there is weak and mostly matches name + description,
+# so these are a supporting signal rather than the main one -- the description
+# above is doing most of the work. GitHub topics are set separately (see
+# scripts/set_repo_topics.sh); they are what actually drives discovery.
+keywords = [
+    "data-science", "machine-learning", "ai-agents", "agentic-ai", "llm",
+    "automl", "mlops", "data-analysis", "data-engineering", "etl",
+    "langgraph", "langchain", "ray", "cli", "multi-agent",
+    "data-quality", "feature-engineering", "model-training", "analytics",
+]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
@@ -26,6 +35,12 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: Scientific/Engineering :: Information Analysis",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Database",
+    "Topic :: Utilities",
+    "Environment :: Console",
+    "Operating System :: OS Independent",
+    "Natural Language :: English",
 ]
 
 dependencies = [
@@ -38,6 +53,16 @@ dependencies = [
     "PyYAML>=6.0",
     "jinja2>=3.1",
 ]
+
+# Rendered as the sidebar on the PyPI project page. Without these, a visitor
+# who arrives at PyPI has no route to the source, the docs or the issue tracker,
+# which is most of what they came for.
+[project.urls]
+Homepage = "https://avaloka.ai"
+Documentation = "https://github.com/guruvaidev/avaloka/blob/main/docs/INSTALL.md"
+Source = "https://github.com/guruvaidev/avaloka"
+Issues = "https://github.com/guruvaidev/avaloka/issues"
+Changelog = "https://github.com/guruvaidev/avaloka/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 llm = ["anthropic>=0.40"]

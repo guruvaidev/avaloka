@@ -1,9 +1,20 @@
 {{- if .Values.redis.enabled }}
-# Minimal in-cluster Redis so the API's session cache works (D1 step 3). This is a
-# single ephemeral replica — fine for kind/dev; for production point at a managed
-# Redis via redis.enabled=false + redis.externalUrl.
+# In-cluster Redis: layer-1 schema cache and the ctxmem session hints/preferences.
+#
+# A StatefulSet with a volumeClaimTemplate, not a Deployment with no volume at
+# all. memory_plane calls this store "durable ... survives redeploys", and that
+# was true of the code and false of the deployment: nothing was mounted, so
+# every schema cache entry and every remembered preference died with the pod.
+#
+# appendonly is on for the same reason. A volume alone still loses everything
+# since the last RDB snapshot on an unclean stop -- up to an hour on redis:7
+# defaults. appendfsync everysec bounds that to a second.
+#
+# replicas stays 1: HA Redis needs Sentinel or Cluster, which this chart does
+# not run. Node failure is the StorageClass's job (see storage.className); for
+# managed Redis use redis.enabled=false + redis.externalUrl.
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: {{ include "avaloka.fullname" . }}-redis
   labels:
@@ -11,6 +22,7 @@ metadata:
     app.kubernetes.io/component: redis
 spec:
   replicas: 1
+  serviceName: {{ include "avaloka.fullname" . }}-redis-hl
   selector:
     matchLabels:
       {{- include "avaloka.selectorLabels" . | nindent 6 }}
@@ -25,6 +37,15 @@ spec:
         - name: redis
           image: {{ .Values.redis.image | quote }}
           imagePullPolicy: {{ .Values.redis.pullPolicy }}
+          {{- if .Values.redis.appendOnly }}
+          args:
+            - "--appendonly"
+            - "yes"
+            - "--appendfsync"
+            - "everysec"
+            - "--dir"
+            - "/data"
+          {{- end }}
           ports:
             - name: redis
               containerPort: {{ .Values.redis.port }}
@@ -38,8 +59,28 @@ spec:
               command: ["redis-cli", "ping"]
             initialDelaySeconds: 15
             periodSeconds: 20
+          volumeMounts:
+            - name: data
+              mountPath: /data
           resources:
             {{- toYaml .Values.redis.resources | nindent 12 }}
+{{- if not .Values.redis.persistence.enabled }}
+      volumes:
+        - name: data
+          emptyDir: {}
+{{- end }}
+{{- if .Values.redis.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          - {{ include "avaloka.accessMode" (dict "ctx" . "component" .Values.redis) }}
+        resources:
+          requests:
+            storage: {{ .Values.redis.persistence.size | quote }}
+        {{- include "avaloka.storageClass" (dict "ctx" . "component" .Values.redis) | nindent 8 }}
+{{- end }}
 ---
 apiVersion: v1
 kind: Service
@@ -58,4 +99,25 @@ spec:
       port: {{ .Values.redis.port }}
       targetPort: redis
       protocol: TCP
+---
+# Headless companion for stable pod DNS; clients keep using the ClusterIP
+# Service above, so REDIS_URL is unchanged.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "avaloka.fullname" . }}-redis-hl
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: redis
+spec:
+  clusterIP: None
+  selector:
+    {{- include "avaloka.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: redis
+  ports:
+    - name: redis
+      port: {{ .Values.redis.port }}
+      targetPort: redis
+      protocol: TCP
+
 {{- end }}

@@ -119,18 +119,11 @@ def deploy_avaloka(
     image_pull_policy: Optional[str] = None,
     minio: Optional[bool] = None,
     supabase: Optional[bool] = None,
-    local_images: bool = False,
 ) -> dict:
     """helm upgrade --install the avaloka chart.
 
     Image overrides let cloud (GKE/EKS) point at a registry image (e.g.
     gcr.io/<project>/avaloka) while local kind uses the side-loaded image.
-
-    ``local_images`` points every chart image at the ``*:latest`` builds that
-    ``build_images(load_into_kind=True)`` side-loads. The chart's defaults are
-    the GHCR release images, so without this a local provision builds one set
-    of images and deploys another -- ImagePullBackOff when the registry has no
-    image for this checkout, or silently a stale registry image when it does.
 
     ``minio`` deploys the in-cluster S3-compatible object store and points the
     app's storage backend at it. This is what gives a local/on-prem cluster a
@@ -168,16 +161,6 @@ def deploy_avaloka(
         cmd += ["--set-string", f"ray.address={ray_address}"]
     if service_type:
         cmd += ["--set", f"service.type={service_type}"]
-    if local_images:
-        api_repo, api_tag = API_IMAGE.rsplit(":", 1)
-        ui_repo, ui_tag = WEBUI_IMAGE.rsplit(":", 1)
-        cmd += [
-            "--set-string", f"image.repository={api_repo}",
-            "--set-string", f"image.tag={api_tag}",
-            "--set-string", f"webui.image.repository={ui_repo}",
-            "--set-string", f"webui.image.tag={ui_tag}",
-            "--set-string", f"supabase.functions.image={FUNCTIONS_IMAGE}",
-        ]
     if image_repository:
         cmd += ["--set-string", f"image.repository={image_repository}"]
     if image_tag:
@@ -188,6 +171,23 @@ def deploy_avaloka(
         cmd += ["--set", f"minio.enabled={'true' if minio else 'false'}"]
     if supabase is not None:
         cmd += ["--set", f"supabase.enabled={'true' if supabase else 'false'}"]
+    if supabase:
+        # The chart ships no Supabase credentials: a usable secret in a public
+        # repository is a forgeable auth stack, and the published demo keys let
+        # anyone mint a service_role token. Forward them from the environment
+        # instead, so they can live in an env file outside git.
+        #
+        # Nothing is defaulted here. If they are unset the chart's credential
+        # guard fails the render with an actionable message, which is better
+        # than standing up an auth stack whose keys are public.
+        for flag, env_var in (
+            ("supabase.jwtSecret", "SUPABASE_JWT_SECRET"),
+            ("supabase.anonKey", "SUPABASE_ANON_KEY"),
+            ("supabase.serviceKey", "SUPABASE_SERVICE_KEY"),
+        ):
+            value = (os.environ.get(env_var) or "").strip()
+            if value:
+                cmd += ["--set-string", f"{flag}={value}"]
 
     # Provision mode installs ``deploy/helm/ray/raycluster.yaml`` immediately
     # after this Helm release. Point all Ray Jobs clients at that shared,
@@ -229,8 +229,8 @@ def deploy_avaloka(
         cmd += ["--set-string", f"config.mtaRayNamespace={mta_namespace}"]
 
     # Prefer env vars so keys never land in shell history when not passed explicitly.
-    pk = groq_planning_key if groq_planning_key is not None else os.environ.get("GROQ_API_KEY_PLANNING_AGENT", "")
-    ck = groq_coding_key if groq_coding_key is not None else os.environ.get("GROQ_API_KEY_CODING_AGENT", "")
+    pk = groq_planning_key if groq_planning_key is not None else (os.environ.get("GROQ_API_KEY_PLANNING_AGENT", "") or os.environ.get("GROQ_API_KEY", ""))
+    ck = groq_coding_key if groq_coding_key is not None else (os.environ.get("GROQ_API_KEY_CODING_AGENT", "") or os.environ.get("GROQ_API_KEY", ""))
     if pk:
         cmd += ["--set-string", f"secrets.groqPlanningKey={pk}"]
     if ck:

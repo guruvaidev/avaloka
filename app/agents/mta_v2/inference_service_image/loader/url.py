@@ -195,6 +195,84 @@ def _is_local(uri: str) -> bool:
     return uri.startswith("/") or uri.startswith("./") or uri.startswith("file://")
 
 
+def _sample_bytes(
+    uri: str,
+    storage_options: Dict[str, Any],
+    size: int = 256 * 1024,
+) -> bytes:
+    """Read a small binary prefix without downloading the full dataset."""
+    if _is_local(uri):
+        local_path = urlparse(uri).path if uri.startswith("file://") else uri
+        with open(local_path, "rb") as stream:
+            return stream.read(size)
+
+    import fsspec
+
+    with fsspec.open(uri, mode="rb", **storage_options) as stream:
+        return stream.read(size)
+
+
+def _csv_encoding_candidates(
+    uri: str,
+    storage_options: Dict[str, Any],
+) -> list[str]:
+    """Return conservative non-UTF-8 fallbacks for a failed CSV decode."""
+    candidates: list[str] = []
+    try:
+        # charset_normalizer, not chardet: chardet is LGPL, which is a licence
+        # an Apache-2.0 distribution cannot carry as a required dependency.
+        # `detect` is charset_normalizer's chardet-compatible shim and returns
+        # the same {encoding, confidence} shape.
+        from charset_normalizer import detect
+
+        detected = detect(_sample_bytes(uri, storage_options))
+        encoding = str(detected.get("encoding") or "").strip()
+        if encoding and float(detected.get("confidence") or 0) >= 0.5:
+            candidates.append(encoding)
+    except Exception as exc:
+        print(f"[URL Loader] Could not detect CSV encoding: {exc}")
+
+    # cp1252 covers the most common legacy Windows CSV exports. latin-1 is the
+    # final lossless single-byte fallback and therefore cannot raise a decode
+    # error, but it comes last to avoid turning CP1252 punctuation into control
+    # characters.
+    candidates.extend(["cp1252", "latin-1"])
+    return list(dict.fromkeys(enc.lower() for enc in candidates))
+
+
+def _read_csv_pandas(
+    uri: str,
+    storage_options: Dict[str, Any],
+    csv_options: Dict[str, Any],
+) -> pd.DataFrame:
+    """Read CSV as UTF-8 first, then retry legacy encodings when necessary."""
+    try:
+        return pd.read_csv(
+            uri,
+            storage_options=storage_options or None,
+            **csv_options,
+        )
+    except UnicodeDecodeError as original_error:
+        # An explicit encoding is a caller contract. Do not silently override
+        # it; surface the error so the requested setting can be corrected.
+        if csv_options.get("encoding"):
+            raise
+
+        last_error: UnicodeDecodeError = original_error
+        for encoding in _csv_encoding_candidates(uri, storage_options):
+            print(f"[URL Loader] UTF-8 decode failed; retrying CSV as {encoding}.")
+            try:
+                return pd.read_csv(
+                    uri,
+                    storage_options=storage_options or None,
+                    encoding=encoding,
+                    **csv_options,
+                )
+            except UnicodeDecodeError as exc:
+                last_error = exc
+        raise last_error
+
+
 def _download_to_tmp(uri: str, suffix: str) -> str:
     """Download a remote file to a temp path. Returns the local path."""
     print(f"[URL Loader] Downloading {uri} ...")
@@ -227,7 +305,7 @@ def _download_to_tmp(uri: str, suffix: str) -> str:
 # =========================================================
 
 
-def load_dataset_from_url(uri: str):
+def load_dataset_from_url(uri: str, *, use_ray: Optional[bool] = None):
     """
     Load a file-based dataset into a Ray Dataset (if Ray is available) or a
     pandas DataFrame (local fallback).
@@ -241,14 +319,22 @@ def load_dataset_from_url(uri: str):
     Returns
     -------
     ray.data.Dataset  — when Ray is available and initialised.
-    pd.DataFrame      — otherwise (local_trainer.py path).
+    pd.DataFrame      — otherwise, or when ``use_ray=False``.
+
+    ``use_ray`` makes the caller's execution decision authoritative. Leaving it
+    as ``None`` preserves the legacy auto-detection behaviour. Local training
+    passes ``False`` so unrelated process-global Ray state cannot silently turn
+    a pandas load into a Ray Data execution.
     """
     fmt      = _detect_format(uri)
     clean_uri = _strip_format_param(uri)
 
     print(f"[URL Loader] uri={clean_uri}  detected_format={fmt}")
 
-    if _RAY_AVAILABLE and ray.is_initialized():
+    ray_requested = ray.is_initialized() if use_ray is None and _RAY_AVAILABLE else bool(use_ray)
+    if ray_requested:
+        if not _RAY_AVAILABLE or not ray.is_initialized():
+            raise RuntimeError("Ray loading was requested, but Ray is not initialized.")
         return _load_ray(clean_uri, fmt)
     return _load_pandas(clean_uri, fmt)
 
@@ -363,7 +449,7 @@ def _load_pandas(uri: str, fmt: str) -> pd.DataFrame:
 
     if fmt == "csv":
         csv_opts = _csv_read_options()
-        df = pd.read_csv(uri, storage_options=storage_opts or None, **csv_opts)
+        df = _read_csv_pandas(uri, storage_opts, csv_opts)
 
     elif fmt == "parquet":
         df = pd.read_parquet(uri, storage_options=storage_opts or None)

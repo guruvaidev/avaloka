@@ -1,0 +1,24 @@
+{
+  "example_customer_001": {
+    "customer_id": "test_customer_pg_001",
+    "customer_name": "Test Corporation",
+    "database_type": "postgresql",
+    "connection_string": "postgresql://USER:PASSWORD@HOST:5432/DATABASE",
+    "contact_email": "test@testcorp.com",
+    "environment": "testing",
+    "api_key": "<redacted>",
+    "created_at": "2025-09-18T02:58:40.414330",
+    "status": "active",
+    "query_timeout": 30,
+    "max_rows": 1000,
+    "last_health_check": "2025-09-18T02:58:40.415331",
+    "database_info": {
+      "success": true,
+      "database": "sales_db",
+      "user": "postgres",
+      "version": "PostgreSQL",
+      "table_count": 1,
+      "database_type": "postgresql"
+    }
+  }
+}

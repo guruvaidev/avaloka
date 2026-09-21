@@ -357,3 +357,38 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- define "avaloka.localLLMBaseUrl" -}}
 {{- printf "http://%s:%s/v1" (include "avaloka.localLLMServiceName" .) (include "avaloka.localLLMPort" .) -}}
 {{- end -}}
+
+{{/*
+Storage class for a component's PersistentVolumeClaim.
+
+Resolution order: the component's own persistence.storageClass, then the
+chart-wide storage.className, then nothing -- which lets the cluster's default
+StorageClass decide, so a `kind` install keeps working with no configuration.
+
+The empty string is deliberately distinct from unset. `storageClassName: ""`
+disables dynamic provisioning entirely and binds only a pre-created PV, which
+is not what an unset value should mean, so the key is omitted rather than
+emitted empty.
+
+Usage: {{ include "avaloka.storageClass" (dict "ctx" . "component" .Values.redis) }}
+*/}}
+{{- define "avaloka.storageClass" -}}
+{{- $component := .component | default dict -}}
+{{- $persistence := $component.persistence | default dict -}}
+{{- $class := $persistence.storageClass | default (.ctx.Values.storage).className | default "" -}}
+{{- if $class }}
+storageClassName: {{ $class | quote }}
+{{- end }}
+{{- end -}}
+
+{{/*
+Access mode for a component's PVC. ReadWriteOnce is correct for every store in
+this chart: each is a single writer whose volume follows it to whichever node
+it lands on. Replicated *storage* (Longhorn, Ceph, Mayastor) keeps that volume
+available when a node dies; it does not need, and must not have, RWX.
+*/}}
+{{- define "avaloka.accessMode" -}}
+{{- $component := .component | default dict -}}
+{{- $persistence := $component.persistence | default dict -}}
+{{- $persistence.accessMode | default (.ctx.Values.storage).accessMode | default "ReadWriteOnce" -}}
+{{- end -}}

@@ -85,6 +85,7 @@ spec:
   resources:
     requests:
       storage: {{ .Values.milvus.persistence.etcdSize }}
+  {{- include "avaloka.storageClass" (dict "ctx" . "component" .Values.milvus) | nindent 2 }}
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -96,6 +97,7 @@ spec:
   resources:
     requests:
       storage: {{ .Values.milvus.persistence.size }}
+  {{- include "avaloka.storageClass" (dict "ctx" . "component" .Values.milvus) | nindent 2 }}
 {{- end }}
 ---
 apiVersion: v1

@@ -61,6 +61,22 @@ _MILVUS_TOP_K             = int(os.environ.get("MILVUS_TOP_K",                "5
 _CTX_MEMORY_TTL           = int(os.environ.get("MEMORY_PREFERENCES_TTL_SECONDS", str(7 * 24 * 3600)))
 
 
+def _memory_scope(user_id: str, session_id: str) -> str:
+    """The key under which cross-session memory is stored and retrieved.
+
+    A returning user gets a new session_id, so anything filed under the old one
+    is unreachable no matter how durable the store underneath is. The user is
+    the stable identity, and it is the one the user means by "remember this".
+
+    Falls back to session_id when there is no user -- an anonymous session still
+    accumulates context for as long as it lasts, which is the old behaviour.
+    """
+    user_id = (user_id or "").strip()
+    if user_id and user_id != "default":
+        return user_id
+    return session_id
+
+
 def _k_ctxmem_hints(session_id: str) -> str:
     return f"ctxmem:{session_id}:hints"
 
@@ -84,7 +100,9 @@ def _ensure_sse_url(url: str) -> str:
     trimmed = url.rstrip("/")
     return trimmed if trimmed.endswith("/sse") else trimmed + "/sse"
 
-_api_key = os.environ.get("GROQ_API_KEY_PLANNING_AGENT") or os.environ.get("GROQ_API_KEY_CODING_AGENT")
+_api_key = (os.environ.get("GROQ_API_KEY_PLANNING_AGENT")
+            or os.environ.get("GROQ_API_KEY_CODING_AGENT")
+            or os.environ.get("GROQ_API_KEY"))
 
 memory_llm = build_chat_model(
     role="planning",
@@ -222,6 +240,9 @@ If the query is too simple to extract anything meaningful, return {"new_hints": 
         if state is None:
             state = {}
         user_id = state.get("user_id", "default")
+        # Cross-session tiers (Chroma L2, Milvus L4) key off this rather than the
+        # session, so a returning user reaches what an earlier session learned.
+        memory_scope = _memory_scope(user_id, session_id)
 
         circuit_breaker_triggered = False
 
@@ -355,13 +376,32 @@ If the query is too simple to extract anything meaningful, return {"new_hints": 
                 except Exception as mcp_exc:
                     logger.warning(f"MCP schema hot-load skipped (non-fatal): {mcp_exc}")
 
-            user_sig = self.chroma.get_user_signature(session_id)
+            # chroma_client.get_user_signature takes a user_id -- its docstring
+            # says "for a user within the retention window" -- and was being
+            # handed a session_id, so the signature reset on every new login and
+            # never accumulated into anything worth the name.
+            #
+            # Dual-read during the transition: prefer the user-scoped signature,
+            # fall back to the one filed under this session so signatures written
+            # before this change are not stranded.
+            user_sig = self.chroma.get_user_signature(memory_scope)
+            if not user_sig and memory_scope != session_id:
+                user_sig = self.chroma.get_user_signature(session_id)
             if user_sig:
                 logic_sig = user_sig
 
+            # The schema field is named session_id and cannot be renamed without
+            # recreating the collection, but it is only a retrieval scope. It
+            # now holds the memory scope, so insights written in an earlier
+            # session are reachable after a new login. Legacy rows keep their
+            # session key, hence the second read.
             recent_insights = self.milvus.search_similar_insights(
-                session_id, query_vector=self._embed(query), top_k=_MILVUS_TOP_K
+                memory_scope, query_vector=self._embed(query), top_k=_MILVUS_TOP_K
             )
+            if not recent_insights and memory_scope != session_id:
+                recent_insights = self.milvus.search_similar_insights(
+                    session_id, query_vector=self._embed(query), top_k=_MILVUS_TOP_K
+                )
             for record in recent_insights:
                 _add_hint("similar", record["content"])
 
@@ -373,14 +413,14 @@ If the query is too simple to extract anything meaningful, return {"new_hints": 
                 for hint in raw_new_hints:
                     new_hints_this_context.append(hint)
                     # Insert new episodic memory into Layer 4 (Milvus)
-                    self.milvus.insert_insight(session_id, hint, "memory_llm", vector=self._embed(hint))
+                    self.milvus.insert_insight(memory_scope, hint, "memory_llm", vector=self._embed(hint))
                     if _add_hint("llm", hint):
                         self._session_hints_store.setdefault(session_id, []).append(hint)
 
                 new_logic_sig = extracted_memory.get("logic_signature")
                 if new_logic_sig:
                     logic_sig = new_logic_sig
-                    self.chroma.update_user_signature(session_id, logic_sig)
+                    self.chroma.update_user_signature(memory_scope, logic_sig)
 
                 if new_hints_this_context:
                     self._persist_session_memory(session_id)
@@ -411,7 +451,8 @@ If the query is too simple to extract anything meaningful, return {"new_hints": 
         }
 
 
-    def store_user_preference(self, preference: str, session_id: str = "default") -> bool:
+    def store_user_preference(self, preference: str, session_id: str = "default",
+                              scope_id: Optional[str] = None) -> bool:
         """
         Persist an explicitly stated user preference (e.g. "The user's favorite
         column is 'reordered'") so future retrievals surface it as a hint.
@@ -455,7 +496,7 @@ If the query is too simple to extract anything meaningful, return {"new_hints": 
         if is_new:
             threading.Thread(
                 target=self._persist_preference_to_milvus,
-                args=(session_id, preference),
+                args=(scope_id or session_id, preference),
                 daemon=True,
             ).start()
 
@@ -463,10 +504,16 @@ If the query is too simple to extract anything meaningful, return {"new_hints": 
             logger.info(f"🧠 AVALOKA CONTEXT MEMORY STORED (session={session_id}): {preference}")
         return stored
 
-    def _persist_preference_to_milvus(self, session_id: str, preference: str) -> None:
-        """Best-effort durable write for an explicit preference. Never raises."""
+    def _persist_preference_to_milvus(self, scope_id: str, preference: str) -> None:
+        """Best-effort durable write for an explicit preference. Never raises.
+
+        scope_id is the memory scope (user where known, session otherwise), not
+        a session id. An explicit preference -- "always exclude refunds" -- is
+        the clearest case of something a user expects to still hold next time
+        they log in, so filing it under a session was the wrong lifetime.
+        """
         try:
-            self.milvus.insert_insight(session_id, preference, "user_explicit", vector=self._embed(preference))
+            self.milvus.insert_insight(scope_id, preference, "user_explicit", vector=self._embed(preference))
         except Exception as e:
             logger.error(f"Failed to persist user preference to Milvus: {e}")
 
@@ -651,5 +698,8 @@ def store_user_preference(preference: str, state: ETLState) -> bool:
     explicitly requested preference for the session found in state. Never raises.
     """
     session_id = (state or {}).get("session_id", "default")
-    return _orchestrator.store_user_preference(preference, session_id)
+    user_id = (state or {}).get("user_id", "default")
+    return _orchestrator.store_user_preference(
+        preference, session_id, scope_id=_memory_scope(user_id, session_id)
+    )
 

@@ -17,9 +17,16 @@ import requests
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 load_dotenv(os.path.join(project_root, '.env'))
 
-from app.agents.suggestions import (SUGGESTION_PICK_RE, pick_suggestion,
-                                    remember_offered_options,
+from app.agents.suggestions import (MAX_OFFERED_SUGGESTIONS,
+                                    SUGGESTION_PICK_RE, looks_like_a_pick,
+                                    pick_suggestion, remember_offered_options,
+                                    render_suggestions,
+                                    resolve_pick_with_recovery,
                                     resolve_suggestion_reference)
+
+# Rendering the offer lives with parsing and remembering it; this name is kept
+# so existing call sites read unchanged.
+_render_suggestions = render_suggestions
 from app.graph.etl_state import ETLState
 from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 from typing import List, Literal, Optional, Tuple, Union
@@ -701,6 +708,9 @@ def _classify_planner_route(user_input: str, csv_info: str) -> str:
             "Classify the user's immediate request for routing inside the planner.\n"
             "Return JSON only with this schema: {{\"route\": \"train_model\" | \"continue_planning\"}}.\n"
             "Use train_model when the user is asking to create, review, update, confirm, or run a machine-learning model training workflow or training plan.\n"
+            "The request must name a model, training, or prediction task on its own terms. "
+            "A bare instruction to run, do, or start something -- 'run 3', 'do that', 'go ahead' -- "
+            "names no such task and is continue_planning.\n"
             "Use continue_planning for dataset edits, exploratory analysis, summaries, visualizations, infrastructure, scheduling unrelated to model training, or ordinary data transformations.\n"
             "Judge semantic intent from the request and dataset context. Do not emit explanations."
         ),
@@ -903,35 +913,6 @@ def _fallback_planner_action_without_llm(state: ETLState, user_input: str) -> Op
 _SUGGESTION_PICK_RE = SUGGESTION_PICK_RE
 
 
-def _render_suggestions(suggestions) -> str:
-    """Render analysis suggestions as a numbered list that INVITES a choice.
-
-    This used to be a bare `"Here are some suggestions:\n- " + join(...)`, so the
-    reply ended on the final bullet with no way forward. A user who has just
-    been handed nine steps has no idea whether Avaloka can run any of them, and
-    the obvious next move -- "do number 5" -- was never offered.
-
-    Numbering matters as much as the closing line: it gives the user something
-    short to point at. "Run 3" is a reply anyone will type; re-describing a
-    bullet in their own words is not.
-    """
-    items = [str(s).strip() for s in (suggestions or []) if str(s).strip()]
-    if not items:
-        return ("I could not think of a useful analysis for this dataset yet. "
-                "Tell me what you are trying to find out and I will work from "
-                "that.")
-
-    lines = ["Here is what I would look at:", ""]
-    lines += [f"{n}. {item}" for n, item in enumerate(items, 1)]
-    lines += [
-        "",
-        f"Say **\u201crun {1 if len(items) == 1 else '1'}\u201d** (or any number "
-        f"above) and I will carry it out, or describe what you are after in your "
-        f"own words and I will plan from that.",
-    ]
-    return "\n".join(lines)
-
-
 def _maybe_force_plan(state: ETLState, user_input: str) -> bool:
     """Force a deterministic plan when test mode is enabled."""
     if os.getenv(FORCE_PLAN_ENV) == "1":
@@ -1092,8 +1073,9 @@ class PlannerOutput(BaseModel):
     tool_call: ToolCall
 
 
-_planner_api_key = os.environ.get("GROQ_API_KEY_PLANNING_AGENT")
+_planner_api_key = (os.environ.get("GROQ_API_KEY_PLANNING_AGENT")
 
+              or os.environ.get("GROQ_API_KEY"))
 # Active inference provider for the planner (default Groq). The planner runs
 # unchanged against any provider (local OpenAI-spec model in k8s, Groq,
 # OpenRouter, Bedrock, Vertex, Azure) — see app/core/inference.py. Reasoning
@@ -4508,13 +4490,25 @@ def plan_etl_job(state: ETLState) -> ETLState:
     user_input = _normalize_dates(user_input)
     logger.info(f"user input after date normalization is {user_input}")
     # "run 3" only means something if the numbered list we offered is still known.
-    _picked = pick_suggestion(user_input, state)
+    # State first, transcript second: the checkpointer is a MemorySaver, so a
+    # restart or a second worker loses pending_suggestions while the transcript
+    # -- which the UI replays anyway -- still holds the numbered list.
+    _unresolved_pick = False
+    _picked = resolve_pick_with_recovery(user_input, state)
     if _picked is not None:
         logger.info("User picked a previously offered option; expanding it.")
         user_input = _picked
         # The offer has now been taken. Leaving it live meant a "2" typed many
         # turns later silently resolved against a menu the user had forgotten.
         state["pending_suggestions"] = None
+    elif looks_like_a_pick(user_input):
+        # Unmistakably a pick, and the list is gone from both state and
+        # transcript. Routing the bare text is what produced the reported
+        # failure: "run 3" reaching the route classifier reads as "run a
+        # training workflow" better than a third of the time, and the user is
+        # answered by the training agent with a refusal about a pivot table.
+        # A number nothing can resolve is a question to ask, never a guess.
+        _unresolved_pick = True
 
     # ── SECURITY GATE (ANTI-INJECTION PRE-FILTER) ────────────────────────────
     import unicodedata
@@ -5008,6 +5002,26 @@ def plan_etl_job(state: ETLState) -> ETLState:
         })
         return _preserve_infra(new_state)
 
+    if _unresolved_pick:
+        # Ask rather than route. Classifying a bare "run 3" is a coin flip, and
+        # the wrong side of it hands an analysis request to the training agent.
+        logger.info("Pick %r could not be resolved; re-offering instead of routing.", user_input)
+        new_state = state.copy()
+        new_state.update({
+            "messages": state.get("messages", []) + [AIMessage(content=(
+                "Sorry — I have lost track of the list I offered, so I cannot "
+                "tell which one that number refers to.\n\n"
+                "Could you tell me in your own words what you would like me to do? "
+                "If it is easier, say “what can I look at?” and I will put the "
+                "options back up."
+            ))],
+            "ready_to_summarize": False,
+            "ready_to_code": False,
+            "enable_training": False,
+            "pending_suggestions": None,
+        })
+        return _preserve_infra(new_state)
+
     planner_route = (
         "continue_planning"
         if resolved_pending_clarification
@@ -5371,8 +5385,11 @@ def plan_etl_job(state: ETLState) -> ETLState:
                     "enable_training": False,
                     # Remember what was offered so a reply of "run 3" on the next
                     # turn can be resolved back to the suggestion text.
+                    # Same cap as the renderer. Remembering more than was
+                    # shown would let "run 6" resolve to an option the user
+                    # never saw.
                     "pending_suggestions": [str(x).strip() for x in (suggestions or [])
-                                            if str(x).strip()] or None,
+                                            if str(x).strip()][:MAX_OFFERED_SUGGESTIONS] or None,
                 })
                 if not _maybe_force_plan(state, user_input):
                     state.update({

@@ -11,9 +11,7 @@ metadata:
 spec:
   accessModes:
     - ReadWriteOnce
-  {{- with .Values.minio.persistence.storageClass }}
-  storageClassName: {{ . | quote }}
-  {{- end }}
+  {{- include "avaloka.storageClass" (dict "ctx" . "component" .Values.minio) | nindent 2 }}
   resources:
     requests:
       storage: {{ .Values.minio.persistence.size | quote }}

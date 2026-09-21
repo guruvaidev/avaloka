@@ -15,7 +15,8 @@ logger = logging.getLogger(__name__)
 
 TrainingPlanReplyAction = Literal["confirm", "update", "modify_dataset", "cancel", "unclear", "none"]
 
-_api_key = os.environ.get("GROQ_API_KEY_PLANNING_AGENT")
+_api_key = (os.environ.get("GROQ_API_KEY_PLANNING_AGENT")
+              or os.environ.get("GROQ_API_KEY"))
 # Cheap JSON classifier: reasoning stays at "low" (mechanical judgment);
 # AVALOKA_MTA_CLASSIFIER_MODEL=llama-3.3-70b-versatile restores the old model.
 _classifier_llm = build_agent_llm(
