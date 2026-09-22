@@ -218,3 +218,172 @@ a document you have to get signed.
 Forgot on the last commit: `git commit --amend -s`. On several:
 `git rebase --signoff HEAD~<n>`.
 
+---
+
+## Project Structure
+
+```text
+avaloka-dev/
+├── app/
+│   ├── agents/                    # Core agent implementations
+│   │   ├── planner.py             # User-facing planning agent (with persistence tools)
+│   │   ├── planner_graph_agent.py # DAG visualisation agent
+│   │   ├── summarizer.py          # JSON summary generation
+│   │   ├── infra_agent.py         # Infrastructure provisioning
+│   │   ├── coder.py               # Python code generation
+│   │   ├── validator.py           # Three-layer code validation
+│   │   ├── scheduler.py           # Celery/RedBeat task scheduling
+│   │   ├── execution_agent.py     # Local / K8s / Ray code execution
+│   │   ├── visualization_agent.py # Chart generation
+│   │   ├── sampling_agent.py      # PySpark dataset sampling
+│   │   ├── sampling_agent_v2.py   # MCP-based sampling (database-agnostic)
+│   │   ├── sampling_agent_daft.py # Daft-powered portfolio sampling with profiling
+│   │   ├── sampling_async.py      # Async quick-sample helper
+│   │   ├── sampling_persistence.py # Supabase-backed profile cache
+│   │   ├── profiling_agent.py     # Semantic data profiling (domain, quality, column ranking)
+│   │   ├── model_training_agent.py # MTA v1 orchestration node
+│   │   ├── state.py               # CodingAgentState TypedDict
+│   │   ├── mta/                   # MTA v1 modules
+│   │   │   ├── mlflow_integration.py
+│   │   │   ├── config_manager.py
+│   │   │   ├── pytorch_trainer.py
+│   │   │   ├── onnx_exporter.py
+│   │   │   ├── training_task.py
+│   │   │   ├── model_types.py
+│   │   │   ├── error_types.py
+│   │   │   ├── code_analyzer.py
+│   │   │   ├── task_builder.py
+│   │   │   └── state_extractor.py
+│   │   ├── mta_v2/                # MTA v2 – Ray + GCP inference
+│   │   │   ├── agent.py           # LLM tool-calling agent (plan/train/deploy)
+│   │   │   ├── ray_trainer.py     # Ray distributed training
+│   │   │   ├── local_trainer.py   # Local fallback training
+│   │   │   ├── mlflow_manager.py  # MLflow experiment & model registry
+│   │   │   ├── inference.py       # Inference pipeline
+│   │   │   ├── inference_service_manager.py # GKE deployment + API gateway lifecycle
+│   │   │   ├── model.py           # Model wrapper
+│   │   │   ├── schema.py          # Pydantic schemas (HyperparameterConfig, RayConfig, etc.)
+│   │   │   ├── utils.py
+│   │   │   ├── loader/            # SQL and URL data loaders
+│   │   │   ├── gcp/               # GCP operations (13 modules)
+│   │   │   │   ├── create_api_gateway.py    # API Gateway provisioning & API key management
+│   │   │   │   ├── run_inference_service.py # GKE inference service deployment
+│   │   │   │   ├── create_gke_cluster.py
+│   │   │   │   ├── create_ray_cluster.py
+│   │   │   │   ├── submit_ray_job.py
+│   │   │   │   └── ...
+│   │   │   ├── inference_service_image/  # Containerized inference service
+│   │   │   │   ├── server.py             # FastAPI inference server
+│   │   │   │   ├── inference.py
+│   │   │   │   ├── model.py
+│   │   │   │   ├── mlflow_manager.py
+│   │   │   │   ├── schema.py
+│   │   │   │   └── gcp/                  # GCP ops mirror (inside container)
+│   │   │   └── training_docker_image/    # Containerized Ray training job
+│   │   └── data_transfer_agent/   # Daft-based ETL code generation
+│   │       ├── data_transfer_agent.py
+│   │       ├── daft_coder.py
+│   │       ├── daft_execution.py
+│   │       ├── daft_validator.py
+│   │       └── dta_state.py
+│   ├── api/                       # HTTP API and workflow
+│   │   ├── server.py              # FastAPI backend (sessions, uploads, asset retrieval)
+│   │   ├── workflow.py            # LangGraph workflow orchestration
+│   │   ├── graph_runtime.py       # Graph execution runtime
+│   │   ├── langgraph_app.py       # LangGraph app setup
+│   │   ├── schemas.py             # Pydantic request/response schemas
+│   │   ├── cloud_connections.py   # Cloud storage connection helpers
+│   │   ├── helpers.py             # API utility functions
+│   │   └── config.py              # API configuration
+│   ├── graph/                     # State management
+│   │   └── etl_state.py           # ETLState TypedDict (84+ fields)
+│   ├── execution/                 # Execution routing
+│   │   ├── router.py              # local / Ray / k8s selection from plan + fidelity
+│   │   ├── estimator.py           # cost & runtime estimation
+│   │   └── environment.py         # environment detection
+│   ├── missions/                  # Canonical mission model
+│   │   ├── compiler.py            # intent → DataMission
+│   │   └── schema.py
+│   ├── interfaces/                # Front doors sharing one core
+│   │   ├── service.py             # shared plan_mission / planned_to_dict
+│   │   ├── cli/main.py            # mission-planning CLI (`python -m app.interfaces.cli.main`)
+│   │   └── mcp/server.py          # MCP server exposing the same tools
+│   ├── serve/                     # Serving
+│   │   └── inference.py           # Ray Serve inference app (app.serve.inference:app)
+│   ├── infra/                     # Infrastructure & multi-cloud deployment
+│   │   ├── cluster_bootstrap.py   # provision|connect driver
+│   │   ├── install_k8s.py         # preflight + KubeRay operator install
+│   │   ├── ray_manager.py         # Ray/KubeRay lifecycle (RayCluster, RayService, connect)
+│   │   ├── deploy_stack.py        # build/side-load images + helm upgrade --install
+│   │   ├── cloud_provisioner.py   # cluster lifecycle dispatch
+│   │   ├── k8s_invoker.py         # Kubernetes operations
+│   │   ├── providers/             # ClusterProvider abstraction
+│   │   │   ├── factory.py         # local | gcp | aws  (azure = roadmap)
+│   │   │   ├── local_kind.py      # kind (Kubernetes-in-Docker)
+│   │   │   ├── gcp_gke.py         # Google Kubernetes Engine
+│   │   │   ├── aws_eks.py         # Amazon EKS
+│   │   │   └── base.py            # run_command + provider interface
+│   │   ├── config/                # Kubernetes configurations
+│   │   ├── manifests/             # Helm values (Postgres, Kafka, Milvus, etc.)
+│   │   └── python_app/            # Containerized Python app
+│   ├── core/                      # Shared runtime utilities
+│   │   ├── celery_app.py          # Celery/RedBeat scheduler backend
+│   │   ├── cache.py               # Redis cache with circuit-breaker
+│   │   ├── storage.py             # GCS / S3 blob store abstraction (IBlobStore)
+│   │   └── settings.py            # Pydantic settings
+│   ├── mcp_server/                # Multi-tenant MCP server
+│   │   ├── multi_tenant_mcp_server.py
+│   │   └── customer_dbs.py
+│   ├── rag/                       # RAG-powered code retrieval
+│   │   ├── daft_ingest.py
+│   │   ├── daft_retrieval.py
+│   │   └── daft_embeddings/
+│   ├── services/                  # Application services
+│   │   ├── persistence_service.py # Async asset persistence (cloud storage + GitHub registry)
+│   │   ├── session_service.py     # Thread-based session store
+│   │   └── storage_service.py     # Storage abstraction layer
+│   └── sample_data/               # Test datasets (35+ subdirectories)
+├── file_handler/                  # File-format connectors
+│   ├── handler.py                 # Unified format dispatcher
+│   ├── csv_connector.py
+│   ├── excel_connector.py         # Excel / xlsx / xls support
+│   ├── parquet_connector.py
+│   ├── avro_connector.py
+│   ├── delta_connector.py
+│   ├── iceberg_connector.py
+│   ├── json_connector.py
+│   └── xml_connector.py
+├── tests/                         # Comprehensive test suite (55+ files)
+│   ├── sampler/                   # Sampling agent tests
+│   ├── infra/                     # Infrastructure tests
+│   ├── execution-agent/           # Execution agent tests
+│   ├── test_mta_agent.py          # MTA v1 agent tests
+│   ├── test_mta_training.py       # MTA v1 training tests
+│   ├── test_mta_v2_*.py           # MTA v2 tests (unit, training, integration)
+│   ├── test_daft*.py              # Daft / DTA / RAG tests
+│   ├── test_ray*.py               # Ray execution tests
+│   ├── test_profiling_agent_standalone.py
+│   ├── test_mcp_server_integration.py
+│   ├── test_scheduler_integration.py
+│   ├── test_wbs06_asset_persistence.py # Asset persistence tests
+│   ├── test_connectors.py         # File connector tests
+│   └── test_*.py                  # Integration and E2E tests
+├── deploy/                        # Kubernetes deployment
+│   ├── Makefile                   # make up / connect / status / down
+│   ├── clusters/kind-cluster.yaml # local kind topology
+│   ├── docker/                    # Dockerfile.avaloka, Dockerfile.ray
+│   ├── helm/avaloka/              # avaloka app Helm chart
+│   ├── helm/ray/                  # RayCluster + RayService CRs
+│   └── avaloka/values/            # per-cloud overlays (gke/eks/aks/minikube/onprem)
+├── ui/                            # React.js web UI (built with Lovable) + local Supabase
+├── docs/                          # Architecture, deployment, API, CLI guides
+├── docs/research/                # Research paper: draft, ICLR source, PDF
+├── requirements.txt               # Python dependencies
+├── docker-compose.scheduler.yml   # Celery/RedBeat + Redis stack
+├── langgraph.json                 # LangGraph CLI config
+├── kind-ray-local-multi.yaml      # Kind cluster config for local Ray
+├── bitbucket-pipelines.yml        # CI/CD pipeline
+└── README.md                      # This file
+```
+
+---

@@ -1,0 +1,84 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Avaloka Documentation</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  :root{--fg:#1a1a1a;--muted:#5a6270;--line:#e3e6ea;--accent:#2d5b8e;--bg:#fff;--card:#fafbfc}
+  @media (prefers-color-scheme:dark){
+    :root{--fg:#e6e8ea;--muted:#9aa4b2;--line:#2a2f37;--accent:#7fb0e8;--bg:#14171a;--card:#1b1f24}
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:0 1.25rem 4rem;background:var(--bg);color:var(--fg);
+       font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}
+  .wrap{max-width:60rem;margin:0 auto}
+  header{padding:3rem 0 1.5rem;border-bottom:1px solid var(--line)}
+  h1{margin:0 0 .35rem;font-size:2rem;letter-spacing:-.02em}
+  .tag{color:var(--muted);margin:0;font-size:1.05rem}
+  h2{margin:2.5rem 0 .25rem;font-size:1.15rem;letter-spacing:.02em;text-transform:uppercase;color:var(--muted)}
+  .lead{margin:.15rem 0 1rem;color:var(--muted);font-size:.95rem}
+  .grid{display:grid;gap:.75rem;grid-template-columns:repeat(auto-fill,minmax(17rem,1fr))}
+  a.card{display:block;padding:.85rem 1rem;border:1px solid var(--line);border-radius:8px;
+         background:var(--card);text-decoration:none;color:inherit;transition:border-color .15s}
+  a.card:hover{border-color:var(--accent)}
+  a.card b{display:block;color:var(--accent);font-size:.98rem;margin-bottom:.2rem}
+  a.card span{color:var(--muted);font-size:.86rem;line-height:1.45;display:block}
+  footer{margin-top:3.5rem;padding-top:1.25rem;border-top:1px solid var(--line);color:var(--muted);font-size:.87rem}
+  footer a{color:var(--accent)}
+  code{background:var(--card);border:1px solid var(--line);border-radius:4px;padding:.1em .35em;font-size:.88em}
+</style>
+<div class="wrap">
+<header>
+  <h1>Avaloka Documentation</h1>
+  <p class="tag">A team of AI agents that does data science work end to end — ingestion, analysis, training, serving.</p>
+</header>
+
+<h2>Start here</h2>
+<p class="lead">Running it for the first time.</p>
+<div class="grid">
+  <a class="card" href="INSTALL.md"><b>Install Guide</b><span>Requirements, one-command install, Kubernetes vs. local processes, offline and air-gapped, and what goes wrong on a first run.</span></a>
+  <a class="card" href="USER_GUIDE.md"><b>User Guide</b><span>A hands-on walkthrough: sign in, upload, prompt, connect a database, train a model. <em>PDF also available.</em></span></a>
+  <a class="card" href="../README_CLI.md"><b>CLI Guide</b><span>The <code>avaloka</code> command — analyse a file, train a model, chat about a dataset, from a terminal.</span></a>
+  <a class="card" href="TECHNICAL_USER_GUIDE.md"><b>Technical User Guide</b><span>Every capability, the prompts that invoke it, supported formats, endpoints and edition gates.</span></a>
+</div>
+
+<h2>Running it for real</h2>
+<p class="lead">Deployment, operations, and the HTTP surface.</p>
+<div class="grid">
+  <a class="card" href="deployment.md"><b>Kubernetes Deployment</b><span><code>kind</code> and small self-managed clusters, Ray &amp; KubeRay, the Helm chart, storage classes, and how to verify a deployment.</span></a>
+  <a class="card" href="operations.md"><b>Operations</b><span>Beyond a first try — MLflow tracking, artifact storage, inference, troubleshooting.</span></a>
+  <a class="card" href="api.md"><b>HTTP API</b><span>The FastAPI surface: upload → chat → assets → models.</span></a>
+  <a class="card" href="versions.md"><b>Version Matrix</b><span>The single source of truth for pinned versions — Python, Ray, Daft, images.</span></a>
+</div>
+
+<h2>How it works</h2>
+<p class="lead">The design, and the reasoning behind it.</p>
+<div class="grid">
+  <a class="card" href="architecture.md"><b>Architecture</b><span>The agent team, the request lifecycle, and why each dependency exists.</span></a>
+  <a class="card" href="context-memory.md"><b>Context &amp; Memory</b><span>The four-tier memory plane — what each tier holds, how a hint is composed, why the circuit breaker exists.</span></a>
+  <a class="card" href="design/"><b>Design Notes</b><span>Where the system is heading: agent experience, the loop &amp; graph engine, telemetry.</span></a>
+  <a class="card" href="research/"><b>Research</b><span>The paper behind the system — draft, ICLR submission source, and the published PDF.</span></a>
+</div>
+
+<h2>Evidence</h2>
+<p class="lead">What was measured, and what the measurements do not cover.</p>
+<div class="grid">
+  <a class="card" href="benchmarks.md"><b>Benchmarks</b><span>The scorecard you can reproduce with one command — and an honest account of what it does not measure.</span></a>
+  <a class="card" href="test-reports/1.6-reliability-measurements.md"><b>Reliability Measurements</b><span>Routing accuracy across models, conversational fixes, and the ingest results, each produced by running the thing measured.</span></a>
+  <a class="card" href="testing.md"><b>Testing</b><span>Test tiers, markers, and how to run each — including which suites need a live service.</span></a>
+  <a class="card" href="test-reports/"><b>Test Reports</b><span>Per-case evidence behind the claims made in the README.</span></a>
+</div>
+
+<h2>Project</h2>
+<p class="lead">Editions, licensing, and how to take part.</p>
+<div class="grid">
+  <a class="card" href="EDITIONS.md"><b>Editions</b><span>What Open Source / Free / Professional / Enterprise each include, and why each boundary exists.</span></a>
+  <a class="card" href="../CONTRIBUTING.md"><b>Contributing</b><span>Development setup, coding conventions, testing tiers, PR workflow.</span></a>
+  <a class="card" href="../SECURITY.md"><b>Security Policy</b><span>How to report a vulnerability privately.</span></a>
+  <a class="card" href="../CHANGELOG.md"><b>Changelog</b><span>What changed, release by release.</span></a>
+</div>
+
+<footer>
+  Avaloka is open source under the <a href="../LICENSE">Apache License 2.0</a>.
+  Start at the <a href="../README.md">README</a>, or open an issue if something here is wrong or missing.
+</footer>
+</div>
