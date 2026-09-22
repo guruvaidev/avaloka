@@ -14,17 +14,18 @@ It was about instruments — that scientists were spending their time on the
 plumbing of capturing, cleaning, moving and analysing data instead of on the
 questions.
 
-Two decades on, the plumbing is still there. Avaloka is an attempt at the
-instrument. You state the question in plain language and a team of agents —
-planner, profiler, coder, validator, executor, trainer, visualizer — samples
-the data, plans the analysis, writes and validates the Python, runs it locally
-or on a Ray cluster, trains a model, serves it, and records every artifact
-along the way.
+Two decades on, the plumbing is still there, and it still stands between a
+curious person and an answer. Avaloka is an attempt at the instrument. You
+state the question in plain language and a team of agents — planner, profiler,
+coder, validator, executor, trainer, visualizer — samples the data, plans the
+analysis, writes and validates the Python, runs it locally or on a Ray cluster,
+trains a model, serves it, and records every artifact along the way.
 
-An instrument is only as good as its calibration, so Avaloka tests its own
-answers: it refuses to train on leaked data, makes every model beat a trivial
-baseline, and checks the prose it writes against the numbers it computed.
-Where that evidence is thin, [we say where](docs/test-reports/three-pillar-coverage.md).
+An instrument is only as good as its calibration, so three of those agents
+exist to check the other six. Avaloka refuses to train on leaked data, makes
+every model beat a trivial baseline, and checks the prose it writes against the
+numbers it computed. Where that evidence is thin,
+[we say where](docs/test-reports/three-pillar-coverage.md).
 
 📖 **[Full documentation](docs/index.html)** · 🚀 **[Install Guide](docs/INSTALL.md)** · 📊 **[Benchmarks](docs/benchmarks.md)**
 
@@ -46,8 +47,9 @@ pure noise, an earlier version of Avaloka's training path returned verdict
 learned nothing as production-ready. Our own benchmark scored 1.00 before *and*
 after the fix, because no task in it carried the shape that triggers the bug.
 
-No model choice fixes either of those. What fixes them is a harness that
-computes its own baseline, and a benchmark that can fail.
+No model choice fixes that, because a model has no privileged access to whether
+its own answer is true. What fixes it is a harness that computes its own
+baseline, and a benchmark that can fail.
 
 > *A benchmark that cannot fail is a statement of intent, not a measurement.*
 
