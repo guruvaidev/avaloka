@@ -32,7 +32,18 @@ import pytest
 import pytest_asyncio
 
 # ── helpers ──────────────────────────────────────────────────────────────────
-SKIP_GCS = os.getenv("AVALOKA_TEST_SKIP_GCS") == "1"
+# Skip when the credentials are absent, not only when someone remembers to opt
+# out. As an opt-out these flags defaulted to "run", so a checkout with no GCS
+# credentials -- which is every CI run and every new contributor -- attempted
+# real uploads and failed 22 tests that had nothing to say about the code. A
+# test that cannot reach its dependency should report that it was skipped and
+# why, not report the code as broken.
+_GCS_CREDENTIALS = bool(
+    os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+    or os.getenv("GOOGLE_CLOUD_PROJECT")
+    or os.getenv("AVALOKA_GCS_BUCKET")
+)
+SKIP_GCS = os.getenv("AVALOKA_TEST_SKIP_GCS") == "1" or not _GCS_CREDENTIALS
 SKIP_GIT = os.getenv("AVALOKA_TEST_SKIP_GIT") == "1"
 
 GCS_BUCKET    = os.getenv("AVALOKA_GCS_BUCKET", "avaloka-test-user-filestore")

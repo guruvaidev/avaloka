@@ -32,38 +32,59 @@ from unittest.mock import MagicMock, patch
 # Venv-isolation: stub out packages that may be missing
 # ---------------------------------------------------------------------------
 
+#: Names this module actually replaced in sys.modules. Only these may have
+#: mocks assigned onto them -- see _mock_attrs.
+_STUBBED: set = set()
+
+
 def _stub(name):
     """Register a throwaway module so `import <name>` never raises.
 
-    Only stubs what is genuinely unimportable. These entries are never torn
-    down, so stubbing a module that really exists leaves a MagicMock in
-    sys.modules for the whole session and every later test module that imports
-    it gets the mock instead of the real thing.
+    Returns the module to configure, or None when the real package is present
+    and must be left alone.
+
+    The docstring here used to describe the bug rather than prevent it: this
+    stubbed every name in the list, real or not, and "these entries are never
+    torn down". Stubbing a package that genuinely exists put a copy in
+    sys.modules for the rest of the session -- and the assignments below then
+    set HumanMessage, AIMessage and BaseMessage to MagicMock on it. Every test
+    module imported after this one therefore got MagicMock where it expected a
+    message class, which is why tests/test_mta_v2_unit.py failed 30 assertions
+    in a full run and passed all 82 on its own.
+
+    So the rule is now the one the old docstring claimed: stub only what is
+    genuinely unimportable. With a complete install nothing here is stubbed and
+    nothing leaks; in a minimal venv the stubs still do their job.
     """
     if name in sys.modules:
-        return sys.modules[name]
+        return sys.modules[name] if name in _STUBBED else None
 
     try:
-        real = importlib.import_module(name)
+        importlib.import_module(name)
     except Exception:
-        real = None
+        pass
+    else:
+        return None                     # real package present: do not touch it
 
     mod = types.ModuleType(name)
-    if real is not None:
-        # Copy the real module's symbols so later importers still resolve them,
-        # but keep this a *separate* object: callers below assign mocks onto the
-        # result, and doing that to the real module would corrupt it for every
-        # other test in the session.
-        for attr_name, attr_value in vars(real).items():
-            if not attr_name.startswith("__"):
-                setattr(mod, attr_name, attr_value)
-        mod.__file__ = getattr(real, "__file__", None)
-    else:
-        # Make attribute access return another stub so `from x.y import z` works
-        mod.__getattr__ = lambda _n: MagicMock()
-
+    # Attribute access returns another stub so `from x.y import z` works.
+    mod.__getattr__ = lambda _n: MagicMock()
     sys.modules[name] = mod
+    _STUBBED.add(name)
     return mod
+
+
+def _mock_attrs(name, **attrs):
+    """Assign mock attributes, but only onto a module we actually stubbed.
+
+    Doing this to a real module corrupts it for every later test in the
+    session, which is the failure mode this file used to cause.
+    """
+    if name not in _STUBBED:
+        return
+    mod = sys.modules[name]
+    for attr, value in attrs.items():
+        setattr(mod, attr, value)
 
 # Core stubs — must be registered before any app imports
 for _pkg in [
@@ -89,60 +110,41 @@ for _pkg in [
 ]:
     _stub(_pkg)
 
-# groq.APIError
-_groq = sys.modules["groq"]
-_groq.APIError = type("APIError", (Exception,), {})
+# Mock attributes, applied only to modules that were actually stubbed. When the
+# real packages are installed every call below is a no-op, which is the whole
+# point: this file must not reach into a working langchain_core and replace its
+# message classes with MagicMock for the rest of the session.
+_mock_attrs("groq", APIError=type("APIError", (Exception,), {}))
+_mock_attrs("langchain_groq", ChatGroq=MagicMock)
+_mock_attrs("langchain_core.messages",
+            AIMessage=MagicMock, HumanMessage=MagicMock,
+            BaseMessage=MagicMock, SystemMessage=MagicMock)
+_mock_attrs("langchain_core.prompts", ChatPromptTemplate=MagicMock)
+_mock_attrs("pymilvus", **{a: MagicMock() for a in (
+    "connections", "Collection", "CollectionSchema", "FieldSchema",
+    "DataType", "utility")})
+_mock_attrs("celery.utils.log", get_logger=MagicMock(return_value=MagicMock()))
+_mock_attrs("celery", Celery=MagicMock,
+            shared_task=lambda *a, **kw: (lambda f: f))
+_mock_attrs("redbeat.schedulers", **{n: MagicMock for n in (
+    "RedBeatScheduler", "RedBeatSchedulerEntry", "RedBeatJSONEncoder",
+    "RedBeatJSONDecoder", "get_redis", "ensure_conf")})
+_mock_attrs("langgraph.graph", StateGraph=MagicMock, END="END")
+_mock_attrs("app.agents.infra_agent", infra_agent_node=MagicMock)
+_mock_attrs("app.infra.ray_job_runner", run_rayjob_from_yaml=MagicMock)
 
-# langchain_groq.ChatGroq
-sys.modules["langchain_groq"].ChatGroq = MagicMock
-
-# langchain_core.messages named imports
-_lcm = sys.modules["langchain_core.messages"]
-for _cls_name in ("AIMessage", "HumanMessage", "BaseMessage", "SystemMessage"):
-    setattr(_lcm, _cls_name, MagicMock)
-
-# langchain_core.prompts
-sys.modules["langchain_core.prompts"].ChatPromptTemplate = MagicMock
-
-# pymilvus top-level attributes
-_pym = sys.modules["pymilvus"]
-for _attr in ("connections", "Collection", "CollectionSchema", "FieldSchema",
-              "DataType", "utility"):
-    setattr(_pym, _attr, MagicMock())
-
-# celery.utils.log
-sys.modules["celery.utils.log"].get_logger = MagicMock(return_value=MagicMock())
-sys.modules["celery"].Celery = MagicMock
-sys.modules["celery"].shared_task = lambda *a, **kw: (lambda f: f)  # passthrough decorator
-
-# redbeat.schedulers — all names as mocks
-_rb = sys.modules["redbeat.schedulers"]
-for _n in ("RedBeatScheduler", "RedBeatSchedulerEntry", "RedBeatJSONEncoder",
-           "RedBeatJSONDecoder", "get_redis", "ensure_conf"):
-    setattr(_rb, _n, MagicMock)
-
-# langgraph.graph — StateGraph and END
-_lg = sys.modules["langgraph.graph"]
-_lg.StateGraph = MagicMock
-_lg.END = "END"
-
-# app.core.celery_app — expose celery_app and AvalokaScheduler
-_ca = sys.modules["app.core.celery_app"]
-_ca.celery_app = MagicMock()
-_ca.AvalokaScheduler = MagicMock
-sys.modules["app.core"].celery_app = _ca
-
-# app.agents.infra_agent
-sys.modules["app.agents.infra_agent"].infra_agent_node = MagicMock
-
-# Wire sub-modules into parents
-sys.modules["langchain_core"].messages = sys.modules["langchain_core.messages"]
-sys.modules["langchain_core"].prompts  = sys.modules["langchain_core.prompts"]
-sys.modules["redbeat"].schedulers      = sys.modules["redbeat.schedulers"]
-sys.modules["langgraph"].graph         = sys.modules["langgraph.graph"]
-sys.modules["app.infra"].k8s_invoker     = sys.modules["app.infra.k8s_invoker"]
-sys.modules["app.infra"].ray_job_runner  = sys.modules["app.infra.ray_job_runner"]
-sys.modules["app.infra.ray_job_runner"].run_rayjob_from_yaml = MagicMock
+# Parent-package wiring, also only where we stubbed the parent.
+for _parent, _child, _attr in (
+    ("langchain_core", "langchain_core.messages", "messages"),
+    ("langchain_core", "langchain_core.prompts", "prompts"),
+    ("redbeat", "redbeat.schedulers", "schedulers"),
+    ("langgraph", "langgraph.graph", "graph"),
+    ("app.infra", "app.infra.k8s_invoker", "k8s_invoker"),
+    ("app.infra", "app.infra.ray_job_runner", "ray_job_runner"),
+    ("app.core", "app.core.celery_app", "celery_app"),
+):
+    if _parent in _STUBBED and _child in sys.modules:
+        setattr(sys.modules[_parent], _attr, sys.modules[_child])
 
 
 
