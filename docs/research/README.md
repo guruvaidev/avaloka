@@ -10,18 +10,40 @@ The paper behind Avaloka, and its sources.
 | `paper-draft.md` | Working draft in markdown |
 | `fig/` | Figures |
 
+## ⚠️ The compiled PDF is out of date
+
+[`Avaloka-Research-Paper.pdf`](../Avaloka-Research-Paper.pdf) **predates a
+correction and should not be cited until it is rebuilt.** It contains a
+reference to *"Agents in the Wild: Safety, Security, and Beyond,
+arXiv:2508.05002"*. That paper does not exist: arXiv:2508.05002 is
+**"AgenticData: An Agentic Data Analytics System for Heterogeneous Data"**
+(Sun et al.), and *Agents in the Wild* is an ICLR 2026 **workshop**, not a
+paper. The `.tex`, the `.bib` and `paper-draft.md` in this directory are
+corrected; the PDF is not, because it cannot currently be rebuilt — see below.
+
 ## Building it
 
-The source was written against the ICLR 2026 template. Those class and style
-files are **not** vendored here — `natbib.sty`, `fancyhdr.sty`, the conference
-`.sty` and `.bst`, and `math_commands.tex` were removed because they are
-third-party LaTeX packages under their own licences, which do not belong in an
-Apache-2.0 tree. A build artefact (`.aux`) and a duplicate of the compiled PDF
-went with them.
+`avaloka-paper.tex` was written against the **ICLR 2026** template and will not
+compile without it. Line 3 is `\usepackage{iclr2026_conference,times}` and line
+6 is `\input{math_commands.tex}`.
 
-To build, fetch the template you are submitting to and place `avaloka-paper.tex`
-alongside it. Most venues require their own template anyway, so vendoring one
-would have been wrong even without the licensing question.
+Those files are deliberately **not** vendored here. `iclr2026_conference.sty`,
+`iclr2026_conference.bst`, `natbib.sty`, `fancyhdr.sty` and `math_commands.tex`
+are third-party LaTeX packages under their own licences and do not belong in an
+Apache-2.0 tree.
+
+To build as-is, download the ICLR 2026 author kit and unpack it alongside
+`avaloka-paper.tex`:
+
+```bash
+# from https://github.com/ICLR/Master-Template (or the ICLR 2026 CFP page)
+pdflatex avaloka-paper.tex && bibtex avaloka-paper && pdflatex avaloka-paper.tex
+```
+
+Since the paper is no longer being submitted to ICLR, the more useful option is
+to reformat it for the venue you are targeting — every venue mandates its own
+template anyway, which is the second reason vendoring one would have been
+wrong. See [`submissions/`](submissions/) for work already done that way.
 
 ## Note on scope
 

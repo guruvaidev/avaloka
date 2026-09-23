@@ -110,7 +110,7 @@ Avaloka currently assumes access to configured infrastructure (Redis, Kubernetes
 Avaloka demonstrates how a multi-agent, stateful workflow can operationalize conversational data tasks while retaining validation guarantees and operational controls. The system unifies planning, coding, training, scheduling, and visualization into a single orchestration layer suitable for ETL and ML workflows.
 
 ## References
-[1] Agents in the Wild. arXiv:2508.05002, 2025. https://arxiv.org/abs/2508.05002
+[1] AgenticData: An Agentic Data Analytics System for Heterogeneous Data. Sun et al. arXiv:2508.05002, 2025. https://arxiv.org/abs/2508.05002
 [2] DS-STAR. arXiv:2509.21825, 2025. https://arxiv.org/abs/2509.21825
 [3] DABstep benchmark. https://huggingface.co/spaces/adyen/DABstep
 [4] Groq Llama 3.3 70B Versatile (model identifier: `llama-3.3-70b-versatile`).

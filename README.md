@@ -158,10 +158,10 @@ scored 1.00 before *and* after five real defects were fixed, because no task
 carried the shape that triggers them. Full scorecard and an account of what it
 does **not** measure: [docs/benchmarks.md](docs/benchmarks.md).
 
-**Task design** is aligned with multi-step data-agent benchmarks — DABstep
-(Adyen / Hugging Face) and *Agents in the Wild* — as described in the
-[research paper](docs/research/). We have not run those suites end to end and
-do not claim scores on them.
+**Task design** is aligned with the multi-step data-agent framing established
+by DABstep (Adyen / Hugging Face), as described in the
+[research paper](docs/research/). We have not run that suite end to end and
+claim no score on it — alignment of design is not a score.
 
 **Tests.** `pytest -m "not cluster and not cloud and not integration"` is the
 gate that must stay green: unit and contract tests, no cluster and no network.
