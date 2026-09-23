@@ -6,6 +6,43 @@
 
 replicaCount: 1
 
+# ---------------------------------------------------------------------------
+# Storage
+# ---------------------------------------------------------------------------
+# Every stateful component in this chart is a StatefulSet with a
+# volumeClaimTemplate, so its volume follows the pod to whichever node it is
+# rescheduled onto. That is what survives a node going down -- NOT the replica
+# count.
+#
+# Replica counts stay at 1 for the databases on purpose. Postgres, Redis and
+# Chroma are single-writer: setting replicas to 3 gives three independent
+# empty stores, not a highly-available one. Real database HA needs replication
+# the database itself understands -- CloudNativePG or Patroni for Postgres,
+# Sentinel or Cluster for Redis -- which is a larger operational commitment
+# than a laptop or a small cluster should be asked to make. Point the chart at
+# a managed service instead (postgres.enabled=false + postgres.externalUrl,
+# redis.enabled=false + redis.externalUrl) when you need that.
+#
+# Durability across node failure therefore comes from the StorageClass. Use one
+# that replicates each volume across nodes:
+#
+#   className: longhorn    # CNCF, 3-way replication, one-command install.
+#                          # The recommended default for on-prem / bare metal.
+#   className: rook-ceph-block   # heavier; use when you also want object+file
+#   className: mayastor    # OpenEBS; NVMe-class latency
+#   className: gp3 | premium-rwo | standard-rwo   # cloud CSI (already replicated
+#                          # within a zone; use a regional class to survive one)
+#
+# Left unset, the cluster's default StorageClass is used, which keeps `kind`
+# and Docker Desktop working with no configuration. A single-node default
+# class (kind's `standard`, local-path) stores data on that one node's disk:
+# it survives a pod restart, but not the loss of the node.
+storage:
+  # Chart-wide default. Any component may override via its own
+  # persistence.storageClass.
+  className: ""
+  accessMode: ReadWriteOnce
+
 # Avaloka's own images, published to GHCR by .github/workflows/images.yml.
 #
 # These used to be bare names -- `avaloka-api:latest` -- which resolve to Docker
@@ -49,6 +86,15 @@ redis:
   pullPolicy: IfNotPresent
   port: 6379
   externalUrl: ""   # used only when redis.enabled=false, e.g. redis://my-redis:6379
+  persistence:
+    enabled: true
+    size: 8Gi
+    storageClass: ""        # falls back to storage.className
+  # Append-only file. A volume alone is not durability: with RDB snapshots only
+  # (the redis:7 default, save 3600/300/60), an unclean shutdown discards every
+  # write since the last snapshot -- up to an hour of schema cache and session
+  # hints. appendfsync everysec bounds that loss to one second.
+  appendOnly: true
   resources:
     requests:
       cpu: 50m
@@ -112,6 +158,10 @@ postgres:
   password: avaloka
   database: avaloka
   externalUrl: ""   # used only when postgres.enabled=false
+  persistence:
+    enabled: true
+    size: 20Gi
+    storageClass: ""        # falls back to storage.className
   resources:
     requests:
       cpu: 100m
@@ -277,43 +327,49 @@ mcp:
 # app. When enabled, the avaloka API's SUPABASE_JWT_SECRET is set to supabase.jwtSecret
 # so it accepts UI-issued JWTs.
 supabase:
-  # Disabled in the general chart because the bundled credentials below are for
-  # loopback-only development. The local bootstrap enables it explicitly.
-  enabled: true
-  # WARNING - PUBLIC DEMO CREDENTIALS, SAFE FOR LOCAL DEVELOPMENT ONLY.
+  # OFF by default, and the bundled credentials are gone.
   #
-  # These three values are Supabase's PUBLISHED self-hosted demo keys. They are
-  # printed in Supabase's own documentation, so anyone can mint a service_role
-  # token against a deployment that still uses them - full read/write on every
-  # table, bypassing row-level security.
+  # This block used to ship `enabled: true` alongside Supabase's PUBLISHED
+  # self-hosted demo keys. Those keys are in Supabase's own documentation, so
+  # any deployment that kept them let anyone mint a service_role token: full
+  # read/write on every table, row-level security bypassed. A public repository
+  # must not carry that as a default, and the comment directly above the value
+  # already said "disabled in the general chart" while the value said otherwise.
   #
-  # They are defaulted here so `helm install` yields a working local cluster
-  # with no setup. That convenience is the only reason they exist.
+  # app/infra/deploy_stack.py sets supabase.enabled explicitly for the paths
+  # that want it, so nothing that worked before stops working.
+  enabled: false
+
+  # Refuse to render while credentials are missing or still the public demo
+  # ones. On by default now: the safe direction is to fail an install rather
+  # than to quietly stand up a forgeable auth stack.
+  requireOwnCredentials: true
+
+  # Supply these at install time. They are deliberately empty here so that no
+  # usable secret lives in a public repository:
   #
-  # BEFORE ANY SHARED OR INTERNET-REACHABLE DEPLOYMENT, replace all three:
   #   jwtSecret=$(openssl rand -base64 48 | tr -d '\n')
-  #   then mint anonKey and serviceKey signed with it (HS256):
-  #     header  {"alg":"HS256","typ":"JWT"}
-  #     payload {"role":"anon","iss":"supabase","iat":<now>,"exp":<later>}
-  #     payload {"role":"service_role","iss":"supabase","iat":<now>,"exp":<later>}
-  #   helm upgrade ... --set supabase.jwtSecret=... \
-  #                    --set supabase.anonKey=... --set supabase.serviceKey=...
+  #   # then mint anonKey and serviceKey, HS256-signed with it:
+  #   #   header  {"alg":"HS256","typ":"JWT"}
+  #   #   payload {"role":"anon","iss":"supabase","iat":<now>,"exp":<later>}
+  #   #   payload {"role":"service_role","iss":"supabase","iat":<now>,"exp":<later>}
   #
-  # Set supabase.requireOwnCredentials=true to make the chart REFUSE to render
-  # while these demo values are still in place.
+  #   helm upgrade --install avaloka deploy/helm/avaloka \
+  #     --set supabase.enabled=true \
+  #     --set-string supabase.jwtSecret="$SUPABASE_JWT_SECRET" \
+  #     --set-string supabase.anonKey="$SUPABASE_ANON_KEY" \
+  #     --set-string supabase.serviceKey="$SUPABASE_SERVICE_KEY"
   #
-  # Standard Supabase self-hosted demo secret + keys (public demo values).
-  # anonKey/serviceKey MUST be HS256-signed with jwtSecret above — PostgREST verifies
-  # the signature (PGRST_JWT_SECRET) and answers PGRST301 JWSInvalidSignature otherwise,
-  # which makes the UI able to log in but unable to read a single table. Regenerate with:
-  #   header  {"alg":"HS256","typ":"JWT"}
-  #   payload {"role":"anon","iss":"supabase-demo","iat":1641769200,"exp":1799535600}
-  # Refuse to render while the demo credentials below are still in place.
-  # Turn this on for any deployment that is not a throwaway local cluster.
-  requireOwnCredentials: false
-  jwtSecret: "super-secret-jwt-token-with-at-least-32-characters-long"
-  anonKey: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlLWRlbW8iLCJpYXQiOjE2NDE3NjkyMDAsImV4cCI6MTc5OTUzNTYwMH0.F_rDxRTPE8OU83L_CNgEGXfmirMXmMMugT29Cvc8ygQ"
-  serviceKey: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIiwiaXNzIjoic3VwYWJhc2UtZGVtbyIsImlhdCI6MTY0MTc2OTIwMCwiZXhwIjoxNzk5NTM1NjAwfQ.5z-pJI1qwZg1LE5yavGLqum65WOnnaaI5eZ3V00pLww"
+  # Or keep them in an env file outside git and let the deploy read them --
+  # `make up` passes SUPABASE_JWT_SECRET / SUPABASE_ANON_KEY /
+  # SUPABASE_SERVICE_KEY through when they are set.
+  #
+  # anonKey and serviceKey MUST be HS256-signed with jwtSecret: PostgREST
+  # verifies the signature and answers PGRST301 JWSInvalidSignature otherwise,
+  # which makes the UI able to sign in but unable to read a single table.
+  jwtSecret: ""
+  anonKey: ""
+  serviceKey: ""
   # Browser-reachable gateway URL (kong NodePort). Must match the host the browser
   # uses — for kind that's the mapped localhost port.
   externalUrl: "http://localhost:30091"
@@ -322,7 +378,7 @@ supabase:
     password: postgres
     port: 5432
     storageSize: 20Gi
-    storageClassName: standard
+    storageClassName: ""   # empty -> storage.className, then the cluster default
   auth:
     image: supabase/gotrue:v2.177.0
     # Where the UI is reached (for redirect/confirm URLs).
@@ -379,7 +435,7 @@ supabase:
     image: supabase/storage-api:v1.11.13
     port: 5000
     storageSize: 20Gi
-    storageClassName: standard
+    storageClassName: ""   # empty -> storage.className, then the cluster default
   resources:
     requests:
       cpu: 100m

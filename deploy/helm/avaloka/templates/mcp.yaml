@@ -11,9 +11,7 @@ spec:
   resources:
     requests:
       storage: {{ .Values.mcp.persistence.size }}
-  {{- with .Values.mcp.persistence.storageClass }}
-  storageClassName: {{ . | quote }}
-  {{- end }}
+  {{- include "avaloka.storageClass" (dict "ctx" . "component" .Values.mcp) | nindent 2 }}
 
 {{- if .Values.mcp.enabled }}
 # ============================================================================

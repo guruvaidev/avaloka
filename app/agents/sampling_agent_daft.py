@@ -77,12 +77,29 @@ class _LazyDaft:
     __slots__ = ()
     _module = None
 
-    def __getattr__(self, name: str):
-        if _LazyDaft._module is None:
+    @classmethod
+    def _real(cls):
+        if cls._module is None:
             import daft as _daft          # may raise, or die on SIGILL -- but
+            cls._module = _daft           # only for a caller that needs Daft
+        return cls._module
 
-            _LazyDaft._module = _daft     # only for a caller that needs Daft
-        return getattr(_LazyDaft._module, name)
+    def __getattr__(self, name: str):
+        return getattr(_LazyDaft._real(), name)
+
+    # Writes and deletes forward to the real module rather than landing on the
+    # proxy. Before this they could not land anywhere at all: __slots__ leaves
+    # the instance with no __dict__, so `monkeypatch.setattr(sad.daft,
+    # "read_csv", stub)` -- which every test that stubs the reader does -- died
+    # with "'_LazyDaft' object has no attribute 'read_csv'". When `daft` was a
+    # plain module that patch worked, so the proxy has to be transparent in
+    # both directions, not just for reads. monkeypatch then restores the real
+    # attribute on the module it actually changed.
+    def __setattr__(self, name: str, value) -> None:
+        setattr(_LazyDaft._real(), name, value)
+
+    def __delattr__(self, name: str) -> None:
+        delattr(_LazyDaft._real(), name)
 
 
 daft = _LazyDaft()

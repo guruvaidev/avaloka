@@ -37,6 +37,12 @@ data:
 
   # Redis: chart-managed service DNS when redis.enabled, else the external URL.
   REDIS_URL: {{ include "avaloka.redisUrl" . | quote }}
+  # The Celery broker. app/core/celery_app.py defaults to
+  # redis://avaloka-redis:6379/0 -- the right host only when the release happens
+  # to be named "avaloka". Any other release name left the worker and the beat
+  # scheduler pointed at a service that does not exist, so enqueued tasks were
+  # never executed and nothing said so. Derived from the release here.
+  CELERY_REDIS_URL: {{ include "avaloka.redisUrl" . | quote }}
   {{- if or .Values.chroma.enabled .Values.chroma.externalHost }}
   # Chroma HttpClient (layer-2). Presence of CHROMA_HOST switches the client off the
   # embedded PersistentClient onto the in-cluster server.

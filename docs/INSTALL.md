@@ -310,28 +310,13 @@ dependency — Postgres, Redis, MinIO, Chroma, Supabase and the LangGraph server
 
 ```bash
 kind create cluster --name avaloka          # or use an existing cluster
-
-# The chart pulls the API, web UI, Supabase edge-functions and Ray images
-# from ghcr.io/guruvaidev, published by CI for every release. Nothing to
-# build. If you are on a commit whose images are not published yet, or you
-# are offline, build and side-load them instead:
-#   make -C deploy images-status               # what would need building?
-#   make -C deploy images-pull PROVIDER=local  # pull + kind-load what exists
-#   make -C deploy images PROVIDER=local       # build + kind-load the rest
-
 helm upgrade --install avaloka deploy/helm/avaloka \
   --set minio.enabled=true \
   --set-string secrets.groqApiKey="$GROQ_API_KEY"
 
-kubectl port-forward svc/avaloka 9000:9000
+kubectl port-forward svc/avaloka-api 9000:8000
 curl localhost:9000/health
 ```
-
-If the `avaloka`, `avaloka-webui` or `avaloka-supabase-functions` pods sit in
-`ImagePullBackOff`, the image for this checkout is not in the registry — run
-`make -C deploy images-status` to see which, then build it as above. The API
-image is ~4 GB (CPU-only torch plus the baked embedding model) and takes a
-while to build cold; the others are small.
 
 `/health` reports `graph_ready`, `redis_connected` and whether the LangGraph
 server upstream is reachable — check it before anything else.
@@ -358,10 +343,10 @@ cd ui && npm install && npm run dev                   # UI on :5173
 ```
 
 **A note on ports.** The container image serves on **9000**
-(`deploy/docker/Dockerfile.api`), and the Helm service `avaloka` exposes it on
-9000 as well (NodePort 30085). Uvicorn's own default is 8000, so running it
-without `--port` gives you a different port from every other path — pass
-`--port 9000` and everything lines up.
+(`deploy/docker/Dockerfile.api`), and the Helm service maps `8000 → 9000`.
+Uvicorn's own default is 8000, so running it without `--port` gives you a
+different port from every other path — pass `--port 9000` and everything lines
+up.
 
 Kubernetes, Ray and cloud targets: see [deployment.md](deployment.md).
 

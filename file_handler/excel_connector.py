@@ -1,3 +1,4 @@
+import logging
 import random
 import uuid
 from dataclasses import dataclass
@@ -8,7 +9,10 @@ import numpy as np
 import pandas as pd
 
 from .base_connector import BaseConnector, OutputData
+from .table_shape import extract_tables, reinfer_dtypes, reshape
 from .utils import convert_type
+
+logger = logging.getLogger(__name__)
 
 
 def _normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
@@ -19,6 +23,10 @@ def _normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     dtype on pandas >= 3, so match both — an object-only check silently skips
     every text column on pandas 3.
     """
+    # Reading with header=None costs pandas its own inference: every column
+    # carried its header string, so dates and currency arrive as object. Retype
+    # before the per-column pass below, which only coerces plain numerics.
+    df = reinfer_dtypes(df)
     for col in df.columns:
         s = df[col]
         if s.dtype == object or pd.api.types.is_string_dtype(s):
@@ -99,9 +107,59 @@ class ExcelConnector(BaseConnector):
     # Loading
     # ------------------------------------------------------------------
     def _load_df(self) -> pd.DataFrame:
+        """Read the sheet, finding where the table actually starts.
+
+        Read with ``header=None`` and located afterwards, rather than letting
+        pandas take row 0. A spreadsheet is a canvas: a title on row 0, a blank
+        row, the real header on row 2, the whole thing indented one column. With
+        the default header pandas names every column ``Unnamed: N``, and the
+        profiler, the planner and every insight built on top are then describing
+        columns that do not exist.
+        """
         if self._df is None:
-            self._df = pd.read_excel(self.path, sheet_name=self.selected_sheet)
+            raw = pd.read_excel(self.path, sheet_name=self.selected_sheet, header=None)
+            self._df, self._shape_report = reshape(raw)
         return self._df
+
+    def load_all_tables(self, normalize: bool = True) -> list[dict]:
+        """Every table in the workbook, not just the biggest sheet.
+
+        _resolve_sheet picks the sheet with the most rows and the rest of the
+        workbook is never seen. For a pricing model spread over nine sheets --
+        a rate card, a cost estimate, a project summary -- that discards most
+        of what the user uploaded, and the sheet with the most rows is rarely
+        the one they wanted to talk about.
+
+        A sheet is also not necessarily one table. People put a second table to
+        the right of the first and a third below it, so each sheet is split on
+        its empty rows and columns before being reshaped.
+
+        Returns one dict per table: sheet, index within the sheet, the frame,
+        and the reshaping report.
+        """
+        out: list[dict] = []
+        for sheet in self.list_sheets():
+            try:
+                raw = pd.read_excel(self.path, sheet_name=sheet, header=None)
+            except Exception as exc:
+                logger.warning("Could not read sheet %r: %s", sheet, exc)
+                continue
+            for index, (frame, report) in enumerate(extract_tables(raw)):
+                if normalize:
+                    frame = _normalize_dataframe(frame)
+                out.append({
+                    "sheet": sheet,
+                    "table_index": index,
+                    "dataframe": frame,
+                    "shape_report": report,
+                })
+        return out
+
+    @property
+    def shape_report(self) -> dict:
+        """What had to be done to find the table. Empty until the sheet loads."""
+        self._load_df()
+        return getattr(self, "_shape_report", {})
 
     def load_dataframe(self, normalize: bool = True) -> pd.DataFrame:
         """Return the sheet as a typed DataFrame (dtypes preserved).

@@ -63,10 +63,29 @@ def base_values() -> dict:
 
 # ------------------------------------------------------------------ the store
 def test_c6_01_minio_template_exists_and_is_values_gated() -> None:
+    """minio.yaml gates its workloads on .Values.minio.enabled.
+
+    This used to require the gate on line 1, which failed once the template
+    opened with a `$fullname :=` assignment -- a formatting detail, not a
+    gating one. The PersistentVolumeClaim above the gate is deliberate:
+    turning MinIO off should not delete the bucket it was holding.
+    """
     assert MINIO_TEMPLATE.is_file(), f"missing {MINIO_TEMPLATE}"
-    head = _read(MINIO_TEMPLATE).lstrip().splitlines()[0]
-    assert head.startswith("{{- if .Values.minio.enabled }}"), (
-        f"minio.yaml is not gated on .Values.minio.enabled: {head!r}"
+    lines = _read(MINIO_TEMPLATE).splitlines()
+
+    gate = next((i for i, line in enumerate(lines)
+                 if line.lstrip().startswith("{{- if .Values.minio.enabled }}")), None)
+    assert gate is not None, "minio.yaml has no `{{- if .Values.minio.enabled }}` gate"
+
+    workloads = {"Deployment", "StatefulSet", "DaemonSet", "Job", "CronJob", "Pod"}
+    ungated = [
+        line.split(":", 1)[1].strip()
+        for line in lines[:gate]
+        if line.startswith("kind:") and line.split(":", 1)[1].strip() in workloads
+    ]
+    assert not ungated, (
+        f"minio.yaml emits {ungated} before its gate, so they deploy even with "
+        "minio.enabled=false"
     )
 
 

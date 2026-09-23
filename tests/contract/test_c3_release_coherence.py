@@ -26,9 +26,11 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 _TEMPLATES_DIR = REPO_ROOT / "deploy" / "helm" / "avaloka" / "templates"
 
-_APP_VERSION_DEFAULT_RE = re.compile(
-    r"""APP_VERSION\s*=\s*os\.getenv\(\s*["']APP_VERSION["']\s*,\s*["']([^"']+)["']\s*\)"""
-)
+# app/api/server.py used to hardcode the served version as the default of an
+# env lookup -- `os.getenv("APP_VERSION", "1.2")` -- which is how GET /version
+# answered "1.2" for the whole 1.6 line. It now reads the VERSION file, so the
+# surface to compare is the file, not a literal in the source.
+_APP_VERSION_READS_VERSION_FILE_RE = re.compile(r'open\(candidate\)|"VERSION"|VERSION["\']?\s*\)')
 _CHANGELOG_HEADING_RE = re.compile(r"^##\s*\[([^\]]+)\]", re.M)
 _ROADMAP_HEADING_RE = re.compile(r"^###\s+(Roadmap|Unreleased)\s*$", re.M | re.I)
 _NEXT_HEADING_RE = re.compile(r"^#{2,3}\s+\S", re.M)
@@ -57,9 +59,23 @@ def _chart() -> Dict[str, object]:
 
 
 def _server_app_version_default() -> str:
-    match = _APP_VERSION_DEFAULT_RE.search(_read("app/api/server.py"))
-    assert match, "app/api/server.py no longer defines APP_VERSION via os.getenv with a literal default"
-    return match.group(1)
+    """The version GET /version will serve.
+
+    server.py resolves it at import: an APP_VERSION env var wins, then the OSS
+    edition override, then the VERSION file. With neither env var set -- which
+    is the shipped default, and what the chart does -- the answer is the VERSION
+    file, so that is the surface this compares.
+    """
+    source = _read("app/api/server.py")
+    assert "def _read_version()" in source, (
+        "app/api/server.py no longer resolves APP_VERSION through _read_version(); "
+        "update this helper to match however it is derived now"
+    )
+    assert _APP_VERSION_READS_VERSION_FILE_RE.search(source), (
+        "app/api/server.py no longer falls back to the VERSION file, so the served "
+        "version can drift from it again"
+    )
+    return _read("VERSION").strip()
 
 
 def _version_surfaces() -> Dict[str, str]:
@@ -138,7 +154,16 @@ def _tracked_test_files() -> List[str]:
     return [f for f in tracked if re.fullmatch(r"tests/(?:.+/)?test_[^/]+\.py", f)]
 
 
-_DECLARED_MARKERS: Tuple[str, ...] = ("cloud", "integration", "cluster", "kuberay", "slow")
+# The markers CI and scripts/ci.sh actually deselect. `kaggle` joined them when
+# the Kaggle-dependent suites appeared; it was missing here, so this pin failed
+# on position 5 rather than telling anyone a marker had been added.
+_DECLARED_MARKERS: Tuple[str, ...] = (
+    "cloud", "integration", "cluster", "kuberay", "kaggle", "slow",
+)
+
+#: Markers that exist for grouping rather than selection -- they are never
+#: deselected by CI, so adding one does not need a hermetic-filter decision.
+_NON_SELECTION_MARKERS = frozenset({"defect", "single", "multi", "transfer", "operations"})
 _MARKER_RE = re.compile(r"pytest\.mark\.(?:%s)\b" % "|".join(_DECLARED_MARKERS))
 
 _INFRA_SIGNALS: Dict[str, re.Pattern] = {
@@ -190,12 +215,18 @@ def _declared_marker_names() -> List[str]:
 # E14.01 — the version story must be one story
 # ---------------------------------------------------------------------------
 
+# DEFECT E14.01 is fixed: these were five different answers to "what version is
+# this?" -- 0.2, 0.2.0, 0.1.0, 0.2.0 and 1.2 -- and they are now one. The pin
+# stays because the property worth holding is that a release bump moves every
+# surface together; it is read from VERSION so a bump updates it in one place.
+_RELEASE_VERSION = _read("VERSION").strip()
+
 _PINNED_VERSION_SURFACES: Dict[str, str] = {
-    "CHANGELOG.md newest heading": "0.2",
-    "Chart.yaml appVersion": "0.2.0",
-    "Chart.yaml version": "0.1.0",
-    "VERSION file": "0.2.0",
-    "app/api/server.py APP_VERSION default (served by GET /version)": "1.2",
+    "CHANGELOG.md newest heading": _RELEASE_VERSION,
+    "Chart.yaml appVersion": _RELEASE_VERSION,
+    "Chart.yaml version": _RELEASE_VERSION,
+    "VERSION file": _RELEASE_VERSION,
+    "app/api/server.py APP_VERSION default (served by GET /version)": _RELEASE_VERSION,
 }
 
 
@@ -205,17 +236,6 @@ def test_e14_01_pins_current_version_surfaces(surface: str, expected: str) -> No
     assert _version_surfaces()[surface] == expected
 
 
-@pytest.mark.defect
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEFECT E14.01 (P0): the release version is five-way inconsistent - VERSION='0.2.0', "
-        "CHANGELOG.md:7 '## [0.2]', deploy/helm/avaloka/Chart.yaml version=0.1.0 / appVersion='0.2.0', "
-        "and GET /version serves APP_VERSION default '1.2' (app/api/server.py:296) because APP_VERSION "
-        "is set nowhere in deploy/ or .env, while the release branch claims 1.5.2. "
-        "Remove this xfail when fixed."
-    ),
-)
 def test_e14_01_version_surfaces_agree() -> None:
     """VERSION, Chart version/appVersion, the newest CHANGELOG heading and the served APP_VERSION are one version."""
     surfaces = _version_surfaces()
@@ -376,19 +396,36 @@ def test_pytest_ini_markers_are_stable() -> None:
     """pytest.ini still declares the five selection markers section 3 filters on, plus `defect`."""
     declared = _declared_marker_names()
     assert declared[: len(_DECLARED_MARKERS)] == list(_DECLARED_MARKERS)
-    assert set(declared) - set(_DECLARED_MARKERS) <= {"defect"}, (
-        "a new marker was added to pytest.ini; decide whether the hermetic filter in "
-        "section 3 and CI must also deselect it, then update this pin"
+    unexpected = set(declared) - set(_DECLARED_MARKERS) - _NON_SELECTION_MARKERS
+    assert not unexpected, (
+        f"new marker(s) in pytest.ini: {sorted(unexpected)}. Decide whether the "
+        "hermetic filter in scripts/ci.sh and .github/workflows/ci.yml must also "
+        "deselect them, then add them to _DECLARED_MARKERS or "
+        "_NON_SELECTION_MARKERS here."
+    )
+    assert len(declared) == len(set(declared)), (
+        f"pytest.ini declares a marker twice: {sorted(m for m in declared if declared.count(m) > 1)}"
     )
 
 
 def test_root_level_test_scripts_are_not_collectable_pins_testpaths_scoping() -> None:
-    """Pins the decision to leave root test.py / test_milvus_integration.py in place and exclude them via testpaths=tests."""
+    """testpaths stays scoped to tests/, and no stray test script sits at the root.
+
+    This used to pin the opposite: that test.py and test_milvus_integration.py
+    DID sit at the repo root, excluded from collection only by
+    `testpaths = tests`. Both were deleted while preparing the public 1.0 --
+    they were debug scripts, and one of them carried an MCP api_key literal.
+
+    The scoping assertion is the part worth keeping: without it a stray
+    `test_*.py` at the root would be collected and run as if it were a test.
+    """
     assert _pytest_ini().get("pytest", "testpaths").split() == ["tests"]
-    for name in ("test.py", "test_milvus_integration.py"):
-        script = REPO_ROOT / name
-        assert script.is_file(), f"{name} no longer sits at the repo root; update this pin"
-        assert not str(script).startswith(str(REPO_ROOT / "tests"))
+
+    strays = sorted(p.name for p in REPO_ROOT.glob("test*.py"))
+    assert not strays, (
+        "test scripts at the repo root are collected by some tools regardless of "
+        f"testpaths, and these are not tests: {', '.join(strays)}"
+    )
 
 
 @pytest.mark.parametrize("offender", _KNOWN_UNMARKED_INFRA_TESTS)
@@ -470,9 +507,20 @@ def test_e6_05_top3_hint_relevance_regression_suite_is_merged() -> None:
 
 
 def test_e6_07_memory_circuit_breaker_is_merged() -> None:
-    """The memory circuit breaker is merged app code with a 3.0s default and live coverage, anchoring E6.07."""
+    """The memory circuit breaker is merged app code with a default and live coverage.
+
+    The default used to be pinned at exactly 3.0s. It is 20.0s now, raised
+    deliberately: 3 seconds was shorter than the first-call load of the
+    sentence-transformer model, so the breaker tripped on the very first query
+    and the learning loop looked empty rather than slow.
+
+    What is worth pinning is that the breaker exists, is configurable, and is
+    covered -- not the number, which is an operational tuning decision.
+    """
     plane = _read("app/services/memory_plane.py")
-    assert re.search(r'MEMORY_CIRCUIT_BREAKER_TIMEOUT["\']\s*,\s*["\']3\.0["\']', plane)
+    assert re.search(
+        r'MEMORY_CIRCUIT_BREAKER_TIMEOUT["\']\s*,\s*["\'][0-9]+(?:\.[0-9]+)?["\']', plane
+    ), "the circuit-breaker timeout is no longer an env-configurable numeric default"
     semantics = _read("tests/test_memory_semantics.py")
     assert "MEMORY_CIRCUIT_BREAKER_TIMEOUT" in semantics
     assert len(_TEST_FUNC_RE.findall(semantics)) >= 1

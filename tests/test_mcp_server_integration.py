@@ -8,6 +8,7 @@ and tests multiple database types.
 import asyncio
 import json
 import os
+import urllib.parse
 import tempfile
 import logging
 import pytest
@@ -22,10 +23,18 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# The local Postgres password is read from the environment rather than written
+# here. It used to be a literal -- the company name and three digits -- in a file
+# that is published to a public repository, which is how a weak password people
+# reuse ends up in a credential-stuffing list. Set AVALOKA_TEST_PG_PASSWORD to
+# point these at a real local database; the default connects to nothing.
+_PG_PASSWORD = os.environ.get("AVALOKA_TEST_PG_PASSWORD", "changeme")
+_PG_PASSWORD_QUOTED = urllib.parse.quote(_PG_PASSWORD, safe="")
+
 # --- CONFIGURATION ---
 # Database configurations for testing
 POSTGRESQL_CONFIG = {
-    "connection_string": "postgresql://postgres:avaloka%40123@localhost:5432/sales_db",
+    "connection_string": f"postgresql://postgres:{_PG_PASSWORD_QUOTED}@localhost:5432/sales_db",
     "database_type": "postgresql"
 }
 
@@ -57,7 +66,7 @@ DATABASE_TEST_CONFIGS = {
         "port": 5432,
         "database_name": "sales_db",
         "username": "postgres",
-        "password": "avaloka@123",
+        "password": _PG_PASSWORD,
         "contact_email": "test@testcorp.com",
         "environment": "testing",
         "sample_query": "SELECT * FROM sales_data LIMIT 5"

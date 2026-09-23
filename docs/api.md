@@ -19,17 +19,13 @@ uvicorn app.api.server:app --host 0.0.0.0 --port 9000 --reload
 ## Authentication
 
 Every non-public route expects an `Authorization: Bearer <jwt>` header. The token
-is HS256-signed with `JWT_SECRET` and carries `{"sub": "<user-id>"}`. The `sub`
-must be a UUID — it is stored as the owner of sessions and datasets, and the
-persistence layer rejects anything else (`invalid input syntax for type uuid`).
-Tokens issued by Supabase Auth already satisfy this. Requests without a valid
-token get `401`; accessing another user's resource returns `403` (threads) or
-`404` (datasets).
+is HS256-signed with `JWT_SECRET` and carries `{"sub": "<user-id>"}`. Requests
+without a valid token get `401`; accessing another user's resource returns `403`
+(threads) or `404` (datasets).
 
 ```python
-import jwt, time, uuid
-user_id = str(uuid.uuid4())   # or the Supabase auth user's id
-token = jwt.encode({"sub": user_id, "iat": int(time.time())}, JWT_SECRET, algorithm="HS256")
+import jwt, time
+token = jwt.encode({"sub": "user-1", "iat": int(time.time())}, JWT_SECRET, algorithm="HS256")
 headers = {"Authorization": f"Bearer {token}"}
 ```
 

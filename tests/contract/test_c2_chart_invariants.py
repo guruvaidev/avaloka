@@ -51,6 +51,14 @@ UNPINNED_LEGACY_COMPONENTS = frozenset({"mcp", "supabase-functions"})
 # Shared model/data plane: local installs use MinIO while cloud overlays may use
 # managed object storage; MLflow provides the tracking and model-registry API.
 STORAGE_CHART_COMPONENTS = frozenset({"minio", "mlflow"})
+# Background execution. E6.08 was the defect that none of this shipped; celery.yaml
+# now runs a worker and a beat/RedBeat scheduler, so these are expected workloads.
+EXECUTOR_CHART_COMPONENTS = frozenset({"celery", "celery-redbeat"})
+# Opt-in tiers, all disabled by default: the layer-4 vector store and its etcd,
+# the local inference server, and the remaining Supabase pieces.
+OPTIONAL_CHART_COMPONENTS = frozenset(
+    {"milvus", "etcd", "local-llm", "supabase-storage", "supabase-email-templates"}
+)
 
 _CELERY_WORKER_RE = re.compile(r"celery[^\n]{0,120}\b(worker|beat)\b", re.IGNORECASE)
 _NETWORK_POLICY_RE = re.compile(r"^\s*kind:\s*NetworkPolicy\s*$", re.MULTILINE)
@@ -146,15 +154,21 @@ def test_e1_02_pins_chart_workload_inventory() -> None:
         - INGRESS_CHART_COMPONENTS
         - UNPINNED_LEGACY_COMPONENTS
         - STORAGE_CHART_COMPONENTS
+        - EXECUTOR_CHART_COMPONENTS
+        - OPTIONAL_CHART_COMPONENTS
     )
     assert not unexpected, (
         f"chart gained unpinned workload(s) {sorted(unexpected)}; decide whether they belong "
         f"and update the *_CHART_COMPONENTS pins at the top of this module"
     )
+    # The inverse of the original assertion. This pin used to require that NO
+    # task-executing workload shipped, which was the evidence for DEFECT E6.08.
+    # The defect is fixed, so the same inventory now has to show the executor
+    # still present -- losing it again would silently restore the bug.
     executors = {c for c in components if re.search(r"celery|worker|beat|scheduler", c)}
-    assert not executors, (
-        f"a task-executing workload {sorted(executors)} now ships in the chart - E6.08 is no "
-        f"longer a defect; re-check test_e6_08_chart_runs_a_celery_worker and drop its xfail"
+    assert executors, (
+        "the chart no longer ships a task-executing workload; DEFECT E6.08 would "
+        "be back: .delay() enqueues are swallowed and RedBeat entries never fire"
     )
 
 
@@ -181,8 +195,33 @@ def test_e1_05_branch_only_templates_are_values_gated(component: str) -> None:
             "branch ui-k8s-deploy-1.5.2 (covered by the UI-wiring suite there)"
         )
     for path in matches:
-        head = _read(path).lstrip().splitlines()[0]
-        assert head.startswith("{{- if .Values"), f"{path.name} is not values-gated: {head!r}"
+        lines = _read(path).splitlines()
+        gate = next((i for i, line in enumerate(lines)
+                     if line.lstrip().startswith("{{- if .Values")), None)
+        assert gate is not None, (
+            f"{path.name} has no `{{{{- if .Values...}}}}` gate, so disabling the "
+            "component still deploys it"
+        )
+
+        # Anything emitted BEFORE the gate ships unconditionally. A
+        # PersistentVolumeClaim there is deliberate -- both minio.yaml and
+        # supabase.yaml keep their PVCs outside the gate so that turning the
+        # component off does not delete its data. A workload is not: that would
+        # run whether or not the component is enabled.
+        #
+        # This used to assert the gate was on line 1, which failed the moment a
+        # template opened with a `$fullname :=` assignment -- a formatting
+        # detail, not a gating one.
+        workloads = {"Deployment", "StatefulSet", "DaemonSet", "Job", "CronJob", "Pod"}
+        ungated = [
+            line.split(":", 1)[1].strip()
+            for line in lines[:gate]
+            if line.startswith("kind:") and line.split(":", 1)[1].strip() in workloads
+        ]
+        assert not ungated, (
+            f"{path.name} emits {ungated} before its `{{{{- if .Values...}}}}` gate, so "
+            "they deploy even when the component is disabled"
+        )
 
 
 # --------------------------------------------------------------------------- E2.07
@@ -193,19 +232,14 @@ def test_e2_07_no_insecure_auth_escape_hatch_under_deploy() -> None:
 
 
 # --------------------------------------------------------------------------- E6.08
-@pytest.mark.defect
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEFECT E6.08 (P0): no chart template runs a Celery worker or beat/RedBeat scheduler "
-        "(deploy/helm/avaloka/templates/ ships only api/langgraph/redis/chroma/postgres/ui), so "
-        "nothing executes background tasks in-cluster: .delay() enqueues are swallowed and RedBeat "
-        "entries never fire, making /api/datasets/*/background-task-status, Milvus episodic writes "
-        "and scheduled entire-dataset executions vacuous in k8s. Remove this xfail when fixed."
-    ),
-)
 def test_e6_08_chart_runs_a_celery_worker() -> None:
-    """Some chart template must launch a celery worker/beat process (regex scan of every chart file)."""
+    """Some chart template must launch a celery worker/beat process.
+
+    Was DEFECT E6.08 (P0), xfail(strict): the chart shipped no task-executing
+    component at all, so .delay() enqueues were swallowed and RedBeat entries
+    never fired. celery.yaml now runs both a worker and a beat/RedBeat
+    scheduler, so the xfail is gone and this is an ordinary assertion.
+    """
     runners = [
         str(p.relative_to(CHART_ROOT)).replace("\\", "/")
         for p in _chart_files()
@@ -214,76 +248,149 @@ def test_e6_08_chart_runs_a_celery_worker() -> None:
     assert runners, "no chart template starts a celery worker or beat scheduler"
 
 
-def test_e6_08_pins_no_celery_broker_configured() -> None:
-    """CELERY_REDIS_URL is set by no chart file — the broker app/core/celery_app.py:23-29 reads is unset in-cluster.
+def test_e6_08_celery_broker_is_configured() -> None:
+    """A worker without a broker is the same silence as a broker without a worker.
 
-    Paired with test_e6_08_chart_runs_a_celery_worker: wiring the broker without a
-    worker (or a worker without the broker) makes the pair disagree, which is the
-    signal to re-review the background-task story.
+    The inverse of this test used to assert CELERY_REDIS_URL was set *nowhere*,
+    pinning the state where neither existed. Now that celery.yaml runs a worker,
+    the broker has to be wired or the pair disagrees.
+
+    It must also be derived from the release rather than hardcoded:
+    app/core/celery_app.py falls back to redis://avaloka-redis:6379/0, which is
+    the wrong host whenever nameOverride is set -- the worker would point at a
+    service that does not exist, and nothing would say so.
     """
-    offenders = [
+    configured = {
         str(p.relative_to(CHART_ROOT)).replace("\\", "/")
         for p in _chart_files()
         if "CELERY_REDIS_URL" in _read(p)
-    ]
-    assert offenders == [], f"CELERY_REDIS_URL is configured but no worker runs: {offenders}"
+    }
+    assert configured, (
+        "celery.yaml runs a worker but no chart file sets CELERY_REDIS_URL; "
+        "the worker would fall back to a hardcoded host"
+    )
+    for rel in configured:
+        text = _read(CHART_ROOT / rel)
+        for line in text.splitlines():
+            if "CELERY_REDIS_URL" in line and not line.strip().startswith("#"):
+                assert "include" in line or "{{" in line, (
+                    f"{rel} hardcodes CELERY_REDIS_URL ({line.strip()}); derive it "
+                    f"from the release so nameOverride installs still reach Redis"
+                )
 
 
 # --------------------------------------------------------------------------- E6.09
-@pytest.mark.parametrize(
-    "component,expected", [("redis", "none"), ("chroma", "none"), ("postgres", "emptyDir")]
-)
-def test_e6_09_pins_stateful_component_persistence(component: str, expected: str) -> None:
-    """Pins that redis/chroma mount no volume at all and postgres uses emptyDir (line scan of the owning template).
+#: Stores whose data must outlive the pod that wrote it. Each is a StatefulSet
+#: with a volumeClaimTemplate, so the volume follows the pod when it is
+#: rescheduled instead of being left on a node that went away.
+DURABLE_STATEFULSETS = {"redis", "chroma", "postgres"}
 
-    Pins the Day-0 decision that in-cluster state is ephemeral. App-side mitigation:
-    chat history and user preferences write through to Redis keys, so an API-pod
-    restart is survivable — a REDIS-pod restart is not.
+#: Stores that keep a standalone PVC rather than a volumeClaimTemplate. These
+#: hold data a user would notice losing -- uploaded datasets, trained models,
+#: the DTA connection registry -- and moving them to a volumeClaimTemplate
+#: would orphan the existing claim on upgrade. The claim is durable either way.
+DURABLE_STANDALONE_PVCS = {"templates/mcp.yaml", "templates/minio.yaml"}
+
+
+@pytest.mark.parametrize("component", sorted(DURABLE_STATEFULSETS))
+def test_e6_09_stateful_stores_own_a_volume_claim_template(component: str) -> None:
+    """redis/chroma/postgres are StatefulSets that claim their own storage.
+
+    This reverses the Day-0 decision that in-cluster state is ephemeral, and the
+    reversal is the point. memory_plane describes Redis as durable -- "survives
+    redeploys" -- while redis.yaml mounted nothing at all, and postgres held the
+    layer-3 artifact store, keyed by user_id, on an emptyDir. The one memory
+    tier a returning user was expected to get back did not outlive a restart.
+
+    Replica counts stay at 1 deliberately; see test_e6_09_databases_do_not_claim_ha.
     """
     path = _template_for_component(component)
     assert path is not None, f"no chart template declares component {component!r}"
     text = _read(path)
-    assert "persistentVolumeClaim" not in text and "volumeClaimTemplates" not in text
-    if expected == "none":
-        assert not re.search(r"^\s*volumes:\s*$", text, re.MULTILINE), (
-            f"{path.name} now mounts volumes — update this pin deliberately"
+    assert re.search(r"^\s*kind:\s*StatefulSet\s*$", text, re.MULTILINE), (
+        f"{path.name} is no longer a StatefulSet -- re-review E6.09"
+    )
+    assert re.search(r"^\s*volumeClaimTemplates:\s*$", text, re.MULTILINE), (
+        f"{path.name} no longer claims its own volume -- its data would not "
+        f"survive the pod being rescheduled"
+    )
+    assert re.search(r"^\s*serviceName:\s*", text, re.MULTILINE), (
+        f"{path.name} is a StatefulSet without a serviceName"
+    )
+
+
+def test_e6_09_redis_enables_the_append_only_file() -> None:
+    """A volume alone is not durability.
+
+    With RDB snapshots only (the redis:7 default), an unclean stop discards
+    every write since the last snapshot -- up to an hour of schema cache and
+    remembered preferences. appendfsync everysec bounds that to one second.
+    """
+    text = _read(CHART_ROOT / "templates" / "redis.yaml")
+    assert "--appendonly" in text and "everysec" in text, (
+        "redis.yaml no longer enables the append-only file"
+    )
+
+
+def test_e6_09_databases_do_not_claim_high_availability() -> None:
+    """Single-writer stores stay at one replica.
+
+    Postgres, Redis and Chroma cannot be made highly available by raising a
+    replica count: three replicas of these StatefulSets are three independent
+    empty stores, not one available one. Real HA needs replication the database
+    understands (CloudNativePG, Redis Sentinel), which this chart does not run.
+    Surviving a node failure is the StorageClass's job instead.
+    """
+    for component in sorted(DURABLE_STATEFULSETS):
+        text = _read(_template_for_component(component))
+        replicas = re.search(r"^\s*replicas:\s*(\S+)\s*$", text, re.MULTILINE)
+        assert replicas and replicas.group(1) == "1", (
+            f"{component} declares replicas={replicas.group(1) if replicas else None}. "
+            f"These stores are single-writer -- extra replicas are separate empty "
+            f"databases, not availability. Use a managed service instead."
         )
-    else:
-        assert re.search(r"^\s*emptyDir:\s*\{\}\s*$", text, re.MULTILINE), (
-            f"{path.name} no longer uses emptyDir — update this pin deliberately"
-        )
+
+
+def test_e6_09_every_claim_honours_the_chart_storage_class() -> None:
+    """No template hardcodes a StorageClass name.
+
+    supabase.yaml defaulted two claims to "standard", which exists on kind and
+    GKE and on little else; on a cluster without it those PVCs sit Pending for
+    ever. Every claim now resolves through storage.className so one value moves
+    the whole chart onto replicated storage (longhorn, rook-ceph-block).
+    """
+    offenders = []
+    # templates/ only. values-gke.yaml naming standard-rwo is the whole point of
+    # a cloud overlay, and values.yaml's "" is the documented "use the default".
+    for path in (p for p in _chart_files() if p.parent.name == "templates"):
+        for match in re.finditer(r"^\s*storageClassName:\s*(\S.*)$", _read(path), re.MULTILINE):
+            value = match.group(1).strip()
+            if not value.startswith(("{{", '{{-')):
+                offenders.append(f"{path.name}: {value}")
+    assert not offenders, f"hardcoded StorageClass names: {offenders}"
 
 
 def test_e6_09_pins_which_templates_claim_durable_storage() -> None:
-    """Only the deliberately-durable templates carry a PVC; nothing uses a StatefulSet.
+    """The set of standalone PVCs is fixed; new ones are a decision, not a drift.
 
-    The Day-0 decision was that all in-cluster state is ephemeral. Two templates
-    now opt out on purpose, and both are the kind of state whose loss is not a
-    cache miss but data loss:
-
-      * ``mcp.yaml``    — the DTA connection registry;
-      * ``minio.yaml``  — uploaded datasets and trained model artifacts, and the
-        shared data plane Ray workers read from on local/on-prem clusters.
-
-    redis/chroma/postgres stay ephemeral — that leg is pinned separately above.
-    Any *other* template claiming a volume is a new decision, not an accident.
+    redis/chroma/postgres moved to volumeClaimTemplates and no longer appear
+    here. mcp and minio keep standalone claims on purpose -- see
+    DURABLE_STANDALONE_PVCS. milvus is off by default and brings its own.
     """
     with_pvc = {
         str(p.relative_to(CHART_ROOT)).replace("\\", "/")
         for p in _chart_files()
         if re.search(r"^\s*kind:\s*PersistentVolumeClaim\s*$", _read(p), re.MULTILINE)
     }
-    assert with_pvc == {"templates/mcp.yaml", "templates/minio.yaml"}, (
-        f"the set of templates claiming durable storage changed: {sorted(with_pvc)} — "
+    # milvus, supabase and local-llm are all off by default and bring their own
+    # claims; they are listed so enabling one is not mistaken for drift.
+    expected = DURABLE_STANDALONE_PVCS | {
+        "templates/milvus.yaml", "templates/supabase.yaml", "templates/local-llm.yaml",
+    }
+    assert with_pvc == expected, (
+        f"the set of templates claiming durable storage changed: {sorted(with_pvc)} -- "
         "re-review E6.09 and update this pin deliberately"
     )
-
-    statefulsets = [
-        str(p.relative_to(CHART_ROOT)).replace("\\", "/")
-        for p in _chart_files()
-        if re.search(r"^\s*kind:\s*StatefulSet\s*$", _read(p), re.MULTILINE)
-    ]
-    assert statefulsets == [], f"chart gained a StatefulSet — re-review E6.09: {statefulsets}"
 
 
 # --------------------------------------------------------------------------- E7.09

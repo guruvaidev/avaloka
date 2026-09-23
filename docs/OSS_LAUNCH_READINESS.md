@@ -170,7 +170,9 @@ how a demo becomes an incident.
 ## 7. Engine compatibility — separate branch
 
 `feat/starrocks-duckdb-compat` is cut with compose files for StarRocks and
-DuckDB, plus [ENGINE_COMPATIBILITY.md](ENGINE_COMPATIBILITY.md).
+DuckDB, plus an `ENGINE_COMPATIBILITY.md` that lives on that branch — not a
+link here, because the file is not in this tree and a link that cannot
+resolve reads as a missing document rather than as one held elsewhere.
 
 The useful finding: **StarRocks speaks the MySQL wire protocol**, so registering
 and querying may work today with no new driver — worth verifying before anything

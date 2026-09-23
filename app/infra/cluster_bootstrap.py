@@ -84,9 +84,6 @@ def provision(args) -> int:
         # ReadWriteMany volume the Ray workers could share instead — so give them
         # the in-cluster MinIO. Cloud providers keep their own object storage.
         minio=args.provider not in ("gcp", "aws", "azure"),
-        # Step [3/6] built and side-loaded the images; deploy those, not the
-        # chart's default GHCR release images.
-        local_images=args.provider == "local",
     )))
     if _any_failed(results):
         return _finish(results)

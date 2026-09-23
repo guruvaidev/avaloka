@@ -49,7 +49,8 @@ logger = logging.getLogger(__name__)
 # LLM initialisation
 def _build_validator_llm() -> ChatGroq | None:
     """Construct the validator LLM from environment variables, or return None."""
-    api_key = os.environ.get("GROQ_API_KEY_CODING_AGENT")
+    api_key = (os.environ.get("GROQ_API_KEY_CODING_AGENT")
+               or os.environ.get("GROQ_API_KEY"))
     if not api_key:
         logger.warning(
             "GROQ_API_KEY_CODING_AGENT is not set — logical validation will be skipped."

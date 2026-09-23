@@ -91,8 +91,24 @@ if [[ "$FAST" -eq 1 ]]; then
   HERMETIC_MARKERS="$HERMETIC_MARKERS and not slow and not kaggle"
 fi
 stage "hermetic tests" "$PY" -m pytest -q -p no:cacheprovider -m "$HERMETIC_MARKERS"
-stage "data science"   "$PY" -m pytest -q -p no:cacheprovider tests/datascience
-stage "cli robustness" "$PY" -m pytest -q -p no:cacheprovider tests/avaloka
+
+# Optional suites. tests/datascience ships on develop-1.6 and not on oss/1.6 --
+# the data-science suite is deliberately development-only while the code it
+# exercises is synced. Naming it unconditionally meant every open-source CI run
+# called pytest on a path that does not exist, which exits 4 and failed the
+# gate before a single test had run. A suite that is absent by design is not a
+# failure; a suite that is present and failing still is.
+optional_stage() {
+  local name="$1" path="$2"
+  if [[ -d "$path" ]]; then
+    stage "$name" "$PY" -m pytest -q -p no:cacheprovider "$path"
+  else
+    RESULTS+=("${DIM}SKIP${OFF}  $name (no $path in this tree)")
+  fi
+}
+
+optional_stage "data science"   tests/datascience
+optional_stage "cli robustness" tests/avaloka
 
 if [[ "$FAST" -eq 0 ]]; then
   stage "benchmark" "$PY" -m avaloka.benchmark run

@@ -313,6 +313,101 @@ make up PROVIDER=local DATA_STACK=postgres
 
 Values live in `app/infra/manifests/helm-values/<component>-values.yaml`.
 
+## 8b. Storage: what survives a node going down
+
+Every store that holds state Avaloka is expected to remember is a **StatefulSet
+with a `volumeClaimTemplate`** — Redis, Chroma and Postgres. The claim belongs to
+the workload, so the volume follows the pod when Kubernetes reschedules it
+rather than being stranded on a node that went away. MinIO and the MCP registry
+keep standalone PVCs (moving them would orphan existing data); they are durable
+either way.
+
+### Replicas are not the answer
+
+Postgres, Redis and Chroma are single-writer. Setting `replicas: 3` on these
+gives you three independent empty stores, not one highly available one — each
+replica gets its own volume and neither knows about the others. Real database HA
+needs replication the database itself understands:
+
+| Store | What HA actually requires |
+| --- | --- |
+| Postgres | streaming replication — [CloudNativePG](https://cloudnative-pg.io/) or Patroni |
+| Redis | Sentinel or Redis Cluster |
+| Chroma | not available in open-source Chroma (single-node) |
+| Milvus | the Milvus operator in cluster mode |
+
+The chart deliberately does not run any of these. When you need them, point the
+chart at a managed service — `postgres.enabled=false` + `postgres.externalUrl`,
+`redis.enabled=false` + `redis.externalUrl`.
+
+### Node failure is the StorageClass's job
+
+For a self-managed cluster, survival of a lost node comes from **replicated block
+storage underneath the PVC**. Set it once, chart-wide:
+
+```yaml
+storage:
+  className: longhorn
+```
+
+```bash
+helm upgrade --install avaloka deploy/helm/avaloka --set storage.className=longhorn
+```
+
+Every claim in the chart — Redis, Postgres, Chroma, MinIO, MCP, Milvus, Supabase
+— resolves through that one value. Any component can still override it with its
+own `persistence.storageClass`.
+
+**Which one to use:**
+
+| StorageClass | When it fits |
+| --- | --- |
+| **[Longhorn](https://longhorn.io/)** — *recommended default* | On-prem and bare metal. CNCF project, synchronous 3-way replication per volume, installs with one Helm command, rebuilds replicas automatically when a node dies. Needs `open-iscsi` on each node. The right answer for a small self-managed cluster. |
+| [Rook-Ceph](https://rook.io/) (`rook-ceph-block`) | You also want object and shared-filesystem storage from the same pool, and have ≥5 nodes and someone willing to operate Ceph. More capable, considerably more to run. |
+| [OpenEBS Mayastor](https://openebs.io/) | NVMe-class latency matters. Fastest of the three; newest, and the most particular about hardware (hugepages, dedicated devices). |
+| Cloud CSI (`gp3`, `premium-rwo`, `standard-rwo`) | Managed Kubernetes. Already replicated **within a zone** — which survives a node, not a zone. Use a regional class if you need zone failure tolerance. |
+
+**Sizing** defaults, all overridable per component:
+
+| Component | Default | Holds |
+| --- | --- | --- |
+| `postgres.persistence.size` | 20Gi | layer-3 artifact store, keyed by user |
+| `redis.persistence.size` | 8Gi | layer-1 schema cache, session hints and preferences |
+| `chroma.persistence.size` | see values.yaml | layer-2 user signature |
+| `minio.persistence.size` | 20Gi | uploaded datasets and trained models |
+
+### Redis durability
+
+`redis.appendOnly` is on by default. A volume alone is not durability: with RDB
+snapshots only (the `redis:7` default of `save 3600 1 300 100 60 10000`), an
+unclean shutdown discards every write since the last snapshot — up to an hour of
+cached schema and remembered preferences. `appendfsync everysec` bounds that loss
+to one second.
+
+### Leaving it unset
+
+With no `storage.className`, claims fall through to the cluster's default
+StorageClass, so `kind` and Docker Desktop work with no configuration. Be clear
+about what that gives you: a single-node default class (kind's `standard`,
+`local-path`) writes to that one node's disk. It survives a pod restart. It does
+not survive losing the node.
+
+### Upgrading an existing install
+
+Redis, Chroma and Postgres change `kind` from `Deployment` to `StatefulSet`, and
+Helm cannot mutate a workload's kind in place. Delete the old workloads first;
+their data was on an `emptyDir` or no volume at all, so there is nothing to
+preserve:
+
+```bash
+kubectl delete deployment avaloka-redis avaloka-postgres avaloka-chroma --ignore-not-found
+helm upgrade --install avaloka deploy/helm/avaloka --set storage.className=longhorn
+```
+
+MinIO and MCP keep their existing claims and are untouched by the upgrade.
+
+---
+
 ## 9. Verifying a deployment
 
 ```bash

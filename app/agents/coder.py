@@ -29,7 +29,8 @@ from app.core.model_config import resolve as resolve_model
 from app.core.model_fallback import attach_fallback
 from app.core.log_utils import describe_messages, describe_response
 
-_coder_api_key = os.environ.get("GROQ_API_KEY_CODING_AGENT")
+_coder_api_key = (os.environ.get("GROQ_API_KEY_CODING_AGENT")
+              or os.environ.get("GROQ_API_KEY"))
 coder_llm = build_chat_model(
     role="coding",
     agent="CODER",

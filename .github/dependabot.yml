@@ -1,0 +1,35 @@
+# Dependency updates, batched so the noise stays manageable.
+#
+# Avaloka pins several dependencies for reasons a bot cannot see -- ray to keep
+# the client and the cluster on one version, numpy below 2 on platforms whose
+# newest torch wheel predates it. Those pins carry a comment explaining why;
+# read it before accepting a bump.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      python-dependencies:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: /ui
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      ui-dependencies:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]

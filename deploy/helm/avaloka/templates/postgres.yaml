@@ -1,9 +1,20 @@
 {{- if .Values.postgres.enabled }}
-# In-cluster Postgres (layer-3 artifact store). Single ephemeral replica with an
-# emptyDir — fine for kind/dev; for production use a managed Postgres via
-# postgres.enabled=false + postgres.externalUrl (and a real PVC).
+# In-cluster Postgres (layer-3 artifact store).
+#
+# A StatefulSet with a volumeClaimTemplate, not a Deployment with an emptyDir.
+# The layer-3 artifact store is keyed by user_id and is the one memory tier a
+# returning user is genuinely expected to get back; on an emptyDir it did not
+# survive the pod being rescheduled, which made "remembered across sessions"
+# true only until the next restart.
+#
+# replicas stays 1 by design. Postgres is single-writer: three replicas of this
+# StatefulSet would be three independent empty databases, not one highly
+# available one. Surviving a node failure is the StorageClass's job (see
+# storage.className) -- the volume follows the pod. For real Postgres HA use a
+# managed service via postgres.enabled=false + postgres.externalUrl, or run
+# CloudNativePG alongside.
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: {{ include "avaloka.fullname" . }}-postgres
   labels:
@@ -11,6 +22,7 @@ metadata:
     app.kubernetes.io/component: postgres
 spec:
   replicas: 1
+  serviceName: {{ include "avaloka.fullname" . }}-postgres-hl
   selector:
     matchLabels:
       {{- include "avaloka.selectorLabels" . | nindent 6 }}
@@ -47,9 +59,23 @@ spec:
               mountPath: /var/lib/postgresql/data
           resources:
             {{- toYaml .Values.postgres.resources | nindent 12 }}
+{{- if not .Values.postgres.persistence.enabled }}
       volumes:
         - name: data
           emptyDir: {}
+{{- end }}
+{{- if .Values.postgres.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          - {{ include "avaloka.accessMode" (dict "ctx" . "component" .Values.postgres) }}
+        resources:
+          requests:
+            storage: {{ .Values.postgres.persistence.size | quote }}
+        {{- include "avaloka.storageClass" (dict "ctx" . "component" .Values.postgres) | nindent 8 }}
+{{- end }}
 ---
 apiVersion: v1
 kind: Service
@@ -68,4 +94,26 @@ spec:
       port: {{ .Values.postgres.port }}
       targetPort: postgres
       protocol: TCP
+---
+# Headless companion for the StatefulSet's stable pod DNS. Clients continue to
+# use the ClusterIP Service above; this one exists so postgres-0 has a resolvable
+# name of its own, which is what serviceName requires.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "avaloka.fullname" . }}-postgres-hl
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgres
+spec:
+  clusterIP: None
+  selector:
+    {{- include "avaloka.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: postgres
+  ports:
+    - name: postgres
+      port: {{ .Values.postgres.port }}
+      targetPort: postgres
+      protocol: TCP
+
 {{- end }}

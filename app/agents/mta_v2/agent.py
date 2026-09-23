@@ -42,7 +42,8 @@ REMOTE_DATA_SOURCE_SCHEMES = (
     "http://", "https://",
     "postgresql://", "mysql://", "sqlite://", "mssql://",
 )
-_planner_api_key = os.environ.get("GROQ_API_KEY_PLANNING_AGENT")
+_planner_api_key = (os.environ.get("GROQ_API_KEY_PLANNING_AGENT")
+                    or os.environ.get("GROQ_API_KEY"))
 # Hybrid-reasoning MTA (verified live: gpt-oss honors tool_choice="none" for
 # the conversational replies and "required" for the tool-pick call). Effort
 # defaults to "low" to keep natural-language replies snappy; raise via

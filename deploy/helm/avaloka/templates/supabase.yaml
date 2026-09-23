@@ -22,7 +22,9 @@ metadata:
 spec:
   accessModes:
     - ReadWriteOnce
-  storageClassName: {{ .Values.supabase.db.storageClassName | default "standard" }}
+{{- with (.Values.supabase.db.storageClassName | default (.Values.storage).className) }}
+  storageClassName: {{ . | quote }}
+{{- end }}
   resources:
     requests:
       storage: {{ .Values.supabase.db.storageSize | default "20Gi" }}
@@ -38,7 +40,9 @@ metadata:
 spec:
   accessModes:
     - ReadWriteOnce
-  storageClassName: {{ .Values.supabase.db.storageClassName | default "standard" }}
+{{- with (.Values.supabase.db.storageClassName | default (.Values.storage).className) }}
+  storageClassName: {{ . | quote }}
+{{- end }}
   resources:
     requests:
       storage: {{ .Values.supabase.storage.storageSize | default "10Gi" }}
@@ -580,30 +584,12 @@ spec:
             - name: PGPASSWORD
               value: {{ $pw | quote }}
           command:
-            - /bin/bash
+            - /bin/sh
             - -c
             - |
               set -e
               echo "waiting for db..."
               until pg_isready -h {{ $dbHost }} -U postgres -d postgres >/dev/null 2>&1; do sleep 3; done
-              # The app migrations create RLS policies on storage.objects that
-              # reference storage.foldername(). storage-api's own first migration
-              # DROPs and recreates that function, which fails once a policy
-              # depends on it -- so on a fresh cluster the ordering matters:
-              # storage-api must finish its schema migrations before ours run.
-              # It only starts listening on :5000 after they complete, so a TCP
-              # connect is the signal. Bounded, because this is a post-install
-              # hook and helm blocks on it.
-              echo "waiting for storage-api schema migrations..."
-              i=0
-              until timeout 2 bash -c 'exec 3<>/dev/tcp/{{ $fullname }}-supabase-storage/{{ .Values.supabase.storage.port }}' 2>/dev/null; do
-                i=$((i+1))
-                if [ "$i" -ge 120 ]; then
-                  echo "  storage-api not up after 10 minutes; applying migrations anyway"
-                  break
-                fi
-                sleep 5
-              done
               for f in $(ls /migrations/*.sql | sort); do
                 echo "applying $f"
                 psql -h {{ $dbHost }} -U postgres -d postgres -v ON_ERROR_STOP=0 -f "$f" || echo "  (non-fatal errors in $f ignored)"

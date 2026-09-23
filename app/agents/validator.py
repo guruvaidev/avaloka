@@ -14,7 +14,8 @@ from app.core.model_config import resolve as resolve_model
 from app.core.model_fallback import attach_fallback
 from app.core.log_utils import describe_response
 
-_validator_api_key = os.environ.get("GROQ_API_KEY_CODING_AGENT")
+_validator_api_key = (os.environ.get("GROQ_API_KEY_CODING_AGENT")
+              or os.environ.get("GROQ_API_KEY"))
 validator_llm = build_chat_model(
     role="coding",
     agent="VALIDATOR",

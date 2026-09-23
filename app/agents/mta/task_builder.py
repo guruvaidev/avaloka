@@ -124,7 +124,8 @@ class TrainingTaskBuilder:
     def _determine_model_name_and_description(self, state: ETLState):
         """Determine model name and description from state information"""
         try:
-            api_key = os.environ.get("GROQ_API_KEY_PLANNING_AGENT")
+            api_key = (os.environ.get("GROQ_API_KEY_PLANNING_AGENT")
+                       or os.environ.get("GROQ_API_KEY"))
             llm = build_chat_model(
                 role="planning",
                 agent="MTA_TASK_BUILDER",

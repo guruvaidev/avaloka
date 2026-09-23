@@ -49,7 +49,7 @@ curl -F "file=@sales.csv" localhost:9000/api/upload
 ```
 
 > **Port 9000, not 8000.** The container image serves on 9000 and the Helm
-> service exposes it on 9000. Uvicorn's own default is 8000, which is the single
+> service maps `8000 → 9000`. Uvicorn's own default is 8000, which is the single
 > most common reason a fresh install "cannot reach the API" — pass `--port 9000`
 > and every path lines up.
 
@@ -145,6 +145,7 @@ Everything below is in this repository. Start wherever your question is.
 | Guide | What's in it |
 | ----- | ------------ |
 | 🗺️ [Architecture](docs/architecture.md) | The agent team, the request lifecycle, and why each dependency exists. |
+| 🧠 [Context memory](docs/context-memory.md) | The four-tier memory plane — what each tier holds, how a hint is composed, and why the circuit breaker exists. |
 | 📄 [Research Paper](docs/Avaloka-Research-Paper.pdf) | The system's design and evaluation, written up. |
 | 🧪 [Testing](docs/testing.md) | Test tiers, markers, the suite reference, and how to run each. |
 | 📊 [Test Reports](docs/test-reports/) | Per-case evidence behind the claims in [How this is proven](#how-this-is-proven-and-where-the-proof-is-thin). |

@@ -30,3 +30,47 @@ import pytest
 
 def pytest_configure(config):
     config.addinivalue_line("markers", "cloud: mark test as requiring real cloud credentials")
+
+
+# ---------------------------------------------------------------------------
+# Collection-time marking
+# ---------------------------------------------------------------------------
+# pytest.ini has declared `integration` ("exercises real agents/LLMs") since
+# before the open-source release, and almost nothing ever carried it. So the
+# hermetic CI stage -- which selects `not integration` precisely to stay
+# runnable without Redis, a server or cloud credentials -- pulled in the whole
+# end-to-end suite anyway and failed 378 tests on a clean checkout.
+#
+# The tests are not wrong and the marker expression is not wrong; the marker was
+# simply never applied. Applying it by location is deliberate: a per-file
+# decision drifts the moment someone adds a file, whereas "everything under
+# tests/e2e/ is end-to-end" is a rule that keeps being true. Anything needing a
+# service also needs the marker, and a file can still opt in by hand.
+#
+# Nothing is deleted and nothing is skipped by default. `pytest` with no -m
+# still runs all of it; only the hermetic selection filters these out.
+
+_INTEGRATION_DIRS = ("tests/e2e/", "tests/k8s/", "tests/infra/")
+_INTEGRATION_SUFFIXES = ("_integration.py",)
+
+
+def _wants_integration_marker(relpath: str) -> bool:
+    normalised = relpath.replace("\\", "/")
+    if any(seg in normalised for seg in _INTEGRATION_DIRS):
+        return True
+    return normalised.endswith(_INTEGRATION_SUFFIXES)
+
+
+def pytest_collection_modifyitems(config, items):
+    """Mark end-to-end and integration suites so `-m 'not integration'` means it."""
+    import pathlib
+    root = pathlib.Path(str(config.rootpath))
+    for item in items:
+        try:
+            rel = pathlib.Path(str(item.fspath)).relative_to(root).as_posix()
+        except ValueError:
+            continue
+        if _wants_integration_marker(rel) and not any(
+            m.name == "integration" for m in item.iter_markers()
+        ):
+            item.add_marker(pytest.mark.integration)
