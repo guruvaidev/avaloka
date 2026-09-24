@@ -163,3 +163,111 @@ See [INSTALL.md](INSTALL.md). Licence keys come from the Avaloka team.
   deployment. Offline licence verification exists for exactly this.
 - **Will you open-source more over time?** Capabilities move outward, not
   inward. Anything published stays published.
+
+---
+
+## Where it runs, and what you licensed
+
+Two independent questions decide what you get, and collapsing them is the usual
+source of confusion:
+
+| Question | Values | Decides |
+| --- | --- | --- |
+| **Where does it run?** | self-hosted · Avaloka-hosted | who pays for the compute |
+| **What did you buy?** | OSS · Free · Professional · Enterprise | which capabilities are licensed |
+
+This is why *"does the free version have a scheduler?"* has no single answer.
+**Self-hosted open source: yes** — it is your cluster and your bill.
+**Free on Avaloka's cloud: no** — we pay for every scheduled cycle. Same code,
+opposite answer; the difference is who is paying.
+
+A capability is unavailable for exactly one of three reasons, and every gate
+declares which (`GATE_REASON` in `app/core/editions.py`):
+
+| Reason | Meaning | Workaround |
+| --- | --- | --- |
+| `OPEN` | Not gated | Nothing to work around |
+| `COST` | We provide the compute, so hosted plans are capped | **Self-host** — then it is your bill |
+| `COMMERCIAL` | The implementation is not in the OSS distribution | None; the code is not on disk |
+
+A capability disabled in a self-hosted OSS install for a `COST` reason is a bug.
+The boundary is enforced by **import probe**, not configuration — no environment
+variable can claim a capability whose module is absent — which is what makes the
+split honest rather than advisory. See [docs/EDITIONS.md](EDITIONS.md).
+
+```bash
+./scripts/install.sh                 # open source
+./scripts/install.sh --check         # what does my install resolve to?
+./scripts/install.sh --edition professional --license-key "$KEY"
+```
+
+#### What the open-source edition is sized for
+
+**A laptop, or a small Kubernetes cluster you run yourself.** That is the
+target, it is what gets tested, and it is what the capability matrix grants.
+Everything below follows from it.
+
+| | |
+| --- | --- |
+| **Tested on** | macOS and Linux laptops; a single-node `kind` cluster; small self-managed clusters |
+| **Not tested on** | large multi-node clusters, autoscaling node pools, multi-tenant or production workloads |
+| **Support** | community, best-effort. You run it at your own risk. |
+
+If you need scale — provisioned and autoscaled clusters, larger distributed
+jobs, scheduled cloud workloads, SLAs — that is what the commercial editions
+are for. See [avaloka.ai](https://avaloka.ai), or email
+**[support@avaloka.ai](mailto:support@avaloka.ai)**.
+
+**Included, and fully functional**
+
+- The whole analysis path — profile, transform, analyse, visualise
+- **Distributed Ray execution on a cluster you already run**, and the local
+  scheduler (Celery + Redis via `docker-compose.scheduler.yml`). These are not
+  capped: it is your cluster and your bill, so capping them would protect
+  nothing. They are *sized* for a small cluster, not *limited* to one.
+- Model training and inference locally
+- The generated code, always. Whatever Avaloka writes, you can export and run in
+  your own environment. There is no black box.
+- File connectors: CSV, TSV, JSON, XML, Excel, Parquet, Avro, Delta, Iceberg
+- Any model provider, including local models
+
+**Not included**
+
+- **Cloud infrastructure provisioning.** Avaloka will not create a GKE, EKS or
+  AKS cluster for you. `get_provider("gcp"|"aws"|"azure")` refuses in an
+  open-source build and tells you where to go. This is a genuine limitation,
+  not a switch: standing up and paying for cloud infrastructure on your behalf
+  is what the commercial editions do.
+- **Scheduling work onto a cloud cluster.** The scheduler runs locally and
+  schedules local and own-cluster work. What it cannot do is dispatch a job to
+  a managed cluster it did not provision.
+- **Scheduling a training run onto a cloud cluster.** MTA itself is yours —
+  train and serve models locally or on your own Ray cluster, with MLflow
+  tracking and the model registry. What is commercial is dispatching that work
+  to managed cloud infrastructure Avaloka provisioned for you.
+- **Scale operations** — autoscaling policy, node-pool management, cost
+  controls, multi-tenant isolation.
+- **Team features** — shared analyses, comments, notifications, SSO and audit.
+
+> **What "connect" still does.** Avaloka can attach to any cluster your
+> `kubeconfig` already reaches, including a cloud one you provisioned yourself,
+> and run distributed Ray and scheduled jobs on it. The commercial line is
+> Avaloka *creating and managing* that infrastructure for you — not whether
+> your cluster happens to sit in a cloud.
+
+##### With a commercial edition
+
+Point Avaloka at any cloud and let it run there: provisioned and autoscaled
+clusters, larger distributed execution, scheduled jobs on that cluster, and
+delivery of the results. Teams share analyses, comment on them, and work from
+the same connections and schedules.
+
+The Enterprise UI adds the configuration surfaces for that — cloud Kubernetes
+connections and scheduler configuration — which the open-source edition has no
+use for, because it has no cloud cluster to point them at.
+
+See [docs/EDITIONS.md](EDITIONS.md) for the capability-by-capability
+breakdown, and run `./scripts/install.sh --check` to see what your install
+resolves to.
+
+---

@@ -2,7 +2,6 @@
 
 | | |
 |---|---|
-| **Workbook** | [Avaloka-1.6-Master-Test-Plan.xlsx](Avaloka-1.6-Master-Test-Plan.xlsx) |
 | **Scope** | `develop-1.6` as merged, plus all 14 open PRs targeting it |
 | **Size** | 126 cases · 83 P1 · 9 assignable sheets |
 | **Date** | 2026-08-30 |

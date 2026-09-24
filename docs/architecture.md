@@ -410,3 +410,160 @@ A provider configured with an unusable key degraded silently to canned text.
 `_diagnose_missing_model()` now names the missing variable and says when a key
 for a *different* provider is present. The deterministic fallback remains for
 the genuinely-no-model case, which is a supported way to run.
+
+---
+
+## End-to-End Workflow
+
+```mermaid
+%% see avaloka-flowchart.mermaid for the source diagram
+graph TD
+    A[Start] --> B(plan_etl)
+    B --> C{route_planner_output}
+    C -->|continue planning| V[End]
+    C -->|provision infra| D(provision_infra)
+    D --> B
+    C -->|summarise| E(summarize_etl)
+    E --> F[generate_planner_graph]
+    F --> G[code_etl]
+    C -->|prepare code| G
+    C -->|train models| P[train_models]
+    C -->|task operation / schedule| Q[schedule_task]
+    C -->|execute on ray| R2[execute_on_ray]
+    subgraph "Coding Subgraph"
+        G --> H[coder]
+        H --> I[validator_syntax]
+        I --> J[validator_static]
+        J --> K[validator_logical]
+        K --> L{check_validation_status}
+        L -->|refine| H
+    end
+    L -->|approved| M{route_after_code}
+    M -->|train models| P
+    M -->|schedule task| Q
+    M -->|execute locally| R[execute_locally]
+    M -->|execute on k8s| S[execute_on_k8s]
+    M -->|execute on ray| R2
+    P --> T{route_after_training}
+    T -->|schedule task| Q
+    T -->|end| V
+    R --> W{route_after_execution}
+    S --> W
+    R2 --> W
+    W -->|visualize| U[visualize]
+    W -->|end| V
+    U --> V
+    Q --> V
+```
+
+## System Architecture
+
+```mermaid
+%% see avaloka-system-diagram.mermaid for the source diagram
+graph TD
+    subgraph "User Interface"
+        A[React Web UI]
+        B[FastAPI Backend]
+    end
+
+    subgraph "Agentic Workflow"
+        C[LangGraph Runtime]
+        D[Planner]
+        E[Planner Graph]
+        F[Summariser]
+        G[Coder]
+        H[Validator]
+        I[Infrastructure]
+        J[Execution]
+        K[Sampling & Profiling]
+        L[Scheduler]
+        M[MTA v1 PyTorch/ONNX]
+        M2[MTA v2 Ray/Inference]
+        N[Visualization]
+        O2[MCP Server]
+        P2[RAG Engine]
+    end
+
+    subgraph "Execution Substrate"
+        LK["kind / your own cluster<br/>(open source)"]
+        O["GKE / EKS / AKS<br/>(commercial: provisioned)"]
+        Q[Kubernetes Jobs]
+        RC[Ray Cluster]
+    end
+
+    subgraph "Inference Service"
+        IS[Inference Service Container]
+        AG["Cloud API Gateway<br/>(commercial)"]
+    end
+
+    subgraph "Storage & Services"
+        GS[GCS / S3 Blob Store]
+        RD[Redis Cache]
+        SB[Supabase]
+        ML[MLflow]
+        GH[GitHub Job Registry]
+    end
+
+    A --> B --> C
+    C --> D
+    C --> E
+    C --> F
+    C --> G
+    C --> H
+    C --> I
+    C --> J
+    C --> K
+    C --> L
+    C --> M
+    C --> M2
+    C --> N
+    D --> C
+    F --> G
+    G --> H
+    I --> Q
+    J --> Q
+    J --> RC
+    Q --> LK
+    Q --> O
+    RC --> LK
+    RC --> O
+    M2 --> IS
+    IS --> AG
+    IS --> RC
+    B --> GS
+    B --> RD
+    B --> GH
+    K --> SB
+    M --> ML
+    M2 --> ML
+```
+
+---
+
+---
+
+## Model Routing & Fallback
+
+Model choice is configuration, not code:
+
+| Concern | Where |
+| --- | --- |
+| *Which model* an agent asks for | `app/core/model_config.py` — `resolve_model("coder")`, env-overridable, live-verified against the provider catalogue |
+| *Which provider* serves it | Groq (default) · in-cluster vLLM/Ollama · OpenAI · OpenRouter · Bedrock · Vertex · Azure |
+| *When the provider fails* | `app/core/model_fallback.py` — OpenRouter backup, then a **local** last resort sized by deployment profile |
+
+The local tier is profile-aware: a cluster GPU serves `gemma-4-31b`-class
+models; a laptop gets a small model (`gemma3:4b`) — chosen deliberately and
+stated in the logs, because a laptop serving 27B+ turns a fallback into a
+hang. Detection uses `KUBERNETES_SERVICE_HOST` (kubelet-injected);
+`AVALOKA_DEPLOYMENT_PROFILE` overrides. Measured on the conversational
+integrity probes, a local 3.3 GB `gemma3:4b` matches the hosted 120B's
+Pass@1 at interactive latency — the laptop tier is parity, not a compromise.
+
+`scripts/ops/discover_models.py` keeps this current: it discovers new model
+families from live catalogues (when gemma5 ships, it appears with zero code
+changes), verifies pullable tags against the Ollama registry rather than
+guessing, and sizes recommendations to the machine's memory — MoE models by
+*active* parameters. `scripts/ops/verify_models.py` checks every configured
+model against the provider's live catalogue, so a provider deprecating a
+model is a CI failure, not a mid-analysis 404.
