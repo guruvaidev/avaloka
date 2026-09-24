@@ -212,12 +212,27 @@ def _sample_bytes(
         return stream.read(size)
 
 
+#: Encodings whose detection can be trusted ahead of cp1252. They are all
+#: multi-byte (or BOM-marked): a wrong guess in this family fails loudly,
+#: because arbitrary bytes are not valid in them. Statistical detection is
+#: worth something here.
+_TRUSTED_DETECTION_PREFIXES = (
+    "utf", "shift", "sjis", "euc", "gb", "big5", "iso-2022", "johab",
+    "cp932", "cp936", "cp949", "cp950", "hz",
+)
+
+
+def _detection_outranks_cp1252(encoding: str) -> bool:
+    return encoding.lower().replace("_", "-").startswith(_TRUSTED_DETECTION_PREFIXES)
+
+
 def _csv_encoding_candidates(
     uri: str,
     storage_options: Dict[str, Any],
 ) -> list[str]:
     """Return conservative non-UTF-8 fallbacks for a failed CSV decode."""
-    candidates: list[str] = []
+    detected_first: list[str] = []
+    detected_late: list[str] = []
     try:
         # charset_normalizer, not chardet: chardet is LGPL, which is a licence
         # an Apache-2.0 distribution cannot carry as a required dependency.
@@ -228,7 +243,22 @@ def _csv_encoding_candidates(
         detected = detect(_sample_bytes(uri, storage_options))
         encoding = str(detected.get("encoding") or "").strip()
         if encoding and float(detected.get("confidence") or 0) >= 0.5:
-            candidates.append(encoding)
+            # A single-byte guess must NOT jump ahead of cp1252. Every
+            # single-byte codec decodes every byte sequence, so a wrong guess
+            # cannot fail -- it silently returns different characters. The
+            # detector is confidently wrong about exactly this: a Western CSV
+            # holding "Frýdek" is reported as cp1125/Russian at 0.80, and one
+            # with cp1252 curly quotes and en-dashes as cp775/Swedish at 1.00.
+            # Both decode, so both were accepted, and the dataset reached
+            # training with mojibake in its string columns and no error
+            # anywhere. Confidence is no help; the detector means it.
+            #
+            # It is still kept, after cp1252, for the case cp1252 cannot
+            # handle -- it has five undefined bytes -- and ahead of latin-1.
+            if _detection_outranks_cp1252(encoding):
+                detected_first.append(encoding)
+            else:
+                detected_late.append(encoding)
     except Exception as exc:
         print(f"[URL Loader] Could not detect CSV encoding: {exc}")
 
@@ -236,7 +266,7 @@ def _csv_encoding_candidates(
     # final lossless single-byte fallback and therefore cannot raise a decode
     # error, but it comes last to avoid turning CP1252 punctuation into control
     # characters.
-    candidates.extend(["cp1252", "latin-1"])
+    candidates = detected_first + ["cp1252"] + detected_late + ["latin-1"]
     return list(dict.fromkeys(enc.lower() for enc in candidates))
 
 

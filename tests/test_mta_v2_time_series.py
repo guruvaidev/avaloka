@@ -19,13 +19,45 @@ from app.agents.mta_v2.training_docker_image.src.evaluation import (
 )
 
 
-TIME_SERIES_FIXTURE = (
-    Path(__file__).parent / "fixtures" / "datasets" / "synthetic_retail_time_series.csv"
-)
+# The dataset is built here rather than read from
+# tests/fixtures/datasets/synthetic_retail_time_series.csv. That directory is a
+# download cache for tests/k8s/test_t7_agent_matrix.py and is gitignored, so the
+# file was never in the repository and this test could not pass on any clean
+# checkout -- it failed with FileNotFoundError on a path nothing creates.
+#
+# Generating it is also the better fixture: the data is synthetic (the filename
+# says so), the assertions only need a strictly increasing date and a varying
+# target, and a committed CSV would be one more thing to keep in step with them.
+WEEKS = 60
 
 
-def test_time_series_fixture_is_orderable_and_has_a_future_holdout():
-    frame = pd.read_csv(TIME_SERIES_FIXTURE)
+@pytest.fixture
+def retail_time_series() -> pd.DataFrame:
+    """60 weekly retail observations, deliberately not in chronological order.
+
+    Shuffled so that a test asserting "train is strictly earlier than
+    validation" is checking the sort, not the order the rows happened to
+    arrive in.
+    """
+    dates = pd.date_range("2024-01-07", periods=WEEKS, freq="W-SUN")
+    frame = pd.DataFrame(
+        {
+            "Date": dates.strftime("%Y-%m-%d"),
+            "Store": [1 + (i % 3) for i in range(WEEKS)],
+            "Dept": [10 + (i % 5) for i in range(WEEKS)],
+            "Temperature": [40.0 + (i % 25) for i in range(WEEKS)],
+            # A trend plus a repeating seasonal wobble: strictly more than one
+            # distinct value, without needing a random seed to stay stable.
+            "Weekly_Sales": [
+                20000.0 + (i * 125.0) + ((i % 7) * 310.0) for i in range(WEEKS)
+            ],
+        }
+    )
+    return frame.sample(frac=1.0, random_state=0).reset_index(drop=True)
+
+
+def test_time_series_fixture_is_orderable_and_has_a_future_holdout(retail_time_series):
+    frame = retail_time_series
     ordered = add_time_order_column(frame, "Date").sort_values(TIME_ORDER_COLUMN)
     metadata = time_series_split_metadata(len(ordered), "Date")
 
@@ -33,7 +65,7 @@ def test_time_series_fixture_is_orderable_and_has_a_future_holdout():
     train = ordered.iloc[:train_rows]
     validation = ordered.iloc[train_rows:]
 
-    assert len(frame) == 60
+    assert len(frame) == WEEKS
     assert frame["Weekly_Sales"].nunique() > 1
     assert train["Date"].max() < validation["Date"].min()
 

@@ -78,10 +78,19 @@ def _stub_execution_layer(monkeypatch):
 
     gke_mod = types.ModuleType("app.data_transfer_docker.gke_run")
 
-    def _gke_launch_spy(injection_script, job_id=None, cloud_env=None, gcp_sa_json=None, dest_gcp_sa_json=None):
+    # Mirrors launch_gke_pipeline's real signature. It has to: the planner calls
+    # it by keyword, so a spy missing a parameter does not fail as a signature
+    # mismatch -- it is swallowed by the planner's except-and-report path and
+    # surfaces as "the transfer could not be completed", which reads like a
+    # product bug rather than a stale double. dashboard_url is recorded because
+    # it is the routing decision worth asserting: a DB endpoint the remote Ray
+    # cluster cannot reach must send the job to the in-cluster dashboard.
+    def _gke_launch_spy(injection_script, job_id=None, cloud_env=None, gcp_sa_json=None,
+                        dest_gcp_sa_json=None, dashboard_url=None):
         _CALLS["gke"].append({
             "job_id": job_id, "cloud_env": cloud_env,
             "gcp_sa_json": gcp_sa_json, "dest_gcp_sa_json": dest_gcp_sa_json,
+            "dashboard_url": dashboard_url,
         })
         return TransferResult(success=True)
 

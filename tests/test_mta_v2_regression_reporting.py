@@ -1,5 +1,6 @@
 """Focused regression-metric and chat-report tests for MTA v2."""
 
+import math
 import os
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -112,7 +113,14 @@ def test_local_trainer_returns_regression_metrics_in_final_payload(tmp_path):
 
     csv_path = tmp_path / "regression.csv"
     rows = list(range(24))
-    pd.DataFrame({"feature": rows, "target": [2.5 * value + 3.0 for value in rows]}).to_csv(csv_path, index=False)
+    # target = 2.5 * feature + 3.0 exactly -- a single feature that perfectly
+    # encodes the target -- is what the data-integrity guard exists to refuse
+    # (correlation 1.0 against a 0.98 threshold), so training was blocked with
+    # "Target leakage detected" and the payload this test reads was never
+    # built. The wobble brings |r| to ~0.87: still an obviously learnable
+    # relationship, which is all this test needs, and deterministic with no seed.
+    targets = [2.5 * value + 3.0 + 14.0 * math.sin(value * 1.7) for value in rows]
+    pd.DataFrame({"feature": rows, "target": targets}).to_csv(csv_path, index=False)
     plan = {
         "model_type": "regression",
         "model_name": "regression-test",

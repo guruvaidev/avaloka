@@ -428,14 +428,18 @@ class TestMTAIntegration:
         import shutil
         shutil.rmtree(self.temp_dir, ignore_errors=True)
     
-    def test_mta_agent_with_training_capability(self):
-        """Test MTA agent with training capabilities"""
+    def test_mta_agent_exposes_the_graph_entry_point(self):
+        """The agent must be constructible and drivable from the graph.
+
+        This used to assert execute_training/communication/mlflow_manager.
+        app.agents.model_training_agent now re-exports the mta_v2 agent, which
+        has none of them: its entry point is execute(state), and that is what
+        model_training_agent_node calls.
+        """
         mta = ModelTrainingAgent()
-        
-        # Verify training capabilities are available
-        assert hasattr(mta, 'execute_training')
-        assert hasattr(mta, 'communication')
-        assert hasattr(mta, 'mlflow_manager') or mta.mlflow_manager is None
+
+        assert callable(getattr(mta, "execute", None))
+        assert callable(getattr(mta, "parse_tool_call", None))
     
     def test_training_task_creation_from_config(self):
         """Test training task creation from configuration"""
@@ -445,6 +449,9 @@ class TestMTAIntegration:
         # Create proper TrainingTask object
         task = TrainingTask(
             task_id="test_task",
+            model_name="test_model",
+            model_description="model built by the training tests",
+            model_version="1",
             model_type=ModelType.PYTORCH_CLASSIFICATION,
             task_type=TaskType.CLASSIFICATION,
             data_config=DataConfig(data_source="test.csv"),
@@ -505,6 +512,9 @@ class TestMTAIntegration:
         # Test 1: Invalid training task
         invalid_task = TrainingTask(
             task_id="invalid_test",
+            model_name="test_model",
+            model_description="model built by the training tests",
+            model_version="1",
             model_type=ModelType.PYTORCH_CLASSIFICATION,
             task_type=TaskType.CLASSIFICATION,
             data_config=DataConfig(data_source="nonexistent_file.csv")
@@ -557,6 +567,9 @@ class TestConfigurationManagement:
         # Create proper TrainingTask object
         task = TrainingTask(
             task_id="config_test",
+            model_name="test_model",
+            model_description="model built by the training tests",
+            model_version="1",
             model_type=ModelType.PYTORCH_REGRESSION,
             task_type=TaskType.REGRESSION,
             data_config=DataConfig(data_source="test.csv"),
@@ -589,6 +602,9 @@ class TestConfigurationManagement:
         try:
             invalid_task = TrainingTask(
                 task_id="invalid_test",
+                model_name="test_model",
+                model_description="model built by the training tests",
+                model_version="1",
                 model_type="invalid_model_type",  # This should fail
                 task_type=TaskType.CLASSIFICATION,
                 data_config=DataConfig(data_source="test.csv")
@@ -604,6 +620,9 @@ class TestConfigurationManagement:
         try:
             invalid_task = TrainingTask(
                 task_id="invalid_test",
+                model_name="test_model",
+                model_description="model built by the training tests",
+                model_version="1",
                 model_type=ModelType.PYTORCH_CLASSIFICATION,
                 task_type="invalid_task_type",  # This should fail
                 data_config=DataConfig(data_source="test.csv")
@@ -633,6 +652,9 @@ class TestConfigurationManagement:
         try:
             invalid_task = TrainingTask(
                 task_id="invalid_test",
+                model_name="test_model",
+                model_description="model built by the training tests",
+                model_version="1",
                 model_type=ModelType.PYTORCH_CLASSIFICATION,
                 task_type=TaskType.CLASSIFICATION,
                 data_config=DataConfig(data_source="test.csv"),
@@ -700,6 +722,9 @@ def test_integration_with_fixtures(sample_training_task, sample_data_info):
     # Convert dict to TrainingTask object
     task = TrainingTask(
         task_id=sample_training_task["task_id"],
+        model_name="test_model",
+        model_description="model built by the training tests",
+        model_version="1",
         model_type=ModelType(sample_training_task["model_type"]),
         task_type=TaskType.CLASSIFICATION,
         data_config=DataConfig(data_source="test.csv"),

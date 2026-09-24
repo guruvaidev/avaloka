@@ -276,12 +276,23 @@ def _print_verdict(result: MissionResult) -> None:
 
 
 def _print_next_steps(result: MissionResult) -> None:
+    """The bundle, and the three commands that open it.
+
+    These lines are meant to be copied and run, so they must not be word-
+    wrapped: an output directory long enough to exceed the terminal width had
+    ``executive_report.html`` broken across two lines, which is a path the user
+    then cannot paste. ``soft_wrap`` leaves the text intact and lets the
+    terminal reflow it, which keeps the copy correct at any width.
+    """
     out = result.summary["output_dir"]
     console.print()
-    console.print(f"[bold green]Deliverables →[/bold green] {out}")
-    console.print(f"  [dim]open {out}/executive_report.html[/dim]   the decision summary")
-    console.print(f"  [dim]cat  {out}/README.md[/dim]               findings and limitations")
-    console.print(f"  [dim]python {out}/analysis.py[/dim]           reproduce this run")
+    console.print(f"[bold green]Deliverables →[/bold green] {out}", soft_wrap=True)
+    console.print(f"  [dim]open {out}/executive_report.html[/dim]   the decision summary",
+                  soft_wrap=True)
+    console.print(f"  [dim]cat  {out}/README.md[/dim]               findings and limitations",
+                  soft_wrap=True)
+    console.print(f"  [dim]python {out}/analysis.py[/dim]           reproduce this run",
+                  soft_wrap=True)
 
 
 def _finish(result: MissionResult, ava: Avaloka | None) -> None:

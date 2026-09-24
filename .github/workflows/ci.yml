@@ -33,6 +33,13 @@ jobs:
           python-version: ${{ matrix.python }}
           cache: pip
 
+      - name: System packages
+        # Graphviz is a system package, not a pip one: the `graphviz` wheel is
+        # only a binding to the `dot` binary. Without it the planner-graph
+        # tests skip themselves, so CI would go green without ever rendering a
+        # plan. Installing it here is what makes that suite actually run.
+        run: sudo apt-get update && sudo apt-get install -y graphviz
+
       - name: Install
         # The same installer a user runs, so a break in it fails CI rather than
         # being discovered by the first person to clone the repository.

@@ -665,27 +665,39 @@ def _extract_runtime_env_from_yaml(yaml_text: str) -> dict:
 
     env_yaml = block_match.group(1)
 
-    # Step 2: extract pip packages from within the isolated block
-    pip_block = re.search(r"pip:\s*\n((?:[ \t]+-[ \t]+\S.*\n?)*)", env_yaml)
-    if pip_block:
-        pkgs = []
-        for line in pip_block.group(1).splitlines():
-            m = re.match(r"[ \t]+-[ \t]+(\S+)", line)
-            if m:
-                pkgs.append(m.group(1))
-        if pkgs:
-            runtime_env["pip"] = pkgs
+    # Step 2: parse the isolated block as YAML.
+    #
+    # This used to scan the block line by line with regexes, stripping one
+    # optional quote off each end of the value. That reads a *double-quoted YAML
+    # scalar* as if it were plain text, so every escape survived into the value:
+    # _render_cloud_env_vars writes the secret abc\def"ghi correctly as
+    # "abc\\def\"ghi", and the regex handed Ray back the literal abc\\def\"ghi.
+    # Any credential containing a backslash or a double quote -- a Windows path,
+    # an ODBC connection string, roughly one AWS secret key in thirty -- reached
+    # the job corrupted, and the failure surfaced as an authentication error
+    # against the remote store rather than as a quoting bug here.
+    #
+    # yaml.safe_load does the unescaping correctly. The block scoping above is
+    # kept: it is what stops K8s spec entries (name:, containerPort:) being
+    # picked up, which is why the line scanner replaced an earlier safe_load.
+    import yaml as _yaml
+    import textwrap
 
-    # Step 3: extract env_vars from within the isolated block
-    env_vars = {}
-    env_block = re.search(r"env_vars:\s*\n((?:[ \t]+\S.*\n?)*)", env_yaml)
-    if env_block:
-        for line in env_block.group(1).splitlines():
-            m = re.match(r'[ \t]+([A-Z_][A-Z0-9_]*):\s*["\']?(.*?)["\']?\s*$', line)
-            if m:
-                env_vars[m.group(1)] = m.group(2)
-    if env_vars:
-        runtime_env["env_vars"] = env_vars
+    parsed = {}
+    try:
+        parsed = _yaml.safe_load(textwrap.dedent(env_yaml)) or {}
+    except Exception as exc:
+        logger.warning("[ray_job_runner] runtimeEnvYAML block did not parse: %s", exc)
+    if not isinstance(parsed, dict):
+        parsed = {}
+
+    pkgs = parsed.get("pip")
+    if isinstance(pkgs, list) and pkgs:
+        runtime_env["pip"] = [str(pkg) for pkg in pkgs]
+
+    env_vars = parsed.get("env_vars")
+    if isinstance(env_vars, dict) and env_vars:
+        runtime_env["env_vars"] = {str(k): str(v) for k, v in env_vars.items()}
 
     logger.info("[ray_job_runner] Extracted runtime_env: pip=%s env_vars=%s",
                 runtime_env.get("pip", []),

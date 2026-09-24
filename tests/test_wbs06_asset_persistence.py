@@ -23,6 +23,7 @@ import csv
 import io
 import json
 import os
+import re
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -57,6 +58,44 @@ def _rand_id() -> str:
 
 def _now_ts() -> str:
     return datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+
+
+# ── the object-key contract ──────────────────────────────────────────────────
+# persistence_service no longer writes the flat
+# ``prefix/user/session/dataset_ts_suffix`` key this file used to assert. Keys
+# are now browsable: the user id is shortened, and the dataset and the analysis
+# each get their own labelled directory, so a bucket listing reads as
+# "this dataset, this analysis, these versions" instead of a wall of GUIDs.
+#
+#     code-registry/abcd1234/sales-9f2a11bc/churn-7d0e4a55/v2__20260424_120000_transform.py
+#
+# Nothing parses these keys -- they are opaque to every reader -- so the layout
+# is free to change, and this file states the layout it must currently produce
+# rather than the one it produced when it was written.
+
+def slug(text: str, max_len: int = 40) -> str:
+    s = re.sub(r"[^a-zA-Z0-9]+", "-", (text or "").strip().lower()).strip("-")
+    return s[:max_len].strip("-")
+
+
+def short(uid: str, n: int = 8) -> str:
+    """Eight chars of the GUID: enough to stay unique, short enough to read."""
+    return (uid or "").replace("-", "")[:n]
+
+
+def asset_key(prefix, user_id, session_id, dataset_id, prompt_ts, suffix,
+              *, dataset_label="", analysis_label="", version=None) -> str:
+    ds  = f"{slug(dataset_label) or 'dataset'}-{short(dataset_id)}"
+    an  = f"{slug(analysis_label) or 'analysis'}-{short(session_id)}"
+    ver = f"v{version}__{prompt_ts}" if version else prompt_ts
+    return f"{prefix}/{short(user_id)}/{ds}/{an}/{ver}_{suffix}"
+
+
+def github_config(token="fake-token", repo="test/repo"):
+    """A resolved GitHub target, as resolve_github_config() now returns one."""
+    from app.api.integrations import GitHubConfig
+
+    return GitHubConfig(token=token, repo=repo, source="env")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -208,9 +247,8 @@ class TestTaskA_CodePersistence:
         assert result["status"] == "success"
         assert "object_key" in result
 
-        expected_key = (
-            f"code-registry/{user_id}/{session_id}/{dataset_id}_{prompt_ts}_transform.py"
-        )
+        expected_key = asset_key(
+            "code-registry", user_id, session_id, dataset_id, prompt_ts, "transform.py")
         assert result["object_key"] == expected_key
         assert mock_store.has_key(expected_key)
 
@@ -281,14 +319,14 @@ class TestTaskA_CodePersistence:
             )
 
         key = result["object_key"]
-        # Validate structure: prefix/user_id/session_id/dataset_id_ts_suffix
+        # prefix / short(user) / dataset-<short id> / analysis-<short id> / ts_suffix
         parts = key.split("/")
         assert parts[0] == "code-registry"
-        assert parts[1] == user_id
-        assert parts[2] == session_id
-        assert parts[3].endswith("_transform.py")
-        assert dataset_id in parts[3]
-        assert prompt_ts in parts[3]
+        assert parts[1] == short(user_id)
+        assert parts[2] == f"dataset-{short(dataset_id)}"
+        assert parts[3] == f"analysis-{short(session_id)}"
+        assert parts[4].endswith("_transform.py")
+        assert prompt_ts in parts[4]
 
     @pytest.mark.asyncio
     async def test_persist_code_multiple_prompts_create_separate_files(
@@ -353,9 +391,8 @@ class TestTaskC_OutputPersistence:
             )
 
         assert result["status"] == "success"
-        expected_key = (
-            f"execution-outputs/{user_id}/{session_id}/{dataset_id}_{prompt_ts}_output.csv"
-        )
+        expected_key = asset_key(
+            "execution-outputs", user_id, session_id, dataset_id, prompt_ts, "output.csv")
         assert result["object_key"] == expected_key
         assert mock_store.has_key(expected_key)
 
@@ -444,9 +481,10 @@ class TestTaskC_OutputPersistence:
         key = result["object_key"]
         parts = key.split("/")
         assert parts[0] == "execution-outputs"
-        assert parts[1] == user_id
-        assert parts[2] == session_id
-        assert parts[3].endswith("_output.csv")
+        assert parts[1] == short(user_id)
+        assert parts[2] == f"dataset-{short(dataset_id)}"
+        assert parts[3] == f"analysis-{short(session_id)}"
+        assert parts[4].endswith("_output.csv")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -475,9 +513,9 @@ class TestTaskD_VizPersistence:
             )
 
         assert result["status"] == "success"
-        expected_key = (
-            f"visualization-configs/{user_id}/{session_id}/{dataset_id}_{prompt_ts}_viz_config.json"
-        )
+        expected_key = asset_key(
+            "visualization-configs", user_id, session_id, dataset_id, prompt_ts,
+            "viz_config.json")
         assert result["object_key"] == expected_key
         assert mock_store.has_key(expected_key)
 
@@ -529,7 +567,9 @@ class TestTaskD_VizPersistence:
         key = result["object_key"]
         parts = key.split("/")
         assert parts[0] == "visualization-configs"
-        assert parts[3].endswith("_viz_config.json")
+        assert parts[2] == f"dataset-{short(dataset_id)}"
+        assert parts[3] == f"analysis-{short(session_id)}"
+        assert parts[4].endswith("_viz_config.json")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -546,7 +586,12 @@ class TestTaskB_GitPersistence:
         """Task B: skips gracefully when no GitHub token configured."""
         from app.services.persistence_service import persist_job_definition_to_git
 
-        with patch("app.services.persistence_service.GITHUB_TOKEN", ""):
+        # The GitHub target is resolved per user (UI connection, then the
+        # GITHUB_SYSTEM_TOKEN env fallback); the module-level GITHUB_TOKEN this
+        # test used to patch is no longer what gates the write. "Nothing
+        # resolved" is what the caller must skip on.
+        with patch("app.api.integrations.resolve_github_config",
+                   AsyncMock(return_value=None)):
             result = await persist_job_definition_to_git(
                 user_id=user_id,
                 session_id=session_id,
@@ -559,7 +604,7 @@ class TestTaskB_GitPersistence:
             )
 
         assert result["status"] == "skipped"
-        assert result["reason"] == "GITHUB_SYSTEM_TOKEN not set"
+        assert "no GitHub connection" in result["reason"]
 
     @pytest.mark.asyncio
     async def test_persist_job_skips_on_failed_execution(
@@ -568,7 +613,8 @@ class TestTaskB_GitPersistence:
         """Task B: does not write to Git when execution failed."""
         from app.services.persistence_service import persist_job_definition_to_git
 
-        with patch("app.services.persistence_service.GITHUB_TOKEN", "fake-token"):
+        with patch("app.api.integrations.resolve_github_config",
+                   AsyncMock(return_value=github_config())):
             result = await persist_job_definition_to_git(
                 user_id=user_id,
                 session_id=session_id,
@@ -608,8 +654,8 @@ class TestTaskB_GitPersistence:
         mock_get_contents_response = MagicMock()
         mock_get_contents_response.status_code = 404
 
-        with patch("app.services.persistence_service.GITHUB_TOKEN", "fake-token"), \
-             patch("app.services.persistence_service.GITHUB_JOB_REPO", "test/repo"), \
+        with patch("app.api.integrations.resolve_github_config",
+                   AsyncMock(return_value=github_config())), \
              patch("httpx.AsyncClient") as mock_client_cls:
 
             mock_client = AsyncMock()
@@ -661,8 +707,8 @@ class TestTaskB_GitPersistence:
         mock_put_response = MagicMock()
         mock_put_response.status_code = 201
 
-        with patch("app.services.persistence_service.GITHUB_TOKEN", "fake-token"), \
-             patch("app.services.persistence_service.GITHUB_JOB_REPO", "test/repo"), \
+        with patch("app.api.integrations.resolve_github_config",
+                   AsyncMock(return_value=github_config())), \
              patch("httpx.AsyncClient") as mock_client_cls:
 
             mock_client = AsyncMock()
@@ -711,8 +757,8 @@ class TestTaskB_GitPersistence:
         mock_put_response = MagicMock()
         mock_put_response.status_code = 201
 
-        with patch("app.services.persistence_service.GITHUB_TOKEN", "fake-token"), \
-             patch("app.services.persistence_service.GITHUB_JOB_REPO", "test/repo"), \
+        with patch("app.api.integrations.resolve_github_config",
+                   AsyncMock(return_value=github_config())), \
              patch("httpx.AsyncClient") as mock_client_cls:
 
             mock_client = AsyncMock()
@@ -732,9 +778,9 @@ class TestTaskB_GitPersistence:
             )
 
         file_path = result["file_path"]
-        assert file_path.startswith(f"jobs/{user_id}/{session_id}/")
+        assert file_path.startswith(
+            f"jobs/dataset-{short(dataset_id)}/analysis-{short(session_id)}/")
         assert file_path.endswith("_job_definition.json")
-        assert dataset_id in file_path
         assert prompt_ts in file_path
 
 
@@ -762,6 +808,15 @@ class TestBackgroundOrchestrator:
             mock_sess.update(data)
             return True
 
+        # The orchestrator no longer does get_session + save_session: it hands a
+        # mutator to update_session, which re-reads the session under a lock and
+        # applies only the asset fields, so a concurrent chat turn's save cannot
+        # be clobbered. Patching only save_session left the real update_session
+        # in place and the assertions saw an untouched session.
+        async def mock_update_session(sid, mutate):
+            mutate(mock_sess)
+            return dict(mock_sess)
+
         # with patch("app.services.persistence_service._get_store_for_connection",
         #            return_value=(mock_store, "")), \
         #      patch("app.services.persistence_service.GITHUB_TOKEN", ""), \
@@ -772,10 +827,13 @@ class TestBackgroundOrchestrator:
 
         with patch("app.services.persistence_service._get_store_for_connection",
                    return_value=(mock_store, "")), \
-             patch("app.services.persistence_service.GITHUB_TOKEN", ""), \
+             patch("app.api.integrations.resolve_github_config",
+                   AsyncMock(return_value=None)), \
              patch("app.services.persistence_service.datetime") as mock_dt, \
              patch("app.services.session_service.get_session", side_effect=mock_get_session), \
-             patch("app.services.session_service.save_session", side_effect=mock_save_session):
+             patch("app.services.session_service.save_session", side_effect=mock_save_session), \
+             patch("app.services.session_service.update_session",
+                   side_effect=mock_update_session):
 
             mock_dt.utcnow.return_value.strftime.side_effect = lambda fmt: next(ts_iter)
 
@@ -827,11 +885,23 @@ class TestBackgroundOrchestrator:
             mock_sess.update(data)
             return True
 
+        # The orchestrator no longer does get_session + save_session: it hands a
+        # mutator to update_session, which re-reads the session under a lock and
+        # applies only the asset fields, so a concurrent chat turn's save cannot
+        # be clobbered. Patching only save_session left the real update_session
+        # in place and the assertions saw an untouched session.
+        async def mock_update_session(sid, mutate):
+            mutate(mock_sess)
+            return dict(mock_sess)
+
         with patch("app.services.persistence_service._get_store_for_connection",
                    return_value=(mock_store, "")), \
-             patch("app.services.persistence_service.GITHUB_TOKEN", ""), \
+             patch("app.api.integrations.resolve_github_config",
+                   AsyncMock(return_value=None)), \
              patch("app.services.session_service.get_session", side_effect=mock_get_session), \
-             patch("app.services.session_service.save_session", side_effect=mock_save_session):
+             patch("app.services.session_service.save_session", side_effect=mock_save_session), \
+             patch("app.services.session_service.update_session",
+                   side_effect=mock_update_session):
 
             await _persist_assets_background(
                 user_id=user_id,
@@ -926,15 +996,27 @@ class TestBackgroundOrchestrator:
             mock_sess.update(data)
             return True
 
+        # The orchestrator no longer does get_session + save_session: it hands a
+        # mutator to update_session, which re-reads the session under a lock and
+        # applies only the asset fields, so a concurrent chat turn's save cannot
+        # be clobbered. Patching only save_session left the real update_session
+        # in place and the assertions saw an untouched session.
+        async def mock_update_session(sid, mutate):
+            mutate(mock_sess)
+            return dict(mock_sess)
+
         # Return different timestamps for each call so keys don't collide
         ts_values = iter(["20260424_120000", "20260424_120500"])
 
         with patch("app.services.persistence_service._get_store_for_connection",
                    return_value=(mock_store, "")), \
-             patch("app.services.persistence_service.GITHUB_TOKEN", ""), \
+             patch("app.api.integrations.resolve_github_config",
+                   AsyncMock(return_value=None)), \
              patch("app.services.persistence_service.datetime") as mock_dt, \
              patch("app.services.session_service.get_session", side_effect=mock_get_session), \
-             patch("app.services.session_service.save_session", side_effect=mock_save_session):
+             patch("app.services.session_service.save_session", side_effect=mock_save_session), \
+             patch("app.services.session_service.update_session",
+                   side_effect=mock_update_session):
 
             mock_dt.utcnow.return_value.strftime.side_effect = lambda fmt: next(ts_values)
 
@@ -991,11 +1073,23 @@ class TestBackgroundOrchestrator:
             mock_sess.update(data)
             return True
 
+        # The orchestrator no longer does get_session + save_session: it hands a
+        # mutator to update_session, which re-reads the session under a lock and
+        # applies only the asset fields, so a concurrent chat turn's save cannot
+        # be clobbered. Patching only save_session left the real update_session
+        # in place and the assertions saw an untouched session.
+        async def mock_update_session(sid, mutate):
+            mutate(mock_sess)
+            return dict(mock_sess)
+
         with patch("app.services.persistence_service._get_store_for_connection",
                    return_value=(broken_store, "")), \
-             patch("app.services.persistence_service.GITHUB_TOKEN", ""), \
+             patch("app.api.integrations.resolve_github_config",
+                   AsyncMock(return_value=None)), \
              patch("app.services.session_service.get_session", side_effect=mock_get_session), \
-             patch("app.services.session_service.save_session", side_effect=mock_save_session):
+             patch("app.services.session_service.save_session", side_effect=mock_save_session), \
+             patch("app.services.session_service.update_session",
+                   side_effect=mock_update_session):
 
             await _persist_assets_background(
                 user_id=user_id, session_id=session_id, dataset_id=dataset_id,
@@ -1087,23 +1181,38 @@ class TestObjectKeyGeneration:
     def test_code_key_format(self):
         from app.services.persistence_service import _object_key
         key = _object_key("code-registry", "user1", "sess1", "ds1", "20260424_120000", "transform.py")
-        assert key == "code-registry/user1/sess1/ds1_20260424_120000_transform.py"
+        assert key == "code-registry/user1/dataset-ds1/analysis-sess1/20260424_120000_transform.py"
 
     def test_output_key_format(self):
         from app.services.persistence_service import _object_key
         key = _object_key("execution-outputs", "user1", "sess1", "ds1", "20260424_120000", "output.csv")
-        assert key == "execution-outputs/user1/sess1/ds1_20260424_120000_output.csv"
+        assert key == "execution-outputs/user1/dataset-ds1/analysis-sess1/20260424_120000_output.csv"
 
     def test_viz_key_format(self):
         from app.services.persistence_service import _object_key
         key = _object_key("visualization-configs", "user1", "sess1", "ds1", "20260424_120000", "viz_config.json")
-        assert key == "visualization-configs/user1/sess1/ds1_20260424_120000_viz_config.json"
+        assert key == ("visualization-configs/user1/dataset-ds1/analysis-sess1/"
+                       "20260424_120000_viz_config.json")
+
+    def test_labels_name_the_directories_when_supplied(self):
+        """The point of the layout: a bucket listing readable without a lookup."""
+        from app.services.persistence_service import _object_key
+        key = _object_key(
+            "code-registry", "user1", "sess1", "ds1", "20260424_120000", "transform.py",
+            dataset_label="Meridian_Molding_Production.csv",
+            analysis_label="Which lines are slipping?",
+            version=2,
+        )
+        assert key == ("code-registry/user1/meridian-molding-production-csv-ds1/"
+                       "which-lines-are-slipping-sess1/v2__20260424_120000_transform.py")
 
     def test_key_uses_dataset_id_not_session(self):
+        """The dataset directory must come from the dataset, not the session."""
         from app.services.persistence_service import _object_key
         key = _object_key("code-registry", "u", "sess-abc", "ds-xyz", "20260424_120000", "transform.py")
-        filename = key.split("/")[-1]
-        assert filename.startswith("ds-xyz_")
+        parts = key.split("/")
+        assert parts[2] == "dataset-dsxyz"
+        assert parts[3] == "analysis-sessabc"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

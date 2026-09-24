@@ -50,6 +50,25 @@ def pytest_configure(config):
 # Nothing is deleted and nothing is skipped by default. `pytest` with no -m
 # still runs all of it; only the hermetic selection filters these out.
 
+# ---------------------------------------------------------------------------
+# Files named test_*.py that are not tests
+# ---------------------------------------------------------------------------
+# These two are operator diagnostics: an argparse __main__, a required CSV path
+# supplied by the person running them, a real LLM call, and a printed report to
+# read. They contain no assertions and cannot pass as tests -- pytest collects
+# them only because of the filename, then errors with "fixture 'csv_path' not
+# found" on every run.
+#
+# Ignored rather than renamed: their own usage lines, and the docs, say
+# `python tests/test_new_sampler_standalone.py --csv-path ...`, and that still
+# works. Ignoring them at collection also skips their module-level daft import,
+# which is not free.
+collect_ignore = [
+    "test_new_sampler_standalone.py",
+    "test_profiling_agent_standalone.py",
+]
+
+
 _INTEGRATION_DIRS = ("tests/e2e/", "tests/k8s/", "tests/infra/")
 _INTEGRATION_SUFFIXES = ("_integration.py",)
 

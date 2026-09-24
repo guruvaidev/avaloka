@@ -20,6 +20,7 @@ spec:
     env_vars:
       JOB_ID: "__JOB_ID__"
       PYTHONPATH: "/home/ray"
+      __CLOUD_ENV_VARS__
 
   rayClusterSpec:
     rayVersion: "2.10.0"
@@ -119,4 +120,4 @@ metadata:
   name: __RAYJOB_NAME__-code
 data:
   sample_code.py: |
-__INJECTION_SCRIPT__
+    __INJECTION_SCRIPT__

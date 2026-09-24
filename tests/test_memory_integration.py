@@ -85,14 +85,31 @@ if "groq" not in sys.modules:
     groq.APIError = type("APIError", (Exception,), {})
     sys.modules["groq"] = groq
 
+# ── Module stubbing, and undoing it ──────────────────────────────────────────
+# The stubs below have to be installed at import time: app.api.workflow imports
+# these agent nodes at *its* import, so there is no fixture early enough.
+#
+# What they must not do is outlive this file. They used to: each call replaced
+# sys.modules[name] for the rest of the session, so `execution_agent_node_ray`
+# and `infra_agent_node` stayed MagicMocks for every later test module. Run on
+# its own, tests/test_ray_unit.py passed; run after this file, its four tests
+# asserted against `<MagicMock name='mock().__getitem__()...'>`, and
+# test_infra_routing failed with KeyError: 'platform'. Sixteen failures across
+# four files, none of them about the code under test, all of them invisible
+# until the suite was run in one process.
+#
+# So record what was there first and put it back when this module is done. The
+# attribute-copying below stays for the same reason it was added: while the
+# stub is installed it must remain a superset of the real module, or an
+# unrelated import during this file's run fails on a missing symbol.
+_STUBBED_ORIGINALS: Dict[str, object] = {}
+
 def _stub_module(name, **attrs):
     """Install a stub for `name`, keeping any real symbols it already exports.
 
-    These entries persist for the whole session, so a bare ModuleType would hide
-    every other symbol the real module provides -- later test modules importing
-    one of them fail at collection with "unknown location". Copying the real
-    module's attributes first keeps the stub a superset: the names in `attrs`
-    are mocked for the tests here, everything else still resolves.
+    A bare ModuleType would hide every other symbol the real module provides,
+    so copy the real module's attributes first: the names in `attrs` are mocked
+    for the tests here, everything else still resolves.
     """
     try:
         real = importlib.import_module(name)
@@ -108,8 +125,40 @@ def _stub_module(name, **attrs):
 
     for attr_name, attr_value in attrs.items():
         setattr(mod, attr_name, attr_value)
+    if name not in _STUBBED_ORIGINALS:
+        _STUBBED_ORIGINALS[name] = sys.modules.get(name)
     sys.modules[name] = mod
     return mod
+
+
+def _restore_stubbed_modules():
+    """Put sys.modules back the way this file found it.
+
+    Called immediately after the imports below, NOT from a fixture: pytest
+    imports every test module during collection, before it runs a single test,
+    so a fixture teardown fires long after tests/test_ray_unit.py has already
+    been imported against the mocks. The window in which the stubs must exist
+    is exactly the three imports that follow -- once those have bound their
+    names, nothing else needs them.
+    """
+    for name, original in _STUBBED_ORIGINALS.items():
+        if original is None:
+            sys.modules.pop(name, None)
+        else:
+            sys.modules[name] = original
+
+    # app.api.workflow bound the mocked agent nodes into its graph at import,
+    # so putting the stubbed modules back is not enough -- the cached workflow
+    # module still wires MagicMocks as graph nodes, and the next file to import
+    # it builds a graph out of them (tests/test_planner.py failed ten times on
+    # langgraph.errors.InvalidUpdateError that way). Drop it so it is rebuilt
+    # against the real agents. The name imported above stays bound to the
+    # stubbed version, which is what this file is testing.
+    #
+    # Only this module: evicting app.* wholesale re-imports app.graph.etl_state
+    # too, and a second ETLState class breaks every graph built against the
+    # first one.
+    sys.modules.pop("app.api.workflow", None)
 
 if "app.core.celery_app" not in sys.modules:
     _stub_module(
@@ -141,6 +190,11 @@ _stub_module("app.agents.scheduler", task_scheduler_node=MagicMock())
 from app.api.workflow import memory_injection_node
 from app.graph.etl_state import ETLState
 from app.services.memory_plane import retrieve_memory, MemoryOrchestrator
+
+# The names above are now bound to objects built against the stubs, which is
+# the isolation this file wants. sys.modules goes back to normal so that the
+# rest of the session imports the real agents.
+_restore_stubbed_modules()
 
 
 # ── Constants ──────────────────────────────────────────────────

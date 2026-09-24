@@ -4,6 +4,7 @@ Run this to test the planner graph functionality before integrating with the ful
 """
 
 import os
+import shutil
 import sys
 import tempfile
 import pandas as pd
@@ -30,6 +31,19 @@ except ImportError as exc:  # pragma: no cover - environment-dependent
     # kept the script's error handling when it became a test.
     pytest.skip(
         f"planner graph agent dependencies unavailable: {exc}",
+        allow_module_level=True,
+    )
+
+# The `graphviz` PyPI package is a binding, not a renderer: every test in this
+# file ends in a call to `dot`, and without the Graphviz *system* package the
+# agent returns "error: Graphviz system executables not found" and the
+# assertions fail on a message about the environment rather than about the
+# code. Absent is absent -- report it as a skip naming what to install.
+if shutil.which("dot") is None:  # pragma: no cover - environment-dependent
+    pytest.skip(
+        "Graphviz system executables not found: these tests render a plan with "
+        "`dot`. Install the system package (apt-get install graphviz, or "
+        "brew install graphviz) -- the graphviz PyPI package alone is not enough.",
         allow_module_level=True,
     )
 

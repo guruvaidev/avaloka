@@ -1,6 +1,7 @@
 import os
 import logging
 import uuid
+import re
 from pathlib import Path
 
 # Reuse the Chameleon runner from the other workflow!
@@ -72,10 +73,17 @@ def launch_gke_pipeline(injection_script: str, job_id: str = None, cloud_env: di
         yaml_text = f.read()
 
     # 2. Indent every script line to 4 spaces so it's valid YAML block-scalar
-    # content under sample_code.py. The template's "    __INJECTION_SCRIPT__"
-    # placeholder is matched WITH its 4 leading spaces (see the replace below) so
-    # those are consumed — preventing a double-indent (first line 8 spaces, rest
-    # 4 -> block scalar terminates -> invalid YAML).
+    # content under sample_code.py. The placeholder's own leading whitespace is
+    # consumed with it, preventing a double-indent on the first line (8 spaces,
+    # then 4 -> the block scalar terminates -> invalid YAML).
+    #
+    # The leading spaces are matched by pattern rather than as a literal
+    # "    __INJECTION_SCRIPT__". They were literal, and when the template lost
+    # that indent the replace silently stopped matching: no error, no warning,
+    # just a ConfigMap whose sample_code.py held the text __INJECTION_SCRIPT__
+    # and a Ray job that ran it. A substitution whose failure mode is a
+    # plausible-looking artifact has to fail loudly instead, which is what the
+    # check below does.
     indented_script = "\n".join(
         f"    {line}" if line.strip() else "" for line in injection_script.split("\n")
     )
@@ -83,9 +91,28 @@ def launch_gke_pipeline(injection_script: str, job_id: str = None, cloud_env: di
     # 3. Inject variables into the YAML
     yaml_text = yaml_text.replace("__RAYJOB_NAME__", rayjob_name)
     yaml_text = yaml_text.replace("__JOB_ID__", job_id)
-    yaml_text = yaml_text.replace("    __INJECTION_SCRIPT__", indented_script)
+    yaml_text, _n_script = re.subn(
+        r"[ \t]*__INJECTION_SCRIPT__", lambda _m: indented_script, yaml_text
+    )
+    if _n_script != 1:
+        raise RuntimeError(
+            f"RayJob template {template_path} has {_n_script} __INJECTION_SCRIPT__ "
+            "placeholders; expected exactly 1. Refusing to submit a job whose "
+            "code would not be the generated script."
+        )
     yaml_text = yaml_text.replace("__GCS_SECRET_NAME__", GCS_SA_SECRET_NAME)
-    yaml_text = yaml_text.replace("      __CLOUD_ENV_VARS__", _render_cloud_env_vars(cloud_env))
+    # Same failure mode as the script placeholder, same guard: when this stopped
+    # matching, every S3/Azure transfer was submitted with no credentials in the
+    # pod env and failed against the remote store for no stated reason.
+    yaml_text, _n_env = re.subn(
+        r"[ \t]*__CLOUD_ENV_VARS__", lambda _m: _render_cloud_env_vars(cloud_env), yaml_text
+    )
+    if _n_env != 1:
+        raise RuntimeError(
+            f"RayJob template {template_path} has {_n_env} __CLOUD_ENV_VARS__ "
+            "placeholders; expected exactly 1. Refusing to submit a job that "
+            "would reach the remote store with no credentials."
+        )
 
     # 4. Hand off to the reusable Chameleon runner. Forward the connection's GCS
     # service-account key so direct-submission mode authenticates as that SA.
