@@ -260,7 +260,7 @@ def test_t1_8_api_port_probes_and_nodeport(rendered_chart):
 
 # --------------------------------------------------------------------------- T1.9
 def test_t1_9_single_source_ray_version():
-    """D2 guard: ray image tag == both CR rayVersion == requirements ray pin == 2.49.2."""
+    """D2 guard: ray image tag == both CR rayVersion == requirements ray pin == 2.58.0."""
     dockerfile = (REPO_ROOT / "deploy/docker/Dockerfile.ray").read_text()
     m = re.search(r"FROM rayproject/ray:([0-9.]+)-py311", dockerfile)
     assert m, "could not find ray base image tag"
@@ -275,8 +275,12 @@ def test_t1_9_single_source_ray_version():
     rs_ver = rs["spec"]["rayClusterConfig"]["rayVersion"]
 
     req = (REPO_ROOT / "requirements.txt").read_text()
-    rm = re.search(r"ray\[ml\]==([0-9.]+)", req)
-    assert rm, "could not find ray[ml] pin in requirements.txt"
+    # Match whatever extras are pinned, not one hard-coded set. This asked for
+    # `ray[ml]` specifically, and `ray[ml]` stopped existing when that extra was
+    # found not to be real -- so the guard could no longer find the pin it was
+    # guarding, and failed on its own assert instead of comparing versions.
+    rm = re.search(r"^ray(?:\[[^\]]*\])?==([0-9.]+)", req, re.M)
+    assert rm, "could not find a ray pin in requirements.txt"
     req_ver = rm.group(1)
 
     assert img_tag == rc_ver == rs_ver == req_ver == RAY_VERSION, (

@@ -14,7 +14,7 @@ OVERLAY_DIR = CHART_DIR / "values"
 KIND_CLUSTER_YAML = REPO_ROOT / "deploy" / "clusters" / "kind-cluster.yaml"
 
 # The single source of truth the whole stack must agree on (D2 / R4).
-RAY_VERSION = "2.49.2"
+RAY_VERSION = "2.58.0"
 
 
 def has(tool: str) -> bool:

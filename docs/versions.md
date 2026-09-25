@@ -19,20 +19,22 @@ pinned numbers, so there is one place to update when a version changes.
 
 | Component | Version | Where it's pinned |
 | --------- | ------- | ----------------- |
-| Ray / Ray Serve (app client) | 2.49.2 | `requirements.txt` (`ray[ml]==2.49.2`) |
-| Ray (cluster image) | 2.49.2 | `deploy/docker/Dockerfile.ray` (`rayproject/ray:2.49.2-py311`) |
-| RayCluster CR `rayVersion` | 2.49.2 | `deploy/helm/ray/raycluster.yaml` |
-| RayService CR `rayVersion` | 2.49.2 | `deploy/helm/ray/rayservice.yaml` |
+| Ray / Ray Serve (app client) | 2.58.0 | `requirements.txt` (`ray[air,serve]==2.58.0`) |
+| Ray (cluster image) | 2.58.0 | `deploy/docker/Dockerfile.ray` (`rayproject/ray:2.58.0-py311`) |
+| RayCluster CR `rayVersion` | 2.58.0 | `deploy/helm/ray/raycluster.yaml` |
+| RayService CR `rayVersion` | 2.58.0 | `deploy/helm/ray/rayservice.yaml` |
 | KubeRay operator | set by `KUBERAY_OPERATOR_VERSION` | `app/infra/ray_manager.py` |
 | Apache Spark (PySpark) | 4.0.0+ | `requirements.txt` |
 | Daft (getdaft) | 0.5–0.8 range | `requirements.txt` |
 
-> **Why 2.49.2.** The matrix previously named 2.53.0, a Ray release that does
-> not exist — the newest published is 2.49.2. Every consumer agreed with every
-> other, so the guard test passed, and `pip install -r requirements.txt` failed
-> on every platform with "No matching distribution found for ray==2.53.0". A
-> matrix that is internally consistent and externally wrong is the failure mode
-> worth watching for here.
+> **Why 2.58.0.** Every consumer must agree: the pip client, the cluster
+> image, both CR `rayVersion` fields, and the two agent Dockerfiles. Ray refuses
+> a client/cluster version mismatch at connect time, and nothing in the hermetic
+> CI selection can catch it because CI never starts a cluster --
+> `tests/k8s/test_t1_deploy_logic.py` has the guard, and `tests/k8s/` is marked
+> integration. Dependabot bumped `requirements.txt` alone in PR #4 and split the
+> matrix; this realigns the other six references upward rather than reverting,
+> since 2.58.0 is published on PyPI and `rayproject/ray:2.58.0-py311` exists.
 
 
 > **Ray version must match on both ends.** The app talks to the cluster over the
