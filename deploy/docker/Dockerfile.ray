@@ -6,7 +6,7 @@
 # Pin the Ray base image to the Ray version compatible with the KubeRay operator
 # installed by app/infra/ray_manager.py (KUBERAY_OPERATOR_VERSION=1.4.2, which
 # supports Ray 2.38.0+ per the KubeRay compatibility matrix; 2.9.3 predated it).
-FROM rayproject/ray:2.49.2-py311
+FROM rayproject/ray:2.58.0-py311
 
 USER root
 

@@ -1,4 +1,4 @@
-FROM rayproject/ray:2.49.2-py311
+FROM rayproject/ray:2.58.0-py311
 
 ENV PYTHONUNBUFFERED=1
 ENV RAY_BACKEND_LOG_LEVEL=error

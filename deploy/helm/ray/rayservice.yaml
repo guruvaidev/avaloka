@@ -30,7 +30,7 @@ spec:
           - name: InferenceService
             num_replicas: 1
   rayClusterConfig:
-    rayVersion: "2.49.2"
+    rayVersion: "2.58.0"
     headGroupSpec:
       rayStartParams:
         dashboard-host: "0.0.0.0"

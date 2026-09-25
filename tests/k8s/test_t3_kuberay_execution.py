@@ -1,7 +1,7 @@
 """T3 — KubeRay execution (cluster, kuberay, slow).
 
 Installs the KubeRay operator at the D2 version, brings up the RayCluster, proves
-the cluster runs Ray 2.49.2 end to end, runs a Ray job, and exercises the D3
+the cluster runs Ray 2.58.0 end to end, runs a Ray job, and exercises the D3
 RayService inference path (real prediction / not a scaffold).
 
 Resource note: a RayCluster and a RayService each run a head pod. On a 2-node kind
@@ -22,7 +22,7 @@ from tests.k8s.helpers.portforward import port_forward
 pytestmark = [pytest.mark.cluster, pytest.mark.kuberay, pytest.mark.slow]
 
 NS = k8s.NAMESPACE
-RAY_VERSION = "2.49.2"
+RAY_VERSION = "2.58.0"
 
 
 def _reachable() -> bool:
@@ -79,7 +79,7 @@ def test_t3_raycluster_runs_ray_253(kuberay_operator):
     if not ok:
         pytest.fail("RayCluster head not Running in 600s\n" +
                     k8s.diagnostics("ray.io/node-type=head"))
-    # T3.3: dashboard reports 2.49.2
+    # T3.3: dashboard reports 2.58.0
     with port_forward("svc/avaloka-raycluster-head-svc", 8265) as lp:
         ver = requests.get(f"http://127.0.0.1:{lp}/api/version", timeout=15).json()
     assert ver.get("ray_version") == RAY_VERSION, ver

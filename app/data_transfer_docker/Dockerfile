@@ -9,12 +9,12 @@
 #
 # Use the official Ray image as the base.
 #
-# 2.49.2 matches the app env (requirements.txt pins ray==2.49.2), so the injection
+# 2.58.0 matches the app env (requirements.txt pins ray==2.58.0), so the injection
 # scripts the planner generates and validates run on the same ray/daft/pyarrow stack
 # inside this container. The old 2.10.0 base broke against modern daft: daft's
 # flotilla error handler references ray.exceptions.ActorDiedError (added after 2.10),
 # so any task failure crashed with AttributeError instead of surfacing the real error.
-FROM rayproject/ray:2.49.2-py311
+FROM rayproject/ray:2.58.0-py311
 
 # Switch to root to install system dependencies
 USER root
