@@ -17,6 +17,11 @@ from app.agents.preparation_agent import parse_numeric_token
 # through app.agents.coder, so the name must stay importable here even
 # though coder.py no longer calls it itself.
 from app.utils import generate_filename_timestamp  # noqa: F401
+from app.agents.blueprint_contract import (
+    BlueprintContract,
+    ContractError,
+    parse_blueprint,
+)
 
 # Load environment variables
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -249,12 +254,38 @@ For co-occurrence, recommender, user-item, product-order, product-product, pairw
 10. Return sparse COO edge-list rows instead of materializing zero similarity cells.
 11. For symmetric pairwise similarity matrices, remove self-pairs and duplicate mirrored pairs by filtering COO coordinates with row < col before mapping codes back to IDs.
 
-AGGREGATION / CHART OUTPUT RULE:
-When the request asks to aggregate, group by, count, sum, average, a rate/percentage/share, a distribution/histogram, or to plot/chart/graph X by Y:
-1. The final output dataframe MUST be the aggregated result - one row per group (or the binned distribution), containing only the grouping key(s) and the computed metric column(s).
-2. NEVER return the full input rows or the whole dataframe for such a request. Returning the raw, unaggregated data (the same columns and roughly the same row count as the input) is incorrect and must not happen.
-3. For a rate/percentage/share request, compute the aggregated ratio per group (for a 0/1 outcome column, that is its mean per group), not the raw rows.
-4. For a histogram/distribution request, return the binned counts (bin label and count), not the raw column values.
+ACCEPTANCE CRITERIA (the contract):
+After the numbered steps, emit a fenced ```json block stating the postconditions the
+result DataFrame must satisfy. The validator checks these against the real result, so
+state what must be TRUE of the output, not how to compute it.
+
+```json
+{
+  "result_kind": "aggregate | row_transform | subset | reshape | scalar",
+  "source_columns": ["exact schema column names the computation reads"],
+  "result_columns": [
+    {"name": "<output column>", "role": "key | metric | passthrough",
+     "dtype": "numeric | string | datetime | boolean | any",
+     "min": <optional number>, "max": <optional number>}
+  ],
+  "row_relation": {"type": "one_per_group | same_as_input | fewer_than_input | at_most | exactly | unconstrained",
+                   "group_by": ["grouping column(s), for one_per_group"],
+                   "n": <number, for at_most/exactly>},
+  "unique_key": ["column(s) that must not repeat"],
+  "not_null": ["column(s) that must have no missing values"]
+}
+```
+
+Rules for the contract itself:
+- Use ONLY the field names and values listed above.
+- "source_columns" must be exact column names from the schema. Never invent one.
+- If the request aggregates, groups, counts, sums, averages, takes a rate/share, bins a
+  distribution, or plots X by Y, then result_kind is "aggregate" and row_relation is
+  "one_per_group" with the grouping column(s). That is what makes returning the raw
+  input rows a detectable failure.
+- A proportion, rate or share that you express as a 0-1 fraction gets "min": 0, "max": 1.
+- State only postconditions you are confident the correct result satisfies. An
+  over-tight contract rejects correct code; prefer omitting a criterion to guessing one.
 """
 
     details: List[str] = []
@@ -279,7 +310,10 @@ When the request asks to aggregate, group by, count, sum, average, a rate/percen
     if state.get("session_logic_signature"):
         human_prompt += f"\n[SESSION LOGIC SIGNATURE]:\n{state['session_logic_signature']}\n"
 
-    human_prompt += "\nRespond with numbered pseudocode steps only."
+    human_prompt += (
+        "\nRespond with the numbered pseudocode steps, then the fenced json "
+        "acceptance-criteria block."
+    )
 
     try:
         response = coder_llm.invoke(
@@ -296,6 +330,85 @@ When the request asks to aggregate, group by, count, sum, average, a rate/percen
     pseudocode = _coerce_response_text(response)
     logger.info("--- Generated pseudocode blueprint ---\n%s", pseudocode)
     return pseudocode
+
+
+def _split_blueprint(raw: str, state: CodingAgentState):
+    """Split a blueprint response into prose steps and a parsed contract.
+
+    A contract that cannot be read, or that asserts nothing checkable, is
+    discarded rather than trusted -- the pipeline then behaves exactly as it did
+    before contracts existed. A gate that silently passes everything is worse
+    than no gate.
+    """
+    steps, contract, problems = parse_blueprint(raw, schema=state.get("schema"))
+    for problem in problems:
+        logger.info("Blueprint contract: %s", problem)
+    if contract is not None:
+        logger.info("--- Blueprint contract ---\n%s",
+                    json.dumps(contract.to_dict(), indent=2))
+    return steps, contract
+
+
+def _contract_from_state(state: CodingAgentState):
+    """Re-hydrate the contract carried in state across a retry."""
+    raw = state.get("coder_contract")
+    if not raw:
+        return None
+    try:
+        return BlueprintContract.parse(raw)
+    except ContractError:
+        return None
+
+
+_GUARD_COLUMN_RE = re.compile(r"on the\s+'([^']+)'\s+column")
+
+
+def _contract_contradicts_math_guard(contract, math_err: str, state: CodingAgentState) -> bool:
+    """Should the blueprint's declared intent override the math-on-string guard?
+
+    The guard (``app/agents/planner.py::_detect_math_on_string_column``) decides
+    by regex over the user's wording which column an aggregation verb targets.
+    That guess misfires whenever a text or date column is merely *named* in a
+    request whose arithmetic lands somewhere else -- "monthly admission counts
+    from the date of admission ... 3-month rolling average" is refused outright
+    because 'Date of Admission' is the only column named and 'average' appears.
+
+    The blueprint now states the result columns explicitly. If none of them is
+    the flagged column, the plan is not producing "the average of <text
+    column>", the guard's premise is false, and the request should proceed.
+
+    Deliberately conservative: with no contract, or with no numeric metric
+    declared, the guard keeps its original behaviour.
+    """
+    if contract is None or not math_err:
+        return False
+
+    match = _GUARD_COLUMN_RE.search(math_err)
+    if not match:
+        return False
+    flagged = match.group(1)
+
+    numeric_metrics = [
+        c for c in contract.result_columns
+        if c.role == "metric" and c.dtype in {"numeric", "any"}
+    ]
+    if not numeric_metrics:
+        return False
+
+    # If any declared result column resolves to the flagged column, the plan
+    # really is trying to produce a value from it -- keep the block.
+    for spec in contract.result_columns:
+        if _contract_names_match(spec.name, flagged):
+            return False
+    return True
+
+
+def _contract_names_match(a: str, b: str) -> bool:
+    na = re.sub(r"[^a-z0-9]", "", str(a).lower())
+    nb = re.sub(r"[^a-z0-9]", "", str(b).lower())
+    if not na or not nb:
+        return False
+    return na == nb or na in nb or nb in na
 
 
 def _is_numeric_dtype(dtype: str) -> bool:
@@ -701,6 +814,8 @@ def coder_node(state: CodingAgentState) -> dict:
             "messages": _append_unique_message(state_messages, default_msg),
             "primary_llm_response": primary_msg,
             "coder_pseudocode": state.get("coder_pseudocode"),
+            "coder_contract": state.get("coder_contract"),
+            "contract_error": None,
         }
 
     if coder_llm is None:
@@ -724,6 +839,8 @@ def coder_node(state: CodingAgentState) -> dict:
                 "messages": _append_unique_message(state_messages, math_err),
                 "primary_llm_response": primary_msg,
                 "coder_pseudocode": state.get("coder_pseudocode"),
+            "coder_contract": state.get("coder_contract"),
+            "contract_error": None,
             }
         stub_code = _generate_stub_code(state)
         fallback_msg = "Generated deterministic stub code."
@@ -737,6 +854,8 @@ def coder_node(state: CodingAgentState) -> dict:
             "messages": _append_unique_message(state_messages, fallback_msg),
             "primary_llm_response": primary_msg,
             "coder_pseudocode": state.get("coder_pseudocode"),
+            "coder_contract": state.get("coder_contract"),
+            "contract_error": None,
         }
 
     # Defensive default to avoid KeyError. Only the avro ex_code below still
@@ -775,6 +894,8 @@ def coder_node(state: CodingAgentState) -> dict:
             "messages": _append_unique_message(state_messages, fallback_msg),
             "primary_llm_response": primary_msg,
             "coder_pseudocode": state.get("coder_pseudocode"),
+            "coder_contract": state.get("coder_contract"),
+            "contract_error": None,
         }
 
     if state.get("library_to_use") is None:
@@ -805,13 +926,35 @@ def coder_node(state: CodingAgentState) -> dict:
     # the same plan every time and was injected as "follow exactly", which
     # contradicts "fix based on the feedback" and made retries reproduce the
     # rejected code. The retry works from previous code + feedback instead.
-    if feedback and previous_code:
+    #
+    # Exception: a CONTRACT violation says the blueprint's own stated
+    # postconditions were not met. That is a failure of intent, not of syntax,
+    # and the previous code is the wrong thing to iterate on -- so the blueprint
+    # is regenerated with the violation in hand.
+    contract_retry = bool(state.get("contract_error"))
+    if feedback and previous_code and not contract_retry:
         pseudocode_plan = ""
+        contract = _contract_from_state(state)
     else:
         pseudocode_plan = _generate_pseudocode(state)
+        pseudocode_plan, contract = _split_blueprint(pseudocode_plan, state)
 
     # Guard: refuse math on string columns (LLM path)
     math_err = _detect_math_on_string_column_coder(state)
+    if math_err and _contract_contradicts_math_guard(contract, math_err, state):
+        # The guard is a keyword match over the prompt: it fires on "...average
+        # of that count" in a request whose only named column happens to be a
+        # date, and then terminally refuses a perfectly ordinary time-series
+        # question. The blueprint now states which columns the computation reads
+        # and what the result metric is, so when the plan does not actually
+        # apply arithmetic to the flagged text column, the declared intent wins
+        # over the regex guess.
+        logger.info(
+            "Math-on-string guard overridden by blueprint contract (declared "
+            "source columns %s do not apply arithmetic to the flagged column).",
+            list(contract.source_columns) if contract else [],
+        )
+        math_err = None
     if math_err:
         logger.info("Blocked math-on-string in LLM code path: %s", math_err)
         primary_msg = primary_response or math_err
@@ -829,6 +972,8 @@ def coder_node(state: CodingAgentState) -> dict:
             "messages": _append_unique_message(state_messages, math_err),
             "primary_llm_response": primary_msg,
             "coder_pseudocode": pseudocode_plan,
+            "coder_contract": contract.to_dict() if contract else None,
+            "contract_error": None,
         }
 
     datasets = state.get("datasets_context") or state.get("multi_dataset_state") or []
@@ -1210,6 +1355,18 @@ if __name__ == "__main__":
 
     if pseudocode_plan:
         human_prompt += f"Pseudocode blueprint (follow exactly):\n{pseudocode_plan}\n\n"
+
+    if contract is not None:
+        # The coder is shown the same postconditions the validator will check,
+        # so the acceptance criteria are a shared contract rather than a hidden
+        # exam. This is what replaces the prompt's old four-part
+        # "AGGREGATION / CHART OUTPUT RULE": the constraint is now stated per
+        # task, in the plan, instead of memorised as a general rule.
+        human_prompt += (
+            "Acceptance criteria — the returned DataFrame is checked against "
+            "these and rejected if it does not satisfy them:\n"
+            f"{json.dumps(contract.to_dict(), indent=2)}\n\n"
+        )
     elif feedback and previous_code:
         # Retry: the plan is context, not a script to reproduce — the feedback
         # below takes precedence over it.
@@ -1272,4 +1429,6 @@ if __name__ == "__main__":
         "messages": updated_messages,
         "primary_llm_response": primary_msg,
         "coder_pseudocode": pseudocode_plan,
+        "coder_contract": contract.to_dict() if contract else None,
+        "contract_error": None,
     }

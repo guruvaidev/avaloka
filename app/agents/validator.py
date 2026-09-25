@@ -7,6 +7,12 @@ from typing import Any
 from langchain_core.messages import SystemMessage, HumanMessage
 from app.core.inference import build_chat_model
 from app.agents.state import CodingAgentState
+from app.agents.blueprint_contract import (
+    BlueprintContract,
+    ContractError,
+    check_contract,
+    format_violations,
+)
 import os
 STRICT_LOGIC_ENV = "AVALOKA_STRICT_LOGIC_VALIDATION"
 logger = logging.getLogger(__name__)
@@ -2086,6 +2092,23 @@ import pandas as pd
 from contextlib import redirect_stdout, redirect_stderr
 
 
+VALIDATION_SAMPLE_ROWS_ENV = "AVALOKA_VALIDATION_SAMPLE_ROWS"
+DEFAULT_VALIDATION_SAMPLE_ROWS = 100
+
+
+def validation_sample_rows() -> int:
+    """Rows of the preview used for sample execution during validation."""
+    raw = os.getenv(VALIDATION_SAMPLE_ROWS_ENV)
+    if not raw:
+        return DEFAULT_VALIDATION_SAMPLE_ROWS
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        logger.warning("Ignoring non-integer %s=%r", VALIDATION_SAMPLE_ROWS_ENV, raw)
+        return DEFAULT_VALIDATION_SAMPLE_ROWS
+    return max(2, value)
+
+
 def _build_sample_dataframe(state: CodingAgentState) -> pd.DataFrame | None:
     """Construct a small DataFrame from preview/sample data for execution validation."""
     sample_text = state.get("sample_data") or ""
@@ -2123,8 +2146,16 @@ def _build_sample_dataframe(state: CodingAgentState) -> pd.DataFrame | None:
     if dataframe is None or dataframe.empty:
         return None
 
-    # Limit to two rows to keep execution deterministic.
-    return dataframe.head(2).reset_index(drop=True)
+    # How many rows the generated code is validated against.
+    #
+    # This was 2. Two rows keeps execution cheap, but it makes every
+    # shape-based postcondition unobservable: a group-by over two rows can
+    # legitimately return two rows, so "did this actually aggregate?" cannot be
+    # asked, and a window/resample/pivot result is degenerate rather than
+    # representative. Contract checking needs enough rows for the result shape
+    # to mean something. A deterministic prefix of the preview keeps runs
+    # reproducible -- the sample is still the same rows every time.
+    return dataframe.head(validation_sample_rows()).reset_index(drop=True)
 
 def execute_code_node(state: CodingAgentState) -> dict:
     """Executes the 'main' function from the generated code against the sample data."""
@@ -2220,6 +2251,77 @@ def execute_code_node(state: CodingAgentState) -> dict:
             "execution_error": str(e),
             "execution_output_data": None
         }
+
+def contract_validator_node(state: CodingAgentState) -> dict:
+    """Check the executed result against the blueprint's own acceptance criteria.
+
+    This is the deterministic semantic gate the pipeline did not have. Before
+    it, the only semantic check was ``logical_semantic_validator_node``, an LLM
+    reviewer that in the default configuration cannot block at all: any verdict
+    other than confirmed fabrication is downgraded to ``logical_semantic_error:
+    False`` with the rationale kept as advisory notes. So a result that was
+    simply wrong -- raw rows returned for an aggregation, a duplicated group
+    key, a rate outside [0, 1] -- passed straight through to the user.
+
+    The contract is stated by the blueprint for this specific task, so checking
+    it adds no general rule to memorise and costs no tokens.
+
+    Silent by design when there is nothing trustworthy to check: no contract, no
+    successful execution, or an empty result all return ``{}`` and leave the
+    pipeline exactly as it was.
+    """
+    if state.get("syntax_error") or state.get("static_semantic_error"):
+        return {}
+
+    raw_contract = state.get("coder_contract")
+    if not raw_contract:
+        return {}
+
+    if state.get("execution_error"):
+        # The code did not produce a result to check; the execution feedback
+        # path owns that failure.
+        return {}
+
+    records = state.get("execution_output_data")
+    if not isinstance(records, list) or not records:
+        return {}
+
+    try:
+        contract = BlueprintContract.parse(raw_contract)
+    except ContractError as exc:
+        logger.info("Stored blueprint contract is unreadable (%s); skipping check.", exc)
+        return {}
+
+    try:
+        result_df = pd.DataFrame(records)
+    except Exception as exc:  # noqa: BLE001 - never let the gate crash the graph
+        logger.warning("Could not rebuild result frame for contract check: %s", exc)
+        return {}
+
+    source_df = _build_sample_dataframe(state)
+
+    logger.info("--- Checking blueprint contract ---")
+    try:
+        violations = check_contract(contract, result_df, source_df)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Contract check raised (%s); treating as no violation.", exc)
+        return {}
+
+    if not violations:
+        logger.info("Result satisfies the blueprint contract.")
+        return {"contract_error": False, "contract_violations": []}
+
+    feedback = format_violations(violations, contract)
+    logger.warning(
+        "Result violates the blueprint contract: %s",
+        "; ".join(v.rule for v in violations),
+    )
+    return {
+        "contract_error": True,
+        "contract_violations": [{"rule": v.rule, "detail": v.detail} for v in violations],
+        "code_validation_feedback": feedback,
+    }
+
 
 def logical_semantic_validator_node(state: CodingAgentState) -> dict:
     """Uses an LLM to check if the code logically fulfills the user prompt."""

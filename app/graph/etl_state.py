@@ -76,6 +76,9 @@ class ETLState(TypedDict):
     # Code generation fields
     generated_code: Optional[str]
     coder_pseudocode: Optional[str]
+    coder_contract: Optional[dict]
+    contract_error: Optional[bool]
+    contract_violations: Optional[list]
     coder_raw_response: Optional[str]
     logical_review_feedback: Optional[str]
 

@@ -68,7 +68,12 @@ def test_execute_code_node_is_wired_into_coding_graph():
 
     assert "execute_code" in nodes
     assert ("validator_static", "execute_code") in edges
-    assert ("execute_code", "validator_logical") in edges
+    # The contract check sits between execution and the LLM reviewer: it reads
+    # the executed result and gives a deterministic verdict before any tokens
+    # are spent on judging.
+    assert "validator_contract" in nodes
+    assert ("execute_code", "validator_contract") in edges
+    assert ("validator_contract", "validator_logical") in edges
     # The refine loop re-enters at the coder, so retried code is re-executed.
     assert ("validator_logical", "coder") in edges
 

@@ -12,7 +12,13 @@ from app.core.analysis_limits import byte_routing_enabled
 
 from app.agents.coder import coder_node
 from app.agents.state import CodingAgentState
-from app.agents.validator import syntactic_validator_node, static_semantic_validator_node, logical_semantic_validator_node, execute_code_node
+from app.agents.validator import (
+    syntactic_validator_node,
+    static_semantic_validator_node,
+    logical_semantic_validator_node,
+    contract_validator_node,
+    execute_code_node,
+)
 import subprocess
 from app.agents.summarizer import summarize_etl_job
 from app.agents.planner import plan_etl_job, _detect_ambiguous_prompt_details
@@ -422,6 +428,10 @@ def check_validation_status(state: CodingAgentState) -> str:
         state.get("syntax_error")
         or state.get("static_semantic_error")
         or state.get("logical_semantic_error")
+        # A contract violation is a deterministic, self-stated failure: the
+        # result does not satisfy the acceptance criteria the blueprint itself
+        # published for this task. It retries on the same budget as the rest.
+        or state.get("contract_error")
     )
     if not has_error:
         return "end"
@@ -451,13 +461,18 @@ def build_coding_graph(checkpointer=None):
     workflow.add_node("validator_syntax", syntactic_validator_node)
     workflow.add_node("validator_static", static_semantic_validator_node)
     workflow.add_node("execute_code", execute_code_node)
+    workflow.add_node("validator_contract", contract_validator_node)
     workflow.add_node("validator_logical", logical_semantic_validator_node)
 
     workflow.set_entry_point("coder")
     workflow.add_edge("coder", "validator_syntax")
     workflow.add_edge("validator_syntax", "validator_static")
     workflow.add_edge("validator_static", "execute_code")
-    workflow.add_edge("execute_code", "validator_logical")
+    # The contract check runs on the executed result, before the LLM reviewer:
+    # a deterministic verdict is cheaper and more reliable than a judged one,
+    # and when it fires the reviewer has nothing to add.
+    workflow.add_edge("execute_code", "validator_contract")
+    workflow.add_edge("validator_contract", "validator_logical")
 
     workflow.add_conditional_edges(
         "validator_logical",
@@ -527,6 +542,52 @@ def get_user_prompt(messages: list) -> str:
     return ""
 
 
+def _describe_validation_failure(final_coding_state: dict) -> str:
+    """Explain a terminal validation failure in the user's terms.
+
+    The old message pasted ``code_validation_feedback`` straight into chat, so a
+    ``SyntaxError: unexpected EOF while parsing`` -- or, once contracts existed,
+    a JSON blob -- was what the user actually read. The feedback is written for
+    the coder, not for a person; this says what happened and what the user can
+    do about it, and keeps the raw text out of the reply.
+    """
+    violations = final_coding_state.get("contract_violations") or []
+    if final_coding_state.get("contract_error") and violations:
+        details = "\n".join(
+            f"  - {v.get('detail')}" for v in violations if isinstance(v, dict)
+        )
+        return (
+            "I could write code for this, but the result it produced didn't match "
+            "what the analysis was supposed to return, so I haven't used it:\n"
+            f"{details}\n\n"
+            "Rephrasing the request — especially naming the grouping and the "
+            "figure you want per group — usually resolves this."
+        )
+
+    if final_coding_state.get("syntax_error"):
+        return (
+            "I couldn't produce runnable code for this request after several "
+            "attempts, so nothing was executed. Narrowing the request to one "
+            "step at a time usually gets further."
+        )
+    if final_coding_state.get("static_semantic_error"):
+        return (
+            "The code I wrote referred to the data in a way that doesn't hold for "
+            "this dataset, so I stopped rather than return a misleading answer. "
+            "Naming the exact columns you want used usually resolves this."
+        )
+    if final_coding_state.get("logical_semantic_error"):
+        return (
+            "I wasn't able to satisfy myself that the code answered your question "
+            "correctly, so I haven't run it. Restating the question with the "
+            "specific figure you need usually resolves this."
+        )
+    return (
+        "I couldn't produce a result I trust for this request, so nothing was "
+        "executed. Try rephrasing or narrowing the question."
+    )
+
+
 def coding_subgraph_node(state: ETLState) -> dict:
     global coding_graph, coder_node_is_mock, mocked_coder_node
     if coder_node_is_mock or hasattr(coder_node, "_mock_return_value"):
@@ -593,6 +654,9 @@ def coding_subgraph_node(state: ETLState) -> dict:
         "messages": state.get("messages", []),
         "retry_count": 0,
         "coder_pseudocode": state.get("coder_pseudocode"),
+        "coder_contract": None,
+        "contract_error": None,
+        "contract_violations": None,
         "uploaded_csv_preview": state.get("uploaded_csv_preview"),
         "analysis_fidelity": state.get("analysis_fidelity"),
         "selected_sample_name": state.get("selected_sample_name"),
@@ -631,13 +695,10 @@ def coding_subgraph_node(state: ETLState) -> dict:
         final_coding_state.get("syntax_error")
         or final_coding_state.get("static_semantic_error")
         or final_coding_state.get("logical_semantic_error")
+        or final_coding_state.get("contract_error")
     )
     if validation_failed:
-        feedback = final_coding_state.get("code_validation_feedback") or "unspecified validation error"
-        refusal = (
-            "Generated code failed validation after all retries and will not be executed. "
-            f"Last validation feedback: {feedback}"
-        )
+        refusal = _describe_validation_failure(final_coding_state)
         logger.warning("coding_subgraph_node: %s", refusal)
         messages = list(state.get("messages", []))
         if not any(getattr(msg, "content", None) == refusal for msg in messages):
@@ -657,6 +718,8 @@ def coding_subgraph_node(state: ETLState) -> dict:
         "coder_raw_response": coder_message_text,
         "generated_code": generated_code,
         "coder_pseudocode": final_coding_state.get("coder_pseudocode"),
+        "coder_contract": final_coding_state.get("coder_contract"),
+        "contract_violations": final_coding_state.get("contract_violations"),
         "execution_output_data": final_coding_state.get("execution_output_data"),
         "execution_output_preview": final_coding_state.get("execution_output_preview"),
         "execution_stdout": final_coding_state.get("execution_stdout"),
