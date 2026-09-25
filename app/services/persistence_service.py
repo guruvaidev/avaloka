@@ -145,34 +145,29 @@ async def generate_signed_url(
     expiry_minutes: int = SIGNED_URL_EXPIRY_M,
 ) -> Optional[str]:
     """
-    Generate a time-limited V4 signed URL for direct cloud download.
-    GCSBlobStore has no signed_url method, so we sign off its underlying
-    google-cloud-storage Bucket (_bucket), mirroring its _key() prefixing.
+    Generate a time-limited signed URL for direct cloud download.
+
+    Delegates to the store. ``signed_url`` is part of the IBlobStore contract
+    and every backend implements it -- GCS (V4, off its Bucket), S3 (botocore
+    presign), Azure (SAS), and Local (None, since a local file has no
+    browser-fetchable URL).
+
+    This used to reach past the interface and sign off ``store._bucket``
+    directly, with a comment saying GCSBlobStore had no signed_url method. It
+    has one now, and the reach-past silently broke the other two: S3BlobStore
+    and AzureBlobStore have no ``_bucket``, so every download link for a
+    non-GCS connection logged "cannot sign" and returned None -- the UI showed
+    no error, just a button that produced nothing.
+
     Returns None on any error.
     """
     try:
         store, _ = await _get_store_for_connection(connection_id, storage_uri)
         if not store:
             return None
-
-        def _sign() -> Optional[str]:
-            from datetime import timedelta
-            bucket = getattr(store, "_bucket", None)
-            if bucket is None:
-                logger.warning(
-                    "[persist] store type=%s has no _bucket; cannot sign",
-                    type(store).__name__,
-                )
-                return None
-            keyer = getattr(store, "_key", None)
-            key = keyer(object_key) if callable(keyer) else object_key
-            return bucket.blob(key).generate_signed_url(
-                version="v4",
-                expiration=timedelta(minutes=expiry_minutes),
-                method="GET",
-            )
-
-        return await asyncio.to_thread(_sign)
+        return await asyncio.to_thread(
+            store.signed_url, object_key, expiry_minutes=expiry_minutes
+        )
     except Exception as exc:
         logger.warning("[persist] generate_signed_url failed for %s: %s", object_key, exc)
         return None

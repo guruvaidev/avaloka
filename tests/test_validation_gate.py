@@ -42,9 +42,16 @@ def test_hard_error_at_two_refines_so_stub_is_reachable():
         {"static_semantic_error": True, "retry_count": 2}) == "refine"
 
 
-def test_soft_error_at_two_still_ends():
+def test_soft_error_at_two_also_gets_a_final_constrained_pass():
+    """Logical failures at the cap used to end here; they now refine once more.
+
+    The coder constrains itself to plain pandas over schema columns when
+    logical_semantic_error is set at this depth, so one flaky retry no longer
+    becomes a permanent "failed validation after all retries" on a well-formed
+    ask. retry_count 3 is still the hard stop -- see test_any_error_at_three_ends.
+    """
     assert wf.check_validation_status(
-        {"logical_semantic_error": True, "retry_count": 2}) == "end"
+        {"logical_semantic_error": True, "retry_count": 2}) == "refine"
 
 
 def test_any_error_at_three_ends():

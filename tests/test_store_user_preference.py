@@ -186,8 +186,15 @@ def test_empty_preference_asks_for_rephrase(mock_llm):
     assert any("rephrase" in m.content.lower() for m in _ai_messages(result))
 
 
+# The planner replies early to schedule_task when no Celery worker answers a
+# ping, which is the right behaviour for a deployment without one -- and means
+# that on any machine without a worker (CI included) this test took the
+# early-reply branch and never reached the routing it exists to check.
+# Scheduling availability is not what is under test here; the interaction
+# between two tool calls in one LLM response is.
+@patch("app.agents.scheduler.is_celery_worker_running", return_value=True)
 @patch("app.agents.planner.llm")
-def test_store_alongside_other_tool_does_not_clobber_routing(mock_llm):
+def test_store_alongside_other_tool_does_not_clobber_routing(mock_llm, _worker_running):
     """When the LLM pairs the store tool with another tool in one response,
     the store handler must not reset the other tool's routing flags."""
     mock_llm.invoke.return_value = _tool_call_message(

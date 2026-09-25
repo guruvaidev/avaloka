@@ -540,6 +540,16 @@ class PyTorchTrainer:
                 elif isinstance(obj, (StandardScaler, LabelEncoder)):
                     # Skip sklearn objects - we already extracted their data separately
                     return None
+                elif isinstance(obj, np.integer):
+                    # A LabelEncoder fitted on a numeric target yields np.int64
+                    # classes. Without this branch they fell through to the
+                    # str() fallback below and a class index was written as
+                    # "1" instead of 1 -- when it was written at all.
+                    return int(obj)
+                elif isinstance(obj, np.floating):
+                    return float(obj)
+                elif isinstance(obj, np.bool_):
+                    return bool(obj)
                 else:
                     # Try to return as-is, but catch serialization errors
                     try:
@@ -581,8 +591,17 @@ class PyTorchTrainer:
                 metadata["class_indices"] = {i: cls for i, cls in enumerate(self.label_encoder.classes_)}
             
             metadata_path = save_dir / "metadata.json"
+            # Convert the assembled metadata, not just training_history and
+            # model_info. class_names and class_indices are built from
+            # label_encoder.classes_ *after* those two were converted, so on a
+            # numeric target they arrived here as np.int64 and json.dump raised
+            # "Object of type int64 is not JSON serializable". The model file
+            # had already been written at that point, so save_model returned an
+            # error for a model that was in fact on disk -- without its
+            # metadata, which is what inference needs to map class indices back
+            # to labels.
             with open(metadata_path, 'w') as f:
-                json.dump(metadata, f, indent=2)
+                json.dump(convert_numpy(metadata), f, indent=2)
             
             # Verify files were actually created
             if not model_path.exists():

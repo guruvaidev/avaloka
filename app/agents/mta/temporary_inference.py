@@ -354,7 +354,14 @@ def detect_inference_request(messages: List[BaseMessage], state: ETLState) -> Tu
         state.get("data_source_location") or
         state.get("output_location") or
         state.get("execution_output_data") is not None or
-        mentioned_dataset_id is not None  # Dataset was mentioned and found
+        mentioned_dataset_id is not None or  # Dataset was mentioned and found
+        # The selected dataset of a multi-dataset session is a data source too.
+        # datasets_context/active_dataset_id arrived with multi-dataset chat and
+        # this gate was never taught about them, so a session whose data lives
+        # there -- which is the normal shape after an upload -- was judged to
+        # have no data at all. "Run inference immediately" right after a
+        # successful training came back as "No inference request detected".
+        _get_selected_dataset_data(state) is not None
     )
     
     if has_any_data_source:
@@ -1552,6 +1559,37 @@ class TemporaryInferenceManager:
             Result dictionary with success status and message
         """
         try:
+            # A selected dataset that is not in datasets_context is its own
+            # error, and has to be reported before request detection. Detection
+            # counts the state's data sources, finds none, and concludes there
+            # was no inference request -- so a user pointing at a dataset that
+            # has been removed (or whose id went stale across a restart) was
+            # told "No inference request detected" about a message that plainly
+            # was one, with no indication of what went wrong or what they could
+            # use instead.
+            active_dataset_id = state.get("active_dataset_id")
+            datasets_context = state.get("datasets_context") or []
+            if active_dataset_id and datasets_context:
+                known = {
+                    entry.get("dataset_id")
+                    for entry in datasets_context
+                    if isinstance(entry, dict)
+                }
+                if active_dataset_id not in known:
+                    available = ", ".join(sorted(i for i in known if i))
+                    logger.warning(
+                        "Selected dataset %s not found in datasets_context (have: %s)",
+                        active_dataset_id, available or "none",
+                    )
+                    return {
+                        "success": False,
+                        "error": f"Dataset {active_dataset_id!r} not found",
+                        "message": (
+                            f"I couldn't find the dataset {active_dataset_id!r}. "
+                            f"Available datasets: {available or 'none'}."
+                        ),
+                    }
+
             # Detect request
             is_request, path_or_source, inference_mode = detect_inference_request(messages, state)
             

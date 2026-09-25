@@ -406,14 +406,28 @@ class TestMemoryPlaneCircuitBreaker:
         from app.services.memory_plane import MemoryOrchestrator
         return MemoryOrchestrator(llm_client=None)
 
+    #: The default the module documents, and the reason it is not lower:
+    #: retrieval measures 4.4s warm and 5.8s cold against a healthy deployment,
+    #: so the original 3.0s breaker fired on every call and the memory plane
+    #: never returned anything -- indistinguishable from "nothing learned yet".
+    #: 20s leaves headroom for a cold embedding load without letting a hung
+    #: backend stall a turn. Change both this and the module comment together.
+    DOCUMENTED_DEFAULT_TIMEOUT = 20.0
+
     def test_default_timeout_matches_documented_contract(self):
-        """The module docstring promises a ~3s default (regression: it had
-        silently drifted to 105s while the docs still said 3.0)."""
+        """The default must be the one the module documents.
+
+        This has drifted twice in opposite directions -- once to 105s, once
+        down to a 3.0s that aborted every retrieval -- and neither showed up as
+        anything but missing memory hints. The number is asserted here so a
+        change to it has to be a deliberate one.
+        """
         import app.services.memory_plane as mp
-        expected = float(os.environ.get("MEMORY_CIRCUIT_BREAKER_TIMEOUT", "3.0"))
+        expected = float(os.environ.get(
+            "MEMORY_CIRCUIT_BREAKER_TIMEOUT", str(self.DOCUMENTED_DEFAULT_TIMEOUT)))
         assert mp._CIRCUIT_BREAKER_TIMEOUT == expected
         if "MEMORY_CIRCUIT_BREAKER_TIMEOUT" not in os.environ:
-            assert mp._CIRCUIT_BREAKER_TIMEOUT == 3.0
+            assert mp._CIRCUIT_BREAKER_TIMEOUT == self.DOCUMENTED_DEFAULT_TIMEOUT
 
     def test_timeout_triggers_empty_hints(self):
         """A retrieval that outlives the breaker window yields the safe

@@ -27,6 +27,20 @@ from avaloka.io.loader import UnusableDataset, load_dataset
 runner = CliRunner()
 
 
+def flat(output: str) -> str:
+    """CLI output with its line wrapping undone.
+
+    Rich wraps prose to the terminal width, which is 80 columns under
+    ``CliRunner`` and wider on most developer machines. That is the right
+    behaviour for an error sentence -- the alternative is text running off the
+    screen -- but it means a phrase can be split at any point, so an assertion
+    that a sentence was printed must not depend on where the break landed.
+    Paths and commands are a different matter: those must survive unwrapped,
+    and are asserted against the raw output.
+    """
+    return " ".join(output.split())
+
+
 @pytest.fixture
 def good_csv(tmp_path):
     path = tmp_path / "churn.csv"
@@ -103,7 +117,7 @@ def test_unknown_target_column_suggests_the_right_one(good_csv, tmp_path):
                                  "-o", str(tmp_path / "out")])
 
     assert result.exit_code == 1
-    assert "no column named 'churnd'" in result.output
+    assert "no column named 'churnd'" in flat(result.output)
     assert "churned" in result.output, "must suggest the near-miss"
     assert "Traceback" not in result.output
 
@@ -127,7 +141,7 @@ def test_missing_file_says_what_is_accepted(tmp_path):
                                  "-o", str(tmp_path / "out")])
 
     assert result.exit_code == 1
-    assert "can't reach that dataset" in result.output
+    assert "can't reach that dataset" in flat(result.output)
 
 
 def test_a_directory_is_not_a_dataset(tmp_path):
@@ -135,7 +149,7 @@ def test_a_directory_is_not_a_dataset(tmp_path):
                                  "-o", str(tmp_path / "out")])
 
     assert result.exit_code == 1
-    assert "directory, not a dataset" in result.output
+    assert "directory, not a dataset" in flat(result.output)
 
 
 def test_unwritable_output_fails_before_the_work(good_csv, tmp_path):
@@ -147,7 +161,7 @@ def test_unwritable_output_fails_before_the_work(good_csv, tmp_path):
                                  "-o", str(blocker / "out")])
 
     assert result.exit_code == 1
-    assert "can't write results" in result.output
+    assert "can't write results" in flat(result.output)
 
 
 # ── A successful run has to actually say something ──────────────────────────

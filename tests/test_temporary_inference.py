@@ -1196,12 +1196,16 @@ class TestHandleInferenceRequest:
             ]
         })
         
-        # Mock local inference to return success
+        # manager.local_inference is a real LocalInferenceManager -- the fixture
+        # replaces the Kubernetes job manager, not this one. Assigning
+        # `.predict.return_value` therefore set an attribute on a bound method
+        # and mocked nothing, then raised AttributeError for exactly that
+        # reason. Replace the method itself.
         if manager.local_inference:
-            manager.local_inference.predict.return_value = pd.DataFrame({
+            manager.local_inference.predict = MagicMock(return_value=pd.DataFrame({
                 "Predicted": ["setosa", "setosa", "setosa"],
                 "Confidence": [0.95, 0.92, 0.88]
-            })
+            }))
         
         with patch.dict(os.environ, {"MLFLOW_BACKEND_STORE_URI": "postgresql://..."}):
             result = manager.handle_inference_request(state, messages)

@@ -63,24 +63,23 @@ class TestConnectors(unittest.TestCase):
 
     # --- AVRO ---
     def test_avro_connector(self):
+        # write_data takes OutputData -- {"columns": [names], "rows": [[values]]}
+        # -- exactly as every other connector above. This test used to hand it a
+        # raw Avro record schema as "columns" and dicts as "rows", which is an
+        # older Avro-only signature; the current code iterated the schema dict
+        # and wrote a file whose columns were ['doc','name','namespace','type',
+        # 'fields']. The assertions below had been loosened to tolerate that
+        # ("== 1 or == 2", subset checks), which hid it further.
         file = os.path.join(TEMP_DIR, "test.avro")
         columns = ["a", "b"]
         rows = [[1, 2], [3, 4]]
-        schema = {
-            "doc": "Test",
-            "name": "Test",
-            "namespace": "test",
-            "type": "record",
-            "fields": [{"name": "a", "type": "int"}, {"name": "b", "type": "int"}],
-        }
-        records = [dict(zip(columns, row)) for row in rows]
-        AvroConnector.write_data({"columns": schema, "rows": records}, str(file))
+        AvroConnector.write_data({"columns": columns, "rows": rows}, str(file))
 
         conn = AvroConnector(str(file))
         assert conn.get_columns() == columns
-        assert conn.get_row_count() == 1 or conn.get_row_count() == 2
-        assert set(conn.get_row(0)) <= set([1, 2])
-        assert all(set(row) <= set([1, 2, 3, 4]) for row in conn.load_data())
+        assert conn.get_row_count() == 2
+        assert conn.get_row(0) == [1, 2]
+        assert conn.load_data() == rows
 
     # --- PARQUET ---
     def test_parquet_connector(self):

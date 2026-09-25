@@ -7,6 +7,8 @@ Guarantee under test: Groq stays the default and byte-identical, and every other
 provider is a pure env switch that returns the right LangChain chat model (or
 None when unconfigured, preserving each agent's deterministic fallback).
 """
+import importlib.util
+
 import pytest
 
 from app.core import inference
@@ -146,14 +148,40 @@ def test_openrouter_requires_key(monkeypatch):
 # --------------------------------------------------------------------------
 # cloud providers
 # --------------------------------------------------------------------------
-def test_bedrock_needs_region(monkeypatch):
+# langchain-aws and langchain-google-vertexai live in requirements-cloud-llm.txt,
+# not requirements.txt: langchain-google-vertexai needs google-cloud-storage<3
+# while the data plane needs >=3.4, and pinning both makes the image
+# unbuildable. app/core/inference.py imports them lazily and disables only these
+# two providers when they are missing -- which is the case on a default install
+# and in CI. The "returns None when unconfigured" half of the contract holds
+# either way and is asserted unconditionally; only the half that needs the
+# package to exist is skipped, so `pip install -r requirements-cloud-llm.txt`
+# still runs it.
+_HAS_BEDROCK = importlib.util.find_spec("langchain_aws") is not None
+_HAS_VERTEX = importlib.util.find_spec("langchain_google_vertexai") is not None
+
+
+def test_bedrock_without_a_region_is_disabled(monkeypatch):
     monkeypatch.setenv("INFERENCE_PROVIDER", "bedrock")
-    assert _mk() is None  # no region
+    assert _mk() is None
+
+
+@pytest.mark.skipif(
+    not _HAS_BEDROCK,
+    reason="langchain-aws is not installed (optional: requirements-cloud-llm.txt)",
+)
+def test_bedrock_builds_with_region(monkeypatch):
+    monkeypatch.setenv("INFERENCE_PROVIDER", "bedrock")
     monkeypatch.setenv("AWS_REGION", "us-east-1")
     llm = _mk()
     assert type(llm).__name__ == "ChatBedrockConverse"
 
 
+@pytest.mark.skipif(
+    not _HAS_VERTEX,
+    reason=("langchain-google-vertexai is not installed "
+            "(optional: requirements-cloud-llm.txt)"),
+)
 def test_vertex_builds_with_project(monkeypatch):
     monkeypatch.setenv("INFERENCE_PROVIDER", "vertex")
     monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "proj")

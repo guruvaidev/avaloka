@@ -1,10 +1,32 @@
 
 import unittest
 import os
+
+import pytest
 from langgraph.graph import StateGraph
 from app.api.workflow import build_graph
 from app.graph.etl_state import ETLState
 from langchain_core.messages import HumanMessage
+
+# This drives the real compiled graph through the real planner and summarizer:
+# the job name it asserts on is written by the planning LLM. With no key the
+# planner returns {} and the test failed on `'job_name' not found in {}`, which
+# reads as a broken graph rather than as an absent model.
+#
+# `integration` is pytest.ini's marker for "exercises real agents/LLMs", so the
+# hermetic CI stage excludes it by marker. The skipif is what keeps a direct
+# `pytest tests/test_workflow.py` honest: set the planning key and it runs.
+_PLANNER_KEY = os.environ.get("GROQ_API_KEY_PLANNING_AGENT") or os.environ.get("GROQ_API_KEY")
+
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(
+        not _PLANNER_KEY,
+        reason=("no planning LLM configured — set GROQ_API_KEY_PLANNING_AGENT "
+                "(or GROQ_API_KEY) to run the end-to-end graph"),
+    ),
+]
+
 
 class TestWorkflow(unittest.TestCase):
     def test_e2e_workflow(self):

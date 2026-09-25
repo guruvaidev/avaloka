@@ -84,7 +84,15 @@ def test_multisheet_upload_creates_one_dataset_per_sheet(client):
     assert out["dataset_id"] == datasets[0]["dataset_id"]
     assert datasets[0]["sheet_name"] == "Data"
     assert datasets[1]["sheet_name"] == "Notes"
-    assert set(out["schema"]) == {"id", "amount", "category"}
+    # The top-level schema comes from the sampler, and this module reuses
+    # test_server_integration's fakes -- which stub sample_data_from_source to a
+    # fixed {"a": int, "b": int} for every input. Asserting the workbook's real
+    # column names here was asserting the stub, not the upload. The column
+    # round-trip belongs to the pandas-only path and is covered there:
+    # tests/test_xlsx_multisheet_export.py asserts ["id", "amount", "category"].
+    # What this layer owns is that the *primary* sheet is the one that got
+    # sampled, and that it produced a schema and rows at all.
+    assert out["schema"], "primary sheet should be sampled and carry a schema"
     assert out["samples"], "primary sheet should produce sample rows"
 
     # Aliases stay unique and filenames identify the sheet.

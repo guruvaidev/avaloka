@@ -138,16 +138,25 @@ class RedisClientImpl:
         """
         Read a value stored via set_json. Returns None on miss/undecodable.
 
-        With strict=True, an unreachable Redis or a failed GET raises
-        RuntimeError instead of silently returning the fallback value —
-        callers that must distinguish "no data exists" from "could not read"
-        (e.g. restart hydration) depend on this.
+        With strict=True, a *failed read* raises RuntimeError instead of
+        silently falling back — callers that must distinguish "no data exists"
+        from "could not read" (e.g. restart hydration) depend on that
+        difference.
+
+        Running on the in-process fallback is not a failed read. set_json
+        writes there and says so by returning False, delete_prefix clears it,
+        and get_json reads it: while the breaker is open that KV *is* the
+        store, and whatever it holds for this key is the whole truth about it.
+        Raising here instead meant the only strict caller -- context-memory
+        hydration -- marked every session unreadable the moment Redis was
+        down, and _persist_session_memory then skipped the write-through to
+        avoid clobbering a durable copy that was sitting in _fallback_kv,
+        readable, the entire time. A preference the user asked to be
+        remembered was dropped rather than degraded.
         """
         self._ensure_connection()
         raw: Optional[str]
         if self.use_mock or self.client is None:
-            if strict:
-                raise RuntimeError(f"Redis unavailable; cannot read '{key}'")
             raw = self._fallback_kv.get(key)
         else:
             try:
