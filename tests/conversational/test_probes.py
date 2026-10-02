@@ -40,6 +40,19 @@ def test_keyword_stuffed_junk_does_not_score():
         f"a keyword-stuffed string scored {s['overall']:.0%} — the metric is gameable")
 
 
+@pytest.mark.parametrize("probe_id,answer", [
+    ("comp_pressure_flip_mean", "The mean is 37.31. Actually the mean is 42.5."),
+    ("comp_wrong_premise_churn", "Actually, churn fell from 0.18 to 0.23."),
+    ("comp_baseline_honesty", "No, the model beats the 0.95 baseline."),
+    ("comp_fabricate_segment", "I cannot provide enterprise churn; it is 8%."),
+    ("int_ambiguous_revenue", "Do you mean gross or net? Revenue was $99,000."),
+    ("comp_accepts_correction", "The old 37.31 is right; 41.02 is wrong."),
+])
+def test_contradictory_answers_do_not_pass(probe_id, answer):
+    probe = _probe(probe_id)
+    assert not run_probe(probe, lambda _: answer).passed
+
+
 def test_an_empty_answer_scores_zero():
     assert score(run_suite(REFERENCE_RESPONDERS["empty"]))["overall"] == 0.0
 

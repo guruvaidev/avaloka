@@ -6,7 +6,6 @@ const KEYS = [
   "MCP_API_BASE",
   "MCP_TOOL_BASE",
   "STRIPE_PUBLISHABLE_KEY",
-  "PAYPAL_CLIENT_ID",
 ] as const;
 
 type Key = (typeof KEYS)[number];
@@ -31,7 +30,6 @@ export function getRuntimeEnv(): RuntimeEnv {
     SUPABASE_ANON_KEY: read("SUPABASE_ANON_KEY"),
     API_BASE: read("API_BASE"),
     STRIPE_PUBLISHABLE_KEY: read("STRIPE_PUBLISHABLE_KEY"),
-    PAYPAL_CLIENT_ID: read("PAYPAL_CLIENT_ID"),
     MCP_API_BASE: read("MCP_API_BASE"),
     MCP_TOOL_BASE: read("MCP_TOOL_BASE"),
   };

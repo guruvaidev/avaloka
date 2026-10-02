@@ -57,7 +57,11 @@ storage:
 #     --set image.repository=avaloka-api --set webui.image.repository=avaloka-ui
 image:
   repository: ghcr.io/guruvaidev/avaloka-api
-  tag: "1.0.0"
+  # The branch tag, rebuilt by .github/workflows/images.yml whenever something
+  # that goes into the image changes. For a reproducible deploy, pin the
+  # content tag instead -- it names the exact inputs that built the image:
+  #   --set image.tag=$(python scripts/image_tag.py api --source)
+  tag: "develop-1.6"
   # IfNotPresent still suits a side-loaded local build; the registry path above
   # means a cluster that cannot side-load can pull instead of failing.
   pullPolicy: IfNotPresent
@@ -418,7 +422,7 @@ supabase:
   #   kind load docker-image avaloka-functions:latest --name avaloka
   functions:
     enabled: true
-    image: ghcr.io/guruvaidev/avaloka-functions:1.0.0
+    image: ghcr.io/guruvaidev/avaloka-functions:develop-1.6
     pullPolicy: IfNotPresent
     port: 9000
     # Dev-only key. Changing it makes every previously stored ciphertext
@@ -451,7 +455,7 @@ webui:
   enabled: true
   image:
     repository: ghcr.io/guruvaidev/avaloka-ui
-    tag: "1.0.0"
+    tag: "develop-1.6"
     pullPolicy: IfNotPresent
   # The SSR (Node) UI listens on this port inside the container.
   containerPort: 3000
@@ -492,7 +496,7 @@ ui:
   enabled: false
   image:
     repository: ghcr.io/guruvaidev/avaloka-ray
-    tag: "1.0.0"
+    tag: "develop-1.6"
     pullPolicy: IfNotPresent
   service:
     type: NodePort

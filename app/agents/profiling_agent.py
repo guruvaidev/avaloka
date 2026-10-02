@@ -16,6 +16,7 @@ Two entry points:
 import json
 import logging
 import os
+import re
 import concurrent.futures
 from typing import Any, Dict, List, Optional
 from dotenv import load_dotenv
@@ -32,9 +33,52 @@ load_dotenv(os.path.join(project_root, '.env'))
 
 logger = logging.getLogger(__name__)
 
+
+def _env_flag(name: str, default: str = "1") -> bool:
+    return os.getenv(name, default).strip().lower() not in {"0", "false", "no"}
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.getenv(name, str(default))))
+    except ValueError:
+        return default
+
+
+# Run column semantics (call 2) and insights (call 3) concurrently after the
+# domain call. Set AVALOKA_PROFILE_PARALLEL=0 to restore the sequential flow.
+_PROFILE_PARALLEL = _env_flag("AVALOKA_PROFILE_PARALLEL", "1")
+
+# Ask the provider for a JSON object response (Groq `response_format`). If the
+# model/provider rejects it, that call silently falls back to plain mode.
+_PROFILE_JSON_MODE = _env_flag("AVALOKA_PROFILE_JSON_MODE", "1")
+
+# Attempts per LLM call when the reply can't be parsed as JSON (1 = no retry).
+_PROFILE_JSON_ATTEMPTS = _env_int("AVALOKA_PROFILE_JSON_ATTEMPTS", 2)
+
+# Columns per column-semantics call. Smaller batches = shorter replies, so
+# they are less likely to be cut off by the output-token limit.
+_SEMANTICS_BATCH_SIZE = _env_int("AVALOKA_PROFILE_SEMANTICS_BATCH", 10)
+
+# Max column names listed in the insights prompt (wide schemas are truncated).
+_INSIGHTS_MAX_COLUMNS = _env_int("AVALOKA_PROFILE_INSIGHTS_MAX_COLS", 30)
+
+# Long cell values (free text, JSON blobs) are shortened in prompts.
+_MAX_CELL_CHARS = _env_int("AVALOKA_PROFILE_MAX_CELL_CHARS", 80)
+
+# Concurrent column-semantics calls. With the old cap of 4, an 85-column file
+# (9 batches of 10) ran in 3 waves; 10 runs up to 100 columns in one wave.
+# Lower it if Groq starts returning 429 rate-limit errors.
+_SEMANTICS_MAX_WORKERS = _env_int("AVALOKA_PROFILE_MAX_WORKERS", 10)
+
+_RETRY_NOTE = (
+    "Your previous reply could not be parsed as JSON (it may have been cut off). "
+    "Reply again with ONLY the JSON object and no other text. "
+    "Keep every string under 20 words."
+)
+
 # LLM setup (Groq Llama - same as planner)
-_PROFILING_API_KEY = (os.environ.get("GROQ_API_KEY_PLANNING_AGENT")
-              or os.environ.get("GROQ_API_KEY"))
+_PROFILING_API_KEY = os.environ.get("GROQ_API_KEY_PLANNING_AGENT") or os.environ.get("GROQ_API_KEY")
 profiling_llm = build_chat_model(
     role="planning",
     agent="PROFILING",
@@ -44,7 +88,7 @@ profiling_llm = build_chat_model(
     groq_api_key=_PROFILING_API_KEY,
 )
 if profiling_llm is not None:
-    logger.info("Profiling LLM enabled")
+    logger.info("Profiling LLM enabled (model=%s)", resolve_model("profiling"))
 else:
     logger.warning("Profiling LLM disabled; set GROQ_API_KEY_PLANNING_AGENT to enable semantic analysis")
 
@@ -59,13 +103,34 @@ def round_floats(obj):
     return obj
 
 
+def _trim_rows(
+    rows: Optional[List[Dict[str, Any]]],
+    columns: Optional[List[str]] = None,
+    n: int = 5,
+    max_chars: int = _MAX_CELL_CHARS,
+) -> List[Dict[str, Any]]:
+    """First `n` rows, restricted to `columns` (if given), long strings shortened."""
+    out: List[Dict[str, Any]] = []
+    for row in (rows or [])[:n]:
+        if not isinstance(row, dict):
+            continue
+        items = row.items() if columns is None else ((c, row.get(c)) for c in columns)
+        trimmed: Dict[str, Any] = {}
+        for key, value in items:
+            if isinstance(value, str) and len(value) > max_chars:
+                value = value[:max_chars] + "..."
+            trimmed[key] = value
+        out.append(trimmed)
+    return round_floats(out)
+
+
 # =========================
 # LLM CALL HELPERS
 # Three focused calls
 # =========================
 
 def _call_llm(system: str, user: str) -> Optional[str]:
-    """Run a single LLM call and return the raw text response."""
+    """Run a single LLM call and return the raw text response (kept for callers outside this module)."""
     if profiling_llm is None:
         return None
     try:
@@ -76,27 +141,90 @@ def _call_llm(system: str, user: str) -> Optional[str]:
         return None
 
 
-def _parse_json(text: str) -> Optional[Dict]:
-    """Parse JSON from LLM response, stripping any markdown fences."""
+_THINK_RE = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
+_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
+
+
+def _parse_json(text: str, warn: bool = True) -> Optional[Dict]:
+    """Parse a JSON object from an LLM response.
+
+    Strips reasoning blocks (<think>...</think>) and markdown fences, including
+    an opening fence with no closing one (a cut-off reply).
+    """
     if not text:
         return None
-    # Strip markdown code fences if present
-    cleaned = text.strip()
-    if cleaned.startswith("```"):
-        lines = cleaned.split("\n")
-        cleaned = "\n".join(lines[1:-1]) if len(lines) > 2 else cleaned
+    cleaned = _THINK_RE.sub("", text).strip()
+    cleaned = _FENCE_RE.sub("", cleaned).strip()
+    parsed: Any = None
     try:
-        return json.loads(cleaned)
+        parsed = json.loads(cleaned)
     except json.JSONDecodeError:
         # Try to find the JSON object inside the response
         start = cleaned.find("{")
         end = cleaned.rfind("}") + 1
         if start >= 0 and end > start:
             try:
-                return json.loads(cleaned[start:end])
+                parsed = json.loads(cleaned[start:end])
             except json.JSONDecodeError:
-                pass
-    logger.warning("Failed to parse LLM response as JSON")
+                parsed = None
+    if isinstance(parsed, dict):
+        return parsed
+    if warn:
+        logger.warning("Failed to parse LLM response as JSON")
+    return None
+
+
+def _invoke(messages: List[Any]):
+    """Invoke the profiling model, in JSON mode when enabled.
+
+    If the provider/model rejects JSON mode (or JSON-mode validation fails
+    server-side), the same call is retried once in plain mode.
+    """
+    if _PROFILE_JSON_MODE:
+        try:
+            return profiling_llm.bind(response_format={"type": "json_object"}).invoke(messages)
+        except Exception as e:
+            logger.warning("[profiling] JSON-mode call failed, retrying in plain mode: %s", str(e)[:200])
+    return profiling_llm.invoke(messages)
+
+
+def _call_json(system: str, user: str, label: str) -> Optional[Dict]:
+    """Run one LLM call that must return a JSON object.
+
+    Retries (up to _PROFILE_JSON_ATTEMPTS) with a stricter instruction when the
+    reply can't be parsed, and logs finish_reason/length so truncation is visible.
+    Returns None when every attempt fails.
+    """
+    if profiling_llm is None:
+        return None
+
+    messages = [SystemMessage(content=system), HumanMessage(content=user)]
+    for attempt in range(1, _PROFILE_JSON_ATTEMPTS + 1):
+        try:
+            response = _invoke(messages)
+        except Exception as e:
+            logger.warning("[profiling] %s: LLM call failed (attempt %d/%d): %s",
+                           label, attempt, _PROFILE_JSON_ATTEMPTS, e)
+            continue
+
+        text = response.content if hasattr(response, "content") else str(response)
+        parsed = _parse_json(text or "", warn=False)
+        if parsed is not None:
+            if attempt > 1:
+                logger.info("[profiling] %s: parsed on attempt %d", label, attempt)
+            return parsed
+
+        try:
+            meta = describe_response(response)
+        except Exception:
+            meta = "n/a"
+        logger.warning(
+            "[profiling] %s: reply is not valid JSON (attempt %d/%d): %s, %d chars, ends with %r",
+            label, attempt, _PROFILE_JSON_ATTEMPTS, meta, len(text or ""), (text or "")[-120:],
+        )
+        messages = [SystemMessage(content=system), HumanMessage(content=f"{user}\n\n{_RETRY_NOTE}")]
+
+    logger.error("[profiling] %s: no valid JSON after %d attempts", label, _PROFILE_JSON_ATTEMPTS)
     return None
 
 
@@ -119,16 +247,15 @@ def _call_domain(column_names: List[str], sample_rows: List[Dict]) -> Optional[D
         "  }\n"
         "}"
     )
-    # Send just the column names + first 3 rows to keep the prompt tiny
-    sample_preview = sample_rows[:3] if sample_rows else []
+    # Column names + first 3 rows (long values shortened) keep the prompt small
     user = (
         f"Column names: {column_names}\n\n"
-        f"Sample rows (first 3):\n{json.dumps(round_floats(sample_preview), default=str)}\n\n"
+        f"Sample rows (first 3):\n{json.dumps(_trim_rows(sample_rows, n=3), default=str)}\n\n"
         "Classify the domain."
     )
-    result = _call_llm(system, user)
-    parsed = _parse_json(result or "")
-    return parsed.get("domain") if parsed else None
+    parsed = _call_json(system, user, "domain")
+    domain = parsed.get("domain") if parsed else None
+    return domain if isinstance(domain, dict) else None
 
 
 # --- Call 2: Column semantics (batched for wide schemas) ---
@@ -138,10 +265,10 @@ def _call_column_semantics_batch(
     domain_category: str,
     col_stats: Dict[str, Any],
     sample_rows: List[Dict],
-) -> Dict[str, str]:
+) -> Dict[str, Any]:
     """
     LLM Call 2 (per batch): Explain what each column represents and estimate its predictive value.
-    Works on a batch of up to 15 columns to keep the prompt focused.
+    Works on a batch of _SEMANTICS_BATCH_SIZE columns to keep prompt and reply short.
     """
     batch_stats = {}
     for col in column_batch:
@@ -155,25 +282,27 @@ def _call_column_semantics_batch(
 
     system = (
         f"You are analyzing a {domain_category} dataset. For each column provided, give a one-sentence "
-        "explanation of what it represents and rate its predictive value (high/medium/low).\n\n"
-        "Respond with ONLY a valid JSON object:\n"
+        "explanation (under 20 words) of what it represents and rate its predictive value (high/medium/low).\n\n"
+        "Respond with ONLY a valid JSON object covering every column provided:\n"
         "{\n"
         "  \"column_explanations\": { \"<col_name>\": \"one-sentence explanation\" },\n"
         "  \"predictive_values\": { \"<col_name>\": \"high|medium|low\" }\n"
         "}"
     )
+    # Only this batch's columns in the sample rows: an 85-column row repeated in
+    # every batch used to dominate the prompt.
     user = (
         f"Column stats:\n{json.dumps(batch_stats, default=str)}\n\n"
-        f"Sample rows (first 5):\n{json.dumps(round_floats(sample_rows[:5]), default=str)}\n\n"
+        f"Sample rows (first 3, these columns only):\n"
+        f"{json.dumps(_trim_rows(sample_rows, columns=column_batch, n=3), default=str)}\n\n"
         "Explain each column and rate its predictive value."
     )
-    result = _call_llm(system, user)
-    parsed = _parse_json(result or "")
+    parsed = _call_json(system, user, f"column_semantics[{column_batch[0]}..]")
     if not parsed:
         return {}
     return {
-        "column_explanations": parsed.get("column_explanations", {}),
-        "predictive_values": parsed.get("predictive_values", {}),
+        "column_explanations": parsed.get("column_explanations", {}) or {},
+        "predictive_values": parsed.get("predictive_values", {}) or {},
     }
 
 
@@ -184,21 +313,35 @@ def _call_all_column_semantics(
     sample_rows: List[Dict],
 ) -> Dict:
     """
-    Run Call 2 across all columns, batching into groups of 15 and running in parallel
-    for wide schemas (>20 cols). Merges results back into a single dict.
+    Run Call 2 across all columns in batches of _SEMANTICS_BATCH_SIZE, in parallel
+    when there is more than one batch. Merges results back into a single dict and
+    reports which columns got no explanation.
     """
-    BATCH_SIZE = 15
-    batches = [schema[i:i + BATCH_SIZE] for i in range(0, len(schema), BATCH_SIZE)]
+    batches = [schema[i:i + _SEMANTICS_BATCH_SIZE] for i in range(0, len(schema), _SEMANTICS_BATCH_SIZE)]
     all_explanations: Dict[str, str] = {}
     all_predictive: Dict[str, str] = {}
 
+    def _run(batch: List[str]) -> Dict:
+        return _call_column_semantics_batch(batch, domain_category, col_stats, sample_rows) or {}
 
-    for batch in batches:
-        result = _call_column_semantics_batch(batch, domain_category, col_stats, sample_rows)
+    if len(batches) <= 1:
+        results = [_run(b) for b in batches]
+    else:
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=min(len(batches), _SEMANTICS_MAX_WORKERS)
+        ) as pool:
+            results = list(pool.map(_run, batches))
+
+    for result in results:
         all_explanations.update(result.get("column_explanations", {}))
         all_predictive.update(result.get("predictive_values", {}))
 
-    return {"column_explanations": all_explanations, "predictive_values": all_predictive}
+    missing = [c for c in schema if c not in all_explanations]
+    return {
+        "column_explanations": all_explanations,
+        "predictive_values": all_predictive,
+        "columns_without_semantics": missing,
+    }
 
 
 # --- Call 3: Insights (needs real portfolio stats) ---
@@ -208,13 +351,16 @@ def _call_insights(
     data_quality: Dict,
     high_value_cols: List[str],
     sample_rows: List[Dict],
+    columns_label: str = "High-value columns",
 ) -> Optional[Dict]:
     """
     LLM Call 3: Generate actionable insights — red flags, analysis suggestions, readiness score.
     Only runs in Phase B once we have real portfolio statistics.
+    Wide schemas are truncated to _INSIGHTS_MAX_COLUMNS names so prompt and reply stay short.
     """
     system = (
-        f"You are analyzing a {domain_category} dataset and generating actionable insights.\n\n"
+        f"You are analyzing a {domain_category} dataset and generating actionable insights.\n"
+        "Keep every list to at most 5 items and every item under 25 words.\n\n"
         "Respond with ONLY a valid JSON object:\n"
         "{\n"
         "  \"data_quality_insights\": {\n"
@@ -232,19 +378,29 @@ def _call_insights(
         "  }\n"
         "}"
     )
+    cols = list(high_value_cols or [])
+    shown = cols[:_INSIGHTS_MAX_COLUMNS]
+    hidden = len(cols) - len(shown)
+    cols_text = f"{shown}" + (f" (and {hidden} more columns not listed)" if hidden > 0 else "")
+    rows = _trim_rows(sample_rows, columns=shown if hidden > 0 else None, n=5)
+
     user = (
         f"Data quality summary:\n{json.dumps(data_quality, default=str)}\n\n"
-        f"High-value columns: {high_value_cols}\n\n"
-        f"Sample rows (first 5):\n{json.dumps(round_floats(sample_rows[:5]), default=str)}\n\n"
+        f"{columns_label} ({len(cols)} total): {cols_text}\n\n"
+        f"Sample rows (first 5):\n{json.dumps(rows, default=str)}\n\n"
         "Generate insights."
     )
-    result = _call_llm(system, user)
-    return _parse_json(result or "")
+    return _call_json(system, user, "insights")
 
 
 # =========================
 # PUBLIC ENTRY POINTS
 # =========================
+
+def _clean_schema(schema: List[str]) -> List[str]:
+    """Drop blank column names (e.g. from a trailing comma in a CSV header)."""
+    return [c for c in (schema or []) if str(c).strip()]
+
 
 def profile_quick(
     schema: List[str],
@@ -256,6 +412,7 @@ def profile_quick(
     Runs on quick sample rows — no portfolio stats needed.
     Returns quick_profiling_result and profiling_status.
     """
+    schema = _clean_schema(schema)
     logger.info(f"profile_quick: starting for {len(schema)} columns")
 
     if profiling_llm is None:
@@ -283,6 +440,7 @@ def profile_quick(
             "domain": domain,
             "column_explanations": semantics.get("column_explanations", {}),
             "predictive_values": semantics.get("predictive_values", {}),
+            "columns_without_semantics": semantics.get("columns_without_semantics", []),
             "llm_calls": ["domain", "column_semantics"],
         }
 
@@ -309,7 +467,11 @@ def profile_full(
     Phase B profiling: domain + column semantics (re-run with real stats) + insights.
     Needs portfolio statistics from sample_with_profiling() for accurate results.
     Returns full_profiling_result and profiling_status.
+
+    full_profiling_result["incomplete_sections"] lists any part whose LLM call
+    never returned valid JSON, so callers/UI can tell a partial profile apart.
     """
+    schema = _clean_schema(schema)
     logger.info(f"profile_full: starting for {len(schema)} columns")
 
     if profiling_llm is None:
@@ -323,25 +485,61 @@ def profile_full(
         data_quality = sample_statistics.get("data_quality", {})
 
         # Call 1: domain
-        domain = _call_domain(schema, sample_rows) or {
+        domain_raw = _call_domain(schema, sample_rows)
+        domain = domain_raw or {
             "category": "Unknown", "confidence": 0.0, "reasoning": "Domain detection skipped"
         }
         domain_category = domain.get("category", "Unknown")
 
-        # Call 2: column semantics with real stats
-        semantics = _call_all_column_semantics(
-            schema=schema,
-            domain_category=domain_category,
-            col_stats=col_stats,
-            sample_rows=sample_rows,
-        )
+        if _PROFILE_PARALLEL:
+            # Calls 2 and 3 only depend on the domain from Call 1, so run them
+            # concurrently. Call 3 gets the column list instead of Call 2's
+            # "high" columns, since it no longer waits for Call 2.
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+                sem_future = pool.submit(
+                    _call_all_column_semantics,
+                    schema=schema,
+                    domain_category=domain_category,
+                    col_stats=col_stats,
+                    sample_rows=sample_rows,
+                )
+                ins_future = pool.submit(
+                    _call_insights,
+                    domain_category,
+                    data_quality,
+                    list(schema),
+                    sample_rows,
+                    columns_label="Columns",
+                )
+                semantics = sem_future.result() or {}
+                insights_raw = ins_future.result()
+            predictive_values = semantics.get("predictive_values", {})
+        else:
+            # Call 2: column semantics with real stats
+            semantics = _call_all_column_semantics(
+                schema=schema,
+                domain_category=domain_category,
+                col_stats=col_stats,
+                sample_rows=sample_rows,
+            )
 
-        # Identify high-value columns from Call 2 results for insights prompt
-        predictive_values = semantics.get("predictive_values", {})
-        high_value_cols = [col for col, val in predictive_values.items() if val == "high"]
+            # Identify high-value columns from Call 2 results for insights prompt
+            predictive_values = semantics.get("predictive_values", {})
+            high_value_cols = [col for col, val in predictive_values.items() if val == "high"]
 
-        # Call 3: insights (needs real stats)
-        insights = _call_insights(domain_category, data_quality, high_value_cols, sample_rows) or {}
+            # Call 3: insights (needs real stats)
+            insights_raw = _call_insights(domain_category, data_quality, high_value_cols, sample_rows)
+
+        insights = insights_raw or {}
+        missing_cols = semantics.get("columns_without_semantics", [])
+
+        incomplete: List[str] = []
+        if domain_raw is None:
+            incomplete.append("domain")
+        if missing_cols:
+            incomplete.append("column_semantics")
+        if insights_raw is None:
+            incomplete.append("insights")
 
         full_result = {
             "domain": domain,
@@ -351,9 +549,21 @@ def profile_full(
             "analysis_suggestions": insights.get("analysis_suggestions", []),
             "quick_insights": insights.get("quick_insights", {}),
             "llm_calls": ["domain", "column_semantics", "insights"],
+            "incomplete_sections": incomplete,
+            "columns_without_semantics": missing_cols,
         }
 
-        logger.info(f"profile_full: done, domain={domain_category}, readiness_score={full_result.get('quick_insights', {}).get('data_readiness_score')}")
+        if incomplete:
+            logger.warning(
+                "profile_full: PARTIAL profile, missing %s (%d/%d columns without semantics)",
+                incomplete, len(missing_cols), len(schema),
+            )
+        logger.info(
+            "profile_full: done, domain=%s, readiness_score=%s, complete=%s",
+            domain_category,
+            full_result.get("quick_insights", {}).get("data_readiness_score"),
+            not incomplete,
+        )
         return {
             "full_profiling_result": full_result,
             "profiling_status": "full_profile",

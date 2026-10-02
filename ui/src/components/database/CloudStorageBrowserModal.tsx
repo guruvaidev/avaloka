@@ -245,6 +245,42 @@ export function CloudStorageBrowserModal({
     return `${scheme}://${b}`;
   };
 
+  function formatFileSize(size: string | number | null | undefined): string {
+  if (size === null || size === undefined || size === "") {
+    return "—";
+  }
+
+  // If API already returns "20 MB", keep it
+  if (typeof size === "string") {
+    const trimmed = size.trim();
+    if (!trimmed) return "—";
+    if (/[a-zA-Z]/.test(trimmed)) return trimmed;
+  }
+
+  const bytes = Number(size);
+
+  if (!Number.isFinite(bytes) || bytes < 0) {
+    return String(size);
+  }
+
+  if (bytes === 0) return "0 B";
+
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const index = Math.min(
+    Math.floor(Math.log(bytes) / Math.log(1024)),
+    units.length - 1
+  );
+
+  const value = bytes / Math.pow(1024, index);
+
+  const formatted =
+    index === 0
+      ? Math.round(value).toString()
+      : value.toFixed(1).replace(/\.0$/, "");
+
+  return `${formatted} ${units[index]}`;
+}
+
   const handleUse = async () => {
     if (!connection || selected.size === 0) return;
 
@@ -257,6 +293,7 @@ export function CloudStorageBrowserModal({
       keys.forEach((k) => (next[k] = { state: "running" }));
       return next;
     });
+
 
     type SuccessEntry = { response: any; filename: string; key: string };
     let firstSuccess: SuccessEntry | null = null;
@@ -737,7 +774,7 @@ export function CloudStorageBrowserModal({
             </p>
           ) : (
             <table className="w-full text-sm">
-              <thead className="sticky top-0 z-10 border-b border-border bg-muted/40 text-xs text-muted-foreground">
+              <thead className="sticky top-[-1] z-20 border-b border-border bg-background text-xs text-muted-foreground shadow-sm">
                 <tr>
                   <th className="w-10 px-3 py-2">
                     <input
@@ -845,7 +882,7 @@ export function CloudStorageBrowserModal({
                         />
                       </td>
                       <td className="px-3 py-2 font-medium text-foreground">{o.key}</td>
-                      <td className="px-3 py-2 text-muted-foreground">{o.size || "—"}</td>
+                      <td className="px-3 py-2 text-muted-foreground">{formatFileSize(o.size)}</td>
                       <td className="px-3 py-2 text-muted-foreground">{o.updated || "—"}</td>
                       <td className="px-3 py-2 text-muted-foreground">{fileType(o.key)}</td>
                       <td className="px-3 py-2">

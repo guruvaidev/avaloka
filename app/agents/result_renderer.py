@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 # Sentinel a generated script *may* use to emit an exact, structured result.
 # When present we trust it over anything scraped from stdout.
@@ -283,42 +283,125 @@ def _detect_columns(question: Optional[str], schema: Any, limit: int = 2) -> Lis
 # error cleaning
 # ---------------------------------------------------------------------------
 
-def _clean_error(execution_result: Dict[str, Any]) -> str:
-    """Turn a raw traceback / error payload into a short, actionable cause."""
-    er = execution_result or {}
-    stderr = (er.get("execution_stderr") or er.get("stderr") or "").strip()
-    exec_error = (er.get("execution_error") or er.get("message") or "").strip()
+# Python raises the same handful of exception TYPES for data problems, and the
+# type says what KIND of thing went wrong. Matching on type is a closed set;
+# matching on message text (which is what this used to do) is an open one that
+# grows a new branch after every incident and still lets the next unseen message
+# through as a raw traceback line.
+_EXC_EXPLANATIONS: Dict[str, str] = {
+    "KeyError": "The analysis referred to a column that isn't in this dataset.",
+    "AttributeError": "The analysis used an operation that doesn't apply to that "
+                      "kind of column.",
+    "ValueError": "The analysis hit values it couldn't work with — usually a "
+                  "column holding a different kind of data than the step expected.",
+    "TypeError": "The analysis combined two incompatible kinds of value, such as "
+                 "text and a number.",
+    "ZeroDivisionError": "The analysis divided by zero — a group or filter it "
+                         "relied on matched no rows.",
+    "IndexError": "The analysis looked for a position that doesn't exist in the data.",
+    "MemoryError": "The dataset was too large for this operation to run in memory.",
+    "FileNotFoundError": "An input or output file could not be found.",
+    "PermissionError": "A file could not be read or written because of permissions.",
+    "OverflowError": "A computed number grew too large to represent.",
+    "EmptyDataError": "The input file had no data to read.",
+    "ParserError": "The input file could not be parsed as the expected format.",
+    "MergeError": "A join between two tables could not be performed as specified.",
+}
 
-    exc_line = ""
+# Narrower, high-confidence readings that let us name the actual cause. These
+# refine an explanation; they are never the only thing standing between the user
+# and a raw traceback.
+_EXC_DETAILS: List[Tuple[str, str]] = [
+    ("could not convert string to float",
+     "A column used in a numeric calculation contains non-numeric text."),
+    ("invalid literal for int",
+     "A column used as a whole number contains non-numeric text."),
+    ("cannot reindex", "Two tables being combined had mismatched labels."),
+    ("length of values", "A new column was built with a different number of "
+                         "values than the table has rows."),
+    ("unhashable type", "A grouping key was built from something that can't be "
+                        "grouped on, such as a list."),
+    ("no numeric data to plot", "The columns selected for the chart hold no numbers."),
+    ("out-of-bounds", "A date in the data falls outside the supported range."),
+    ("unknown string format", "A column expected to hold dates contains values "
+                              "that aren't dates."),
+    ("not in index", "The analysis referred to a column that isn't in this dataset."),
+]
+
+_EXC_LINE_RE = re.compile(r"^([A-Za-z_][\w.]*)(Error|Exception|Warning|Interrupt)\b:?\s*(.*)$")
+
+
+def _last_exception_line(stderr: str) -> str:
     for ln in reversed(stderr.splitlines()):
         s = ln.strip()
         if not s:
             continue
-        if re.match(r"^[A-Za-z_][\w.]*(Error|Exception|Warning|Interrupt)\b", s):
-            exc_line = s
-            break
-    if not exc_line and stderr:
-        exc_line = stderr.splitlines()[-1].strip()
+        if _EXC_LINE_RE.match(s):
+            return s
+    return stderr.splitlines()[-1].strip() if stderr else ""
 
-    m = re.match(r"^KeyError:\s*(.+)$", exc_line)
+
+def _clean_error(execution_result: Dict[str, Any]) -> str:
+    """Turn a raw traceback / error payload into a short, actionable cause.
+
+    Contract of this function: it must NEVER return a bare traceback line. A
+    ``ValueError: Length of values (3) does not match length of index (55500)``
+    reaching a chat user as-is is the defect this exists to prevent, so the
+    fallback path still produces a sentence and keeps the technical detail in
+    parentheses for anyone who wants it.
+    """
+    er = execution_result or {}
+    stderr = (er.get("execution_stderr") or er.get("stderr") or "").strip()
+    exec_error = (er.get("execution_error") or er.get("message") or "").strip()
+
+    exc_line = _last_exception_line(stderr) or exec_error
+
+    exc_type, message = "", exc_line
+    m = _EXC_LINE_RE.match(exc_line)
     if m:
-        return f"The analysis referenced a column {m.group(1)} that isn't in the dataset."
-    if "could not convert string to float" in exc_line or (
-        "ValueError" in exc_line and "float" in exc_line
-    ):
-        return (
-            "Couldn't compute a numeric result — a referenced column contains "
-            f"non-numeric values. ({exc_line})"
-        )
+        exc_type = f"{m.group(1)}{m.group(2)}".split(".")[-1]
+        message = (m.group(3) or "").strip()
+
+    lowered = exc_line.lower()
+
+    # Timeouts are about budget, not data, and carry their own advice.
     if "timed out" in exec_error.lower() or "TimeoutExpired" in exc_line:
         base = exec_error or "The computation timed out."
         return f"{base} Try a sample or a narrower query."
-    if "MemoryError" in exc_line:
-        return "Ran out of memory on the full dataset — switch to sample mode or filter the data first."
-    if exc_line.startswith("FileNotFoundError"):
-        return f"Couldn't read an input or output file. ({exc_line})"
 
-    return exc_line or exec_error or "The script did not complete successfully."
+    parts: List[str] = []
+    explanation = _EXC_EXPLANATIONS.get(exc_type)
+    if explanation:
+        parts.append(explanation)
+
+    for needle, detail in _EXC_DETAILS:
+        if needle in lowered:
+            parts.append(detail)
+            break
+
+    if exc_type == "KeyError" and message:
+        parts = [f"The analysis referred to a column {message} that isn't in this dataset."]
+
+    if parts:
+        seen: List[str] = []
+        for p in parts:
+            if p not in seen:
+                seen.append(p)
+        out = " ".join(seen)
+        if message and message not in out:
+            out += f" (technical detail: {exc_type}: {message})" if exc_type else f" ({message})"
+        return out
+
+    # Nothing recognised. Still a sentence, never a bare traceback line.
+    if exc_type:
+        return (
+            f"The analysis stopped with an unexpected {exc_type}. "
+            f"(technical detail: {exc_type}: {message})" if message
+            else f"The analysis stopped with an unexpected {exc_type}."
+        )
+    if exc_line:
+        return f"The script did not complete successfully. (technical detail: {exc_line})"
+    return "The script did not complete successfully."
 
 
 # ---------------------------------------------------------------------------

@@ -3,7 +3,7 @@
 {{- $fullname := include "avaloka.fullname" . }}
 {{- $gwName := include "avaloka.gatewayName" . }}
 {{- if not $g.hosts }}
-{{- fail "gateway.enabled=true requires at least one hostname in gateway.hosts (e.g. [test.example.com, app.example.com])" }}
+{{- fail "gateway.enabled=true requires at least one hostname in gateway.hosts (e.g. [test.avaloka.ai, app.avaloka.ai])" }}
 {{- end }}
 {{- /* Resolve the GatewayClass up front so a missing provider reports itself rather
        than surfacing later as a confusing certificate error. */}}

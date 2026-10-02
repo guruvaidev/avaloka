@@ -1,69 +1,38 @@
-// Where this deployment's Supabase project and public payment identifiers come
-// from — all of them, at runtime, from the environment.
-//
-// These were previously literals pointing at Avaloka's own hosted project. The
-// anon key is publishable, so that was not a credential leak; it was worse in a
-// different way. Anyone self-hosting who did not set the variables got a UI
-// authenticating against our project — their accounts in our database, their
-// traffic on our bill, and no error to tell them. A default that silently
-// borrows someone else's infrastructure is not a convenience.
-//
-// So: no fallbacks. Unset configuration surfaces as a setup message naming the
-// variable, which is the difference between "this needs configuring" and a
-// blank screen.
-//
-// See README.md → "Setting up your own credentials".
+// Single source of truth for the Supabase project this deployment uses.
+// An external URL and anon key must always be supplied as a pair. When neither
+// is configured, use the self-hosted local development pair.
 
 import { runtimeEnv } from "@/lib/runtime-env";
 
-export const SUPABASE_URL = runtimeEnv.SUPABASE_URL || "";
+const LOCAL_SUPABASE_URL = "http://localhost:30091";
+const LOCAL_SUPABASE_ANON_KEY =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlLWRlbW8iLCJpYXQiOjE2NDE3NjkyMDAsImV4cCI6MTc5OTUzNTYwMH0.F_rDxRTPE8OU83L_CNgEGXfmirMXmMMugT29Cvc8ygQ";
+
+if (Boolean(runtimeEnv.SUPABASE_URL) !== Boolean(runtimeEnv.SUPABASE_ANON_KEY)) {
+  throw new Error("SUPABASE_URL and SUPABASE_ANON_KEY must be configured together.");
+}
+
+export const SUPABASE_URL = runtimeEnv.SUPABASE_URL || LOCAL_SUPABASE_URL;
 export const SUPABASE_INCLUSTER_URL = runtimeEnv.SUPABASE_INCLUSTER_URL || SUPABASE_URL;
-export const SUPABASE_ANON_KEY = runtimeEnv.SUPABASE_ANON_KEY || "";
+export const SUPABASE_ANON_KEY =
+  runtimeEnv.SUPABASE_ANON_KEY || LOCAL_SUPABASE_ANON_KEY;
 export const SUPABASE_STORAGE_KEY = `sb-auth-token`;
 export const SUPABASE_ADMIN_KEY_ENV = "PRIMARY_SUPABASE_SERVICE_ROLE_KEY";
 
-/** Variables that must be set before authentication can work. */
-export function missingSupabaseConfig(): string[] {
-  const missing: string[] = [];
-  if (!SUPABASE_URL) missing.push("SUPABASE_URL");
-  if (!SUPABASE_ANON_KEY) missing.push("SUPABASE_ANON_KEY");
-  return missing;
-}
-
-export const isSupabaseConfigured = () => missingSupabaseConfig().length === 0;
-
-/**
- * Throw with something a person can act on.
- *
- * Called where a client is constructed rather than at module load: an
- * import-time throw white-screens the whole application, including the page
- * that would explain what to set.
- */
-export function assertSupabaseConfigured(): void {
-  const missing = missingSupabaseConfig();
-  if (missing.length === 0) return;
-  throw new Error(
-    `Avaloka is not configured yet: ${missing.join(" and ")} ${
-      missing.length === 1 ? "is" : "are"
-    } unset.\n\n` +
-      `Avaloka uses Supabase for sign-in, and you supply your own project — we do ` +
-      `not ship one, because a default would point your users at somebody else's ` +
-      `database.\n\n` +
-      `Create a free project at https://supabase.com, then set SUPABASE_URL and ` +
-      `SUPABASE_ANON_KEY. Both values are safe to expose in a browser.\n\n` +
-      `Step-by-step: README.md → "Setting up your own credentials".`,
-  );
-}
-
 // ─── Payment gateway PUBLIC identifiers ──────────────────────────────────────
-// Only publishable values belong here — this file is in the browser bundle. The
-// matching SECRETS (STRIPE_SECRET_KEY, PAYPAL_CLIENT_SECRET) stay in server-only
-// env and are read inside server handlers. Never move a secret into this file.
-//
-// Empty by default. Billing is a commercial-edition concern; an open-source
-// deployment has nothing to charge for, and a hardcoded key here would have
-// pointed a self-hosted instance's payment flows at our Stripe account.
+// Only publishable / public values live here — this file is imported by the
+// browser bundle. The matching SECRETS (STRIPE_SECRET_KEY, PAYPAL_CLIENT_SECRET)
+// must stay in server-only env (process.env.*) and are read inside server
+// function handlers only. Never move the secrets into this file.
 
+// Empty by default. Billing is a commercial-edition concern; an open-source
+// deployment has nothing to charge for, and a committed publishable key pointed
+// every self-hosted instance's payment flows at one Stripe account.
 export const STRIPE_PUBLISHABLE_KEY = runtimeEnv.STRIPE_PUBLISHABLE_KEY || "";
-export const PAYPAL_CLIENT_ID = runtimeEnv.PAYPAL_CLIENT_ID || "";
 export const isBillingConfigured = () => Boolean(STRIPE_PUBLISHABLE_KEY);
+
+// PayPal client ID is public (already embedded in the JS SDK URL when loaded).
+// The value is provisioned via process.env.PAYPAL_CLIENT_ID on the server
+// (Lovable secret). A public literal can be added here when needed for the
+// browser SDK; leaving empty means server-side code is the sole reader.
+export const PAYPAL_CLIENT_ID = "";

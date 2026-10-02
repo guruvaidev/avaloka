@@ -9,6 +9,7 @@ only frames them — optionally enriching prose with an LLM, never inventing dat
 from __future__ import annotations
 
 from importlib.metadata import PackageNotFoundError, version
+import shlex
 from typing import Any
 
 from avaloka.fireflies.base import Firefly
@@ -33,9 +34,10 @@ class Reporter(Firefly):
         validation = bb.get("validation", {})
         training_summary = bb.get("training_summary")
         finops = bb.get("finops")
+        goal_analysis = bb.get("goal_analysis")
 
         limitations = self._limitations(profile, plan, validation)
-        findings = self._findings(profile, plan, training_summary)
+        findings = self._findings(profile, plan, training_summary, goal_analysis)
         # The console prints what the mission actually concluded, so publish
         # both here rather than only into the HTML bundle: a terminal run that
         # reports a verdict and an economic multiplier but not a single finding
@@ -53,7 +55,7 @@ class Reporter(Firefly):
                                  loaded_hourly_rate=self.ctx.loaded_hourly_rate,
                                  wall_clock_seconds=self.ctx.wall_clock_seconds())
 
-        narrative = self._narrative(profile, plan, training_summary, validation)
+        narrative = self._narrative(profile, plan, training_summary, validation, goal_analysis)
 
         common = {
             "goal": self.ctx.goal, "mission_id": self.ctx.mission_id,
@@ -61,6 +63,7 @@ class Reporter(Firefly):
             "quality": profile["quality"], "columns": profile["columns"],
             "correlations": profile.get("correlations", []), "plan": plan,
             "validation": validation, "model": training_summary, "finops": finops,
+            "goal_analysis": goal_analysis,
         }
         exec_data = {
             **common,
@@ -93,7 +96,7 @@ class Reporter(Firefly):
     # --- content helpers --------------------------------------------------
     _narrate_cost = 0.0
 
-    def _narrative(self, profile, plan, training, validation) -> str:
+    def _narrative(self, profile, plan, training, validation, goal_analysis=None) -> str:
         q = profile["quality"]["score"]
         base = (f"Avaloka profiled {profile['dataset']['n_cols']} columns across "
                 f"{profile['dataset']['n_rows']:,} rows (quality {q}/100), prepared a reproducible "
@@ -103,6 +106,9 @@ class Reporter(Firefly):
                      f"'{training['selected']}'. ")
         base += (f"Validation returned '{validation.get('verdict', 'n/a')}' with a maximum safe "
                  f"deployment level of {validation.get('max_safe_deployment_level', 1)} of 4.")
+        if goal_analysis:
+            base += (f" Goal-specific analysis ({goal_analysis['scope']}): "
+                     f"{goal_analysis['findings'][0]}")
         client = LLMClient() if self.ctx.execution_mode.value != "local" else None
         system = ("You are a precise data-science consultant. Rewrite the summary in 2-4 sentences "
                   "for an executive. Do not invent numbers; only rephrase what is given.")
@@ -110,7 +116,9 @@ class Reporter(Firefly):
         self._narrate_cost = cost
         return text
 
-    def _findings(self, profile, plan, training) -> list[str]:
+    def _findings(self, profile, plan, training, goal_analysis=None) -> list[str]:
+        if goal_analysis:
+            return list(goal_analysis["findings"])
         out = []
         for p in profile.get("correlations", [])[:2]:
             if p["corr"] >= 0.5:
@@ -134,6 +142,12 @@ class Reporter(Firefly):
             lims.append("Potential target leakage detected; resolve before trusting model metrics.")
         if profile["quality"]["high_missing_columns"]:
             lims.append("High-missingness columns require an explicit imputation policy.")
+        goal_analysis = self.ctx.blackboard.get("goal_analysis")
+        if goal_analysis and goal_analysis["status"] != "answered":
+            lims.append("The stated goal was not fully answered by a supported calculation; "
+                        "see goal_analysis.json for the reason.")
+        if goal_analysis and self.ctx.blackboard.get("sampling", {}).get("sampled"):
+            lims.append("Goal-specific figures use the working sample, not every source row.")
         if profile["dataset"]["n_rows"] < 200:
             lims.append("Small sample size limits statistical confidence.")
         lims.append("Estimated manual effort and value are heuristics pending customer calibration.")
@@ -197,6 +211,8 @@ class Reporter(Firefly):
                 "`service.py`, `Dockerfile`, `deployment/` — the deployment package",
                 "`feature_contract.yaml`, `inference_schema.json`, `monitoring_config.yaml` — the serving contract",
             ]
+        else:
+            deliverables.append("`goal_analysis.json` — measured answer to the stated goal")
         md = [f"# Avaloka mission `{self.ctx.mission_id}`", "",
               f"**Goal:** {self.ctx.goal}", "",
               f"This bundle was produced by Avaloka as a governed *Data Mission* — an outcome, not "
@@ -206,7 +222,12 @@ class Reporter(Firefly):
         md += [f"- {d}" for d in deliverables]
         md += ["", "## Key findings", ""] + [f"- {f}" for f in findings]
         md += ["", "## Limitations", ""] + [f"- {l}" for l in limitations]
-        md += ["", "## Reproduce", "", "```bash", "python analysis.py", "```", ""]
+        if train:
+            reproduce = "python analysis.py  # reproduce data preparation"
+        else:
+            reproduce = (f"avaloka analyze {shlex.quote(self.ctx.data_source)} "
+                         f"--goal {shlex.quote(self.ctx.goal)} --output ./reproduced-analysis")
+        md += ["", "## Reproduce", "", "```bash", reproduce, "```", ""]
         if train:
             md += ["## Serve locally", "", "```bash",
                    "pip install -r requirements.lock", "uvicorn service:app --port 8080",

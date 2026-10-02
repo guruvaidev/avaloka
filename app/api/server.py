@@ -96,11 +96,27 @@ logging.basicConfig(
     force=True,  # important: overrides uvicorn/default handlers
 )
 
+# # Ensure our package loggers propagate to root
+# for _name in ("app", "app.agents", "app.graph", "app.api"):
+#     _lg = logging.getLogger(_name)
+#     _lg.setLevel(LOG_LEVEL)
+#     _lg.propagate = True
+
+
 # Ensure our package loggers propagate to root
 for _name in ("app", "app.agents", "app.graph", "app.api"):
     _lg = logging.getLogger(_name)
     _lg.setLevel(LOG_LEVEL)
     _lg.propagate = True
+
+# Daft emits every per-operator tracing span through Python logging at INFO
+# (~1,000 lines per upload). Each one costs GIL time and terminal I/O while
+# sampling runs. Keep warnings and errors, drop the span noise.
+for _noisy in ("tracing", "tracing.span"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
+
+
+
 
 logging.getLogger(__name__).info("Avaloka logging configured (AVALOKA_LOG_LEVEL=%s)", LOG_LEVEL)
 
@@ -171,6 +187,7 @@ from app.core.celery_app import (
 )
 from app.agents.mta_v2.failure_diagnostics import (
     TRAINING_FAILURE_MESSAGE,
+    build_training_failure,
     format_training_failure,
 )
 from app.core.task_metadata import scheduled_task_metadata
@@ -287,12 +304,17 @@ from app.api.schemas import (
     InsightRewriteOut, InsightRewriteIn,
     InsightFeedbackIn,
     InsightFeedbackOut,
+    InsightChartIn,        
+    InsightTurnIn,         
+    InsightExplainIn,      
+    InsightExplainOut, 
 )
 from app.services.persistence_service import (
     _persist_assets_background,
     generate_signed_url as _generate_asset_signed_url,
 )
 from app.agents.visualization_agent import build_visualization_config_from_sample
+from app.agents.chart_explainer import explain_charts
 
 import jwt
 from jwt import PyJWKClient, InvalidTokenError
@@ -383,8 +405,71 @@ CONTENT_TYPE_TO_EXT: Dict[str, Optional[str]] = {
 
 CACHE_CALL_TIMEOUT = float(os.getenv("CACHE_CALL_TIMEOUT", "0.6"))  # seconds per cache op
 
+# # Per-dataset profiling + portfolio cache (populated on upload, read on preview)
+# _profile_meta: Dict[str, Dict[str, Any]] = {}
+# MAX_DB_SAMPLE_ROWS = 1000
+
 # Per-dataset profiling + portfolio cache (populated on upload, read on preview)
 _profile_meta: Dict[str, Dict[str, Any]] = {}
+
+# Rows of each sample sent to the browser and kept in the Redis session.
+# The FULL samples stay on disk (sample_input.csv), in-process (_profile_meta)
+# and in Supabase (dataset_samples); only the copies shipped around are capped.
+PREVIEW_RESPONSE_ROWS = int(os.getenv("AVALOKA_PREVIEW_RESPONSE_ROWS", "500"))
+
+def _strip_blank_header_columns(path: Path) -> List[int]:
+    """Remove columns whose header is blank AND whose every value is empty
+    (e.g. a trailing comma in the header). Rewrites the file in place,
+    preserving cell text verbatim. Returns dropped column indexes ([] if
+    nothing was removed, the file isn't UTF-8, or a blank column holds data)."""
+    try:
+        with open(path, "r", encoding="utf-8", newline="") as f:
+            sample = f.read(8192)
+            f.seek(0)
+            try:
+                delim = csv.Sniffer().sniff(sample, delimiters=[",", ";", "\t", "|"]).delimiter
+            except Exception:
+                delim = ","
+            header = next(csv.reader(f, delimiter=delim), None)
+    except (UnicodeDecodeError, OSError):
+        return []
+    if not header:
+        return []
+
+    blank = {i for i, h in enumerate(header) if not str(h).strip()}
+    if not blank:
+        return []
+    keep = [i for i in range(len(header)) if i not in blank]
+
+    tmp = path.with_name(path.name + ".clean")
+    try:
+        with open(path, "r", encoding="utf-8", newline="") as src, \
+             open(tmp, "w", encoding="utf-8", newline="") as dst:
+            reader = csv.reader(src, delimiter=delim)
+            writer = csv.writer(dst, delimiter=delim, lineterminator="\n")
+            for row in reader:
+                # A "blank" column that actually holds data is real data: keep the file as-is.
+                if any(i < len(row) and str(row[i]).strip() for i in blank):
+                    tmp.unlink(missing_ok=True)
+                    return []
+                writer.writerow([row[i] for i in keep if i < len(row)])
+        os.replace(tmp, path)
+        return sorted(blank)
+    except Exception:
+        logger.warning("[upload] blank-column strip failed for %s; keeping original", path, exc_info=True)
+        tmp.unlink(missing_ok=True)
+        return []
+
+def _cap_rows(rows: Any, n: int = PREVIEW_RESPONSE_ROWS) -> Any:
+    return rows[:n] if isinstance(rows, list) else rows
+
+
+def _cap_portfolio(portfolio: Any, n: int = PREVIEW_RESPONSE_ROWS) -> Any:
+    if not isinstance(portfolio, dict):
+        return portfolio
+    return {k: (v[:n] if isinstance(v, list) else v) for k, v in portfolio.items()}
+
+
 MAX_DB_SAMPLE_ROWS = 1000
 SMALL_FILE_PERSISTENCE_MAX_WORKERS = int(os.getenv("AVALOKA_SMALL_FILE_PERSISTENCE_MAX_WORKERS", "2"))
 SMALL_FILE_PERSISTENCE_MAX_INFLIGHT = int(os.getenv("AVALOKA_SMALL_FILE_PERSISTENCE_MAX_INFLIGHT", "2"))
@@ -480,6 +565,36 @@ def _training_finished_successfully(final_state: Dict[str, Any]) -> bool:
     if result.get("error") or result.get("execution_error"):
         return False
     return bool(result.get("mlflow_run_id"))
+
+
+def _friendly_turn_error(exc: BaseException) -> str:
+    """Map an unhandled turn failure to a specific, user-safe message.
+    The full traceback is logged; the user gets a reason, never a stack trace."""
+    text = str(exc).lower()
+    try:
+        import groq as _groq
+    except Exception:
+        _groq = None
+
+    model_gone = (
+        (_groq and isinstance(exc, getattr(_groq, "NotFoundError", ())))
+        or "model_not_found" in text
+        or "does not exist or you do not have access" in text
+    )
+    if model_gone:
+        return ("⚠️ The analysis model is temporarily unavailable — the configured AI model "
+                "was changed or retired by the provider. This has been logged for the team; "
+                "please try again shortly.")
+
+    if (_groq and isinstance(exc, getattr(_groq, "AuthenticationError", ()))) or "invalid api key" in text:
+        return ("⚠️ The analysis service rejected our credentials. This is a configuration issue "
+                "on our side and has been logged for the team.")
+
+    if (_groq and isinstance(exc, getattr(_groq, "RateLimitError", ()))) or "rate limit" in text:
+        return "⚠️ The analysis service is busy right now. Please wait a moment and try again."
+
+    return ("⚠️ Something went wrong while running this analysis. The error has been logged for "
+            "the team — please try again, and contact support if it keeps happening.")
 
 # -------------------------------------------------------------------
 # Utility: LangGraph HTTP helpers
@@ -608,6 +723,12 @@ def get_output_from_state(state, tmp_root: Optional[Path] = None):
 
     output_file_data = None
     output_json = None
+
+    # Structured aggregate execution returns typed tables directly. Its
+    # output_json is the first table for older clients, not a CSV with a
+    # synthetic table marker.
+    if state.get("structured_action_plan"):
+        return _json_safe_payload(state.get("output_file_data")), _json_safe_payload(state.get("output_json"))
 
     # 1) Data-uri output
     candidate_output = state.get("output_file_data") or None
@@ -1035,11 +1156,23 @@ async def handle_private_network_preflight(request: Request, call_next):
             resp.headers["Access-Control-Allow-Headers"] = request.headers.get(
                 "Access-Control-Request-Headers", "*"
             )
-            resp.headers["Access-Control-Allow-Methods"] = request.headers.get(
-                "Access-Control-Request-Method", "*"
-            )
             return resp
     return await call_next(request)
+
+
+@app.middleware("http")
+async def _upload_timing_middleware(request: Request, call_next):
+    if request.url.path != "/api/upload":
+        return await call_next(request)
+    t = time.monotonic()
+    resp = await call_next(request)
+    logger.info(
+        "[upload-timing] request_total  %.2fs (body parse + handler + response build)",
+        time.monotonic() - t,
+    )
+    return resp
+
+
 # -------------------------------------------------------------------
 # Health
 # -------------------------------------------------------------------
@@ -1133,6 +1266,136 @@ async def _read_upload_to_path_with_limit(
     return written
 
 
+from contextlib import contextmanager
+
+
+@contextmanager
+def _stage(name: str, dsid: str = ""):
+    """Logs how long a block took: [upload-timing] <dsid> <name> <seconds>."""
+    t = time.monotonic()
+    try:
+        yield
+    finally:
+        logger.info("[upload-timing] %s %-14s %.2fs", dsid, name, time.monotonic() - t)
+
+
+async def _put_upload_object(
+    src: Path, object_name: str, dest_uri: Optional[str], conn: Dict[str, Any]
+) -> str:
+    """Upload a local file to the configured store; returns the object URI.
+    Same destination logic the old inline PUT block used."""
+    with _stage("gcs_put", object_name):
+        if dest_uri and "://" in dest_uri:
+            if conn:
+                store, _ = await _store_from_connection_uri(dest_uri, conn)
+                return await asyncio.to_thread(store.put_file, src, object_name.lstrip("/"))
+            if dest_uri.startswith("az://"):
+                try:
+                    _scheme, rest = dest_uri.split("://", 1)
+                    parts = rest.split("/", 2)
+                    prefix_path = parts[2].strip("/") if len(parts) >= 3 else ""
+                except Exception:
+                    prefix_path = ""
+                key = f"{prefix_path}/{object_name}".lstrip("/") if prefix_path else object_name
+                return await asyncio.to_thread(storage_service.blob_store.put_file, src, key)
+            store, base_key = _store_and_key_from_uri(dest_uri, None)
+            key_base = (base_key or "").rstrip("/")
+            key = f"{key_base}/{object_name}".lstrip("/") if key_base else object_name
+            return await asyncio.to_thread(store.put_file, src, key)
+        return await asyncio.to_thread(storage_service.blob_store.put_file, src, object_name)
+
+
+# ---- Background storage finalization for uploads ----------------------------
+# The upload response no longer waits for the storage push. The push keeps
+# running after the response; the finalizer below records the object URI on
+# the dataset session once it lands.
+
+# Strong refs so finalizers aren't garbage-collected after the response is sent.
+_upload_storage_tasks: set = set()
+
+# A request that read the session before the push landed and then saves the
+# whole dict back (e.g. save_session(sid, stale_sess)) would drop
+# data_source_location again. Re-check a few times and re-apply if it vanished.
+_UPLOAD_REASSERT_DELAYS_S = (20, 60, 180)
+
+
+def _delete_orphan_upload(uri: str, object_name: str) -> None:
+    """Best-effort delete of an object whose dataset no longer exists."""
+    try:
+        store, key = _store_and_key_from_uri(uri, object_name)
+        if store and key:
+            store.delete(key)
+            logger.info("[upload-storage] deleted orphaned object %s", uri)
+    except Exception:
+        logger.warning("[upload-storage] could not delete orphaned object %s", uri, exc_info=True)
+
+
+async def _finalize_upload_storage(
+    put_task: "asyncio.Task",
+    session_id: str,
+    dsid: str,
+    object_name: str,
+) -> None:
+    # 1) Wait for the push itself.
+    try:
+        uri = await put_task
+    except asyncio.CancelledError:
+        logger.warning("[upload-storage] %s push was cancelled", dsid)
+        return
+    except Exception as e:
+        logger.error("[upload-storage] %s push to storage FAILED: %s", dsid, e, exc_info=True)
+        try:
+            sess = await get_session(session_id)
+            if isinstance(sess, dict) and sess.get("dataset_id") == dsid:
+                err = str(e)[:500]
+                await update_session(session_id, lambda cur: cur.update({"storage_error": err}))
+        except Exception:
+            logger.debug("[upload-storage] could not record storage_error", exc_info=True)
+        return
+
+    # 2) Record the URI on the session (and keep it there).
+    for attempt, delay in enumerate((0, *_UPLOAD_REASSERT_DELAYS_S)):
+        if delay:
+            await asyncio.sleep(delay)
+        try:
+            sess = await get_session(session_id)
+        except Exception:
+            logger.debug("[upload-storage] session read failed for %s", session_id, exc_info=True)
+            continue
+
+        if not isinstance(sess, dict) or sess.get("dataset_id") != dsid:
+            if attempt == 0:
+                # Upload rolled back or dataset deleted before the push finished.
+                await asyncio.to_thread(_delete_orphan_upload, uri, object_name)
+            return
+
+        if sess.get("data_source_location"):
+            continue  # already recorded (or re-recorded); check again later
+
+        def _apply(cur: Dict[str, Any], _uri: str = uri) -> None:
+            if not cur.get("data_source_location"):
+                cur["data_source_location"] = _uri
+                cur.pop("storage_error", None)
+                # Let send_message re-save the durable snapshot with the cloud URI.
+                cur["snapshot_persisted"] = False
+
+        try:
+            await update_session(session_id, _apply)
+            logger.info(
+                "[upload-storage] %s recorded %s on session %s (check %d)",
+                dsid, uri, session_id, attempt,
+            )
+        except Exception:
+            logger.warning("[upload-storage] failed to record uri for %s", dsid, exc_info=True)
+
+
+def _spawn_upload_finalizer(
+    put_task: "asyncio.Task", session_id: str, dsid: str, object_name: str
+) -> None:
+    t = asyncio.create_task(_finalize_upload_storage(put_task, session_id, dsid, object_name))
+    _upload_storage_tasks.add(t)
+    t.add_done_callback(_upload_storage_tasks.discard)
+
 @app.post("/api/upload", response_model=Union[UploadResponse, MultiUploadResponse])
 async def upload_csv(
     request: Request,
@@ -1149,7 +1412,8 @@ async def upload_csv(
     bucket: Optional[str] = Form(None),
     prefix: Optional[str] = Form(None),
     connection_id: Optional[str] = Form(None),
-):
+    ):
+    _t_handler = time.monotonic()
     user_id = _resolve_user_id(request)
     if not user_id:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing or invalid auth token")
@@ -1166,14 +1430,12 @@ async def upload_csv(
         incoming.append(file)
     if not incoming:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "No files provided (use 'files' or 'file').")
-    
-    # ---- Upload count validation ----
+
     if len(incoming) > MAX_UPLOAD_FILES:
         raise HTTPException(
             status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             f"Too many files. Max allowed is {MAX_UPLOAD_FILES} per upload."
         )
-
 
     used_files_field = files is not None  # did caller use multi field
 
@@ -1218,7 +1480,6 @@ async def upload_csv(
     dataset_ids: List[str] = []
     dataset_session_map: Dict[str, str] = {}
 
-    # Group session id = FIRST file’s session (this is what you return as session_id)
     group_session_id: Optional[str] = None
     thread_id: str = ""
 
@@ -1234,23 +1495,22 @@ async def upload_csv(
     first_profiling_result: Optional[Dict[str, Any]] = None
     first_full_profiling_result: Optional[Dict[str, Any]] = None
     first_sample_statistics: Optional[Dict[str, Any]] = None
-    
+
     # Track created resources so we can rollback if a later file fails
     created_session_ids: List[str] = []
     created_work_dirs: List[Path] = []
     created_tmp_uploads: List[Path] = []
+    # CHANGED: in-flight background storage pushes, with what the finalizer needs
+    pending_puts: List[Dict[str, Any]] = []
     total_bytes_written = 0
     try:
-        # ---- Stage A: materialize each incoming file to a tmp path (with size
-        # validation) and expand Excel workbooks into one logical CSV dataset
-        # per sheet, so a workbook's sheets become sibling datasets instead of
-        # everything after the first sheet being silently dropped.
+        # ---- Stage A: materialize each incoming file to a tmp path and expand
+        # Excel workbooks into one logical CSV dataset per sheet.
         logical_items: List[Dict[str, Any]] = []
         for f_idx, up in enumerate(incoming):
             filename = up.filename or f"file_{f_idx}"
             alias = _alias_from_filename(filename)
 
-            # Resolve extension
             ext = (_filename_ext(filename) or "").lower()
             if not ext:
                 ct = (up.content_type or "").lower()
@@ -1263,7 +1523,6 @@ async def upload_csv(
                     f"{label} is not supported yet; currently supported: {supported_list}.",
                 )
 
-            # ---- write upload to tmp file (with per-file + total size validation) ----
             tmp_upload = TMP_ROOT / f"upload_{_new_id()}.{ext}"
             created_tmp_uploads.append(tmp_upload)
 
@@ -1322,12 +1581,8 @@ async def upload_csv(
                 if multi_sheet or sheet_notes:
                     logger.info(
                         "[upload] workbook %s expanded into %d sheet dataset(s): %s | notes=%s",
-                        filename,
-                        len(exports),
-                        [e.sheet_name for e in exports],
-                        sheet_notes,
+                        filename, len(exports), [e.sheet_name for e in exports], sheet_notes,
                     )
-                # raw workbook tmp no longer needed once per-sheet CSVs exist
                 try:
                     tmp_upload.unlink(missing_ok=True)
                 except Exception:
@@ -1343,8 +1598,7 @@ async def upload_csv(
                     "notes": [],
                 })
 
-        # Aliases must be unique within the upload group (dataset auto-routing
-        # and the UI dropdown key on them); suffix duplicates deterministically.
+        # Aliases must be unique within the upload group
         seen_aliases: Dict[str, int] = {}
         for item in logical_items:
             base_alias = item["alias"]
@@ -1353,8 +1607,7 @@ async def upload_csv(
             if n:
                 item["alias"] = f"{base_alias}_{n + 1}"
 
-        # ---- Stage B: one dataset (id + session + storage object + sampling)
-        # per logical item.
+        # ---- Stage B: one dataset per logical item ----
         for idx, item in enumerate(logical_items):
             filename = item["filename"]
             alias = item["alias"]
@@ -1366,92 +1619,62 @@ async def upload_csv(
             if idx == 0:
                 first_dataset_id = dsid
 
-            # one “group” session returned to client; each dataset stored in its own session
+            session_id = _new_id()
             if idx == 0:
-                session_id = _new_id()
                 group_session_id = session_id
             else:
-                session_id = _new_id()
                 assert group_session_id is not None
 
-            # Track session_id early so we can rollback if anything fails later
-            #created_session_ids.append(session_id)
-
-            # ---- PUT to storage ----
-            try:
-                if dest_uri and "://" in dest_uri:
-                    if conn:
-                        store_for_write, _base_prefix = await _store_from_connection_uri(dest_uri, conn)
-                        key = object_name.lstrip("/")
-                        uri = await asyncio.to_thread(store_for_write.put_file, tmp_upload, key)
-                    else:
-                        if dest_uri.startswith("az://"):
-                            store_for_write = storage_service.blob_store
-                            try:
-                                _scheme, rest = dest_uri.split("://", 1)
-                                parts = rest.split("/", 2)
-                                prefix_path = parts[2].strip("/") if len(parts) >= 3 else ""
-                            except Exception:
-                                prefix_path = ""
-                            key_base = prefix_path.rstrip("/")
-                            key = f"{key_base}/{object_name}".lstrip("/") if key_base else object_name
-                            uri = await asyncio.to_thread(store_for_write.put_file, tmp_upload, key)
-                        else:
-                            store_for_write, base_key = _store_and_key_from_uri(dest_uri, None)
-                            key_base = (base_key or "").rstrip("/")
-                            key = f"{key_base}/{object_name}".lstrip("/") if key_base else object_name
-                            uri = await asyncio.to_thread(store_for_write.put_file, tmp_upload, key)
-                else:
-                    uri = await asyncio.to_thread(storage_service.blob_store.put_file, tmp_upload, object_name)
-            except Exception as e:
-                logger.exception("failed to upload to storage: %s", e)
-                raise HTTPException(500, "Failed to upload to storage")
-            finally:
-                # tmp file no longer needed after storage upload succeeds/fails
-                try:
-                    tmp_upload.unlink(missing_ok=True)
-                except Exception:
-                    pass
-
-            # ---- create work dir + download for sampling ----
+            # ---- keep the local file; push to storage in the background ----
             work_dir = (TMP_ROOT / session_id).resolve()
             work_dir.mkdir(parents=True, exist_ok=True)
             created_work_dirs.append(work_dir)
 
             input_copy = work_dir / f"input_{dsid}.{ext}"
+            await asyncio.to_thread(shutil.move, str(tmp_upload), str(input_copy))  # same disk -> rename
 
-            try:
-                if conn and dest_uri:
-                    store_for_read, _ = await _store_from_connection_uri(dest_uri, conn)
-                    key_for_read = object_name.lstrip("/")
-                    await asyncio.to_thread(store_for_read.get_file, key_for_read, input_copy)
-                else:
-                    store_for_read, key_for_read = _store_and_key_from_uri(uri, object_name)
-                    await asyncio.to_thread(store_for_read.get_file, key_for_read or object_name, input_copy)
-            except Exception as e:
-                logger.exception("failed to download from storage for sampling: %s", e)
-                _safe_rmtree(work_dir)
-                raise HTTPException(500, "Failed to create working copy from storage")
+            # Trailing-comma headers create an empty unnamed column. The sampler
+            # drops it, but the executor reads this file directly, so strip it
+            # here or analyses see one extra column (85 vs 84).
+            if ext in ("csv", "tsv"):
+                _dropped_idx = await asyncio.to_thread(_strip_blank_header_columns, input_copy)
+                if _dropped_idx:
+                    item["notes"] = list(item["notes"] or []) + [
+                        f"Removed {len(_dropped_idx)} empty column(s) with no header "
+                        f"(usually a trailing comma in the header row)."
+                    ]
+                    logger.info("[upload] %s stripped blank columns at %s", dsid, _dropped_idx)
 
-            # ---- sample + schema via portfolio sampler ----
+            put_task = asyncio.create_task(
+                _put_upload_object(input_copy, object_name, dest_uri, conn)
+            )
+            pending_puts.append({                       # CHANGED
+                "task": put_task,
+                "session_id": session_id,
+                "dsid": dsid,
+                "object_name": object_name,
+            })
+
+            # ---- sample + schema via portfolio sampler (reads the LOCAL file) ----
             samples: List[Dict[str, Any]] = []
             schema_any: Union[List[str], Dict[str, str], Dict[str, Any]] = {}
             ddl: str = ""
             used_agent = False
+            agent_res: Optional[Dict[str, Any]] = None
             portfolio_samples: Optional[Dict[str, List[Dict[str, Any]]]] = None
             available_samples: Optional[List[str]] = None
             profiling_result: Optional[Dict[str, Any]] = None
             sample_statistics: Optional[Dict[str, Any]] = None
 
             try:
-                agent_res = await asyncio.to_thread(
-                    sample_with_profiling,
-                    path=str(input_copy),
-                    source_type=ext,
-                    sample_size=DEFAULT_SAMPLE_MAX_ROWS,
-                    use_ray=False,
-                )
-
+                with _stage("sample", dsid):
+                    agent_res = await asyncio.to_thread(
+                        sample_with_profiling,
+                        path=str(input_copy),
+                        source_type=ext,
+                        sample_size=DEFAULT_SAMPLE_MAX_ROWS,
+                        use_ray=False,
+                    )
                 if isinstance(agent_res, dict) and not agent_res.get("error"):
                     schema_any = agent_res.get("schema") or []
                     ddl = agent_res.get("ddl_schema") or ""
@@ -1474,26 +1697,77 @@ async def upload_csv(
                     samples = samples_all[:DEFAULT_SAMPLE_MAX_ROWS]
                     schema_any = schema_dict
                 else:
-                    _safe_rmtree(work_dir)
                     raise HTTPException(
                         500,
                         f"Failed to sample .{ext} file. File type not supported or sampling failed.",
                     )
 
-            # Run semantic profiling if we have statistics from the sampler
-            full_profiling_result: Optional[Dict[str, Any]] = None
-            if used_agent and sample_statistics:
+            if not samples:
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST,
+                    "Empty Dataset Provided — the file has no data rows.",
+                )
+
+            # Optional caller-provided schema override (before the LLM calls)
+            if schema_json:
                 try:
-                    schema_list = list(schema_any.keys()) if isinstance(schema_any, dict) else list(schema_any)
-                    prof_res = await asyncio.to_thread(
-                        profile_full,
-                        schema=schema_list,
-                        sample_rows=samples,
+                    parsed = json.loads(schema_json)
+                    if isinstance(parsed, dict):
+                        schema_any = parsed
+                        ddl = _ddl_from_schema(dsid, parsed)
+                    elif isinstance(parsed, list):
+                        schema_any = parsed
+                        ddl = _ddl_from_schema(dsid, {c: "string" for c in parsed})
+                except Exception:
+                    logger.warning("schema_json parse failed; ignoring override", exc_info=True)
+
+            # ---- semantic profile + viz config run concurrently ----
+            schema_list = list(schema_any.keys()) if isinstance(schema_any, dict) else list(schema_any)
+
+            async def _profile():
+                if not (used_agent and sample_statistics):
+                    return None
+                with _stage("profile_full", dsid):
+                    res = await asyncio.to_thread(
+                        profile_full, schema=schema_list, sample_rows=samples,
                         sample_statistics=sample_statistics,
                     )
-                    full_profiling_result = prof_res.get("full_profiling_result")
-                except Exception as e:
-                    logger.warning("[upload] profile_full failed (non-fatal): %s", e)
+                return (res or {}).get("full_profiling_result")
+
+            async def _viz():
+                with _stage("viz", dsid):
+                    return await asyncio.to_thread(
+                        build_visualization_config_from_sample,
+                        dataset_id=dsid, sample_rows=samples, schema=schema_any,
+                        task_type="unsupervised", target_column=None,
+                    )
+
+            #prof_out, viz_out = await asyncio.gather(_profile(), _viz(), return_exceptions=True)
+            output_path = work_dir / "output.csv"
+            sample_input_path = work_dir / "sample_input.csv"
+
+            async def _write_sample():
+                with _stage("sample_csv", dsid):
+                    await asyncio.to_thread(_write_rows_to_csv, samples, sample_input_path)
+
+            prof_out, viz_out, csv_out = await asyncio.gather(
+                _profile(), _viz(), _write_sample(), return_exceptions=True
+            )
+            if isinstance(csv_out, Exception):
+                logger.warning("Failed to write sample_input.csv; continuing: %s", csv_out)
+
+            full_profiling_result: Optional[Dict[str, Any]] = None
+            if isinstance(prof_out, Exception):
+                logger.warning("[upload] profile_full failed (non-fatal): %s", prof_out)
+            else:
+                full_profiling_result = prof_out
+
+            if isinstance(viz_out, Exception):
+                logger.warning("Failed to build visualization_config: %s", viz_out)
+                visualization_config, visualization_status = {}, "error"
+            else:
+                visualization_config = viz_out or {}
+                visualization_status = visualization_config.get("visualization_status", "ready")
 
             _profile_meta[dsid] = {
                 "portfolio_samples": portfolio_samples,
@@ -1514,73 +1788,45 @@ async def upload_csv(
                     full_profiling_result=full_profiling_result,
                 )
 
-            if not samples:
-                # The caller uploaded a file with no data rows. That is a client
-                # error, not a server fault: a 500 pages an on-call engineer and
-                # tells the UI something broke on our side.
-                raise HTTPException(
-                    status.HTTP_400_BAD_REQUEST,
-                    "Empty Dataset Provided — the file has no data rows.",
-                )
-
-            # Optional caller-provided schema override (applied to each file)
-            if schema_json:
-                try:
-                    parsed = json.loads(schema_json)
-                    if isinstance(parsed, dict):
-                        schema_any = parsed
-                        ddl = _ddl_from_schema(dsid, parsed)
-                    elif isinstance(parsed, list):
-                        schema_any = parsed
-                        ddl = _ddl_from_schema(dsid, {c: "string" for c in parsed})
-                except Exception:
-                    logger.warning("schema_json parse failed; ignoring override", exc_info=True)
-
             cols = list(schema_any.keys()) if isinstance(schema_any, dict) else list(schema_any)
             if not cols and samples:
                 cols = list(samples[0].keys())
 
-            output_path = work_dir / "output.csv"
-            sample_input_path = work_dir / "sample_input.csv"
-            try:
-                _write_rows_to_csv(samples, sample_input_path)
-            except Exception:
-                logger.warning("Failed to write sample_input.csv; continuing", exc_info=True)
-
-            # ---- per-dataset visualization config ----
-            try:
-                visualization_config = build_visualization_config_from_sample(
-                    dataset_id=dsid,
-                    sample_rows=samples,
-                    schema=schema_any,
-                    task_type="unsupervised",
-                    target_column=None,
-                )
-                visualization_status = visualization_config.get("visualization_status", "ready")
-            except Exception as e:
-                logger.warning("Failed to build visualization_config: %s", e)
-                visualization_config = {}
-                visualization_status = "error"
+            # CHANGED: do NOT wait for the storage push. If it already finished,
+            # use its URI now; if it already failed, fail the upload as before.
+            # Otherwise the finalizer records the URI after the response.
+            uri: Optional[str] = None
+            if put_task.done():
+                try:
+                    uri = put_task.result()
+                except Exception as e:
+                    logger.exception("failed to upload to storage: %s", e)
+                    raise HTTPException(500, "Failed to upload to storage")
+            logger.info(
+                "[upload-timing] %s gcs_put_state  %s",
+                dsid, "done" if uri else "still running (finishing in background)",
+            )
 
             try:
                 _upload_size_bytes = input_copy.stat().st_size
             except Exception:
                 _upload_size_bytes = 0
+
             # ---- save per-dataset session ----
             session_data = {
                 "user_id": user_id,
                 "dataset_id": dsid,
                 "created_at": _now_iso(),
                 "work_dir": str(work_dir),
-                "data_source_location": uri,
+                # CHANGED: data_source_location is added below only when known.
+                # The key must be ABSENT (not None) while the push is running, so a
+                # stale session copy merged back later can't overwrite the real URI.
                 "object_name": object_name,
-                # Avaloka created this storage object, so deleting the dataset may
-                # delete it. (register-existing sets "registered" — see delete_dataset.)
                 "source_kind": "uploaded",
                 "work_local_input": _posix(input_copy),
                 "output_location": _posix(output_path),
                 "sample_local_input": _posix(sample_input_path),
-                "uploaded_csv_preview": _jsonify(samples),
+                "uploaded_csv_preview": _jsonify(_cap_rows(samples)),
                 "uploaded_csv_columns": cols,
                 "schema": _jsonify(schema_any),
                 "ddl_schema": ddl,
@@ -1591,34 +1837,43 @@ async def upload_csv(
                 "connection_id": connection_id,
                 "filename": filename,
                 "alias": alias,
-                # Excel-sheet provenance (None for non-workbook uploads): the
-                # dataset object itself is the converted per-sheet CSV.
                 "sheet_name": item["sheet_name"],
                 "source_workbook": item["source_workbook"],
                 "ingest_notes": item["notes"] or None,
                 "group_session_id": group_session_id or session_id,
                 "visualization_config": _jsonify(visualization_config),
                 "visualization_status": visualization_status,
-                # Keep full small-file preview artifacts in Redis session so /preview
-                # does not depend on process-local _profile_meta.
-                "portfolio_samples": _jsonify(portfolio_samples) if portfolio_samples else None,
+                "portfolio_samples": None,
                 "profiling_result": _jsonify(profiling_result) if profiling_result else None,
                 "full_profiling_result": _jsonify(full_profiling_result) if full_profiling_result else None,
-                "sample_statistics": _jsonify(sample_statistics) if sample_statistics else None,
                 "available_samples": available_samples,
                 "analysis_fidelity": FIDELITY_PORTFOLIO,
+                # Without these, send_message sees sample_status="" -> portfolio
+                # "not ready" -> demotes to QUICK -> runs on sample_input.csv
+                # (7,013 rows) instead of the full local file (91,713 rows).
+                "sample_status": "full_sample" if used_agent else "quick_sample",
+                "profiling_status": (
+                    "full_profile" if (used_agent and full_profiling_result) else None
+                ),
+                "total_rows_exact": (
+                    ((sample_statistics or {}).get("data_shape") or {}).get("rows")
+                    if used_agent else None
+                ),
                 "selected_sample_name": (
                     DEFAULT_SAMPLE_NAME
                     if (available_samples and DEFAULT_SAMPLE_NAME in available_samples)
                     else (available_samples[0] if available_samples else None)
                 ),
             }
-
-            if not await save_session(session_id, session_data):
+            if uri:
+                session_data["data_source_location"] = uri
+            with _stage("session_save", dsid):
+                _saved = await save_session(session_id, session_data)
+            if not _saved:
                 _safe_rmtree(work_dir)
                 raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Failed to persist session. Please retry.")
             created_session_ids.append(session_id)
-            # set cookie once (group session == first dataset session)
+
             if idx == 0:
                 secure_cookie_env = os.getenv("COOKIE_SECURE", "").lower()
                 secure_cookie = (
@@ -1635,7 +1890,6 @@ async def upload_csv(
                     max_age=SESSION_TTL_SECONDS,
                 )
 
-            # create thread only once (first file)
             if idx == 0:
                 try:
                     payload = {
@@ -1648,7 +1902,8 @@ async def upload_csv(
                             "schema": schema_any,
                         }
                     }
-                    thread_res = await lg_json("POST", "/threads", json=payload)
+                    with _stage("lg_threads", dsid):
+                        thread_res = await lg_json("POST", "/threads", json=payload)
                     thread_id = thread_res.get("thread_id") or thread_res.get("id") or ""
                     if thread_id:
                         await bind_thread_session(thread_id, session_id)
@@ -1657,7 +1912,6 @@ async def upload_csv(
                 except HTTPException as e:
                     logger.warning("[upload] upstream /threads create failed (soft): %s", e.detail)
 
-            # for subsequent dataset sessions, store same thread_id
             if idx != 0 and thread_id:
                 try:
                     session_data["thread_id"] = thread_id
@@ -1674,10 +1928,10 @@ async def upload_csv(
                     filename=filename,
                     alias=alias,
                     columns=cols,
-                    rows=_jsonify(samples),
+                    rows=_jsonify(_cap_rows(samples)),
                     visualization_config=visualization_config,
                     visualization_status=visualization_status,
-                    portfolio_samples=portfolio_samples,
+                    portfolio_samples=_cap_portfolio(portfolio_samples),
                     available_samples=available_samples,
                     profiling_result=full_profiling_result,
                     sample_statistics=sample_statistics,
@@ -1706,51 +1960,49 @@ async def upload_csv(
                 first_sample_statistics = sample_statistics
 
     except HTTPException:
-        # rollback and re-raise
         for p in created_tmp_uploads:
             try:
                 p.unlink(missing_ok=True)
             except Exception:
                 pass
-
         for wd in created_work_dirs:
             try:
                 _safe_rmtree(wd)
             except Exception:
                 pass
-
         for sid in created_session_ids:
             try:
                 await delete_session(sid)
             except Exception:
                 pass
-
+        # CHANGED: sessions are gone now, so each finalizer sees no session
+        # and deletes any object its push still uploads (no GCS orphans).
+        for p in pending_puts:
+            _spawn_upload_finalizer(p["task"], p["session_id"], p["dsid"], p["object_name"])
         raise
 
     except Exception as e:
         logger.exception("Upload failed mid-batch, rolling back: %s", e)
-
         for p in created_tmp_uploads:
             try:
                 p.unlink(missing_ok=True)
             except Exception:
                 pass
-
         for wd in created_work_dirs:
             try:
                 _safe_rmtree(wd)
             except Exception:
                 pass
-
         for sid in created_session_ids:
             try:
                 await delete_session(sid)
             except Exception:
                 pass
-
+        for p in pending_puts:                           # CHANGED
+            _spawn_upload_finalizer(p["task"], p["session_id"], p["dsid"], p["object_name"])
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Upload failed")
-    
-    #  (only runs if upload succeeded)
+
+    # (only runs if upload succeeded)
     assert group_session_id is not None
     try:
         group_sess = await get_session(group_session_id)
@@ -1762,20 +2014,27 @@ async def upload_csv(
     except Exception:
         logger.warning("Failed to persist group dataset index", exc_info=True)
 
+    for p in pending_puts:
+        _spawn_upload_finalizer(p["task"], p["session_id"], p["dsid"], p["object_name"])
 
-    # response shape selection (backward compat)
+    logger.info("[upload-timing] handler_total  %.2fs", time.monotonic() - _t_handler)
+
     if not used_files_field and len(incoming) == 1:
         return UploadResponse(
             dataset_id=first_dataset_id,
             session_id=group_session_id,
             thread_id=thread_id,
             schema=first_schema_any,
-            samples=_jsonify(first_samples),
+            samples=_jsonify(_cap_rows(first_samples)),
             ddl_schema=first_ddl,
             rows_sampled=len(first_samples),
+            total_rows=((first_sample_statistics or {}).get("data_shape") or {}).get("rows"),
+            # samples=_jsonify(_cap_rows(first_samples)),
+            # ddl_schema=first_ddl,
+            # rows_sampled=len(first_samples),
             visualization_config=first_viz_config,
             visualization_status=first_viz_status,
-            portfolio_samples=first_portfolio_samples,
+            portfolio_samples=_cap_portfolio(first_portfolio_samples),
             available_samples=first_available_samples,
             profiling_result=first_full_profiling_result,
             sample_statistics=first_sample_statistics,
@@ -1785,8 +2044,6 @@ async def upload_csv(
                 if (first_available_samples and DEFAULT_SAMPLE_NAME in first_available_samples)
                 else (first_available_samples[0] if first_available_samples else None)
             ),
-            # A multi-sheet workbook expands into one dataset per sheet; the
-            # top-level fields above describe the primary (largest) sheet.
             datasets=datasets_out if len(datasets_out) > 1 else None,
         )
 
@@ -1835,9 +2092,6 @@ async def register_existing(
     work_dir.mkdir(parents=True, exist_ok=True)
 
     local_input = work_dir / f"input_{dsid}.{ext}"
-
-    # conn = await get_cloud_connection(body.connection_id)
-    # object_name = body.key.lstrip("/")
     conn = await get_cloud_connection(body.connection_id)
     object_name = body.key.lstrip("/")
 
@@ -2148,20 +2402,63 @@ async def register_existing(
             status.HTTP_400_BAD_REQUEST,
             "Empty Dataset Provided — the file has no data rows.",
         )
+    
+    cols = list(schema_any.keys()) if isinstance(schema_any, dict) else list(schema_any)
 
-    full_profiling_result: Optional[Dict[str, Any]] = None
-    if used_agent and sample_statistics and not _is_large_file:
+    
+
+    # Optional caller-provided schema override (before the LLM calls)
+    if body.schema_json:
         try:
-            schema_list = list(schema_any.keys()) if isinstance(schema_any, dict) else list(schema_any)
-            prof_res = await asyncio.to_thread(
-                profile_full,
-                schema=schema_list,
-                sample_rows=samples,
+            parsed = json.loads(body.schema_json)
+            if isinstance(parsed, dict):
+                schema_any = parsed
+                ddl = _ddl_from_schema(dsid, parsed)
+            elif isinstance(parsed, list):
+                schema_any = parsed
+                ddl = _ddl_from_schema(dsid, {c: "string" for c in parsed})
+        except Exception:
+            logger.warning(
+                "[register-existing] schema_json parse failed; ignoring override",
+                exc_info=True,
+            )
+
+    # ---- semantic profile + viz config run concurrently ----
+    schema_list = list(schema_any.keys()) if isinstance(schema_any, dict) else list(schema_any)
+
+    async def _profile():
+        # Large (>=1 GB) files get the profile later, after the fidelity choice.
+        if not (used_agent and sample_statistics) or _is_large_file:
+            return None
+        with _stage("profile_full", dsid):
+            res = await asyncio.to_thread(
+                profile_full, schema=schema_list, sample_rows=samples,
                 sample_statistics=sample_statistics,
             )
-            full_profiling_result = prof_res.get("full_profiling_result")
-        except Exception as e:
-            logger.warning("[register-existing] profile_full failed (non-fatal): %s", e)
+        return (res or {}).get("full_profiling_result")
+
+    async def _viz():
+        with _stage("viz", dsid):
+            return await asyncio.to_thread(
+                build_visualization_config_from_sample,
+                dataset_id=dsid, sample_rows=samples, schema=schema_any,
+                task_type="unsupervised", target_column=None,
+            )
+
+    prof_out, viz_out = await asyncio.gather(_profile(), _viz(), return_exceptions=True)
+
+    full_profiling_result: Optional[Dict[str, Any]] = None
+    if isinstance(prof_out, Exception):
+        logger.warning("[register-existing] profile_full failed (non-fatal): %s", prof_out)
+    else:
+        full_profiling_result = prof_out
+
+    if isinstance(viz_out, Exception):
+        logger.warning("Failed to build visualization_config (register-existing): %s", viz_out)
+        visualization_config, visualization_status = {}, "error"
+    else:
+        visualization_config = viz_out or {}
+        visualization_status = visualization_config.get("visualization_status", "ready")
 
     _profile_meta[dsid] = {
         "portfolio_samples": portfolio_samples,
@@ -2181,40 +2478,6 @@ async def register_existing(
             source_type=ext,
             full_profiling_result=full_profiling_result,
         )
-
-    if body.schema_json:
-        try:
-            parsed = json.loads(body.schema_json)
-            if isinstance(parsed, dict):
-                schema_any = parsed
-                ddl = _ddl_from_schema(dsid, parsed)
-            elif isinstance(parsed, list):
-                schema_any = parsed
-                ddl = _ddl_from_schema(dsid, {c: "string" for c in parsed})
-        except Exception:
-            logger.warning(
-                "[register-existing] schema_json parse failed; ignoring override",
-                exc_info=True,
-            )
-
-    try:
-        visualization_config = build_visualization_config_from_sample(
-            dataset_id=dsid,
-            sample_rows=samples,
-            schema=schema_any,
-            task_type="unsupervised",
-            target_column=None,
-        )
-        visualization_status = visualization_config.get("visualization_status", "ready")
-    except Exception as e:
-        logger.warning(
-            "Failed to build visualization_config (register-existing): %s",
-            e,
-        )
-        visualization_config = {}
-        visualization_status = "error"
-
-    cols = list(schema_any.keys()) if isinstance(schema_any, dict) else list(schema_any)
 
     sample_input_path = work_dir / "sample_input.csv"
     try:
@@ -2346,14 +2609,14 @@ async def register_existing(
         session_id=session_id,
         thread_id=thread_id,
         schema=schema_any,
-        samples=_jsonify(samples),
+        samples=_jsonify(_cap_rows(samples)),
         ddl_schema=ddl,
         rows_sampled=len(samples),
         visualization_config=visualization_config,
         visualization_status=visualization_status,
         file_size_bytes=file_size_bytes,
         file_size_mb=round(file_size_bytes / (1024 * 1024), 2),
-        portfolio_samples=portfolio_samples,
+        portfolio_samples=_cap_portfolio(portfolio_samples),
         available_samples=available_samples,
         profiling_result=full_profiling_result,
         sample_statistics=sample_statistics,
@@ -2597,6 +2860,8 @@ async def register_existing_folder(
         "sample_statistics": _jsonify(sample_statistics) if sample_statistics else None,
         "available_samples": available_samples,
         "analysis_fidelity": FIDELITY_PORTFOLIO,
+        "sample_status": "full_sample",
+        "profiling_status": "full_profile" if full_profiling_result else None,
         "selected_sample_name": (
             DEFAULT_SAMPLE_NAME
             if (available_samples and DEFAULT_SAMPLE_NAME in available_samples)
@@ -2906,15 +3171,71 @@ FIDELITY_PORTFOLIO = "portfolio_samples"
 FIDELITY_ENTIRE = "entire_dataset"
 
 
+def _session_total_rows(sess: Dict[str, Any]) -> Optional[int]:
+    """Row count of the whole file as measured at ingest, or None if unknown.
+
+    sample_with_profiling (uploads and sub-1 GB registrations) reads the whole
+    file and records the exact count in ``sample_statistics.data_shape.rows``.
+    The quick sampler used for >=1 GB objects writes an *estimate* to the same
+    field, so callers must not trust it for large datasets.
+    """
+    stats = _maybe_json_load(sess.get("sample_statistics")) or sess.get("sample_statistics")
+    if isinstance(stats, dict):
+        rows = (stats.get("data_shape") or {}).get("rows")
+        if isinstance(rows, int) and not isinstance(rows, bool) and rows > 0:
+            return rows
+    rows = sess.get("total_rows_exact")
+    if isinstance(rows, int) and not isinstance(rows, bool) and rows > 0:
+        return rows
+    return None
+
+
+def _analysis_ran_on_partial_sample(
+    *,
+    effective_fidelity: Optional[str],
+    sample_n: int,
+    total_rows: Optional[int],
+    is_large_dataset: bool,
+    entire_on_head: bool,
+) -> bool:
+    """Did this turn's figures come from a subset of the file?
+
+    The honest test is rows analysed against rows in the file. Where the
+    dataset lives is not evidence: an uploaded file sits at a gs:// URI too,
+    and a quick-sample run reads every row of it when the file fits under the
+    sample cap. Treating every cloud-origin session as sampled produced the
+    "computed on a 1,000-row sample" note on 1,000-row files.
+    """
+    if effective_fidelity == FIDELITY_ENTIRE:
+        # Entire-dataset semantics on a streamed head is the one way an
+        # "entire" run can still be partial.
+        return entire_on_head
+    if is_large_dataset:
+        # Only a head or a sample of a >=1 GB object is ever local, and the
+        # recorded row total is itself an estimate taken from that head.
+        return True
+    if effective_fidelity == FIDELITY_PORTFOLIO:
+        # Sub-1 GB portfolio runs execute on the full local copy (see the
+        # routing ladder in send_message), so nothing was left out.
+        return False
+    # Quick sample: the sampler returned min(total, row cap, byte clamp) rows.
+    if total_rows is not None:
+        return sample_n < total_rows
+    return sample_n >= DEFAULT_SAMPLE_MAX_ROWS
+
+
 def _sample_fidelity_note(
     effective_fidelity: Optional[str],
     sample_rows: Any,
     sample_name: Optional[str],
+    total_rows: Optional[int] = None,
 ) -> str:
     """One-line disclosure appended to numeric answers computed on a partial sample."""
     n = len(sample_rows) if isinstance(sample_rows, list) else 0
     if effective_fidelity == FIDELITY_PORTFOLIO:
         scope = f"a portfolio sample ({sample_name})" if sample_name else "a portfolio sample"
+    elif n and total_rows and total_rows > n:
+        scope = f"a {n:,}-row sample of the {total_rows:,}-row file"
     else:
         scope = f"a {n:,}-row sample (the first rows of the file)" if n else "a partial sample of the file"
     return (
@@ -3176,12 +3497,23 @@ def _estimated_inmemory_bytes(sess: Dict[str, Any]) -> Tuple[int, float, str]:
         return int(file_bytes * expansion), 0.0, "expansion"
     return 0, 0.0, "none"
 
-
-def _build_execution_context(fidelity: Optional[str], sample_name: Optional[str]) -> Dict[str, Any]:
+def _build_execution_context(
+    fidelity: Optional[str],
+    sample_name: Optional[str],
+    rows_analyzed: Optional[int] = None,
+    total_rows: Optional[int] = None,
+) -> Dict[str, Any]:
     return {
         "mode": fidelity or FIDELITY_QUICK,
         "mode_label": _FIDELITY_LABELS.get(fidelity or "", fidelity or "Quick Sample"),
         "sample": sample_name,
+        # Frontend badge: "Analyzed 91,713 of 91,713 rows" / "Sample: 7,013 of 91,713"
+        "rows_analyzed": rows_analyzed,
+        "total_rows": total_rows,
+        "is_sampled": (
+            rows_analyzed is not None and total_rows is not None
+            and rows_analyzed < total_rows
+        ),
     }
 
 
@@ -3445,6 +3777,47 @@ def _count_csv_rows(path: Path) -> Optional[int]:
         return None
 
 
+_AVALOKA_RESULT_RE = re.compile(
+    r"<<<AVALOKA_RESULT>>>(.*?)<<<END_AVALOKA_RESULT>>>", re.DOTALL
+)
+
+
+def _iter_strings(obj: Any):
+    if isinstance(obj, str):
+        yield obj
+    elif isinstance(obj, dict):
+        for v in obj.values():
+            yield from _iter_strings(v)
+    elif isinstance(obj, (list, tuple)):
+        for v in obj:
+            yield from _iter_strings(v)
+
+
+def _scalar_result_from_state(final: Dict[str, Any], output_json: Any) -> Optional[Dict[str, Any]]:
+    """Return the scalar answer if this turn produced one (count, mean, max...),
+    else None. A scalar answer belongs in the chat message, not in the Data table."""
+    # 1) Explicit sentinel emitted by avaloka_result()
+    for text in _iter_strings(final.get("execution_result") or {}):
+        m = _AVALOKA_RESULT_RE.search(text)
+        if m:
+            try:
+                payload = json.loads(m.group(1))
+                if isinstance(payload, dict) and "value" in payload:
+                    return payload
+            except (TypeError, ValueError):
+                pass
+
+    # 2) Fallback: a 1-row x 1-column result is a scalar wrapped in a table
+    if (
+        isinstance(output_json, list)
+        and len(output_json) == 1
+        and isinstance(output_json[0], dict)
+        and len(output_json[0]) == 1
+    ):
+        (col, val), = output_json[0].items()
+        return {"kind": "scalar", "value": val, "columns": [col]}
+    return None
+
 def _record_latest_tabular_output(
     sess: Dict[str, Any],
     output_path: Optional[str],
@@ -3531,6 +3904,7 @@ def _resolve_selected_sample_rows(
     portfolio = _maybe_json_load(session_data.get("portfolio_samples")) or session_data.get("portfolio_samples") or {}
     if not isinstance(portfolio, dict):
         portfolio = {}
+    
     if not portfolio and dataset_id:
         portfolio = (_profile_meta.get(dataset_id) or {}).get("portfolio_samples") or {}
         if not portfolio:
@@ -3538,6 +3912,11 @@ def _resolve_selected_sample_rows(
                 portfolio = load_portfolio(dataset_id) or {}
             except Exception:
                 portfolio = {}
+            if portfolio:
+                # cache so later turns don't re-download the portfolio
+                _meta = _profile_meta.get(dataset_id) or {}
+                _meta["portfolio_samples"] = portfolio
+                _profile_meta[dataset_id] = _meta
     available = _maybe_json_load(session_data.get("available_samples")) or session_data.get("available_samples") or []
     if not available and portfolio:
         available = list(portfolio.keys())
@@ -3983,9 +4362,11 @@ async def send_message(
         primary_sess["selected_sample_name"] = _requested_sample_name
 
     _fallback_preview = _maybe_json_load(primary_sess.get("uploaded_csv_preview")) or primary_sess.get("uploaded_csv_preview") or []
-    _resolved_rows, _resolved_name = _resolve_selected_sample_rows(
+   
+    _resolved_rows, _resolved_name = await asyncio.to_thread(
+        _resolve_selected_sample_rows,
         primary_sess,
-        dataset_id=primary_dsid,
+        primary_dsid,
         fallback_rows=_fallback_preview if isinstance(_fallback_preview, list) else [],
     )
     if _resolved_name and primary_sess.get("selected_sample_name") != _resolved_name:
@@ -4154,12 +4535,21 @@ async def send_message(
         if _current_fidelity == FIDELITY_ENTIRE
         else (_resolved_name or "quick_sample")
     )
-    _portfolio_ready = _sample_status == "full_sample"
+    # Sub-1 GB datasets always have their full file locally, so there is
+    # nothing to wait for; only >=1 GB portfolios are built in the background.
+    _portfolio_ready = _sample_status == "full_sample" or not _is_large_dataset
     _effective_fidelity = _current_fidelity
     _analysis_task_in_flight = False
     if not _mode_switch_message:
         if _current_fidelity == FIDELITY_PORTFOLIO and not _portfolio_ready:
             _effective_fidelity = FIDELITY_QUICK
+    # _portfolio_ready = _sample_status == "full_sample"
+    # _effective_fidelity = _current_fidelity
+    # _analysis_task_in_flight = False
+    # if not _mode_switch_message:
+    #     if _current_fidelity == FIDELITY_PORTFOLIO and not _portfolio_ready:
+    #         _effective_fidelity = FIDELITY_QUICK
+
         elif _current_fidelity == FIDELITY_ENTIRE:
             _analysis_task_in_flight = _scheduled_task_is_in_flight(primary_sess.get("analysis_task_id"))
             if _analysis_task_in_flight:
@@ -4257,10 +4647,41 @@ async def send_message(
             analysis_task_id=primary_sess.get("analysis_task_id"),
         )
 
+
+    # ── Metadata fast path for small datasets: row/column counts and schema are
+    #    already known exactly from ingest, so answer without running code.
+    if (
+        len(dataset_sessions) == 1
+        and not _is_large_dataset
+        and not _truthy_session_value(primary_sess.get("data_source_was_modified"))  # stored shape would be stale
+        and str(primary_sess.get("sample_status") or "") == "full_sample"           # row count is exact
+        and _is_metadata_only_question(body.content)
+    ):
+        _meta_msg = _build_metadata_answer(primary_sess, body.content)
+        if _meta_msg:
+            lc_seed = THREAD_META[thread_id].get("lc_msgs", [])
+            lc_seed.append(HumanMessage(body.content))
+            lc_seed.append(AIMessage(content=_meta_msg))
+            THREAD_META[thread_id]["lc_msgs"] = _limit_messages(_compact_messages(lc_seed), MAX_CONTEXT_TURNS)
+            await persist_thread_history(thread_id)
+            return ChatResponse(
+                messages=[{"role": "user", "content": body.content},
+                          {"role": "assistant", "content": _meta_msg}],
+                datasets=[{"dataset_id": x[0], "filename": x[2].get("filename"), "alias": x[2].get("alias")} for x in dataset_sessions],
+                active_dataset_ids=[dsid for dsid, _, _ in dataset_sessions],
+                analysis_fidelity=_current_fidelity,
+                selected_sample_name=primary_sess.get("selected_sample_name"),
+                execution_context=_build_execution_context(_current_fidelity, primary_sess.get("selected_sample_name")),
+            )
+
     # ----------------------------------------------------
     # 5) History (LangChain messages in memory)
     # ----------------------------------------------------
     tmeta = THREAD_META[thread_id]
+    # # ----------------------------------------------------
+    # # 5) History (LangChain messages in memory)
+    # # ----------------------------------------------------
+    # tmeta = THREAD_META[thread_id]
     lc_msgs: List[Any] = tmeta.get("lc_msgs", [])
 
     # ----------------------------------------------------
@@ -4688,6 +5109,13 @@ async def send_message(
         "iceberg_metadata_uri": primary_sess.get("iceberg_metadata_uri"),
         "execution_result": {},
         "output_file_data": None,
+        "output_json": None,
+        "output_tables": None,
+        "structured_action_plan": None,
+        "multi_action_actions": None,
+        "multi_action_missing": None,
+        "multi_action_status": None,
+        "multi_action_notes": None,
         "deploy_on_k8s": False,
 
         # Training flags (persist across turns)
@@ -4846,7 +5274,8 @@ async def send_message(
             or (sample_local_input and _posix(sample_local_input))
             or local_path
         )
-   
+    
+
     elif _effective_fidelity == FIDELITY_PORTFOLIO:
         if _is_folder_dataset and _folder_read_path and _conn_id_check:
             # Read the whole partitioned table via Ray, not a single-CSV sample.
@@ -4857,32 +5286,31 @@ async def send_message(
             state_in["data_source_location"] = _folder_read_path
             state_in["task_schedule"] = None
         else:
-            # ── existing sample-upload logic below, unchanged ──
             sample_cloud_uri = (
                 await asyncio.to_thread(_upload_sample_to_cloud_if_needed, primary_sess)
                 if _is_large_dataset else None
             )
-        if _is_large_dataset and sample_cloud_uri and _conn_id_check:
-            execution_mode = "k8s-ray"
-            state_in["execution_mode"] = "k8s-ray"
-            state_in["ray_execution_profile"] = "interactive_sample_analysis"
-            state_in["data_source_location_cloud"] = sample_cloud_uri
-            state_in["data_source_location"] = sample_cloud_uri
-            state_in["task_schedule"] = None
-            state_in["ray_workers"] = 1
-            state_in["ray_timeout_s"] = min(int(ray_timeout_s or 1800), 600)
-        else:
-            # Fallback: run locally against the sample CSV.
-            execution_mode = "local"
-            state_in["execution_mode"] = "local"
-            state_in["task_schedule"] = None
-            state_in["ray_execution_profile"] = "batch_heavy"
-            state_in["data_source_location"] = (
-                (active_local_source and _posix(active_local_source))
-                or (work_local_input and _posix(work_local_input))
-                or (sample_local_input and _posix(sample_local_input))
-                or local_path
-            )
+            if _is_large_dataset and sample_cloud_uri and _conn_id_check:
+                execution_mode = "k8s-ray"
+                state_in["execution_mode"] = "k8s-ray"
+                state_in["ray_execution_profile"] = "interactive_sample_analysis"
+                state_in["data_source_location_cloud"] = sample_cloud_uri
+                state_in["data_source_location"] = sample_cloud_uri
+                state_in["task_schedule"] = None
+                state_in["ray_workers"] = 1
+                state_in["ray_timeout_s"] = min(int(ray_timeout_s or 1800), 600)
+            else:
+                # Sub-1 GB: run locally on the FULL file (work_local_input).
+                execution_mode = "local"
+                state_in["execution_mode"] = "local"
+                state_in["task_schedule"] = None
+                state_in["ray_execution_profile"] = "batch_heavy"
+                state_in["data_source_location"] = (
+                    (active_local_source and _posix(active_local_source))
+                    or (work_local_input and _posix(work_local_input))
+                    or (sample_local_input and _posix(sample_local_input))
+                    or local_path
+                )
    
     elif _effective_fidelity == FIDELITY_ENTIRE:
         execution_mode = (
@@ -4917,6 +5345,24 @@ async def send_message(
     # Re-materialize the local input if TMP_ROOT was wiped (host reboot / tmp
     # cleaner) or a different process handled ingest. Faithful for QUICK/PORTFOLIO
     # (rebuild from the resolved sample rows); ENTIRE-local needs the full object back.
+    if execution_mode != "k8s-ray":
+        await _ensure_local_inputs(
+            primary_sess,
+            need_full=(
+                _effective_fidelity == FIDELITY_ENTIRE
+                or (_effective_fidelity == FIDELITY_PORTFOLIO and not _is_large_dataset)
+            ),
+            rows_override=(_resolved_rows or _fallback_preview or None),
+        )
+        # If the re-download changed work_local_input, point this run at it.
+        if (
+            _effective_fidelity == FIDELITY_PORTFOLIO
+            and not _is_large_dataset
+            and not active_local_source
+            and primary_sess.get("work_local_input")
+        ):
+            state_in["data_source_location"] = _posix(primary_sess["work_local_input"])
+            state_in["full_data_location"] = _posix(primary_sess["work_local_input"])
     if execution_mode != "k8s-ray":
         await _ensure_local_inputs(
             primary_sess,
@@ -5025,9 +5471,15 @@ async def send_message(
         # ----------------------------------------------------
         changed = False
         for k in ("schema", "ddl_schema", "uploaded_csv_preview", "uploaded_csv_columns"):
-            if k in state_in and k in primary_sess and state_in[k] != primary_sess.get(k):
-                primary_sess[k] = _jsonify(state_in[k])
-                changed = True
+            if k in state_in and k in primary_sess:
+                # Keep the preview capped in Redis; the full rows stay in
+                # _profile_meta / Supabase / sample_input.csv.
+                _new_val = _jsonify(
+                    _cap_rows(state_in[k]) if k == "uploaded_csv_preview" else state_in[k]
+                )
+                if _new_val != primary_sess.get(k):
+                    primary_sess[k] = _new_val
+                    changed = True
 
         training_state_keys = (
             "training_plan",
@@ -5165,7 +5617,7 @@ Ready to proceed with model training!"""
         # ----------------------------------------------------
         # 18) Output handling: get_output_from_state + CSV + markdown fallbacks
         # ----------------------------------------------------
-        if not final.get("output_location"):
+        if not final.get("output_location") and not final.get("structured_action_plan"):
             final["output_location"] = state_in.get("output_location")
 
         try:
@@ -5337,6 +5789,33 @@ Ready to proceed with model training!"""
             output_json = None
             output_file_data = None
 
+        # Scalar answers (row count, mean, max, "which category"...) are answered
+        # in the chat message. Don't render them as a 1x1 Data table, and don't
+        # let a chart config built from a 1-row output replace the dataset's charts.
+        _scalar_answer = (
+            _scalar_result_from_state(final, output_json)
+            if produced_fresh_output and not final.get("activate_output_as_dataset")
+            else None
+        )
+        if _scalar_answer is not None:
+            logger.info(
+                "[send_message] Scalar answer %s — suppressing table/chart payload",
+                _scalar_answer,
+            )
+            output_json = None
+            output_file_data = None
+            primary_viz_config = (
+                _maybe_json_load(primary_sess.get("visualization_config"))
+                or primary_sess.get("visualization_config")
+                or {}
+            )
+            primary_viz_status = primary_sess.get("visualization_status")
+            visualization_configs[primary_dsid] = primary_viz_config
+            if primary_viz_status:
+                visualization_statuses[primary_dsid] = primary_viz_status
+            THREAD_META[thread_id]["artifacts"]["visualization_config"] = primary_viz_config
+            THREAD_META[thread_id]["artifacts"]["visualization_status"] = primary_viz_status or ""
+
         # ── Byte-gated deferral: the response is a deterministic job card, never
         #    LLM prose. The summarizer was bypassed in the graph (D-01), and the
         #    payload must carry NO analytical numbers — clear outputs
@@ -5373,7 +5852,7 @@ Ready to proceed with model training!"""
             except Exception as exc:
                 logger.warning("[byte_routing] failed to rewrite thread history with job card: %s", exc)
 
-        if produced_fresh_output:
+        if produced_fresh_output and _scalar_answer is None and not final.get("structured_action_plan"):
             latest_output_path = final.get("output_location") or state_in.get("output_location")
             if _record_latest_tabular_output(primary_sess, latest_output_path, output_json):
                 latest_updates = {
@@ -5537,24 +6016,53 @@ Ready to proceed with model training!"""
             and _effective_fidelity == FIDELITY_ENTIRE
             and str(primary_sess.get("work_local_input") or "").endswith("streamed_head.csv")
         )
-        _ran_on_partial_sample = produced_fresh_output and (
-            (_cloud_origin_session and _effective_fidelity != FIDELITY_ENTIRE)
-            or _entire_on_head
-            or (
-                _effective_fidelity == FIDELITY_QUICK
-                and (_is_large_dataset or _sample_n >= DEFAULT_SAMPLE_MAX_ROWS)
-            )
-            or (_effective_fidelity == FIDELITY_PORTFOLIO and _is_large_dataset)
+        _total_rows = _session_total_rows(primary_sess)
+        _ran_on_partial_sample = produced_fresh_output and _analysis_ran_on_partial_sample(
+            effective_fidelity=_effective_fidelity,
+            sample_n=_sample_n,
+            total_rows=_total_rows,
+            is_large_dataset=_is_large_dataset,
+            entire_on_head=_entire_on_head,
         )
         _assistant_text = ai_msg.content if ai_msg else None
+        _structured = bool(final.get("structured_action_plan"))
+        _multi_status = final.get("multi_action_status") if _structured else None
+        _multi_actions = (final.get("multi_action_actions") or []) if _structured else []
+        _multi_missing = (final.get("multi_action_missing") or []) if _structured else []
+        _output_tables = (final.get("output_tables") or []) if _structured else []
+        _multi_notes = (final.get("multi_action_notes") or []) if _structured else []
+        if _structured and _output_tables:
+            _missing_ids = {item.get("id") for item in _multi_missing}
+            _completed_labels = [
+                f"{item.get('operation')} of {item.get('column') or 'records'}"
+                + (f" by {', '.join(item.get('group_by') or [])}" if item.get("group_by") else "")
+                for item in _multi_actions if item.get("id") not in _missing_ids
+            ]
+            _completed_text = "Completed: " + "; ".join(_completed_labels) + ". " if _completed_labels else ""
+            if _multi_missing:
+                _missing_labels = "; ".join(
+                    f"{item.get('label', 'metric')} ({item.get('reason', 'could not calculate')})"
+                    for item in _multi_missing
+                )
+                _assistant_text = "Incomplete analysis. " + _completed_text + (
+                    f"I could not complete {_missing_labels} after three calculation approaches. "
+                    "Please check the source values and column types; data cleansing or clarification may be needed."
+                )
+            else:
+                _assistant_text = _completed_text + "All requested metrics are complete. The results are in the tables below."
+            if _multi_notes:
+                _assistant_text += " Data preparation: " + " ".join(_multi_notes)
+        elif _structured:
+            _assistant_text = str((final.get("execution_result") or {}).get("message") or "Incomplete analysis.")
         if _ran_on_partial_sample and isinstance(_assistant_text, str) and _assistant_text.strip():
             _assistant_text = _assistant_text.rstrip() + _sample_fidelity_note(
                 _effective_fidelity, _resolved_rows, primary_sess.get("selected_sample_name"),
+                total_rows=_total_rows,
             )
 
         resp = ChatResponse(
             messages=[{"role": "user", "content": body.content}]
-            + ([{"role": "assistant", "content": _assistant_text}] if ai_msg else []),
+            + ([{"role": "assistant", "content": _assistant_text}] if _assistant_text else []),
             reasoning=final.get("reasoning_trace"),
             planner_definition=final.get("planner_definition", {}) or {},
             ready_to_summarize=ready_to_summarize,
@@ -5562,6 +6070,11 @@ Ready to proceed with model training!"""
             coder_definition=final.get("coder_definition", {}) or {},
             output_file_data=output_file_data,
             output_json=output_json,
+            output_tables=_output_tables or None,
+            multi_action_status=_multi_status,
+            multi_action_actions=_multi_actions or None,
+            multi_action_missing=_multi_missing or None,
+            multi_action_notes=_multi_notes or None,
             planner_graph_path=planner_graph_path,
             planner_graph_status=planner_graph_status,
             planner_graph_display_url=planner_graph_display_url,
@@ -5587,9 +6100,22 @@ Ready to proceed with model training!"""
             visualization_statuses=visualization_statuses,
             analysis_fidelity=_current_fidelity,
             selected_sample_name=primary_sess.get("selected_sample_name"),
-            execution_context=_build_execution_context(_current_fidelity, primary_sess.get("selected_sample_name")),
+            execution_context=_build_execution_context(
+                _effective_fidelity,
+                primary_sess.get("selected_sample_name"),
+                rows_analyzed=(
+                    (_sample_n if _ran_on_partial_sample else _total_rows)
+                    if produced_fresh_output else None
+                ),
+                total_rows=_total_rows,
+            ),
             analysis_task_id=(task_info or {}).get("task_id"),
             integrity_report=final.get("integrity_report"),
+            # analysis_fidelity=_current_fidelity,
+            # selected_sample_name=primary_sess.get("selected_sample_name"),
+            # execution_context=_build_execution_context(_current_fidelity, primary_sess.get("selected_sample_name")),
+            # analysis_task_id=(task_info or {}).get("task_id"),
+            # integrity_report=final.get("integrity_report"),
             integrity_safe_to_train=final.get("integrity_safe_to_train"),
             evaluation_report=final.get("evaluation_report"),
             evaluation_beats_baseline=final.get("evaluation_beats_baseline"),
@@ -5661,9 +6187,42 @@ Ready to proceed with model training!"""
     _turn_task = asyncio.create_task(_run_graph_and_finalize())
     _done, _ = await asyncio.wait({_turn_task}, timeout=TURN_SYNC_DEADLINE_S)
 
+    # if _turn_task in _done:
+    #     # Fast turn (all analysis, and any training that fit): identical to before.
+    #     resp = _turn_task.result()          # re-raises HTTPException/errors in-turn
     if _turn_task in _done:
-        # Fast turn (all analysis, and any training that fit): identical to before.
-        resp = _turn_task.result()          # re-raises HTTPException/errors in-turn
+        try:
+            resp = _turn_task.result()      # re-raises HTTPException/errors in-turn
+        except HTTPException:
+            raise  # already structured (401/400/504…) — keep its status
+        except Exception as exc:
+            # An unexpected failure inside the graph (e.g. a retired provider model).
+            # Log the full traceback for engineers; return the reason to the user as a
+            # normal assistant message instead of a bare 500 "Message failed".
+            logger.exception("[send_message] turn failed (thread=%s): %s", thread_id, exc)
+            _friendly = _friendly_turn_error(exc)
+            try:
+                _lc = THREAD_META[thread_id].get("lc_msgs", [])
+                _lc.append(AIMessage(content=_friendly))
+                THREAD_META[thread_id]["lc_msgs"] = _limit_messages(
+                    _compact_messages(_lc), MAX_CONTEXT_TURNS
+                )
+                await persist_thread_history(thread_id)
+            except Exception:
+                logger.debug("[send_message] could not persist error message", exc_info=True)
+            resp = ChatResponse(
+                messages=[{"role": "user", "content": body.content},
+                          {"role": "assistant", "content": _friendly}],
+                datasets=datasets_dropdown,
+                active_dataset_ids=[dsid for dsid, _, _ in dataset_sessions],
+                visualization_configs=visualization_configs,
+                visualization_statuses=visualization_statuses,
+                analysis_fidelity=_current_fidelity,
+                selected_sample_name=primary_sess.get("selected_sample_name"),
+                execution_context=_build_execution_context(
+                    _current_fidelity, primary_sess.get("selected_sample_name")
+                ),
+            )
     else:
         # Slow turn (model training): return a handle before the proxy aborts.
         _deferred_turn_tasks.add(_turn_task)
@@ -5673,8 +6232,11 @@ Ready to proceed with model training!"""
             _deferred_turn_tasks.discard(t)
             if not t.cancelled() and t.exception() is not None:
                 logger.error("[deferred] turn %s failed: %s", _did, t.exception())
+                # asyncio.create_task(
+                #     update_session(bound_sid, _pending_turn_error(_did, "Training failed. Please try again."))
+                # )
                 asyncio.create_task(
-                    update_session(bound_sid, _pending_turn_error(_did, "Training failed. Please try again."))
+                    update_session(bound_sid, _pending_turn_error(_did, _friendly_turn_error(t.exception())))
                 )
         _turn_task.add_done_callback(_cleanup)
 
@@ -6248,7 +6810,7 @@ async def get_task_runs(request: Request, task_id: str):
         elif state == "FAILURE":
             raw_error = task.traceback or task.result or "Task failed"
             error = (
-                format_training_failure(build_training_failure(raw_error))
+                TRAINING_FAILURE_MESSAGE
                 if task_metadata.get("task_type") == "training"
                 else str(raw_error)
             )
@@ -7006,15 +7568,16 @@ async def preview_dataset(
         if _full_rows:
             samples = (_full_rows if isinstance(_full_rows, list) else list(_full_rows))[:limit]
 
+    _preview_cap = min(limit, PREVIEW_RESPONSE_ROWS)
     return DatasetPreviewResponse(
         dataset_id=dataset_id,
         schema=schema_any,
-        samples=_jsonify(samples),
+        samples=_jsonify(samples[:_preview_cap]),
         ddl_schema=ddl,
         rows_sampled=len(samples),
         session_id=session_id,
         thread_id=thread_id,
-        portfolio_samples=meta.get("portfolio_samples"),
+        portfolio_samples=_cap_portfolio(meta.get("portfolio_samples"), _preview_cap),
         available_samples=meta.get("available_samples"),
         profiling_result=meta.get("profiling_result"),
         full_profiling_result=meta.get("full_profiling_result"),
@@ -9257,10 +9820,10 @@ async def refresh_analysis(
             new_output_key = latest_output.object_key
             pointer_advanced = True
 
-    checkpoint_created = bool(
-        checkpoint_created
-        and history_advanced
-        and new_output_key
+    _checkpoint_created = bool(
+    _checkpoint_created
+    and history_advanced
+    and new_output_key
     )
 
     new_prompt_ts = (
@@ -10220,6 +10783,108 @@ async def disconnect_github_integration(request: Request):
         logger.error("[integrations] github delete failed for %s: %s", user_id, exc, exc_info=True)
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Failed to remove the GitHub connection")
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+
+async def _load_insight_viz_context(
+    session_id: Optional[str],
+    dataset_id: Optional[str],
+) -> Dict[str, Any]:
+    """Dataset label + stored visualization profile for the analysis session.
+
+    For multi-file uploads the analyses row points at the GROUP session, so a
+    requested dataset_id is mapped to its own session via dataset_session_map.
+    """
+    if not session_id:
+        return {}
+    sess = await get_session(session_id)
+    if not isinstance(sess, dict):
+        return {}
+
+    if dataset_id and sess.get("dataset_id") != dataset_id:
+        smap = sess.get("dataset_session_map") or {}
+        if isinstance(smap, str):
+            smap = _maybe_json_load(smap) or {}
+        ds_sid = smap.get(dataset_id) if isinstance(smap, dict) else None
+        if ds_sid:
+            ds_sess = await get_session(ds_sid)
+            if isinstance(ds_sess, dict) and ds_sess.get("user_id") == sess.get("user_id"):
+                sess = ds_sess
+
+    viz = _maybe_json_load(sess.get("visualization_config")) or sess.get("visualization_config") or {}
+    return {
+        "dataset_name": sess.get("alias") or sess.get("filename"),
+        "viz": viz if isinstance(viz, dict) else {},
+    }
+
+
+
+
+
+@app.post(
+    "/analysis/{analysis_id}/insights/explain",
+    response_model=InsightExplainOut,
+    tags=["insights"],
+)
+async def explain_analysis_insights(
+    request: Request,
+    analysis_id: str,
+    body: InsightExplainIn,
+):
+    """Spoken-style explanation of the Auto Insights charts for the avatar.
+
+    Owners AND project collaborators can use it (the Auto Insights page is
+    shared), so authorize through the shared-analysis resolver rather than the
+    owner-only _resolve_session_from_aid.
+    """
+    user_id = _resolve_user_id(request)
+    if not user_id:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing or invalid auth token")
+
+    shared = await _resolve_shared_session_for_thread("", user_id, analysis_id=analysis_id)
+    if not shared:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Analysis not found")
+
+    ctx = await _load_insight_viz_context(shared.get("session_id"), body.dataset_id)
+    viz = ctx.get("viz") or {}
+
+    charts = [c.model_dump() for c in body.charts]
+    referenced = {
+        str(f) for c in charts for f in (c.get("x_field"), c.get("y_field")) if f
+    }
+
+    column_profiles = [
+        {
+            "name": p.get("name"),
+            "dtype": p.get("dtype"),
+            "n_unique": p.get("n_unique"),
+            "missing_ratio": p.get("missing_ratio"),
+        }
+        for p in (viz.get("columns") or [])
+        if isinstance(p, dict) and str(p.get("name")) in referenced
+    ]
+    warnings = [
+        w for w in (viz.get("warnings") or [])
+        if isinstance(w, str) and any(f"'{f}'" in w for f in referenced)
+    ]
+
+    result = await asyncio.to_thread(
+        explain_charts,
+        body.question,
+        charts,
+        body.dataset_name or ctx.get("dataset_name") or "dataset",
+        warnings,
+        [h.model_dump() for h in body.history],
+        body.focus_chart_id,
+        column_profiles,
+    )
+
+    logger.info(
+        "[insights-explain] aid=%s role=%s charts=%d focus=%s answered=%s",
+        analysis_id, shared.get("role"), len(charts),
+        body.focus_chart_id, bool(result.get("answer")),
+    )
+    return InsightExplainOut(**result)
  
 # -------------------------------------------------------------------
 # Local runner

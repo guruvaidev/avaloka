@@ -36,8 +36,8 @@ gateway:
   enabled: true
   provider: azure
   hosts:
-    - test.example.com
-    - app.example.com
+    - test.avaloka.ai
+    - app.avaloka.ai
   annotations:
     # ALB-managed strategy. For bring-your-own, drop these two and use instead:
     #   alb.networking.azure.io/alb-id: /subscriptions/.../applicationLoadBalancers/alb-test

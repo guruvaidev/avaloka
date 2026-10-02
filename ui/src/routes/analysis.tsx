@@ -12,16 +12,19 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { analysesKey, useAnalysisMutations } from "@/lib/analyses";
-import { deriveVizFromRows } from "@/lib/derive-viz";
+import { deriveVizFromResultTable, deriveVizFromRows, type ResultTableForViz } from "@/lib/derive-viz";
 import { buildInsightGroups } from "@/lib/insight-groups";
+import { collectAutoInsightHighlights, collectChartFindings } from "@/lib/auto-insight-highlights";
 
 
 import { useProjects } from "@/lib/projects";
 import { TagPicker } from "@/components/analysis/TagPicker";
+import { avatarPortrait } from "@/components/insights-avatar/avatarPortrait";
 const avatarBotAsset = { url: "/assets/dashboard/avatar_bot.png" };
 const avatarBot = avatarBotAsset.url;
 const avatarTtsVideo = "/assets/dashboard/avatar_tts.mp4";
-const avatarTtsIdle = "/assets/dashboard/avatar_tts_idle.png";
+//const avatarTtsIdle = "/assets/dashboard/avatar_tts_idle.png";
+const avatarTtsIdle = avatarPortrait;
 import {
   MessageChatCircle,
   Stars02,
@@ -75,6 +78,8 @@ import {
 import { IconRail } from "@/components/dashboard/IconRail";
 import { speakText, stopSpeaking, useVoiceInput } from "@/hooks/useVoiceInput";
 import { AutoInsightsModal } from "@/components/dashboard/AutoInsightsModal";
+import { AnalysisReportSummary, isReportResult } from "@/components/dashboard/AnalysisReportSummary";
+import { Button } from "@/components/base/buttons/button";
 import { collectVizInsights, DynamicChart, normalizeVizConfig, type Slide } from "@/components/dashboard/dynamicChart";
 import { AddToDashboardModal } from "@/components/dashboard/AddToDashboardModal";
 import { ConnectCloudModal } from "@/components/database/ConnectCloudModal";
@@ -155,7 +160,7 @@ type ChatMessage = {
   isSelf?: boolean;
 };
 
-const ANALYSIS_COMPLETE_MESSAGE = "Analysis complete. Please check your output table and charts for analysis.";
+const ANALYSIS_COMPLETE_MESSAGE = "Analysis complete. Click Chart to visualize the output data, or Data Table to view the underlying data in table format.";
 
 /** True when a turn actually produced an execution result. */
 function hasExecutionResult(payload: unknown): boolean {
@@ -435,7 +440,13 @@ function readDatasetBatch(analysisId: string | null | undefined): StoredBatch | 
   }
 }
 
-type UserInsightEntry = { id: string; sectionId: string; vizConfig: unknown; samples?: unknown[] };
+type UserInsightEntry = {
+  id: string;
+  sectionId: string;
+  vizConfig: unknown;
+  samples?: unknown[];
+  tableTitle?: string;
+};
 
 // Each analysis run's tabular output, persisted per run (parallel to charts).
 type TableRun = {
@@ -560,6 +571,13 @@ function dedupeSlidesByInsight(slides: Slide[], excludeTitles?: Set<string>): Sl
   return out;
 }
 
+function resultVizFromOutput(rows: unknown, savedViz: unknown): unknown {
+  if (!Array.isArray(rows) || rows.length === 0) return savedViz;
+  const clientDerived = savedViz && typeof savedViz === "object" &&
+    !Array.isArray(savedViz) && (savedViz as { source?: unknown }).source === "client_derived";
+  return !savedViz || clientDerived ? deriveVizFromRows(rows) ?? savedViz : savedViz;
+}
+
 function extractUserInsightsFromMessages(
   rows: AnalysisMessage[],
   autoVizConfig: unknown | null,
@@ -571,18 +589,38 @@ function extractUserInsightsFromMessages(
 
   for (const row of rows) {
     if (row.role !== "assistant") continue;
-    const out = row.output as { viz_config?: unknown; output_json?: unknown[]; section_id?: string } | null;
+    const out = row.output as {
+      viz_config?: unknown;
+      output_json?: unknown[];
+      output_tables?: ResultTableForViz[];
+      section_id?: string;
+    } | null;
     if (!out) continue;
 
-    let viz = out.viz_config;
-    if (!viz && Array.isArray(out.output_json) && out.output_json.length > 0) {
-      viz = deriveVizFromRows(out.output_json);
+    const sectionId = typeof out.section_id === "string" ? out.section_id : defaultSectionId;
+    if (Array.isArray(out.output_tables) && out.output_tables.length) {
+      out.output_tables.forEach((table, index) => {
+        const tableViz = deriveVizFromResultTable(table);
+        if (!tableViz) return;
+        const tableKey = `${sectionId}:${vizFingerprint(tableViz)}`;
+        if (seen.has(tableKey)) return;
+        seen.add(tableKey);
+        results.push({
+          id: `${row.id}-table-${index}`,
+          sectionId,
+          vizConfig: tableViz,
+          samples: table.rows,
+          tableTitle: table.title,
+        });
+      });
+      continue;
     }
+
+    const viz = resultVizFromOutput(out.output_json, out.viz_config);
     if (!viz) continue;
 
     const key = vizFingerprint(viz);
     if (autoKey && key === autoKey) continue;
-    const sectionId = typeof out.section_id === "string" ? out.section_id : defaultSectionId;
     const dedupeKey = `${sectionId}:${key}`;
     if (seen.has(dedupeKey)) continue;
     seen.add(dedupeKey);
@@ -610,6 +648,7 @@ function extractTableRunsFromMessages(rows: AnalysisMessage[], defaultSectionId:
     const out = row.output as
       | {
           output_json?: unknown[];
+          output_tables?: ResultTableForViz[];
           extracted_tables?: ParsedTable[];
           section_id?: string;
           code?: string | null;
@@ -629,8 +668,21 @@ function extractTableRunsFromMessages(rows: AnalysisMessage[], defaultSectionId:
 
 
     // Structured backend rows.
-    const hasStructured = !!(out && Array.isArray(out.output_json) && out.output_json.length > 0);
-    if (hasStructured) {
+    const structuredTables = Array.isArray(out?.output_tables) ? out.output_tables : [];
+    const hasStructured = !!(out && ((Array.isArray(out.output_json) && out.output_json.length > 0) || structuredTables.length));
+    if (structuredTables.length) {
+      structuredTables.forEach((table, index) => {
+        runs = mergeTableRun(runs, {
+          id: `${row.id}-table-${index}`,
+          sectionId: typeof out!.section_id === "string" ? out!.section_id : defaultSectionId,
+          title: table.title || lastPrompt || `Result ${runs.length + 1}`,
+          rows: table.rows,
+          code: typeof out!.code === "string" ? out!.code : null,
+          promptTs: typeof out!.prompt_ts === "string" ? out!.prompt_ts : null,
+          file: out!.output_file ?? null,
+        });
+      });
+    } else if (hasStructured) {
       runs = mergeTableRun(runs, {
         id: row.id,
         sectionId: typeof out!.section_id === "string" ? out!.section_id : defaultSectionId,
@@ -784,7 +836,7 @@ function collectSlidesInsights(slides: Slide[]) {
     list.push(t);
   };
   for (const slide of slides) {
-    add(summaries, slide.subtitle);
+    if (slide.subtitle !== slide.reason) add(summaries, slide.subtitle);
     slide.insights.forEach((item) => add(insights, item));
   }
   return { summaries, insights };
@@ -844,6 +896,7 @@ function AnalysisPage() {
   const floatAsideRef = useRef<HTMLElement | null>(null);
   const [avatarMode, setAvatarMode] = useState(false);
   const [voiceListening, setVoiceListening] = useState(false);
+  const [avatarSpeaking, setAvatarSpeaking] = useState(false);
   const [view, setView] = useState<"table" | "chart" | "preview">("chart");
   
   const [moveOpen, setMoveOpen] = useState(false);
@@ -881,6 +934,7 @@ function AnalysisPage() {
   >(undefined);
   const [selectedSampleName, setSelectedSampleName] = useState<string | undefined>(undefined);
   const [datasetChips, setDatasetChips] = useState<DatasetChip[]>([]);
+  const [datasetsExpanded, setDatasetsExpanded] = useState(false);
 
   // Analysis output from sendMessage
   const [analysisRows, setAnalysisRows] = useState<Record<string, unknown>[] | null>(null);
@@ -902,6 +956,7 @@ function AnalysisPage() {
     setTableRuns((prev) => prev.map((r) => (r.id === runId ? { ...r, ...patch } : r)));
   }, []);
   const [analysisVizConfig, setAnalysisVizConfig] = useState<any>(null);
+  const [showAllAutoInsightHighlights, setShowAllAutoInsightHighlights] = useState(false);
   const [persistedDataset, setPersistedDataset] = useState<UploadedDataset | null>(null);
   const [outputFile, setOutputFile] = useState<OutputFile | null>(null);
   const [isSending, setIsSending] = useState(false);
@@ -965,7 +1020,9 @@ function AnalysisPage() {
 
   // Voice mode reads the assistant's newest reply aloud inside <VoicePanel />.
   useEffect(() => {
-    if (!avatarMode) stopSpeaking();
+    if (!avatarMode) {stopSpeaking();
+      setAvatarSpeaking(false);
+    }
   }, [avatarMode]);
 
 
@@ -1368,7 +1425,10 @@ function AnalysisPage() {
     }
 
     // Fresh uploads that asked for it land straight on the Auto Insights cards.
-    if ((navState as any)?.showAutoInsights) {
+    if (
+      (navState as any)?.showAutoInsights ||
+      (up && cfg && (!status || status === "ready"))
+    ) {
       setAutoInsightsOpen(true);
     }
 
@@ -2132,7 +2192,7 @@ function AnalysisPage() {
           setUserInsightsRows(out.output_json as Record<string, unknown>[]);
           setView("table");
         }
-        if (out.viz_config) lastMessageViz = out.viz_config;
+        lastMessageViz = resultVizFromOutput(out.output_json, out.viz_config);
       }
 
       if (!row) return;
@@ -2275,11 +2335,13 @@ function AnalysisPage() {
         }
       }
 
-      if (row.viz_config) {
+        if (row.viz_config) {
         setAutoInsightsConfig(row.viz_config as any);
         setAutoInsightsStatus("ready");
         setAnalysisVizConfig(row.viz_config);
-        setView("chart");
+        // Analyses that already have results open on the data table;
+        // fresh ones with only Auto Insights still open on the chart.
+        setView(hydratedRuns.length ? "table" : "chart");
       } else if (lastMessageViz) {
         setAutoInsightsConfig(null);
         setAutoInsightsStatus(undefined);
@@ -2573,17 +2635,29 @@ function AnalysisPage() {
   const [copyFallbackText, setCopyFallbackText] = useState<string | null>(null);
 
   const copyAnalysisData = useCallback(async () => {
-    if (!selectedRun) {
-      toast.error("No analysis result to copy");
+    // Auto Insights can exist without any analysis/table result.
+    // In that case we should still allow Copy and copy the Auto Insights.
+    const hasAutoInsights =
+      autoChartSlides.length > 0 ||
+      mainSectionUserSlides.length > 0;
+
+    if (!selectedRun && !hasAutoInsights) {
+      toast.error("No analysis result or auto insights to copy");
       return;
     }
-    // Copy EVERY result of the current tab (not just the visible page), each
-    // with its own chart config, plus the tab's key insights.
+
+    // Copy EVERY result of the current tab when analysis results exist.
+    // If there are no results, create an insight-only clip.
     const tabId = resolvedTabId || activeTabId;
     const inTab = (sid: string) =>
       sid === currentMainSectionId || (!!tabId && sid.startsWith(`${tabId}-`));
+
     const runsInTab = tableRuns.filter((r) => inTab(r.sectionId));
-    const sourceRuns = runsInTab.length ? runsInTab : [selectedRun];
+    const sourceRuns = runsInTab.length
+      ? runsInTab
+      : selectedRun
+        ? [selectedRun]
+        : [];
 
     const toClipRun = (r: TableRun): AnalysisClipRun => ({
       id: r.id,
@@ -2593,15 +2667,23 @@ function AnalysisPage() {
       promptTs: r.promptTs ?? null,
       file: r.file ?? null,
       vizConfig:
-        userInsightEntries.find((e) => e.id === r.id)?.vizConfig ?? deriveVizFromRows(r.rows) ?? null,
+        userInsightEntries.find((e) => e.id === r.id)?.vizConfig ??
+        deriveVizFromRows(r.rows) ??
+        null,
     });
 
-    // Capture EVERY chart currently rendered for this tab (auto insights,
-    // user insights and each result's own charts) so paste reproduces them all.
+    // Capture charts from actual analysis runs.
     const runSlides = sourceRuns.flatMap((r) => {
-      const viz = userInsightEntries.find((e) => e.id === r.id)?.vizConfig ?? deriveVizFromRows(r.rows);
-      return viz ? (slidesForDashboardTab(viz, r.rows, undefined) as Slide[]) : [];
+      const viz =
+        userInsightEntries.find((e) => e.id === r.id)?.vizConfig ??
+        deriveVizFromRows(r.rows);
+
+      return viz
+        ? (slidesForDashboardTab(viz, r.rows, undefined) as Slide[])
+        : [];
     });
+
+    // Auto Insights + user insights + result charts.
     const allSlides = dedupeSlidesByInsight([
       ...autoChartSlides,
       ...mainSectionUserSlides,
@@ -2610,36 +2692,60 @@ function AnalysisPage() {
 
     const tabInsights = collectSlidesInsights(allSlides);
 
+    // Nothing actually copyable.
+    if (allSlides.length === 0 && tabInsights.summaries.length === 0 && tabInsights.insights.length === 0) {
+      toast.error("No analysis result or auto insights to copy");
+      return;
+    }
+
     let serializedSlides: unknown[] = [];
+
     try {
       serializedSlides = JSON.parse(JSON.stringify(allSlides));
     } catch {
       serializedSlides = [];
     }
 
+    // AnalysisClip requires a `run` for backwards compatibility.
+    // For Auto-Insights-only tabs, use an empty placeholder run.
+    const fallbackRun: AnalysisClipRun = {
+      id: `auto-insights-${Date.now()}`,
+      title: `${workspaceHeading} - Auto Insights`,
+      rows: [],
+      code: null,
+      promptTs: null,
+      file: null,
+      vizConfig: resolvedAutoViz ?? null,
+    };
+
     const clip: AnalysisClip = {
       marker: AVALOKA_CLIP_MARKER,
       v: 1,
-      run: toClipRun(selectedRun),
+      run: sourceRuns[0] ? toClipRun(sourceRuns[0]) : fallbackRun,
       runs: sourceRuns.map(toClipRun),
       insights: [...tabInsights.summaries, ...tabInsights.insights],
       slides: serializedSlides,
       fidelity: analysisFidelity,
     };
-    const text = JSON.stringify(clip);
 
+    const text = JSON.stringify(clip);
 
     // Try the async clipboard API first.
     if (navigator.clipboard && window.isSecureContext) {
       try {
         await navigator.clipboard.writeText(text);
-        toast.success("Analysis data copied — paste into another analysis");
+        toast.success(
+          sourceRuns.length
+            ? "Analysis data copied — paste into another analysis"
+            : "Auto insights copied — paste into another analysis",
+        );
         return;
       } catch {
-        // Fall through to the execCommand path below.
+        // Fall through to execCommand.
       }
     }
-    // Fallback: hidden textarea + execCommand (works where writeText is denied).
+
+    // Fallback for browsers/iframes blocking navigator.clipboard.
     try {
       const ta = document.createElement("textarea");
       ta.value = text;
@@ -2648,17 +2754,24 @@ function AnalysisPage() {
       ta.style.left = "0";
       ta.style.opacity = "0";
       ta.setAttribute("readonly", "");
+
       document.body.appendChild(ta);
       ta.focus();
       ta.select();
       ta.setSelectionRange(0, ta.value.length);
+
       const ok = document.execCommand("copy");
       document.body.removeChild(ta);
+
       if (!ok) throw new Error("execCommand copy failed");
-      toast.success("Analysis data copied — paste into another analysis");
+
+      toast.success(
+        sourceRuns.length
+          ? "Analysis data copied — paste into another analysis"
+          : "Auto insights copied — paste into another analysis",
+      );
       return;
     } catch {
-      // Last resort: show the text so the user can copy it manually.
       setCopyFallbackText(text);
       toast.info("Clipboard is blocked here — copy the text from the dialog");
     }
@@ -2672,6 +2785,8 @@ function AnalysisPage() {
     userInsightEntries,
     autoChartSlides,
     mainSectionUserSlides,
+    resolvedAutoViz,
+    workspaceHeading,
   ]);
 
   /** Paste modal state — user pastes the copied blob into a text area, then
@@ -2686,18 +2801,23 @@ function AnalysisPage() {
       return;
     }
     const stamp = Date.now();
+    const groupId = `pasted-${stamp}`;
     const sectionId = currentMainSectionId || "main";
-    const clipRuns = (clip.runs?.length ? clip.runs : [clip.run]).filter(
-      (r) => r && Array.isArray(r.rows) && r.rows.length > 0,
-    );
-    if (!clipRuns.length) {
-      toast.error("Copied analysis has no data");
-      return;
-    }
+    const rawClipRuns = clip.runs?.length ? clip.runs : [clip.run];
+
+    const clipRuns = rawClipRuns.filter((r) => r && Array.isArray(r.rows));
+
     const tabInsights = Array.isArray(clip.insights) ? clip.insights.filter(Boolean) : [];
 
-    const groupId = `pasted-${stamp}`;
     const clipSlides = Array.isArray(clip.slides) ? clip.slides : [];
+
+    const hasAnalysisData = clipRuns.some((r) => r.rows.length > 0);
+    const hasAutoInsights = clipSlides.length > 0 || tabInsights.length > 0;
+
+    if (!hasAnalysisData && !hasAutoInsights) {
+      toast.error("Copied analysis has no data or auto insights");
+      return;
+    }
 
     const pastedRuns: PastedAnalysis[] = clipRuns.map((r, i) => ({
       id: `pasted-${stamp}-${i}`,
@@ -2709,26 +2829,24 @@ function AnalysisPage() {
       promptTs: r.promptTs ?? null,
       file: r.file ?? null,
       vizConfig: r.vizConfig ?? null,
-      // Charts + key insights of the source tab ride on the first run of the
-      // group; the whole group renders as one carousel block.
+
+      // Charts + key insights ride on the first run.
       slides: i === 0 ? clipSlides : undefined,
       extraInsights: i === 0 ? tabInsights : undefined,
     }));
 
+    toast.success(
+      hasAnalysisData
+        ? pastedRuns.length > 1
+          ? `${pastedRuns.length} pasted results added below the current analysis`
+          : "Pasted result added below the current analysis"
+        : "Auto insights pasted successfully",
+    );
 
     setPastedAnalyses((prev) => [...prev, ...pastedRuns]);
     setPasteOpen(false);
     setPasteText("");
-    toast.success(
-      pastedRuns.length > 1
-        ? `${pastedRuns.length} pasted results added below the current analysis`
-        : "Pasted result added below the current analysis",
-    );
 
-    // Persist so the pasted results survive a reload — stored on the analysis
-    // message stream as a `pasted_analyses` payload (not a chat bubble), and
-    // merge the pasted rows into the analysis' `samples` column so the full
-    // dataset (original + pasted) travels with the analysis row.
     const aid = resolvedAnalysisId;
     if (aid) {
       void persistMessage({
@@ -2767,10 +2885,10 @@ function AnalysisPage() {
           { label: "Open code", Icon: CodeSnippet02 },
           { label: "Good Response", Icon: ThumbsUp },
           { label: "Bad Response", Icon: ThumbsDown },
-          { label: "Add New Section", Icon: PlusSquareIcon },
+          // { label: "Add New Section", Icon: PlusSquareIcon },
         ].map(({ label, Icon }) => {
           const isComment = label === "Add to Comment";
-          const isNewSection = label === "Add New Section";
+          // const isNewSection = label === "Add New Section";
           const isThumbUp = label === "Good Response";
           const isThumbDown = label === "Bad Response";
           const isRefresh = label === "Refresh";
@@ -2792,31 +2910,29 @@ function AnalysisPage() {
                   ? () => openAddToDashboard(0)
                   : isComment
                     ? () => setInsightCommentOpen((v) => !v)
-                    : isNewSection
-                      ? () => addWorkspaceSection()
-                      : label === "Open code"
+                    : label === "Open code"
+                      ? () => {
+                          void handleOpenCode();
+                        }
+                      : isRefresh
                         ? () => {
-                            void handleOpenCode();
+                            void handleRefresh();
                           }
-                        : isRefresh
+                        : isThumbUp
                           ? () => {
-                              void handleRefresh();
+                              void handleThumb("positive");
                             }
-                          : isThumbUp
+                          : isThumbDown
                             ? () => {
-                                void handleThumb("positive");
+                                void handleThumb("negative");
                               }
-                            : isThumbDown
+                            : isCopy
                               ? () => {
-                                  void handleThumb("negative");
+                                  void copyAnalysisData();
                                 }
-                              : isCopy
-                                ? () => {
-                                    void copyAnalysisData();
-                                  }
-                                : isPaste
-                                  ? () => setPasteOpen(true)
-                                  : undefined
+                              : isPaste
+                                ? () => setPasteOpen(true)
+                                : undefined
               }
               className={cx(
                 "cursor-pointer hover:text-fg-secondary disabled:opacity-50",
@@ -2946,8 +3062,29 @@ function AnalysisPage() {
   }, [selectedRun, selectedRunIndex]);
 
 
-  const tabVizInsights = useMemo(() => collectSlidesInsights(autoChartSlides), [autoChartSlides]);
-  const hasTabInsights = tabVizInsights.summaries.length > 0 || tabVizInsights.insights.length > 0;
+  const tabVizInsights = useMemo(() => collectChartFindings(autoChartSlides), [autoChartSlides]);
+  const autoInsightHighlights = useMemo(
+    () => collectAutoInsightHighlights(autoInsightGroups),
+    [autoInsightGroups],
+  );
+  const autoInsightEntries = useMemo(() => {
+    const entries = multiDatasetInsights
+      ? autoInsightHighlights.map((item) => ({ id: item.datasetId, label: item.datasetName, text: item.text }))
+      : [
+          ...autoInsightHighlights.slice(0, 1).map((item) => ({ id: item.datasetId, label: "", text: item.text })),
+          ...tabVizInsights.map((text, i) => ({ id: `chart-${i}`, label: "", text })),
+        ];
+    const seen = new Set<string>();
+    return entries.filter(({ text }) => {
+      if (seen.has(text)) return false;
+      seen.add(text);
+      return true;
+    });
+  }, [multiDatasetInsights, autoInsightHighlights, tabVizInsights]);
+
+  useEffect(() => {
+    setShowAllAutoInsightHighlights(false);
+  }, [autoInsightGroups]);
 
   const resolveThreadVizConfig = useCallback(
     (targetAnalysisId: string) => {
@@ -3446,31 +3583,9 @@ function AnalysisPage() {
         });
       }
 
-      // TRAINING RESULT: summarise the completed run under the assistant text.
-      if ((res as any).training_completed === true) {
-        const metrics = (res as any).training_metrics ?? (res as any).training_result?.metrics ?? null;
-        const metricLines =
-          metrics && typeof metrics === "object"
-            ? Object.entries(metrics)
-                .slice(0, 12)
-                .map(([k, v]) => `- **${k}**: ${typeof v === "number" ? Number(v).toFixed(4) : String(v)}`)
-                .join("\n")
-            : "";
-        const runId = (res as any).mlflow_run_id;
-        const statusLabel = String((res as any).training_status ?? "completed");
-        assistantMsgs.push({
-          id: `${placeholderId}-train`,
-          role: "ai" as const,
-          content: [
-            `**Training ${statusLabel}**`,
-            runId ? `Run ID: \`${runId}\`` : "",
-            metricLines,
-          ]
-            .filter(Boolean)
-            .join("\n\n"),
-          time: new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }),
-        });
-      }
+      // The MTA's assistant reply already contains the training report and run ID.
+      // training_completed persists across turns, so it must not create a second
+      // chat bubble (or replay the same run ID after an unrelated message).
 
       setMessages((curr) => {
         const without = curr.filter((m) => m.id !== placeholderId);
@@ -3489,9 +3604,10 @@ function AnalysisPage() {
       // If the assistant returned markdown tables with no structured output_json,
       // parse them into result runs so they render in the Data Table panel.
       const extractedTableRunIds: string[] = [];
-      const hasStructuredRows = Array.isArray(res.output_json) && res.output_json.length > 0;
-      // One request must map to exactly one result: when the backend already
-      // returned structured rows, ignore markdown tables in the same reply.
+      const resultTables = Array.isArray(res.output_tables) ? res.output_tables : [];
+      const hasStructuredRows = (Array.isArray(res.output_json) && res.output_json.length > 0) || resultTables.length > 0;
+      // Structured results, including separate grouped tables, take priority
+      // over tables repeated in the assistant's markdown reply.
       if (extractedTables.length && !isScheduledResponse && !hasStructuredRows) {
         const baseRunId = `chat-${Date.now()}`;
         extractedTables.forEach((table, idx) => {
@@ -3518,13 +3634,13 @@ function AnalysisPage() {
       const backendVizReady = vc && (!vs || vs === "ready");
       const hasPromptRows = Array.isArray(res.output_json) && res.output_json.length > 0;
       const hasExtractedRows = extractedTables.length > 0;
-      const derivedViz = hasPromptRows ? deriveVizFromRows(res.output_json) : null;
+      const derivedViz = hasPromptRows && !resultTables.length ? deriveVizFromRows(res.output_json) : null;
 
       // User Insights must follow the latest prompt result. Some backend
       // message responses can echo the upload-time auto-insight config, so
       // when output_json exists we prefer a chart derived from those prompt
       // rows instead of reusing the stable Auto Insights chart.
-      const effectiveViz = derivedViz ?? (backendVizReady ? vc : null);
+      const effectiveViz = resultTables.length ? null : derivedViz ?? (backendVizReady ? vc : null);
 
       // The code that produced THIS result. Never reused across results.
       const coderDef: any = (res as any).coder_definition;
@@ -3547,12 +3663,14 @@ function AnalysisPage() {
       if (aid) {
         const output =
           (Array.isArray(res.output_json) && res.output_json.length > 0) ||
+          resultTables.length > 0 ||
           effectiveViz ||
           extractedTables.length
             ? {
                 output_json: Array.isArray(res.output_json)
                   ? res.output_json
                   : extractedTables[0]?.rows ?? undefined,
+                output_tables: resultTables.length ? resultTables : undefined,
                 extracted_tables: extractedTables.length ? extractedTables : undefined,
                 viz_config: effectiveViz ?? undefined,
                 section_id: targetSectionId,
@@ -3590,7 +3708,50 @@ function AnalysisPage() {
         // Shared id so the chart entry and the table run refer to the same run.
         const runId = `chat-${Date.now()}`;
         // output_json -> table (appended as its own run; never overwritten)
-        if (Array.isArray(res.output_json) && res.output_json.length > 0) {
+        if (resultTables.length) {
+          resultTables.forEach((table, index) => {
+            pushTableRun({
+              id: `${runId}-table-${index}`,
+              sectionId: targetSectionId,
+              title: table.title || String(content ?? "").trim() || "Result",
+              rows: table.rows,
+              code: runCode,
+              promptTs: runPromptTs,
+              file: runFile,
+            });
+          });
+          setAnalysisRows(resultTables[0].rows);
+          setUserInsightsRows(resultTables[0].rows);
+          const tableCharts = resultTables.flatMap((table, index) => {
+            const vizConfig = deriveVizFromResultTable(table);
+            return vizConfig ? [{
+              id: `${runId}-table-${index}`,
+              sectionId: targetSectionId,
+              vizConfig,
+              samples: table.rows,
+              tableTitle: table.title,
+            }] : [];
+          });
+          setUserInsightsViz(tableCharts[0]?.vizConfig ?? null);
+          if (tableCharts.length) {
+            setUserInsightsList((prev) => {
+              const seen = new Set(prev.map((entry) => `${entry.sectionId}:${vizFingerprint(entry.vizConfig)}`));
+              return [...prev, ...tableCharts.filter((entry) => {
+                const key = `${entry.sectionId}:${vizFingerprint(entry.vizConfig)}`;
+                if (seen.has(key)) return false;
+                seen.add(key);
+                return true;
+              })];
+            });
+            setMessages((curr) => curr.map((message) =>
+              message.id === userId ? { ...message, sectionId: targetSectionId } : message,
+            ));
+            activeSectionIdRef.current = targetSectionId;
+            setActiveSectionId(targetSectionId);
+          }
+          // Always land on the data table after an analysis; charts are one click away.
+          setView("table");
+        } else if (Array.isArray(res.output_json) && res.output_json.length > 0) {
           setAnalysisRows(res.output_json as Record<string, unknown>[]);
           setUserInsightsRows(res.output_json as Record<string, unknown>[]);
           pushTableRun({
@@ -3623,7 +3784,9 @@ function AnalysisPage() {
             }
             return [...prev, { id: runId, sectionId: targetSectionId, vizConfig: effectiveViz }];
           });
-          setView(backendVizReady ? "chart" : hasPromptRows || extractedTables.length ? "table" : "chart");
+          // Show the table first whenever the turn produced rows. Only fall back to the
+          // chart when the backend returned a chart with no tabular output at all.
+          setView(hasPromptRows || hasExtractedRows ? "table" : "chart");
           // Link the user message to the produced insight section for
           // navigation, but preserve the user's exact typed text verbatim
           // — do NOT overwrite `content` with the workspace heading or
@@ -4008,7 +4171,6 @@ function AnalysisPage() {
                                 if (upgradeBlocked("Moving analyses into a project")) return;
                                 setMoveOpen(true);
                               }}
-
                               className="inline-flex items-center gap-2 rounded-lg border border-secondary bg-primary px-3 py-2 text-sm font-semibold text-primary shadow-xs hover:bg-primary_hover"
                             >
                               <Folder className="size-4 text-fg-secondary" />
@@ -4063,7 +4225,6 @@ function AnalysisPage() {
                               "scroll-mt-4 rounded-xl p-4 transition-[box-shadow,border-color]",
                               sectionHighlightClass(currentMainSectionId),
                             )}
-
                           >
                             <div className="mb-3 flex items-center justify-end gap-3">
 
@@ -4324,6 +4485,7 @@ function AnalysisPage() {
                                   data={selectedRun?.rows ?? analysisRows ?? undefined}
                                   dataset={persistedDataset}
                                   disableMockFallback={isPersistedAnalysis}
+                                  analysisKey={resolvedAnalysisId ?? aidFromUrl ?? selectedRun?.id ?? "current"}
                                 />
                                 {/* Toolbar for THIS result, directly under its data table */}
                                 {renderResultToolbar()}
@@ -4333,38 +4495,30 @@ function AnalysisPage() {
                             {/* Same toolbar directly under the charts of this result */}
                             {view === "chart" ? renderResultToolbar() : null}
 
-                            {/* Key Insights */}
-                            <CollapsibleInsights>
-                              <ul className="list-disc space-y-1.5 pl-5 text-sm text-secondary">
-                                {resolvedAutoViz ? (
-                                  hasTabInsights ? (
-                                    <>
-                                      {tabVizInsights.summaries.map((summary, i) => (
-                                        <li key={`summary-${i}`}>
-                                          <InlineMarkdown content={summary} />
-                                        </li>
-                                      ))}
-                                      {tabVizInsights.insights.map((insight, i) => (
-                                        <li key={`insight-${i}`}>
-                                          <InlineMarkdown content={insight} />
-                                        </li>
-                                      ))}
-                                    </>
-                                  ) : (
-                                    <li className="text-tertiary">
-                                      Chart insights will appear here once analysis completes.
-                                    </li>
-                                  )
-                                ) : insightsGenerating ? (
-                                  <li className="text-tertiary">Generating key insights…</li>
-                                ) : isPersistedAnalysis ? (
-                                  <li className="text-tertiary">No insights saved for this analysis yet.</li>
-                                ) : (
-                                  <li className="text-tertiary">Insights will appear here once analysis completes.</li>
+                            {autoInsightEntries.length > 0 && (
+                              <CollapsibleInsights title="Key Insights">
+                                <ul className="list-disc space-y-1.5 pl-5 text-sm text-secondary">
+                                  {autoInsightEntries
+                                    .slice(0, showAllAutoInsightHighlights ? undefined : 3)
+                                    .map((entry) => (
+                                      <li key={entry.id}>
+                                        {entry.label && <strong>{entry.label}:</strong>} {entry.text}
+                                      </li>
+                                    ))}
+                                </ul>
+                                {autoInsightEntries.length > 3 && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setShowAllAutoInsightHighlights((current) => !current)}
+                                    className="mt-3 text-sm font-semibold text-[#1565ef] hover:underline"
+                                  >
+                                    {showAllAutoInsightHighlights
+                                      ? "Show fewer insights"
+                                      : `Show ${autoInsightEntries.length - 3} more insight${autoInsightEntries.length - 3 === 1 ? "" : "s"}`}
+                                  </button>
                                 )}
-                              </ul>
-
-                            </CollapsibleInsights>
+                              </CollapsibleInsights>
+                            )}
 
                             {pastedPreviews.map(({ groupId, runs, slides, insights }, pastedIndex) => (
                               <PastedAnalysisSection
@@ -4375,9 +4529,6 @@ function AnalysisPage() {
                                 index={pastedIndex}
                               />
                             ))}
-
-
-
 
                             {codeOpen && (
                               <InlineCodeEditor
@@ -4564,6 +4715,7 @@ function AnalysisPage() {
                     messages={messages}
                     isSending={isSending}
                     listening={voiceListening}
+                    onSpeakingChange={setAvatarSpeaking}
                   />
 
                 ) : (
@@ -4639,6 +4791,11 @@ function AnalysisPage() {
                     onSend={send}
                     onTyping={notifyTyping}
                     onStopTyping={stopTyping}
+                    speaking={avatarSpeaking}
+                    onStopSpeaking={() => {
+                      stopSpeaking();
+                      setAvatarSpeaking(false);
+                    }}
                   />
                   <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
                     <div className="flex flex-wrap items-center gap-1.5">
@@ -4647,31 +4804,47 @@ function AnalysisPage() {
                         : isPersistedAnalysis
                           ? []
                           : [{ id: "ds1", name: "Data Set 1" }]
-                      ).map((d) => {
-                        const active =
-                          datasetChips.length <= 1
-                            ? selectedDatasetIds.length === 0 || selectedDatasetIds.includes(d.id)
-                            : selectedDatasetIds.includes(d.id);
-                        return (
-                          <button
-                            type="button"
-                            key={d.id}
-                            onClick={() => selectDatasetChip(d as DatasetChip)}
-                            title={`${d.name}\nDataset ID: ${d.id}`}
-                            className={cx(
-                              "inline-flex max-w-[240px] items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition",
-                              active
-                                ? "border-[#1565ef] bg-[#eff8ff] text-[#175cd3] shadow-xs"
-                                : "border-secondary bg-primary text-tertiary hover:border-tertiary",
-                            )}
-                          >
-                            <Database01
-                              className={cx("size-3.5 shrink-0", active ? "text-[#1565ef]" : "text-fg-quaternary")}
-                            />
-                            <span className="truncate">{datasetChipLabel(d.name)}</span>
-                          </button>
-                        );
-                      })}
+                      )
+                        .slice(0, datasetsExpanded ? undefined : 2)
+                        .map((d) => {
+                          const active =
+                            datasetChips.length <= 1
+                              ? selectedDatasetIds.length === 0 || selectedDatasetIds.includes(d.id)
+                              : selectedDatasetIds.includes(d.id);
+
+                          return (
+                            <button
+                              type="button"
+                              key={d.id}
+                              onClick={() => selectDatasetChip(d as DatasetChip)}
+                              title={`${d.name}\nDataset ID: ${d.id}`}
+                              className={cx(
+                                "inline-flex max-w-[240px] items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition",
+                                active
+                                  ? "border-[#1565ef] bg-[#eff8ff] text-[#175cd3] shadow-xs"
+                                  : "border-secondary bg-primary text-tertiary hover:border-tertiary",
+                              )}
+                            >
+                              <Database01
+                                className={cx(
+                                  "size-3.5 shrink-0",
+                                  active ? "text-[#1565ef]" : "text-fg-quaternary",
+                                )}
+                              />
+                              <span className="truncate">{datasetChipLabel(d.name)}</span>
+                            </button>
+                          );
+                        })}
+
+                      {datasetChips.length > 2 && (
+                        <button
+                          type="button"
+                          onClick={() => setDatasetsExpanded((prev) => !prev)}
+                          className="text-xs font-semibold text-[#1565ef] hover:underline"
+                        >
+                          {datasetsExpanded ? "Less" : `More (${datasetChips.length - 2})`}
+                        </button>
+                      )}
                     </div>
                     <div className="flex items-center gap-2 text-xs font-semibold text-secondary">
                       <span className="text-primary">Selected Dataset</span>
@@ -4763,7 +4936,6 @@ function AnalysisPage() {
 
         {upgradeDialog}
         <MoveProjectModal
-
           open={moveOpen}
           onOpenChange={setMoveOpen}
           analysisId={resolvedAnalysisId}
@@ -4834,42 +5006,7 @@ function AnalysisPage() {
           aid={aidFromUrl}
         />
 
-        {/* {plannerGraphUrl ? (
-          <div
-            className="fixed inset-0 z-[90] flex items-center justify-center bg-black/60 p-6"
-            onClick={closePlannerGraph}
-          >
-            <div
-              className="flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl bg-primary shadow-xl"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="flex items-center justify-between border-b border-secondary px-4 py-3">
-                <h3 className="text-sm font-semibold text-primary">Planner Graph</h3>
-                <div className="flex items-center gap-2">
-                  <a
-                    href={plannerGraphUrl}
-                    download="planner-graph.png"
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-secondary bg-primary px-2.5 py-1.5 text-xs font-semibold text-primary shadow-xs hover:bg-primary_hover"
-                  >
-                    Download PNG
-                  </a>
-                  <button
-                    type="button"
-                    onClick={closePlannerGraph}
-                    className="inline-flex items-center rounded-lg border border-secondary bg-primary px-2.5 py-1.5 text-xs font-semibold text-primary shadow-xs hover:bg-primary_hover"
-                  >
-                    Close
-                  </button>
-                </div>
-              </div>
-              <div className="min-h-0 flex-1 overflow-auto p-4">
-                <img src={plannerGraphUrl} alt="Planner graph for this analysis thread" className="mx-auto max-w-full" />
-              </div>
-            </div>
-          </div>
-        ) : null} */}
-
-      {plannerGraphUrl ? (
+        {plannerGraphUrl ? (
           <div
             className="fixed inset-0 z-[90] flex items-center justify-center bg-black/60 p-2 sm:p-4"
             onClick={closePlannerGraph}
@@ -5069,7 +5206,7 @@ const PY_TOKEN_RE =
 
 /** Lightweight VS Code-ish Python highlighter (display only). */
 function highlightPython(code: string) {
-  const out: React.ReactNode[] = [];
+  const out: ReactNode[] = [];
   let last = 0;
   let key = 0;
   const push = (text: string, cls?: string) => {
@@ -5091,7 +5228,6 @@ function highlightPython(code: string) {
       else if (PY_BUILTINS.has(word)) push(word, "text-[#267f99] dark:text-[#4ec9b0]");
       else if (/^\s*\(/.test(after)) push(word, "text-[#795e26] dark:text-[#dcdcaa]");
       else push(word, "text-[#001080] dark:text-[#9cdcfe]");
-
     }
   }
   push(code.slice(last));
@@ -5618,11 +5754,13 @@ function VoicePanel({
   messages,
   isSending,
   listening,
+  onSpeakingChange,
 }: {
   onClose: () => void;
   messages: ChatMessage[];
   isSending: boolean;
   listening: boolean;
+  onSpeakingChange?: (speaking: boolean) => void;
 }) {
   const [userName, setUserName] = useState("");
   const [spokenText, setSpokenText] = useState("");
@@ -5636,6 +5774,10 @@ function VoicePanel({
     spokenMessageIdRef.current =
       [...messages].reverse().find((m) => m.role === "ai" && !m.thinking && !m.error)?.id ?? null;
   }
+
+  useEffect(() => {
+    onSpeakingChange?.(speaking);
+  }, [speaking, onSpeakingChange]);
 
   useEffect(() => {
     let cancelled = false;
@@ -5811,6 +5953,8 @@ function ChatComposer({
   onTyping,
   onStopTyping,
   onListeningChange,
+  speaking,
+  onStopSpeaking,
 }: {
   isSending: boolean;
   avatarMode: boolean;
@@ -5819,6 +5963,8 @@ function ChatComposer({
   onTyping?: () => void;
   onStopTyping?: () => void;
   onListeningChange?: (listening: boolean) => void;
+  speaking?: boolean;
+  onStopSpeaking?: () => void;
 }) {
   const [draft, setDraft] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -5837,7 +5983,6 @@ function ChatComposer({
       if (!accepted) setDraft((current) => current || content);
     } finally {
       setIsSubmitting(false);
-
     }
   };
 
@@ -5902,23 +6047,34 @@ function ChatComposer({
           className="field-sizing-content min-h-5 max-h-[240px] flex-1 resize-none overflow-y-auto bg-transparent text-sm text-primary placeholder:text-tertiary focus:outline-none"
         />
         {avatarMode ? (
-          <button
-            type="button"
-            aria-label={voice.listening ? "Stop listening" : "Start listening"}
-            title={voice.listening ? "Stop listening" : "Start listening"}
-            onClick={() => {
-              if (voice.listening) voice.stop();
-              else holdStart();
-            }}
-            className={cx(
-              "mt-0.5 shrink-0 rounded-full p-1 transition",
-              voice.listening ? "bg-[#1565ef] text-white ring-4 ring-[#1565ef]/20" : "text-[#1565ef] hover:bg-[#1565ef]/10",
-            )}
-          >
-            {voice.listening ? <StopListeningIcon className="size-5" /> : <MicIcon className="size-5" />}
-          </button>
+          speaking ? (
+            <button
+              type="button"
+              aria-label="Stop speaking"
+              title="Stop speaking"
+              onClick={() => onStopSpeaking?.()}
+              className="mt-0.5 shrink-0 rounded-full bg-[#1565ef] p-1 text-white ring-4 ring-[#1565ef]/20 transition hover:bg-[#1257d6]"
+            >
+              <StopListeningIcon className="size-5" />
+            </button>
+          ) : (
+            <button
+              type="button"
+              aria-label={voice.listening ? "Stop listening" : "Start listening"}
+              title={voice.listening ? "Stop listening" : "Start listening"}
+              onClick={() => {
+                if (voice.listening) voice.stop();
+                else holdStart();
+              }}
+              className={cx(
+                "mt-0.5 shrink-0 rounded-full p-1 transition",
+                voice.listening ? "bg-[#1565ef] text-white ring-4 ring-[#1565ef]/20" : "text-[#1565ef] hover:bg-[#1565ef]/10",
+              )}
+            >
+              {voice.listening ? <StopListeningIcon className="size-5" /> : <MicIcon className="size-5" />}
+            </button>
+          )
         ) : (
-
           <button
             type="button"
             aria-label="Voice input"
@@ -6220,6 +6376,7 @@ function WorkspaceChartCards({
   onDismiss,
   activeRunId,
   onRunChange,
+  showNeighbors = true,
 }: {
   slides: RunSlide[];
   keyPrefix: string;
@@ -6227,6 +6384,7 @@ function WorkspaceChartCards({
   onDismiss?: (cardKey: string) => void;
   activeRunId?: string | null;
   onRunChange?: (runId: string) => void;
+  showNeighbors?: boolean;
 }) {
   const visible = useMemo(
     () =>
@@ -6242,7 +6400,7 @@ function WorkspaceChartCards({
   );
   if (!visible.length) return null;
   return (
-    <ChartCarousel items={visible} onDismiss={onDismiss} activeRunId={activeRunId} onRunChange={onRunChange} />
+    <ChartCarousel items={visible} onDismiss={onDismiss} activeRunId={activeRunId} onRunChange={onRunChange} showNeighbors={showNeighbors} />
   );
 }
 
@@ -6251,11 +6409,13 @@ function ChartCarousel({
   onDismiss,
   activeRunId,
   onRunChange,
+  showNeighbors,
 }: {
   items: { slide: Slide; index: number; cardKey: string; runId?: string }[];
   onDismiss?: (cardKey: string) => void;
   activeRunId?: string | null;
   onRunChange?: (runId: string) => void;
+  showNeighbors: boolean;
 }) {
   const [active, setActive] = useState(0);
   const total = items.length;
@@ -6328,7 +6488,7 @@ function ChartCarousel({
         >
           {items.map((it, i) => {
             const off = getOffset(i);
-            if (Math.abs(off) > 1) return null; // only render 3 nearest
+            if (Math.abs(off) > 1 || (!showNeighbors && off !== 0)) return null;
             const isActive = off === 0;
             const translateX = off * 52; // percent
             const translateY = isActive ? 0 : -10;
@@ -6356,16 +6516,15 @@ function ChartCarousel({
                   filter,
                   transition:
                     "transform 550ms cubic-bezier(0.22, 1, 0.36, 1), opacity 400ms ease, filter 400ms ease",
-                  pointerEvents: isActive ? "auto" : "auto",
+                  pointerEvents: "auto",
                   cursor: isActive ? "default" : "pointer",
                 }}
-
               >
                 <div className={cx(
                   "relative rounded-xl p-4",
                   isActive
                     ? "border border-secondary bg-primary shadow-sm"
-                    : "border border-primary bg-muted/90"
+                    : "border border-primary bg-muted/90",
                 )}>
                   {isActive && onDismiss ? (
                     <button
@@ -6493,26 +6652,49 @@ function WorkspaceSectionUserInsights({
   const slides = useMemo(
     () =>
       dedupeSlidesByInsight(
-        userChartSlidesForSection(entries, sectionId, activeTab, chartSamples),
+        userChartSlidesForSection(entries.filter((entry) => !entry.tableTitle), sectionId, activeTab, chartSamples),
         excludeTitles,
       ) as RunSlide[],
     [entries, sectionId, activeTab, chartSamples, excludeTitles],
   );
-  const sectionInsights = useMemo(() => collectSlidesInsights(slides), [slides]);
+  const tableSlides = useMemo(
+    () => dedupeSlidesByInsight(
+      userChartSlidesForSection(entries.filter((entry) => entry.tableTitle), sectionId, activeTab, chartSamples),
+    ) as RunSlide[],
+    [entries, sectionId, activeTab, chartSamples],
+  );
+  const sectionInsights = useMemo(
+    () => collectSlidesInsights([...slides, ...tableSlides]),
+    [slides, tableSlides],
+  );
   const hasSectionInsights = sectionInsights.summaries.length > 0 || sectionInsights.insights.length > 0;
 
-  if (!slides.length) return null;
+  if (!slides.length && !tableSlides.length) return null;
 
   return (
-    <div className="p-1">
-      <WorkspaceChartCards
-        slides={slides}
-        keyPrefix={`user-${sectionId}`}
-        dismissedKeys={dismissedKeys}
-        onDismiss={onDismiss}
-        activeRunId={activeRunId}
-        onRunChange={onRunChange}
-      />
+    <div className="space-y-6 p-1">
+      {slides.length ? (
+        <WorkspaceChartCards
+          slides={slides}
+          keyPrefix={`user-${sectionId}`}
+          dismissedKeys={dismissedKeys}
+          onDismiss={onDismiss}
+          activeRunId={activeRunId}
+          onRunChange={onRunChange}
+        />
+      ) : null}
+
+      {tableSlides.length ? (
+        <WorkspaceChartCards
+          slides={tableSlides}
+          keyPrefix={`table-${sectionId}`}
+          dismissedKeys={dismissedKeys}
+          onDismiss={onDismiss}
+          activeRunId={activeRunId}
+          onRunChange={onRunChange}
+          showNeighbors={false}
+        />
+      ) : null}
 
       {hasSectionInsights ? (
         <CollapsibleInsights>
@@ -6650,7 +6832,6 @@ type UploadedDataset = {
   samples: Record<string, unknown>[];
   rows_sampled: number;
   size_mb?: number;
-
 };
 
 function DataPreviewPanel({
@@ -6681,48 +6862,46 @@ function DataPreviewPanel({
         </p>
       </div>
       <div className="flex flex-col overflow-hidden">
-
-          {rows.length === 0 || columns.length === 0 ? (
-            <p className="text-sm text-tertiary">
-              No dataset preview is available. Try re-uploading the file to view its preview.
-            </p>
-          ) : (
-            <div className="max-h-[60vh] overflow-auto rounded-lg border border-secondary">
-
-              <table className="w-full border-collapse text-sm">
-                <thead className="sticky top-0 z-10 bg-secondary">
-                  <tr>
-                    <th className="w-10 px-3 py-2 text-left text-xs font-medium text-tertiary">#</th>
-                    {columns.map((c) => (
-                      <th key={c} className="whitespace-nowrap px-3 py-2 text-left text-xs font-medium text-secondary">
-                        {c}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map((row, i) => (
-                    <tr key={i} className="border-t border-secondary hover:bg-secondary/60">
-                      <td className="px-3 py-2 text-xs text-tertiary">{i + 1}</td>
-                      {columns.map((c) => {
-                        const v = cellOf(row, c);
-                        const s = v == null ? "" : typeof v === "object" ? JSON.stringify(v) : String(v);
-                        return (
-                          <td key={c} className="px-3 py-2 text-primary">
-                            <div className="max-w-[200px] truncate" title={s}>
-                              {s}
-                            </div>
-                          </td>
-                        );
-                      })}
-                    </tr>
+        {rows.length === 0 || columns.length === 0 ? (
+          <p className="text-sm text-tertiary">
+            No dataset preview is available. Try re-uploading the file to view its preview.
+          </p>
+        ) : (
+          <div className="max-h-[60vh] overflow-auto rounded-lg border border-secondary">
+            <table className="w-full border-collapse text-sm">
+              <thead className="sticky top-0 z-10 bg-secondary">
+                <tr>
+                  <th className="w-10 px-3 py-2 text-left text-xs font-medium text-tertiary">#</th>
+                  {columns.map((c) => (
+                    <th key={c} className="whitespace-nowrap px-3 py-2 text-left text-xs font-medium text-secondary">
+                      {c}
+                    </th>
                   ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row, i) => (
+                  <tr key={i} className="border-t border-secondary hover:bg-secondary/60">
+                    <td className="px-3 py-2 text-xs text-tertiary">{i + 1}</td>
+                    {columns.map((c) => {
+                      const v = cellOf(row, c);
+                      const s = v == null ? "" : typeof v === "object" ? JSON.stringify(v) : String(v);
+                      return (
+                        <td key={c} className="px-3 py-2 text-primary">
+                          <div className="max-w-[200px] truncate" title={s}>
+                            {s}
+                          </div>
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
+    </div>
   );
 }
 
@@ -6755,15 +6934,35 @@ function DataTableView({
   data,
   dataset: datasetProp,
   disableMockFallback = false,
+  analysisKey,
 }: {
   data?: Record<string, unknown>[];
   dataset?: UploadedDataset | null;
   disableMockFallback?: boolean;
+  analysisKey?: string;
 } = {}) {
   const sessionDataset = useUploadedDataset();
   const dataset = datasetProp ?? sessionDataset;
   const pageSize = 8;
   const [page, setPage] = useState(1);
+  const [rawTable, setRawTable] = useState(false);
+  const preferenceKey = `analysis:report-view:${analysisKey ?? "current"}`;
+  useEffect(() => {
+    try {
+      setRawTable(sessionStorage.getItem(preferenceKey) === "raw");
+    } catch {
+      setRawTable(false);
+    }
+  }, [preferenceKey]);
+  const chooseView = (raw: boolean) => {
+    setRawTable(raw);
+    try {
+      sessionStorage.setItem(preferenceKey, raw ? "raw" : "summary");
+    } catch {
+      /* session-only preference */
+    }
+  };
+  const reportRow = Array.isArray(data) && isReportResult(data) ? data[0] : null;
 
   const usingProvided = Array.isArray(data) && data.length > 0;
   const usingReal = !usingProvided && !!dataset && dataset.samples.length > 0;
@@ -6799,105 +6998,152 @@ function DataTableView({
   const pageRows = rows.slice(start, start + pageSize);
   const totalRows = usingReal ? dataset!.rows_sampled : rows.length;
 
-  return (
-    <div className="mt-4 flex max-h-[min(640px,calc(100vh-260px))] flex-col overflow-hidden rounded-xl border border-secondary bg-primary">
-      <div className="flex-1 overflow-auto">
-        <table className="w-full text-sm">
-          <thead className="sticky top-0 z-10 bg-secondary text-tertiary">
-            <tr>
-              <th className="px-4 py-2.5 text-left font-medium">#</th>
-              {columns.map((c) => (
-                <th key={c} className="px-4 py-2.5 text-left font-medium whitespace-nowrap">
-                  {c}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {pageRows.length === 0 ? (
-              <tr>
-                <td colSpan={columns.length + 1} className="px-4 py-10 text-center text-sm text-tertiary">
-                  No table data saved for this analysis yet.
-                </td>
-              </tr>
-            ) : (
-              pageRows.map((row, i) => (
-                <tr key={start + i} className="border-t border-secondary">
-                  <td className="px-4 py-2.5 text-tertiary">{start + i + 1}</td>
-                  {columns.map((c) => {
-                    const { text, isNumber } = formatCell(row[c]);
-                    return (
-                      <td
-                        key={c}
-                        className={cx(
-                          "px-4 py-2.5 whitespace-nowrap",
-                          isNumber ? "text-right font-medium text-primary" : "text-secondary",
-                        )}
-                      >
-                        {text}
-                      </td>
-                    );
-                  })}
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
+  if (reportRow && !rawTable) {
+    return (
+      <div className="min-w-0">
+        <div className="mt-4 flex justify-end" role="group" aria-label="Result display">
+          <div className="inline-flex items-center gap-1 rounded-lg border border-secondary bg-primary p-1">
+            <Button
+              type="button"
+              color="tertiary"
+              size="sm"
+              aria-pressed={true}
+              onPress={() => chooseView(false)}
+              className="bg-secondary text-primary"
+            >
+              Summary
+            </Button>
+            <Button type="button" color="tertiary" size="sm" aria-pressed={false} onPress={() => chooseView(true)}>
+              Raw table
+            </Button>
+          </div>
+        </div>
+        <AnalysisReportSummary row={reportRow} />
       </div>
+    );
+  }
 
-      <div className="flex shrink-0 items-center justify-between border-t border-secondary px-4 py-3">
-        <p className="text-xs text-tertiary">
-          Showing {start + 1}-{Math.min(start + pageSize, rows.length)} of {rows.length.toLocaleString()}
-          {usingReal && totalRows > rows.length ? ` (preview · ${totalRows.toLocaleString()} rows total)` : ""}
-        </p>
-        <div className="flex items-center gap-1">
-          <button
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
-            disabled={safePage === 1}
-            className="rounded-md border border-secondary bg-primary px-3 py-1.5 text-xs font-semibold text-primary disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            Previous
-          </button>
-          {(() => {
-            const visiblePages: (number | "ellipsis")[] = [];
-            const startWindow = Math.max(2, safePage - 2);
-            const endWindow = Math.min(totalPages - 1, safePage + 2);
-            visiblePages.push(1);
-            if (startWindow > 2) visiblePages.push("ellipsis");
-            for (let n = startWindow; n <= endWindow; n++) visiblePages.push(n);
-            if (endWindow < totalPages - 1) visiblePages.push("ellipsis");
-            if (totalPages > 1) visiblePages.push(totalPages);
+  return (
+    <div className={reportRow ? "min-w-0" : undefined}>
+      {reportRow && (
+        <div className="mt-4 flex justify-end" role="group" aria-label="Result display">
+          <div className="inline-flex items-center gap-1 rounded-lg border border-secondary bg-primary p-1">
+            <Button type="button" color="tertiary" size="sm" aria-pressed={false} onPress={() => chooseView(false)}>
+              Summary
+            </Button>
+            <Button
+              type="button"
+              color="tertiary"
+              size="sm"
+              aria-pressed={true}
+              onPress={() => chooseView(true)}
+              className="bg-secondary text-primary"
+            >
+              Raw table
+            </Button>
+          </div>
+        </div>
+      )}
+      <div className="mt-4 flex max-h-[min(640px,calc(100vh-260px))] flex-col overflow-hidden rounded-xl border border-secondary bg-primary">
+        <div className="flex-1 overflow-auto">
+          <table className="w-full text-sm">
+            <thead className="sticky top-0 z-10 bg-secondary text-tertiary">
+              <tr>
+                <th className="px-4 py-2.5 text-left font-medium">#</th>
+                {columns.map((c) => (
+                  <th key={c} className="px-4 py-2.5 text-left font-medium whitespace-nowrap">
+                    {c}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {pageRows.length === 0 ? (
+                <tr>
+                  <td colSpan={columns.length + 1} className="px-4 py-10 text-center text-sm text-tertiary">
+                    No table data saved for this analysis yet.
+                  </td>
+                </tr>
+              ) : (
+                pageRows.map((row, i) => (
+                  <tr key={start + i} className="border-t border-secondary">
+                    <td className="px-4 py-2.5 text-tertiary">{start + i + 1}</td>
+                    {columns.map((c) => {
+                      const { text, isNumber } = formatCell(row[c]);
+                      return (
+                        <td
+                          key={c}
+                          className={cx(
+                            "px-4 py-2.5 whitespace-nowrap",
+                            isNumber ? "text-right font-medium text-primary" : "text-secondary",
+                          )}
+                        >
+                          {text}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
 
-            return visiblePages.map((item, index) => {
-              if (item === "ellipsis") {
+        <div className="flex shrink-0 items-center justify-between border-t border-secondary px-4 py-3">
+          <p className="text-xs text-tertiary">
+            Showing {rows.length === 0 ? 0 : start + 1}-{Math.min(start + pageSize, rows.length)} of{" "}
+            {rows.length.toLocaleString()}
+            {usingReal && totalRows > rows.length ? ` (preview · ${totalRows.toLocaleString()} rows total)` : ""}
+          </p>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={safePage === 1}
+              className="rounded-md border border-secondary bg-primary px-3 py-1.5 text-xs font-semibold text-primary disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Previous
+            </button>
+            {(() => {
+              const visiblePages: (number | "ellipsis")[] = [];
+              const startWindow = Math.max(2, safePage - 2);
+              const endWindow = Math.min(totalPages - 1, safePage + 2);
+              visiblePages.push(1);
+              if (startWindow > 2) visiblePages.push("ellipsis");
+              for (let n = startWindow; n <= endWindow; n++) visiblePages.push(n);
+              if (endWindow < totalPages - 1) visiblePages.push("ellipsis");
+              if (totalPages > 1) visiblePages.push(totalPages);
+
+              return visiblePages.map((item, index) => {
+                if (item === "ellipsis") {
+                  return (
+                    <span key={`ellipsis-${index}`} className="px-1 text-xs text-tertiary">
+                      ...
+                    </span>
+                  );
+                }
+                const n = item;
                 return (
-                  <span key={`ellipsis-${index}`} className="px-1 text-xs text-tertiary">
-                    ...
-                  </span>
+                  <button
+                    key={n}
+                    onClick={() => setPage(n)}
+                    className={cx(
+                      "size-8 rounded-md text-xs font-semibold",
+                      n === safePage ? "bg-[#1565ef] text-white" : "text-secondary hover:bg-secondary",
+                    )}
+                  >
+                    {n}
+                  </button>
                 );
-              }
-              const n = item;
-              return (
-                <button
-                  key={n}
-                  onClick={() => setPage(n)}
-                  className={cx(
-                    "size-8 rounded-md text-xs font-semibold",
-                    n === safePage ? "bg-[#1565ef] text-white" : "text-secondary hover:bg-secondary",
-                  )}
-                >
-                  {n}
-                </button>
-              );
-            });
-          })()}
-          <button
-            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-            disabled={safePage === totalPages}
-            className="rounded-md border border-secondary bg-primary px-3 py-1.5 text-xs font-semibold text-primary disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            Next
-          </button>
+              });
+            })()}
+            <button
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={safePage === totalPages}
+              className="rounded-md border border-secondary bg-primary px-3 py-1.5 text-xs font-semibold text-primary disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Next
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -7262,7 +7508,6 @@ function StopListeningIcon({ className }: { className?: string }) {
 }
 
 function MicIcon({ className }: { className?: string }) {
-
   return (
     <svg
       viewBox="0 0 24 24"
@@ -7459,7 +7704,7 @@ function RevenueBarSection({ title = "Revenue 2026 graph" }: { title?: string })
               Chart
             </button>
           </div>
-          </div>
+        </div>
 
         {view === "chart" ? (
           <>

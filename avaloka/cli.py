@@ -15,6 +15,7 @@ to you. Local execution is free and keeps your data on your machine.
 from __future__ import annotations
 
 from pathlib import Path
+import uuid
 
 import typer
 from rich.console import Console
@@ -347,7 +348,8 @@ def analyze(
     data: str = typer.Argument(..., help="Path to a CSV or Parquet dataset."),
     goal: str = typer.Option(..., "--goal", "-g", help="The decision this analysis must inform."),
     budget: float | None = typer.Option(None, "--budget", "-b", help="Hard cost ceiling (USD)."),
-    output: Path = typer.Option(Path("./avaloka-analysis"), "--output", "-o"),
+    output: Path | None = typer.Option(None, "--output", "-o",
+                                       help="Output directory (default: a unique folder under ./avaloka-analysis)."),
     local: bool = typer.Option(True, "--local/--managed"),
     execution: str | None = typer.Option(None, "--execution", help="local|byoc|managed."),
     tier: str = typer.Option("community", "--tier"),
@@ -356,7 +358,7 @@ def analyze(
     llm: bool = typer.Option(False, "--llm", help="Let Avaloka phrase things with Claude (needs ANTHROPIC_API_KEY)."),
 ):
     """Turn a dataset and a question into a defensible analysis bundle."""
-    output = _prepare_output(output)
+    output = _prepare_output(output or Path("./avaloka-analysis") / uuid.uuid4().hex[:12])
     data, wl, _resolved = _load_or_die(data)
 
     ava = _avaloka(quiet, llm)

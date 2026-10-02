@@ -6,6 +6,12 @@ import { DynamicChart, normalizeVizConfig, type Slide } from "./dynamicChart";
 import { AnalysisOutputTable } from "./AnalysisOutputTable";
 import { backendApi } from "@/lib/api/backendApi";
 import { buildInsightGroups } from "@/lib/insight-groups";
+import { InsightsAvatar, ExplainChartButton } from "@/components/insights-avatar/InsightsAvatar";
+import { InsightsAvatarProvider, useInsightsAvatar, HIGHLIGHT_CLASS } from "@/components/insights-avatar/InsightsAvatarContext";
+
+function chartIdOf(slide: Slide, groupId: string, si: number) {
+  return slide.id ?? `${groupId}-${si}`;
+}
 
 
 function stripMarkdown(s: string) {
@@ -112,6 +118,7 @@ function InsightCard({
   samples,
   defaultView = "chart",
   onOpenCode,
+  chartId,
 }: {
   slide: Slide;
   datasetName?: string;
@@ -121,7 +128,9 @@ function InsightCard({
   samples?: any[];
   defaultView?: "table" | "chart";
   onOpenCode: () => void;
+  chartId: string;
 }) {
+  const avatar = useInsightsAvatar();
   const [view, setView] = useState<"table" | "chart">(defaultView);
   const [feedback, setFeedback] = useState<"positive" | "negative" | null>(null);
   const [submitting, setSubmitting] = useState<"positive" | "negative" | null>(null);
@@ -194,10 +203,14 @@ function InsightCard({
   };
 
   return (
-    <div className="flex h-full flex-col overflow-y-auto rounded-2xl border border-[#eaecf0] bg-white p-5 shadow-[0_24px_48px_-12px_rgba(16,24,40,0.18)]">
+    <div
+      {...avatar.bindChart(chartId)}
+      className={"flex h-full flex-col overflow-y-auto rounded-2xl border border-[#eaecf0] bg-white p-5 shadow-[0_24px_48px_-12px_rgba(16,24,40,0.18)] transition-shadow " + (avatar.isHighlighted(chartId) ? HIGHLIGHT_CLASS : "")}
+    >
       <div className="flex items-center gap-2">
         <Table className="size-4 text-[#344054]" />
         <h3 className="text-[15px] font-semibold text-[#101828]">{slide.title}</h3>
+        <ExplainChartButton chartId={chartId} />
       </div>
       {(slide.subtitle || datasetName) && (
         <p className="mt-0.5 text-xs text-[#667085]">
@@ -322,13 +335,15 @@ function CodeViewerModal({
 }
 
 
-export function AutoInsightsModal({ open, onOpenChange, config, status, datasetName, samples, outputRows, defaultView = "chart", title, subtitle, aid, datasets, primaryDatasetId }: AutoInsightsModalProps) {
+function AutoInsightsModalInner({ open, onOpenChange, config, status, datasetName, samples, outputRows, defaultView = "chart", title, subtitle, aid, datasets, primaryDatasetId }: AutoInsightsModalProps) {
   const [index, setIndex] = useState(0);
   const [layout, setLayout] = useState<"stack" | "grid">("stack");
+  const [showAllOverviewCharts, setShowAllOverviewCharts] = useState(false);
   const [codeOpen, setCodeOpen] = useState(false);
   const [codeText, setCodeText] = useState("");
   const [codeLoading, setCodeLoading] = useState(false);
   const [activeDatasetId, setActiveDatasetId] = useState<string | null>(null);
+  const avatar = useInsightsAvatar();
 
   // One entry per DISTINCT dataset_id — each keeps a reference to its own entry
   // so two sections can never share the same visualization_config object.
@@ -465,6 +480,10 @@ export function AutoInsightsModal({ open, onOpenChange, config, status, datasetN
 
   if (!open) return null;
 
+  const avatarCharts = visibleGroups.flatMap((g) => g.slides.map((slide, si) => ({ id: chartIdOf(slide, g.id, si), slide })));
+  const avatarDatasetId = activeGroup ? (activeGroup.id === "__single__" ? primaryDatasetId ?? null : activeGroup.id) : null;
+  const avatarDatasetName = activeGroup?.name || datasetName || null;
+
   const prev = () => setIndex((i) => (i - 1 + total) % total);
   const next = () => setIndex((i) => (i + 1) % total);
 
@@ -538,7 +557,7 @@ export function AutoInsightsModal({ open, onOpenChange, config, status, datasetN
                   type="button"
                   role="tab"
                   aria-selected={active}
-                  onClick={() => { setActiveDatasetId(g.id); setIndex(0); }}
+                  onClick={() => { setActiveDatasetId(g.id); setIndex(0); setShowAllOverviewCharts(false); }}
                   title={g.name}
                   className={
                     "max-w-[220px] truncate rounded-lg px-3 py-1.5 text-xs transition " +
@@ -579,24 +598,28 @@ export function AutoInsightsModal({ open, onOpenChange, config, status, datasetN
                         {g.pending ? "Generating insights…" : "No auto-insights available for this dataset"}
                       </div>
                     ) : (
-                      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
-                        {g.slides.map((slide, si) => {
+                      <div className="grid grid-cols-1 items-start gap-5 sm:grid-cols-2 lg:grid-cols-3">
+                        {g.slides.slice(0, multi && !showAllOverviewCharts ? 2 : undefined).map((slide, si) => {
                           const globalIdx = offset + si;
+                          const cid = chartIdOf(slide, g.id, si);
+                          const lit = avatar.isHighlighted(cid);
                           return (
                             <button
+                              {...avatar.bindChart(cid)}
                               key={`grid-${g.id}-${si}-${slugify(slide.title || String(si))}`}
                               type="button"
                               onClick={() => { setIndex(globalIdx); setLayout("stack"); }}
                               className={
                                 "group flex flex-col overflow-hidden rounded-2xl border bg-white p-4 text-left shadow-[0_12px_28px_-12px_rgba(16,24,40,0.18)] transition hover:-translate-y-1 hover:shadow-[0_24px_48px_-12px_rgba(16,24,40,0.28)] " +
-                                (globalIdx === index ? "border-[#1565ef] ring-2 ring-[#1565ef]/25" : "border-[#eaecf0]")
+                                (lit ? HIGHLIGHT_CLASS : globalIdx === index ? "border-[#1565ef] ring-2 ring-[#1565ef]/25" : "border-[#eaecf0]")
                               }
                             >
                               <div className="flex items-center gap-2">
                                 <Table className="size-4 text-[#344054]" />
                                 <span className="truncate text-[13px] font-semibold text-[#101828]">{slide.title}</span>
+                                <ExplainChartButton chartId={cid} />
                               </div>
-                              <div className="pointer-events-none mt-2 h-[180px] overflow-hidden">
+                              <div className={slide.type === "pie" || slide.type === "donut" ? "pointer-events-none mt-2 h-auto min-h-[180px] overflow-visible" : "pointer-events-none mt-2 h-[180px] overflow-hidden"}>
                                 <DynamicChart slide={slide} chartKey={`${g.id}-${si}`} />
                               </div>
                               <p className="mt-2 flex gap-1.5 text-[12px] leading-5 text-[#667085]">
@@ -607,6 +630,18 @@ export function AutoInsightsModal({ open, onOpenChange, config, status, datasetN
                           );
                         })}
                       </div>
+                    )}
+                    {multi && g.slides.length > 2 && (
+                      <button
+                        type="button"
+                        aria-expanded={showAllOverviewCharts}
+                        onClick={() => setShowAllOverviewCharts((current) => !current)}
+                        className="mt-4 text-sm font-semibold text-[#1565ef] hover:underline"
+                      >
+                        {showAllOverviewCharts
+                          ? "Show fewer charts"
+                          : `Show ${g.slides.length - 2} more chart${g.slides.length - 2 === 1 ? "" : "s"}`}
+                      </button>
                     )}
                   </section>
                 );
@@ -689,6 +724,7 @@ export function AutoInsightsModal({ open, onOpenChange, config, status, datasetN
                 samples={activeEntry.group.samples}
                 defaultView={defaultView}
                 onOpenCode={handleOpenCode}
+                chartId={chartIdOf(activeSlide, activeEntry.group.id, activeEntry.si)}
               />
 
             )}
@@ -715,6 +751,13 @@ export function AutoInsightsModal({ open, onOpenChange, config, status, datasetN
       )}
 
 
+      <InsightsAvatar
+        aid={aid ?? null}
+        datasetId={avatarDatasetId}
+        datasetName={avatarDatasetName}
+        charts={avatarCharts}
+      />
+
       <CodeViewerModal
         open={codeOpen}
         onClose={() => setCodeOpen(false)}
@@ -725,3 +768,13 @@ export function AutoInsightsModal({ open, onOpenChange, config, status, datasetN
   );
 }
 
+export function AutoInsightsModal(props: AutoInsightsModalProps) {
+  // Keyed by aid so the assistant's transcript resets when the analysis changes;
+  // unmounting on close stops speech, recognition, requests and highlights.
+  if (!props.open) return null;
+  return (
+    <InsightsAvatarProvider key={props.aid ?? "no-aid"}>
+      <AutoInsightsModalInner {...props} />
+    </InsightsAvatarProvider>
+  );
+}

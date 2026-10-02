@@ -1,0 +1,72 @@
+# Weekly live check against a hosted provider.
+#
+# The hermetic gate in ci.yml runs with no API key at all and passes 2557 tests.
+# That is deliberate -- it is what a contributor and a fork PR can actually run --
+# but it cannot see how a provider handles a request. It did not see this:
+# TOOL_CHOICE was "required" for everything, OpenRouter answers that with
+# finish_reason="error" and no tool call, and every planner turn returned
+# "I ran into a temporary problem while planning that request."
+#
+# So this runs weekly rather than per-PR: it costs real credit, and the drift it
+# catches is a provider changing behaviour, which happens on its own schedule and
+# not on ours.
+name: live provider (weekly)
+
+on:
+  schedule:
+    # Mondays 06:00 UTC -- a working-week start, so a break is seen on a weekday.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  openrouter:
+    runs-on: ubuntu-latest
+    # Without the key the suite skips every test and reports success, which would
+    # be a green tick that measured nothing. Skip the job instead, visibly.
+    if: github.repository == 'guruvaidev/avaloka'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: System packages
+        run: sudo apt-get update && sudo apt-get install -y graphviz
+
+      - name: Install
+        run: PYTHON=python ./scripts/install.sh --no-venv
+
+      - name: Fail loudly if the key is missing
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          if [ -z "$OPENROUTER_API_KEY" ]; then
+            echo "::error::OPENROUTER_API_KEY is not set. This job exists to make a"
+            echo "::error::real request; skipping silently would report success while"
+            echo "::error::testing nothing. Add the repository secret or disable this workflow."
+            exit 1
+          fi
+          echo "key present (${#OPENROUTER_API_KEY} chars)"
+
+      - name: Live smoke
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          INFERENCE_PROVIDER: openrouter
+        run: python -m pytest -v -p no:cacheprovider tests/live/
+
+      - name: Report spend
+        if: always()
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        # Surfaced on every run so a credit drain is noticed here rather than on
+        # the day a run fails for want of balance.
+        run: |
+          curl -sS -H "Authorization: Bearer $OPENROUTER_API_KEY" \
+            https://openrouter.ai/api/v1/credits \
+            | python3 -c "import json,sys;d=json.load(sys.stdin).get('data',{});t=d.get('total_credits');u=d.get('total_usage');print(f'granted={t} used={u} remaining={None if t is None else round(t-u,4)}')" \
+            || echo "credits endpoint unavailable"

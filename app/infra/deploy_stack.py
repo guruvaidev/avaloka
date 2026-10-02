@@ -119,11 +119,18 @@ def deploy_avaloka(
     image_pull_policy: Optional[str] = None,
     minio: Optional[bool] = None,
     supabase: Optional[bool] = None,
+    local_images: bool = False,
 ) -> dict:
     """helm upgrade --install the avaloka chart.
 
     Image overrides let cloud (GKE/EKS) point at a registry image (e.g.
     gcr.io/<project>/avaloka) while local kind uses the side-loaded image.
+
+    ``local_images`` points every chart image at the ``*:latest`` builds that
+    ``build_images(load_into_kind=True)`` side-loads. The chart's defaults are
+    the GHCR release images, so without this a local provision builds one set
+    of images and deploys another -- ImagePullBackOff when the registry has no
+    image for this checkout, or silently a stale registry image when it does.
 
     ``minio`` deploys the in-cluster S3-compatible object store and points the
     app's storage backend at it. This is what gives a local/on-prem cluster a
@@ -161,6 +168,16 @@ def deploy_avaloka(
         cmd += ["--set-string", f"ray.address={ray_address}"]
     if service_type:
         cmd += ["--set", f"service.type={service_type}"]
+    if local_images:
+        api_repo, api_tag = API_IMAGE.rsplit(":", 1)
+        ui_repo, ui_tag = WEBUI_IMAGE.rsplit(":", 1)
+        cmd += [
+            "--set-string", f"image.repository={api_repo}",
+            "--set-string", f"image.tag={api_tag}",
+            "--set-string", f"webui.image.repository={ui_repo}",
+            "--set-string", f"webui.image.tag={ui_tag}",
+            "--set-string", f"supabase.functions.image={FUNCTIONS_IMAGE}",
+        ]
     if image_repository:
         cmd += ["--set-string", f"image.repository={image_repository}"]
     if image_tag:

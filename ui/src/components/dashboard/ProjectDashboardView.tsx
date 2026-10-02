@@ -21,6 +21,7 @@ import { DashboardEmptySlot } from "./DashboardEmptySlot";
 import { DashboardMiniChart } from "./dashboardMiniChart";
 import { widgetsForTab } from "./useAnalysisDashboard";
 import { useDashboardPerms } from "@/lib/use-user-mgmt-perms";
+import { useUpgradeGate } from "@/components/dashboard/UpgradeGate";
 
 
 type Props = {
@@ -64,6 +65,7 @@ export function ProjectDashboardView({
   const [dragOverSlot, setDragOverSlot] = useState<number | null>(null);
   const [savingSlot, setSavingSlot] = useState<number | null>(null);
   const [removingSlot, setRemovingSlot] = useState<number | null>(null);
+  
 
   const handleGenerateReport = async () => {
     if (!tabWidgets.length) {
@@ -195,7 +197,9 @@ export function ProjectDashboardView({
   });
 
   return (
+
     <div className={cx("flex min-h-0 flex-1 flex-col overflow-hidden", className)}>
+      
       <div className="flex flex-wrap items-center gap-2 border-b border-secondary bg-primary px-4 py-3 sm:px-6">
         {onToggleInsights ? (
           <button
@@ -213,11 +217,13 @@ export function ProjectDashboardView({
           </button>
         ) : null}
         <div className="ml-auto flex items-center gap-2">
+          
           <Button
             size="sm"
             color="primary"
             iconLeading={File02}
-            onClick={handleGenerateReport}
+            onClick={ handleGenerateReport}
+            
             isDisabled={!tabWidgets.length}
           >
             Generate report

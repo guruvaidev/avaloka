@@ -22,6 +22,7 @@ from app.agents.mta_v2.schema import HyperparameterConfig, RayConfig, DataConfig
 from app.agents.mta_v2.training_docker_image.src.data_integrity import (
     classify_identifier_features,
 )
+from app.agents.planner import NoParams
 from app.agents.mta_v2.utils import get_columns, load_dataset, extract_json_from_content
 from app.agents.mta_v2.loader.url import _is_local, _is_http, _gcs_storage_options, _s3_storage_options
 from app.agents.pii_agent import (
@@ -31,6 +32,7 @@ from app.agents.pii_agent import (
     require_pii_key,
     scan_dataframe,
 )
+from app.core.inference import resolve_provider, tool_choice_for_provider
 
 load_dotenv()
 
@@ -42,10 +44,9 @@ REMOTE_DATA_SOURCE_SCHEMES = (
     "http://", "https://",
     "postgresql://", "mysql://", "sqlite://", "mssql://",
 )
-_planner_api_key = (os.environ.get("GROQ_API_KEY_PLANNING_AGENT")
-                    or os.environ.get("GROQ_API_KEY"))
+_planner_api_key = os.environ.get("GROQ_API_KEY_PLANNING_AGENT") or os.environ.get("GROQ_API_KEY")
 # Hybrid-reasoning MTA (verified live: gpt-oss honors tool_choice="none" for
-# the conversational replies and "required" for the tool-pick call). Effort
+# the conversational replies and "any" for the tool-pick call). Effort
 # defaults to "low" to keep natural-language replies snappy; raise via
 # AVALOKA_MTA_REASONING_EFFORT. Set AVALOKA_MTA_MODEL=llama-3.3-70b-versatile
 # to restore the previous non-reasoning behavior without a code change.
@@ -61,13 +62,38 @@ if llm is None:
         "Planner LLM disabled; set GROQ_API_KEY_PLANNING_AGENT to re-enable remote generation."
     )
 
+# TOOL_CHOICE is read at call time, so it must be bound whether or not the
+# LLM was configured at import. Binding it only in the else branch meant that
+# with no API key -- CI, and any deployment missing the planning key -- the
+# name was never defined, and the first invoke raised NameError instead of
+# reporting the disabled LLM. Tests that patch `llm` hit it too: patching the
+# object does not bind a global the module never created.
+# tool_choice is not portable across providers, so it is chosen from the client
+# rather than fixed. Measured against OpenRouter with the live key:
+#
+#   model                 tools  tool_choice  tool_calls  provider_errors
+#   openai/gpt-oss-120b   19     required     0/3         3/3
+#   openai/gpt-oss-120b    3     required     0/3         2/3
+#   openai/gpt-oss-120b   19     auto         1/3         0/3
+#
+# "required" makes OpenRouter return finish_reason="error" with empty content,
+# so every turn raised "Planner response returned no tool calls" and the user
+# got "I ran into a temporary problem". Tool count is irrelevant -- 3 tools
+# errored too. Switching to "auto" on the OpenAI-compatible clients took a
+# four-prompt live planner run from 0/4 working to 3/4. Groq keeps "required",
+# where it works and the dispatch logic relies on it; Vertex keeps "any".
+TOOL_CHOICE = tool_choice_for_provider(
+    resolve_provider(role="planning", agent="MTA"), type(llm).__name__
+)
+
+
 TOOLS = [
     {
         "type": "function",
         "description": "Generate training plan for model training to show to user and get confirmation before execution",
         "function": {
             "name": "generate_training_plan",
-            "parameters": {}
+            "parameters": NoParams.model_json_schema()
         },
     },
     {
@@ -75,7 +101,7 @@ TOOLS = [
         "description": "Ask more details to user to update training plan (not start training confirmation) because user didn't provide enough information to make update on training plan",
         "function": {
             "name": "ask_more_detail_to_update_training_plan",
-            "parameters": {}
+            "parameters": NoParams.model_json_schema()
         }
     },
     {
@@ -83,7 +109,7 @@ TOOLS = [
         "description": "Update training plan based on user feedback and confirmation from user provided enough information to make update on training plan (not start training confirmation)",
         "function": {
             "name": "update_training_plan",
-            "parameters": {}
+            "parameters": NoParams.model_json_schema()
         }
     },
     {
@@ -91,7 +117,7 @@ TOOLS = [
         "description": "Generate code repository for model training based on the training plan",
         "function": {
             "name": "generate_code_repo",
-            "parameters": {}
+            "parameters": NoParams.model_json_schema()
         }
     },
     {
@@ -99,7 +125,7 @@ TOOLS = [
         "description": "Prepare jupyterlab env with generated code repo so that user can review and update repo",
         "function": {
             "name": "review_code_repo",
-            "parameters": {}
+            "parameters": NoParams.model_json_schema()
         }
     },
     {
@@ -107,7 +133,7 @@ TOOLS = [
         "description": "Execute model training based on the training plan and code repo",
         "function": {
             "name": "execute_training",
-            "parameters": {}
+            "parameters": NoParams.model_json_schema()
         }
     },
     {
@@ -115,7 +141,7 @@ TOOLS = [
         "description": "Configure the inference service for the trained model",
         "function": {
             "name": "configure_inference_service",
-            "parameters": {}
+            "parameters": NoParams.model_json_schema()
         }
     },
     {
@@ -123,7 +149,7 @@ TOOLS = [
         "description": "Execute inference using the trained model and its configured service when available",
         "function": {
             "name": "execute_inference",
-            "parameters": {}
+            "parameters": NoParams.model_json_schema()
         }
     },
     {
@@ -131,7 +157,7 @@ TOOLS = [
         "description": "Stop the inference service",
         "function": {
             "name": "stop_inference_service",
-            "parameters": {}
+            "parameters": NoParams.model_json_schema()
         }
     },
 ]
@@ -3313,7 +3339,7 @@ class ModelTrainingAgent:
                 [SystemMessage(content=SYSTEM_PROMPT)]
                 + self._normalize_messages(state["messages"])[-10:]
             )
-            response = llm.invoke(messages, tools=TOOLS, tool_choice="required")
+            response = llm.invoke(messages, tools=TOOLS, tool_choice=TOOL_CHOICE)
 
             # Normalise tool_calls — some SDK versions expose different attrs
             if hasattr(response, "tool_calls"):
@@ -3407,7 +3433,7 @@ class ModelTrainingAgent:
                 return self._finish_mta(new_state)
 
         except Exception as exc:
-            # tool_choice="required" forbids conversational replies, so when an
+            # tool_choice="any" forbids conversational replies, so when an
             # out-of-scope ask reaches the MTA the model's polite refusal comes
             # back as a Groq 400 (code=tool_use_failed) with the refusal text in
             # failed_generation. That text IS the right answer for the user —
@@ -3415,7 +3441,7 @@ class ModelTrainingAgent:
             declined_text = self._tool_use_failed_text(exc)
             if declined_text:
                 logger.info(
-                    "MTA got a conversational reply under tool_choice=required; "
+                    f"MTA got a conversational reply under tool_choice={TOOL_CHOICE}; "
                     "surfacing it to the user: %s", declined_text[:120],
                 )
                 new_state = state.copy()

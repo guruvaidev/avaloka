@@ -90,6 +90,17 @@ interface MessageResponse {
   coder_definition: any;
   output_file_data: any;
   output_json: any;
+  output_tables?: Array<{
+    title: string;
+    rows: Record<string, unknown>[];
+    action_ids?: string[];
+    group_by?: string[];
+    metric_columns?: string[];
+  }>;
+  multi_action_status?: "complete" | "incomplete";
+  multi_action_actions?: Array<{ id: string; operation: string; column?: string | null; group_by: string[] }>;
+  multi_action_missing?: Array<{ label: string }>;
+  multi_action_notes?: string[];
   task_info?: { task_id: string; next_due_at?: number };
   analysis_fidelity?: "quick_sample" | "portfolio_samples" | "entire_dataset";
   selected_sample_name?: string;

@@ -327,7 +327,7 @@ export function ProjectDetailsView({
       </footer>
 
       <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
-        <DialogContent className="max-w-2xl bg-white p-6">
+        <DialogContent className="max-w-2xl bg-primary p-6 text-primary">
           <DialogHeader>
             <DialogTitle>New Analysis</DialogTitle>
           </DialogHeader>
@@ -421,11 +421,7 @@ function GridView({
 
             <button type="button" onClick={() => onOpen(r)} className="text-left">
               <p className="text-md font-semibold text-primary hover:underline">{r.name}</p>
-              <p className="mt-2 text-sm text-tertiary">{r.teamLabel ?? "Team"}</p>
-              <div className="mt-2 flex items-center gap-2">
-                <MemberStack members={r.members} extra={extra} />
-                <span className="text-sm text-tertiary">{r.teamCount} users</span>
-              </div>
+             
             </button>
 
             <div className="-mx-4 mt-2 flex items-center justify-between gap-3 border-t border-secondary px-4 pt-3">

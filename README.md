@@ -132,7 +132,26 @@ with a `--network none` check so you can prove it rather than trust it.
 **Something not working?** The install guide's
 [First run: what to expect, and what goes wrong](docs/INSTALL.md#first-run-what-to-expect-and-what-goes-wrong)
 section lists every failure we hit bringing this stack up on a clean cluster.
-Each one is silent — the symptom never names the cause.
+Each one is silent — the symptom never names the cause — so it is worth a read
+before you start debugging.
+
+### Two ways to run it
+
+| | |
+| --- | --- |
+| **Run it yourself, fully offline** | [**Install Guide → Running Avaloka completely offline**](docs/INSTALL.md#running-avaloka-completely-offline). No internet at all: a local model server, the embedding model **baked into the image**, and storage, memory and auth all deployed by the chart. Nothing calls home. |
+| **Let us run it** | [**avaloka.ai**](https://avaloka.ai) hosts the **Professional** and **Enterprise** editions with auto-scaling compute — no Kubernetes, Ray, object store or model provider to stand up. Enterprise adds shared team workspaces, the cloud scheduler, and connections to your own cloud clusters. |
+
+The open-source edition is not a limited trial of the hosted ones. It is the
+same engine on your own hardware, and it stays useful with no account, no key
+and no network.
+
+Under the hood, a Planner agent acts as the team lead: it converses with you and
+delegates to Sampling, Profiling, Coder, Validator, Execution, Data-Transfer,
+Model-Training, and Visualization specialists, all coordinating through one
+shared state object. Generated code is authored pseudocode-first and passes a
+three-layer validation gate, so it stays grounded in the source schema even when
+the primary LLM is unavailable.
 
 ---
 
@@ -158,10 +177,18 @@ scored 1.00 before *and* after five real defects were fixed, because no task
 carried the shape that triggers them. Full scorecard and an account of what it
 does **not** measure: [docs/benchmarks.md](docs/benchmarks.md).
 
-**Task design** is aligned with the multi-step data-agent framing established
-by DABstep (Adyen / Hugging Face), as described in the
-[research paper](docs/research/). We have not run that suite end to end and
-claim no score on it — alignment of design is not a score.
+**External benchmarks.** Avaloka runs against
+[DataAgentBench](https://github.com/ucbepic/DataAgentBench) (UC Berkeley EPIC
+lab) — 54 queries over PostgreSQL, MongoDB, SQLite and DuckDB, graded by the
+official per-query validators, against the unmodified upstream scaffold. The
+harness lives in `benchmarks/external/dab/` and deliberately vendors none of
+DAB's questions, gold answers or validators. An official run is five trials per
+query. Task design is separately aligned with the framing established by
+DABstep (Adyen / Hugging Face), cited in the [research paper](docs/research/).
+
+Scorecards are **not committed** — `benchmarks/results/` gitignores `*.json`
+and `*.md`, so a run's output stays local by design. Ask for the current
+numbers rather than expecting to find them in this tree.
 
 **Tests.** `pytest -m "not cluster and not cloud and not integration"` is the
 gate that must stay green: unit and contract tests, no cluster and no network.
@@ -245,6 +272,7 @@ ask for most often:
 | 🗺️ [Architecture](docs/architecture.md) | The agent team, the request lifecycle, why each dependency exists |
 | ☸️ [Deployment](docs/deployment.md) | Kubernetes, Ray/KubeRay, Helm, storage classes |
 | 📊 [Benchmarks](docs/benchmarks.md) · [Reliability](docs/test-reports/1.6-reliability-measurements.md) | What was measured, and what it does not cover |
+| 💰 [Model Routing & Cost](docs/model-routing-cost.md) | What each agent costs per turn, and which model is worth upgrading |
 | 📄 [Research](docs/research/) | The paper behind the system |
 
 ---

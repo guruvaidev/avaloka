@@ -33,6 +33,7 @@ import { ConfigurationsIcon } from "./icons/ConfigurationsIcon";
 import { NotificationsPopover } from "./NotificationsPopover";
 import { getCachedAuthUser } from "@/lib/auth-user";
 import { SUPPORT_ADMIN_EMAIL } from "@/lib/support-admin";
+import { useUpgradeGate } from "@/components/dashboard/UpgradeGate";
 
 type RailItem = { id: string; icon: FC<{ className?: string }>; label: string };
 
@@ -72,6 +73,8 @@ const DEFAULT_NAV: Record<string, string> = {
   "db-config": "/db-tables",
 };
 
+
+
 function activeFromPath(pathname: string): string | undefined {
   if (pathname.startsWith("/scheduled-analysis") || pathname.startsWith("/proanalysis/scheduled-analysis")) return "history";
   if (pathname.startsWith("/proanalysis")) return "chat";
@@ -106,6 +109,7 @@ export function IconRail({
   const isAnalysisProject = variant === "analysis-project";
   const projectsPerms = useProjectsPerms();
   const dashboardPerms = useDashboardPerms();
+  const { blocked: upgradeBlocked, dialog: upgradeDialog } = useUpgradeGate();
   const visibleAnalysisProjectItems = analysisProjectItems.filter(
     (item) =>
       item.id !== "projects" ||
@@ -138,12 +142,17 @@ export function IconRail({
     onItemClick?.(id);
     if (skipNavIds?.includes(id)) return;
     const to = DEFAULT_NAV[id];
+    if (id === "reports" && upgradeBlocked("Reports")) {
+  // show upgrade dialog
+    return;
+    }
     if (to && to !== pathname) navigate({ to });
   };
 
 
   return (
     <aside className="flex h-full w-[64px] shrink-0 flex-col items-center border-r border-secondary bg-primary py-3">
+      {upgradeDialog}
       {!isAnalysisProject ? (
       <button
         type="button"
@@ -317,7 +326,7 @@ function RailGroup({
               tooltip={isLocked ? `${item.label} — Upgrade to unlock` : item.label}
               tooltipPlacement="right"
               onClick={() => onItemClick?.(item.id)}
-              className={cx("size-10 *:data-icon:size-[18px]", isActive && "bg-primary_hover text-fg-primary")}
+              className={cx("size-10 *:data-icon:size-[18px] text-fg-secondary dark:text-white/60", isActive && "bg-primary_hover text-fg-primary")}
             />
             {isLocked ? (
               <span

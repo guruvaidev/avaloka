@@ -369,15 +369,13 @@ def _preconfigure_for_planner(
             "use_ray": True,
         }
 
-    if intent.intent == "schedule":
-        ts = state.get("task_schedule") or {}
-        if not ts.get("task_type"):
-            updates["task_schedule"] = {
-                "task_type": "execute",
-                "schedule_type": "relative",
-                "second": 0,
-                "max_runs": 1,
-            }
+    # A "schedule" intent is routed to the planner and nothing more. This used
+    # to pre-set a hard-coded run-once task_schedule (relative, 0 seconds, one
+    # run) without reading the sentence; the planner then saw a schedule
+    # already present, skipped its LLM, and the router ended the turn with no
+    # reply and no task. Every message containing "schedule", "every day",
+    # "cron"... produced an empty turn. The planner's own schedule_task tool
+    # is the only thing that can turn "every Monday 9am" into a cron.
 
     if intent.intent in (
         "statistical_analysis",
@@ -451,7 +449,11 @@ def avaloka_agent_node(state: ETLState) -> Dict[str, Any]:
     #    ("clarification") messages both delegate to plan_etl, which has
     #    the richer toolset for asking follow-ups. Direct replies are
     #    reserved for clearly conversational intents.
-    delegate = intent.should_delegate()
+    pending = state.get("pending_clarification")
+    answering_planner = isinstance(pending, dict) and pending.get("type") in {
+        "filter_value", "metric_choice",
+    }
+    delegate = intent.should_delegate() or answering_planner
 
     # 7. Build the state update bundle
     updates: Dict[str, Any] = {

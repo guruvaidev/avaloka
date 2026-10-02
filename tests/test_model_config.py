@@ -24,8 +24,22 @@ def test_summarizer_no_longer_runs_on_an_8b_model():
     assert "8b" not in DEFAULT_MODELS["summarizer"].lower()
 
 
-def test_validator_defaults_to_compound():
-    assert DEFAULT_MODELS["validator"].startswith(("groq/compound", "compound"))
+def test_validator_is_not_on_a_decommissioned_model():
+    """The validator's model must still exist.
+
+    This asserted that the validator defaults to compound. Groq decommissioned
+    the compound models on 2026-09-21 -- model_config.py records that, and
+    provider_for_model("groq/compound") now returns
+    "groq (decommissioned 2026-09-21)". The default correctly moved to
+    openai/gpt-oss-120b; only the test was left behind, asserting a model that
+    can no longer be called.
+    """
+    model = DEFAULT_MODELS["validator"]
+    assert provider_for_model(model) is None, (
+        f"validator is on {model}, which provider_for_model flags as "
+        f"{provider_for_model(model)!r}"
+    )
+    assert not model.startswith(("compound", "groq/compound"))
 
 
 def test_no_agent_is_left_on_an_instant_tier_model():
@@ -132,7 +146,19 @@ def test_foreign_models_are_identified_with_their_provider(model, provider):
     "gemma2-9b-it",
 ])
 def test_groq_hosted_models_need_no_other_provider(model):
-    assert provider_for_model(model) is None
+    """A Groq-hosted model needs no separate provider -- unless it is gone.
+
+    The compound family was decommissioned on 2026-09-21. model_config.py now
+    maps those ids to "groq (decommissioned ...)" deliberately, so asking for one
+    reports why it cannot be served instead of silently failing at call time.
+    """
+    verdict = provider_for_model(model)
+    if verdict is None:
+        return
+    assert "decommissioned" in verdict, (
+        f"{model} needs provider {verdict!r}, which is neither 'no provider "
+        f"needed' nor a decommissioning notice"
+    )
 
 
 def test_gpt_oss_is_recognised_as_groq_not_openai():

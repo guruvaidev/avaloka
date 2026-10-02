@@ -28,8 +28,8 @@ pip install -e .                                  # from this repo
 avaloka analyze sales.csv --goal "why did revenue drop in Q3?"
 ```
 
-That is the whole loop. Avaloka sizes the file, profiles it, plans an analysis,
-writes and runs the code, validates the result, and leaves a bundle you can
+That is the whole loop. Avaloka sizes the file, profiles it, runs a supported
+goal-specific calculation, writes reproducible preparation code, validates the result, and leaves a bundle you can
 open, rerun and hand to someone else. Nothing leaves your machine unless you
 configure a hosted model provider.
 
@@ -239,9 +239,19 @@ churn-analysis/
 ├── technical_report.html      ├── assumptions.yaml
 ├── analysis.ipynb             ├── validation_report.json
 ├── analysis.py                ├── planner_graph.json
-├── transformed_dataset.parquet├── lineage.json
-├── README.md                  └── environment.lock
+├── transformed_dataset.parquet├── goal_analysis.json
+├── lineage.json               ├── environment.lock
+└── README.md
 ```
+
+The goal affects the computed findings. Local analysis currently supports
+missing-value checks and imputation suggestions, numeric correlations, monthly
+trends, grouped comparisons, and named-column summaries. The calculation and
+its row scope (full data or working sample) are recorded in `goal_analysis.json`.
+An unsupported or under-specified goal is marked as limited rather than passed
+off as an answered question; descriptive trends do not establish causation.
+Without `--output`, each run gets a separate folder under `./avaloka-analysis/`
+so a second prompt cannot overwrite the first report.
 
 ## `avaloka train` — predict a column, and find out whether you should trust it
 

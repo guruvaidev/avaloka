@@ -23,6 +23,7 @@ export type DataSource = {
   id: string;
   name: string;
   logoUrl: string;
+  darkLogoUrl?: string;
   storageProvider?: StorageProvider;
   dbType?: DbType;
   comingSoon?: boolean;
@@ -34,7 +35,7 @@ const initialSources: DataSource[] = [
   { id: "postgres", name: "PostgreSQL", logoUrl: postgres.url, dbType: "postgresql" },
   { id: "sqlserver", name: "SQL Server", logoUrl: sqlserver.url, dbType: "mssql" },
   { id: "mariadb", name: "MariaDB", logoUrl: mariadb.url, dbType: "mariadb" },
-  { id: "mongodb", name: "MongoDB", logoUrl: mongodb.url, dbType: "mongodb" },
+  { id: "mongodb", name: "MongoDB", logoUrl: mongodb.url,darkLogoUrl: "/assets/logos/Logo_Type_Mongo.png", dbType: "mongodb" },
 ];
 
 const moreSources: DataSource[] = [
@@ -90,7 +91,26 @@ export function DataSourceGrid({ onSelect, disabled = false }: { onSelect?: (id:
               (s.comingSoon || disabled) && "cursor-not-allowed opacity-60",
             )}
           >
-            <img src={s.logoUrl} alt={s.name} className="max-w-[140px] object-contain" />
+          { s.darkLogoUrl ? (
+            <>
+              <img
+                src={s.logoUrl}
+                alt={s.name}
+                className="max-w-[100%] object-contain dark:hidden "
+              />
+              <img
+                src={s.darkLogoUrl}
+                alt={s.name}
+                className="hidden max-w-[100%] object-contain dark:block"
+              />
+            </>
+          ) : (
+            <img
+              src={s.logoUrl}
+              alt={s.name}
+              className="max-w-[100%] object-contain dark:invert"
+            />
+          )}
           </Button>
           {s.comingSoon && (
             <span className="pointer-events-none absolute -right-1 -top-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-medium text-amber-700 shadow">

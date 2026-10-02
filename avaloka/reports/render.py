@@ -96,6 +96,11 @@ SHA-256 <span class="muted">{{ ds.sha256[:16] }}…</span></p></div>
 <p class="muted">{{ plan.compute_plan.budget_note }}</p>
 <p><strong>Hypotheses:</strong></p><ul>{% for h in plan.hypotheses %}<li>{{ h }}</li>{% endfor %}</ul></div>
 
+{% if goal_analysis %}<h2>Goal-specific analysis</h2>
+<div class="card"><p><strong>{{ goal_analysis.kind }}</strong> — {{ goal_analysis.status }}
+· {{ goal_analysis.scope }}</p><ul>{% for f in goal_analysis.findings %}<li>{{ f }}</li>{% endfor %}</ul>
+<p class="muted">Measured values and calculation details: <code>goal_analysis.json</code>.</p></div>{% endif %}
+
 {% if model %}<h2>Model results</h2>
 <div class="card"><table><tr><th>Candidate</th><th>{{ model.metric }}</th><th>CV mean ± std</th><th>Train s</th><th>Latency ms</th></tr>
 {% for c in model.candidates %}<tr {% if c.name==model.selected %}style="font-weight:600;background:#f0fff4"{% endif %}>

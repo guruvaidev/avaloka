@@ -221,3 +221,8 @@ if __name__ == "__main__":
         sys.exit(1)
     
     test_profiling_agent(csv_path, use_ray=(not args.no_ray))
+
+
+# CLI helper, not a pytest test: pytest reads the csv_path parameter as a
+# fixture request and errors at setup. Keep it runnable via __main__ only.
+test_profiling_agent.__test__ = False

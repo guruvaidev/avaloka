@@ -42,3 +42,9 @@ class CodingAgentState(TypedDict):
     llm_raw_response: Optional[str]
     primary_llm_response: Optional[str]
     coder_pseudocode: Optional[str]
+    # Machine-checkable acceptance criteria emitted alongside the blueprint.
+    # Stored as a plain dict so the LangGraph checkpointer (msgpack) can
+    # serialize it; app/agents/blueprint_contract.py owns the shape.
+    coder_contract: Optional[dict]
+    contract_error: Optional[bool]
+    contract_violations: Optional[list]

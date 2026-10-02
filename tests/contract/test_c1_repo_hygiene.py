@@ -485,9 +485,40 @@ def _modules_matching(pattern: re.Pattern, modules: Sequence[str]) -> Set[str]:
             text = path.read_text("utf-8", errors="ignore")
         except OSError:
             continue
-        if pattern.search(text):
+        if pattern.search(_code_only(text)):
             found.add(relpath)
     return found
+
+
+def _code_only(text: str) -> str:
+    """Source with comments and docstrings removed.
+
+    The inventory asks which modules *send* data to a third party. Matching the
+    raw text answers a different question: app/api/server.py:417 mentions
+    dataset_samples in a comment explaining what is capped, and was reported as
+    a new egress module on that basis. Tokenising and dropping COMMENT and
+    docstring tokens makes the channel patterns match code again.
+    """
+    import io
+    import tokenize
+
+    try:
+        toks = list(tokenize.generate_tokens(io.StringIO(text).readline))
+    except (tokenize.TokenError, IndentationError, SyntaxError):
+        return text  # unparseable: fall back to the stricter raw match
+    kept, prev_meaningful = [], None
+    for tok in toks:
+        if tok.type == tokenize.COMMENT:
+            continue
+        # A STRING in statement position is a docstring, not data flow.
+        if tok.type == tokenize.STRING and prev_meaningful in (
+            None, tokenize.INDENT, tokenize.DEDENT, tokenize.NEWLINE, tokenize.NL,
+        ):
+            continue
+        kept.append(tok.string)
+        if tok.type not in (tokenize.NL, tokenize.COMMENT):
+            prev_meaningful = tok.type
+    return "\n".join(kept)
 
 
 @pytest.mark.parametrize("channel", sorted(EGRESS_CHANNELS))

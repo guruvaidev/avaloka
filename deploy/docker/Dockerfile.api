@@ -56,6 +56,7 @@ RUN pip install --no-cache-dir --prefer-binary \
         --extra-index-url https://download.pytorch.org/whl/cpu \
         -r /tmp/requirements.txt
 
+RUN pip install --no-cache-dir langchain-google-vertexai
 # ---------- bake the embedding model into the image ----------
 # The memory plane embeds every query with sentence-transformers. Left to
 # itself it fetches the model from huggingface.co ON THE FIRST QUERY, which
@@ -80,6 +81,10 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libpq5 curl graphviz \
     && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL -o /usr/local/bin/kubectl \
+        "https://dl.k8s.io/release/$(curl -fsSL https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" \
+    && chmod +x /usr/local/bin/kubectl
 
 COPY --from=builder /opt/venv /opt/venv
 # The model cache baked in the builder stage. Without this the runtime

@@ -2,6 +2,7 @@
 // small viz_config compatible with `normalizeVizConfig` / `DynamicChart`.
 // Used when the backend reply has no `visualization_config` so each user
 // prompt still gets a Chart view alongside the Data table.
+import { aggregateTitle, fieldTitle } from "@/lib/chart-axis-titles";
 
 type Row = Record<string, unknown>;
 
@@ -85,6 +86,85 @@ function displayValue(value: number): string {
   return new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(value);
 }
 
+function summaryValueAxisTitle(metrics: string[]): string {
+  if (metrics.length === 1) return fieldTitle(metrics[0]);
+  const sources = metrics.map((metric) => metric.replace(/^(?:mean|median|sum|avg|average|min|max|count)_/i, ""));
+  return sources.every((source) => source === sources[0]) ? fieldTitle(sources[0]) : "Calculated value";
+}
+
+export type ResultTableForViz = {
+  title?: string;
+  rows: Row[];
+  group_by?: string[];
+  metric_columns?: string[];
+};
+
+// Structured action tables already contain aggregated values. Plot each
+// metric directly against its own grouping instead of aggregating the rows
+// again or combining unrelated groupings into one chart.
+export function deriveVizFromResultTable(table: ResultTableForViz): any | null {
+  const groups = table.group_by?.filter((key) => table.rows[0] && key in table.rows[0]) ?? [];
+  const metrics = table.metric_columns?.filter((key) => table.rows[0] && key in table.rows[0]) ?? [];
+  if (!groups.length && metrics.length && table.rows.length === 1) {
+    const plottedMetrics = metrics.filter((key) => parseNumber(table.rows[0][key]) != null);
+    const data = plottedMetrics
+      .map((key) => ({ metric: key.replace(/_/g, " "), value: parseNumber(table.rows[0][key]) }))
+      .filter((row): row is { metric: string; value: number } => row.value != null);
+    if (data.length) return {
+      source: "client_derived",
+      charts: [{
+        type: "bar",
+        title: table.title ?? "Overall metric values",
+        subtitle: data.map(({ metric, value }) => `${metric}: ${displayValue(value)}`).join("; "),
+        xKey: "metric",
+        xAxisTitle: data.length === 1 ? "Metric" : "Statistic",
+        yAxisTitle: summaryValueAxisTitle(plottedMetrics),
+        data,
+        series: [{ dataKey: "value", name: summaryValueAxisTitle(plottedMetrics) }],
+        insights: ["These values come directly from the overall result table."],
+      }],
+    };
+  }
+  if (!groups.length || !metrics.length) {
+    const fallback = deriveVizFromRows(table.rows);
+    if (!fallback || !table.title) return fallback;
+    return {
+      ...fallback,
+      charts: fallback.charts.map((chart: any) => ({ ...chart, title: `${table.title}: ${chart.title}` })),
+    };
+  }
+
+  const xKey = groups.join(" / ");
+  const charts = metrics.flatMap((metric) => {
+    const data = table.rows
+      .map((row) => {
+        const value = parseNumber(row[metric]);
+        if (value == null) return null;
+        const label = groups.map((key) => String(row[key] ?? "(missing)")).join(" / ");
+        return { [xKey]: label, [metric]: value };
+      })
+      .filter((row): row is Record<string, string | number> => row != null)
+      .sort((a, b) => Number(b[metric]) - Number(a[metric]));
+    if (!data.length) return [];
+    const shown = data.slice(0, TOP_K);
+    const metricLabel = metric.replace(/_/g, " ");
+    return [{
+      type: "bar",
+      title: `${metricLabel} by ${groups.join(" and ")}`,
+      subtitle: data.length > TOP_K
+        ? `Showing the ${TOP_K} highest of ${data.length} groups from ${table.title ?? "the result table"}.`
+        : `Showing all ${data.length} groups from ${table.title ?? "the result table"}.`,
+      xKey,
+      xAxisTitle: groups.map(fieldTitle).join(" / "),
+      yAxisTitle: fieldTitle(metric),
+      data: shown,
+      series: [{ dataKey: metric, name: metricLabel }],
+      insights: ["Values are plotted directly from this grouped result table."],
+    }];
+  });
+  return charts.length ? { charts, source: "client_derived" } : null;
+}
+
 export function deriveVizFromRows(rows: unknown): any | null {
   if (!Array.isArray(rows) || rows.length === 0) return null;
   const first = rows[0];
@@ -99,6 +179,31 @@ export function deriveVizFromRows(rows: unknown): any | null {
   const dates = cols.filter((c) => c.kind === "date");
 
   const charts: any[] = [];
+
+  // A single result row with several numeric columns is a set of summary
+  // metrics, not a set of observations. A scatter plot of those columns would
+  // contain one point and imply a relationship the data cannot establish.
+  if (data.length === 1 && numbers.length >= 2 && numbers.length === cols.length) {
+    const metricRows = numbers
+      .map(({ key }) => ({ metric: key.replace(/_/g, " "), value: parseNumber(data[0]?.[key]) }))
+      .filter((row): row is { metric: string; value: number } => row.value != null);
+    if (metricRows.length >= 2) {
+      return {
+        source: "client_derived",
+        charts: [{
+          type: "bar",
+          title: "Requested metric values",
+          subtitle: metricRows.map(({ metric, value }) => `${metric}: ${displayValue(value)}`).join("; "),
+          xKey: "metric",
+          xAxisTitle: "Metric",
+          yAxisTitle: summaryValueAxisTitle(numbers.map(({ key }) => key)),
+          data: metricRows,
+          series: [{ dataKey: "value", name: summaryValueAxisTitle(numbers.map(({ key }) => key)) }],
+          insights: ["These are separate summary calculations from the same result table."],
+        }],
+      };
+    }
+  }
 
   // 1) date + number -> line
   if (dates[0] && numbers[0]) {
@@ -117,8 +222,12 @@ export function deriveVizFromRows(rows: unknown): any | null {
         title: `${yKey} over ${xKey}`,
         subtitle: `${yKey} ${direction} from ${displayValue(firstValue)} to ${displayValue(lastValue)}.`,
         xKey,
+        xAxisTitle: fieldTitle(xKey),
+        yAxisTitle: aggregateTitle("mean", yKey),
+        aggregate: "mean",
+        yField: yKey,
         data: series,
-        series: [{ dataKey: yKey, name: yKey }],
+        series: [{ dataKey: yKey, name: aggregateTitle("mean", yKey) }],
         insights: [`Across the displayed period, ${yKey} ${direction} by ${displayValue(Math.abs(lastValue - firstValue))}.`],
       });
     }
@@ -138,15 +247,17 @@ export function deriveVizFromRows(rows: unknown): any | null {
         title: `Top ${xKey} by ${yKey}`,
         subtitle: `${leaderName} has the highest ${yKey} at ${displayValue(leaderValue)}.`,
         xKey,
+        xAxisTitle: fieldTitle(xKey),
+        yAxisTitle: aggregateTitle("sum", yKey),
         data: bars,
-        series: [{ dataKey: yKey, name: yKey }],
+        series: [{ dataKey: yKey, name: aggregateTitle("sum", yKey) }],
         insights: [`${leaderName} leads the displayed ${xKey} categories by ${yKey}.`],
       });
     }
   }
 
   // 3) two numbers -> scatter
-  if (numbers.length >= 2 && charts.length < 3) {
+  if (data.length >= 2 && numbers.length >= 2 && charts.length < 3) {
     const xKey = numbers[0].key;
     const yKey = numbers[1].key;
     const points = data
@@ -159,6 +270,8 @@ export function deriveVizFromRows(rows: unknown): any | null {
         title: `${yKey} vs ${xKey}`,
         subtitle: `${points.length} observations compare ${yKey} with ${xKey}.`,
         xKey,
+        xAxisTitle: fieldTitle(xKey),
+        yAxisTitle: fieldTitle(yKey),
         data: points,
         series: [{ dataKey: yKey, name: yKey }],
         insights: [`The chart shows how ${yKey} varies across ${xKey} for ${points.length} observations.`],
@@ -189,8 +302,10 @@ export function deriveVizFromRows(rows: unknown): any | null {
         title: `${xKey} distribution`,
         subtitle: `${leaderName} is the most frequent value with ${displayValue(leaderCount)} rows.`,
         xKey,
+        xAxisTitle: fieldTitle(xKey),
+        yAxisTitle: "Count of records",
         data: bars,
-        series: [{ dataKey: "count", name: "count" }],
+        series: [{ dataKey: "count", name: "Count of records" }],
         insights: [`${leaderName} is the largest ${xKey} group in the pasted result.`],
       });
     }

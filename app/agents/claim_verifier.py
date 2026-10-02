@@ -94,7 +94,15 @@ _CAUSAL_EVIDENCE_KEYS = ("experiment", "randomized", "randomised", "ab_test",
                          "treatment", "control", "causal", "uplift",
                          "instrument", "did", "difference_in_differences")
 
-_NUMBER = re.compile(r"-?\d+(?:\.\d+)?%?")
+# _NUMBER = re.compile(r"-?\d+(?:\.\d+)?%?")
+_NUMBER = re.compile(r"(?<![\w.])-?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?%?")
+
+
+def _parse_number(raw: str) -> Optional[float]:
+    try:
+        return float(raw.rstrip("%").replace(",", ""))
+    except ValueError:
+        return None
 
 
 @dataclass
@@ -172,10 +180,9 @@ def _evidence_numbers(flat: Dict[str, Any]) -> List[float]:
             numbers.append(float(value))
         elif isinstance(value, str):
             for match in _NUMBER.findall(value):
-                try:
-                    numbers.append(float(match.rstrip("%")))
-                except ValueError:
-                    continue
+                parsed = _parse_number(match)
+                if parsed is not None:
+                    numbers.append(parsed)
     return numbers
 
 
@@ -196,10 +203,16 @@ def _mentions(text: str, terms: Iterable[str]) -> Optional[str]:
 
 
 def split_claims(narrative: str) -> List[str]:
-    """Split a narrative into sentence-level claims worth checking."""
+    """Split a narrative into sentence-level claims worth checking.
+
+    Code is not a claim: fenced blocks and inline `identifiers` are removed first,
+    so a script or a column name like `age_25%` is never read as a statistic.
+    """
     if not narrative:
         return []
-    parts = re.split(r"(?<=[.!?])\s+|\n+", narrative)
+    text = re.sub(r"```.*?```", " ", narrative, flags=re.DOTALL)
+    text = re.sub(r"`[^`\n]*`", " ", text)
+    parts = re.split(r"(?<=[.!?])\s+|\n+", text)
     return [p.strip() for p in parts if len(p.strip()) > 15]
 
 
@@ -229,11 +242,11 @@ def check_invented_numbers(claim: str, flat: Dict[str, Any],
                            tolerance: float = 0.01) -> Optional[ClaimFinding]:
     """A figure in the narrative that appears nowhere in the evidence."""
     stated = []
-    for match in _NUMBER.finditer(claim):
+    # Typographic minus ("−2,008.49") is still a negative number.
+    for match in _NUMBER.finditer(claim.replace("\u2212", "-")):
         raw = match.group(0)
-        try:
-            value = float(raw.rstrip("%"))
-        except ValueError:
+        value = _parse_number(raw)
+        if value is None:
             continue
         is_percentage = raw.endswith("%")
 
@@ -368,15 +381,33 @@ def claim_verifier_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 break
 
     execution_result = state.get("execution_result") or {}
+    # The executed result is the authoritative evidence. In the ETL graph it lives
+    # in output_file_data (a CSV data URI); output_json is only built later by the
+    # API layer, and execution_output_data is the validator's dry run.
+    execution_output = state.get("output_json")
+    if not execution_output:
+        ofd = state.get("output_file_data")
+        if isinstance(ofd, dict) and ofd.get("content"):
+            try:
+                from app.api.helpers import _datauri_csv_to_records
+                execution_output = _datauri_csv_to_records(ofd["content"])
+            except Exception:
+                logger.debug("[claim-verifier] could not decode output_file_data", exc_info=True)
+    execution_output = (
+        execution_output
+        or state.get("execution_output_data")
+        or execution_result.get("output_json")
+        or execution_result.get("output_data")
+    )
+    result_shape = None
+    if isinstance(execution_output, list) and execution_output and isinstance(execution_output[0], dict):
+        result_shape = {"rows": len(execution_output), "columns": len(execution_output[0])}
+
     evidence = {
         "evaluation_report": state.get("evaluation_report"),
         "integrity_report": state.get("integrity_report"),
-        "execution_output": (
-            state.get("output_json")
-            or state.get("execution_output_data")
-            or execution_result.get("output_json")
-            or execution_result.get("output_data")
-        ),
+        "execution_output": execution_output,
+        "result_shape": result_shape,
         "training_metrics": state.get("training_metrics"),
     }
     # "No analysis ran" and "analysis ran and produced no numbers" are

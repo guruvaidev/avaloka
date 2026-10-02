@@ -75,7 +75,11 @@ AZURE = "azure"          # Azure AI / Azure OpenAI
 
 # Normalise user-facing aliases to canonical provider names.
 _PROVIDER_ALIASES = {
-    "": GROQ,
+    # The empty string is what an unset INFERENCE_PROVIDER looks like by the
+    # time it reaches here, so this entry -- not the `or` below -- is what
+    # actually decides the default. It said GROQ, which is why setting the
+    # fallback alone changed nothing.
+    "": OPENROUTER,
     "groqcloud": GROQ,
     "groq-cloud": GROQ,
     "vllm": LOCAL,
@@ -122,27 +126,98 @@ def _env_first(*names: str, default: Optional[str] = None) -> Optional[str]:
     return default
 
 
-def _canonical_provider(raw: Optional[str]) -> str:
+def _default_provider_with_a_usable_key(groq_api_key: Optional[str] = None) -> str:
+    """OpenRouter when it has a key, else a provider that does.
+
+    Only consulted when no provider was configured at all. Order is the
+    preferred default first, then the providers whose keys are a single env var
+    to check; anything needing cloud credentials is out of scope here and must
+    be selected explicitly.
+    """
+    if _env_first("OPENROUTER_API_KEY", "INFERENCE_OPENROUTER_API_KEY"):
+        return OPENROUTER
+    if groq_api_key or _env_first(
+        "GROQ_API_KEY", "GROQ_API_KEY_PLANNING_AGENT", "GROQ_API_KEY_CODING_AGENT"
+    ):
+        logger.info(
+            "No INFERENCE_PROVIDER set and no OpenRouter key; using Groq, which has one. "
+            "Set INFERENCE_PROVIDER explicitly to pin this."
+        )
+        return GROQ
+    if _env_first("OPENAI_API_KEY"):
+        return OPENAI
+    return OPENROUTER   # nothing usable: keep the documented default and let it report
+
+
+def _canonical_provider(raw: Optional[str], groq_api_key: Optional[str] = None) -> str:
+    """Resolve a provider name, defaulting to OpenRouter.
+
+    The default was Groq, which meant a first run required a Groq account
+    specifically. OpenRouter fronts many providers behind one key -- including
+    Groq itself -- so one credential reaches whatever model a user already has
+    access to, which is the better default for an open-source install.
+
+    Groq remains fully supported and is still the fastest path: set
+    INFERENCE_PROVIDER=groq, or AVALOKA_<AGENT>_PROVIDER=groq per agent.
+    """
     key = (raw or "").strip().lower()
-    canonical = _PROVIDER_ALIASES.get(key, key or GROQ)
+    if not key:
+        # Nothing was configured, so this is the implicit default. Prefer
+        # OpenRouter, but only if it can actually be used: selecting a provider
+        # whose key is absent returns no LLM at all, and the only signal is a
+        # log line. Anyone who had GROQ_API_KEY set and nothing else -- which is
+        # what the older docs tell you to do -- would silently lose the LLM on
+        # upgrade. An EXPLICIT setting is never second-guessed below, so
+        # INFERENCE_PROVIDER=openrouter with no key still reports itself.
+        return _default_provider_with_a_usable_key(groq_api_key)
+    canonical = _PROVIDER_ALIASES.get(key, key or OPENROUTER)
     return canonical
 
 
-def resolve_provider(*, role: str, agent: str) -> str:
+def tool_choice_for_provider(provider: str, client_name: str = "") -> str:
+    """The tool_choice value a provider actually accepts.
+
+    Keyed on the PROVIDER, not the client class. ``local``, ``openrouter`` and
+    ``openai`` all build the same ``ChatOpenAI``, so the class name cannot tell
+    them apart -- and the two that matter need OPPOSITE values.
+
+    Measured, not assumed:
+
+      OpenRouter, openai/gpt-oss-120b
+        required -> 0/3 tool calls, 3/3 finish_reason="error"  (19 tools)
+        required -> 0/3 tool calls, 2/3 errors                 (3 tools, so
+                                                                count is not it)
+        auto     -> tool calls returned, 0/3 errors
+      Ollama, gemma4:e4b
+        required -> tool call returned
+        auto     -> no tool call, prose answer instead
+
+    Groq keeps "required": it works there, and the dispatch path relies on always
+    receiving a tool call. Vertex spells it "any". An unknown provider, and a
+    disabled LLM, get "required" so the name is always bound -- leaving it
+    unbound raised NameError rather than reporting the disabled LLM, which broke
+    57 tests.
+    """
+    if provider == VERTEX or client_name == "ChatVertexAI":
+        return "any"
+    if provider == OPENROUTER:
+        return "auto"
+    return "required"
+def resolve_provider(*, role: str, agent: str, groq_api_key: Optional[str] = None) -> str:
     """
     Resolve the active provider for an agent, most specific wins:
 
     1. ``AVALOKA_<AGENT>_PROVIDER``            (per-agent)
     2. ``INFERENCE_PROVIDER_<ROLE>``           (per-role: PLANNING/CODING/VIZ)
     3. ``INFERENCE_PROVIDER``                  (global)
-    4. ``groq``                                (default)
+    4. OpenRouter if it has a key, else a provider that does
     """
     raw = _env_first(
         f"AVALOKA_{agent.upper()}_PROVIDER",
         f"INFERENCE_PROVIDER_{role.upper()}",
         "INFERENCE_PROVIDER",
     )
-    return _canonical_provider(raw)
+    return _canonical_provider(raw, groq_api_key)
 
 
 # --------------------------------------------------------------------------
@@ -164,15 +239,20 @@ _PROVIDER_MODEL_DEFAULTS = {
     # model (e.g. qwen2.5-14b/32b) when you run the vLLM GPU deployment.
     LOCAL: {"large": "qwen2.5:3b-instruct", "small": "qwen2.5:3b-instruct"},
     OPENAI: {"large": "gpt-4o", "small": "gpt-4o-mini"},
+    # Same models the Groq path uses, and the ones every measurement in
+    # docs/test-reports was taken on -- openai/gpt-oss-120b routing accuracy
+    # 54/54, the conversational suite, the blueprint harness. Changing the
+    # default provider must not silently change the model underneath it, or
+    # every published number stops describing the shipped configuration.
     OPENROUTER: {
-        "large": "qwen/qwen-2.5-72b-instruct",
-        "small": "qwen/qwen-2.5-7b-instruct",
+        "large": "openai/gpt-oss-120b",
+        "small": "openai/gpt-oss-20b",
     },
     BEDROCK: {
         "large": "meta.llama3-1-70b-instruct-v1:0",
         "small": "meta.llama3-1-8b-instruct-v1:0",
     },
-    VERTEX: {"large": "gemini-1.5-pro", "small": "gemini-1.5-flash"},
+    VERTEX: {"large": "gemini-2.5-flash", "small": "gemini-2.5-flash"},
     # Azure keys off *deployment* names, resolved separately below.
     AZURE: {"large": "gpt-4o", "small": "gpt-4o-mini"},
 }
@@ -306,7 +386,8 @@ def _build_azure(*, agent, tier, temperature):
 # --------------------------------------------------------------------------
 # Public factory
 # --------------------------------------------------------------------------
-def _with_fallback(llm, *, model: str, temperature: float, agent: str):
+def _with_fallback(llm, *, model: str, temperature: float, agent: str,
+                   provider: Optional[str] = None):
     """Attach the OpenRouter backup to whatever provider produced *llm*.
 
     Applied here rather than in each agent because this is the single place every
@@ -320,6 +401,14 @@ def _with_fallback(llm, *, model: str, temperature: float, agent: str):
     """
     if llm is None:
         return None
+    if provider == OPENROUTER:
+        # The backup IS OpenRouter. Wrapping an OpenRouter primary in an
+        # OpenRouter fallback buys nothing and costs something: a 429 or an
+        # outage is retried against the provider that just produced it, and the
+        # wrapper changes the returned type, so callers that introspect the
+        # model see RunnableWithFallbacks instead of the chat model. This could
+        # not happen while Groq was the default primary.
+        return llm
     try:
         from app.core.model_fallback import attach_fallback
     except Exception:  # noqa: BLE001
@@ -373,7 +462,10 @@ def build_chat_model(
     or ``None`` when the selected provider is not configured — in which case
     the caller keeps its existing deterministic fallback.
     """
-    provider = resolve_provider(role=role, agent=agent)
+    # The caller's Groq key counts as evidence when no provider is configured:
+    # every agent passes one, and ignoring it meant a Groq-only deployment
+    # silently resolved to OpenRouter and got no LLM at all.
+    provider = resolve_provider(role=role, agent=agent, groq_api_key=groq_api_key)
 
     if provider == GROQ:
         env_var = env_model_var or f"AVALOKA_{agent.upper()}_MODEL"
@@ -392,7 +484,7 @@ def build_chat_model(
                 model,
                 reasoning_effort if (reasoning_effort and supports_reasoning(model)) else "off",
             )
-        return _with_fallback(llm, model=model, temperature=temperature, agent=agent)
+        return _with_fallback(llm, model=model, temperature=temperature, agent=agent, provider=provider)
 
     # ---- non-Groq providers -------------------------------------------------
     if provider == AZURE:
@@ -416,4 +508,4 @@ def build_chat_model(
     # model_desc, not model: the Azure branch never assigns `model` because Azure
     # addresses a deployment name rather than a model id, and referencing it here
     # raised UnboundLocalError on that path alone.
-    return _with_fallback(llm, model=model_desc, temperature=temperature, agent=agent)
+    return _with_fallback(llm, model=model_desc, temperature=temperature, agent=agent, provider=provider)

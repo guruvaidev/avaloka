@@ -1,7 +1,7 @@
-# GKE overlay for the PRODUCTION app.example.com instance.
+# GKE overlay for the PRODUCTION app.avaloka.ai instance.
 #
 # A second, fully independent release with its own public IP, its own certificate
-# and its own data plane — so test.example.com can be redeployed, broken and rolled
+# and its own data plane — so test.avaloka.ai can be redeployed, broken and rolled
 # back without touching production.
 #
 # Layered ON TOP of values-gke.yaml, which carries everything the two instances
@@ -19,13 +19,13 @@
 # both in one namespace, set nameOverride here instead — fullname honours it.
 #
 # Prerequisites, created out of band with its OWN IP and certificate map:
-#   ./deploy/gcp-lb-prereqs.sh --project MY_PROJECT --hosts app.example.com \
+#   ./deploy/gcp-lb-prereqs.sh --project MY_PROJECT --hosts app.avaloka.ai \
 #       --ip-name avaloka-app-lb-ip --cert-map avaloka-app-cert-map
-# then point an A record for app.example.com at the IP that prints.
+# then point an A record for app.avaloka.ai at the IP that prints.
 
 gateway:
   hosts:
-    - app.example.com
+    - app.avaloka.ai
   # A distinct global IP — this is the separate public address for production.
   addresses:
     - type: NamedAddress

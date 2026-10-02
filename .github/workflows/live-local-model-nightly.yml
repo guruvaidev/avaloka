@@ -1,0 +1,117 @@
+# Nightly live check against a LOCAL model -- no hosted provider, no spend.
+#
+# Runs on a GitHub-hosted runner, which is free and unlimited for this public
+# repository. A self-hosted runner was considered and rejected: GitHub's own
+# guidance is "only use self-hosted runners with private repositories", because a
+# fork of a public repo can run arbitrary code on the runner. Inviting outside
+# pull requests and exposing our own infrastructure to them are not compatible.
+#
+# Model choice is measured, not preferred:
+#   gemma3:4b   UNUSABLE -- Ollama returns HTTP 400 for ANY request carrying
+#               tools, with or without tool_choice. Avaloka's planner dispatches
+#               entirely through tools, so every turn would fail outright.
+#   gemma4:e4b  works. 8B, ~9.6 GB. Three planner turns in 26s/0s/8s on a
+#               10-core workstation; a 4-core hosted runner will be slower.
+#   gemma4:31b  works, but 19.9 GB and 31B on CPU -- too slow and too large here.
+#
+# This tier also guards something the weekly tier cannot: Ollama needs
+# tool_choice="required" where OpenRouter needs "auto". A single value breaks one
+# of them, which is why tool_choice is keyed on the provider.
+name: live local model (nightly)
+
+on:
+  schedule:
+    # 03:30 UTC daily -- off-peak, and a failure is waiting by morning.
+    - cron: "30 3 * * *"
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "Ollama model (must support tools -- gemma3:4b does not)"
+        default: "gemma4:e4b"
+        required: false
+
+env:
+  OLLAMA_MODEL: ${{ github.event.inputs.model || 'gemma4:e4b' }}
+
+permissions:
+  contents: read
+
+jobs:
+  local-model:
+    runs-on: ubuntu-latest
+    # Generous: the model pull plus CPU inference dominates, and a timeout here
+    # should mean "something is wrong", not "a cold runner was slow".
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Runner capacity
+        # Recorded every run: the headroom for a ~9.6 GB model is the thing most
+        # likely to change under us, and a log line now beats guessing later.
+        run: |
+          echo "cpus: $(nproc)"
+          free -g | sed -n '1,2p'
+          df -h / /mnt 2>/dev/null | sed 's/^/  /'
+
+      - name: System packages
+        run: sudo apt-get update && sudo apt-get install -y graphviz
+
+      - name: Install Avaloka
+        run: PYTHON=python ./scripts/install.sh --no-venv
+
+      - name: Install Ollama
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          nohup ollama serve >/tmp/ollama.log 2>&1 &
+          for _ in $(seq 1 60); do
+            curl -sf http://localhost:11434/api/tags >/dev/null && break
+            sleep 1
+          done
+          curl -sf http://localhost:11434/api/tags >/dev/null \
+            || { echo "::error::ollama did not come up"; tail -40 /tmp/ollama.log; exit 1; }
+
+      - name: Pull the model
+        run: |
+          start=$(date +%s)
+          ollama pull "$OLLAMA_MODEL"
+          echo "pull took $(( $(date +%s) - start ))s"
+          df -h / | tail -1
+
+      - name: Confirm the model supports tools
+        # A model without tool support returns HTTP 400 here. Checking it as its
+        # own step means that failure reads as "wrong model" rather than being
+        # mistaken for a broken planner.
+        run: |
+          code=$(curl -s -o /tmp/tools.json -w '%{http_code}' \
+            http://localhost:11434/v1/chat/completions \
+            -H 'Content-Type: application/json' \
+            -d "{\"model\":\"$OLLAMA_MODEL\",\"stream\":false,
+                 \"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],
+                 \"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"noop\",
+                   \"description\":\"no-op\",\"parameters\":{\"type\":\"object\",\"properties\":{}}}}]}")
+          echo "HTTP $code"
+          if [ "$code" != "200" ]; then
+            echo "::error::$OLLAMA_MODEL rejected a request carrying tools (HTTP $code)."
+            echo "::error::Avaloka's planner dispatches through tools, so this model cannot be used."
+            cat /tmp/tools.json; exit 1
+          fi
+
+      - name: Live smoke
+        env:
+          INFERENCE_PROVIDER: local
+          INFERENCE_LOCAL_BASE_URL: http://localhost:11434/v1
+          INFERENCE_LOCAL_API_KEY: sk-local
+        run: |
+          export INFERENCE_LOCAL_MODEL="$OLLAMA_MODEL"
+          export AVALOKA_PLANNER_MODEL_LOCAL="$OLLAMA_MODEL"
+          export AVALOKA_MTA_MODEL_LOCAL="$OLLAMA_MODEL"
+          time python -m pytest -v -p no:cacheprovider tests/live/
+
+      - name: Ollama log on failure
+        if: failure()
+        run: tail -80 /tmp/ollama.log || true
