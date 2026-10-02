@@ -3,6 +3,9 @@ import io
 import csv
 import json
 import time
+import base64
+import asyncio
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union, Set
 
@@ -12,6 +15,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.api.server as server
+import app.api.integrations as integrations
+import app.services.persistence_service as persistence
 from app.services import storage_service, session_service
 from app.core.storage import ResourceNotFoundError
 from langchain_core.messages import AIMessage, HumanMessage
@@ -25,7 +30,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 class FakeBlobStore:
     """
     Minimal in-memory blob store implementing the methods used by the API,
-    including list_hierarchy() which /buckets/list now depends on.
+    including list_hierarchy() which /buckets/list depends on.
     """
 
     def __init__(self, scheme: str = "gs", bucket: str = "fake-bucket", prefix: str = "test"):
@@ -66,11 +71,7 @@ class FakeBlobStore:
                 yield key, len(data), "2024-01-01T00:00:00Z"
 
     def list_hierarchy(self, prefix: str):
-        """
-        Return (folder_prefixes, file_tuples) for the current level. This fake keeps
-        it flat: no folders, every object is a file at the root level.
-        file_tuples: List[(key, size, updated)].
-        """
+        """Flat fake: no folders, every object is a file at the root level."""
         prefix = (prefix or "").lstrip("/")
         files: List[Tuple[str, int, str]] = []
         for key, data in self.objects.items():
@@ -116,6 +117,8 @@ class FakeCache:
 
 SESSIONS: Dict[str, Dict[str, Any]] = {}
 THREAD_TO_SESSION: Dict[str, str] = {}
+PERSIST_CALLS: List[Dict[str, Any]] = []
+PROFILE_RESULT = {"domain": {"category": "Test/Domain"}, "quick_insights": {"data_readiness_score": 90}}
 
 
 async def save_session_fake(session_id: str, data: Dict[str, Any]) -> bool:
@@ -186,6 +189,14 @@ async def persist_thread_history_fake(thread_id: str) -> None:
 
 
 async def delete_thread_history_fake(thread_id: str) -> None:
+    return None
+
+
+async def persist_session_snapshot_fake(thread_id: str, sess: Dict[str, Any]) -> int:
+    return 0
+
+
+async def resolve_shared_session_fake(thread_id: str, user_id: str, analysis_id=None):
     return None
 
 
@@ -283,7 +294,9 @@ def client(tmp_path, monkeypatch) -> TestClient:
     # Fresh per-test in-memory state
     SESSIONS.clear()
     THREAD_TO_SESSION.clear()
+    PERSIST_CALLS.clear()
     server.THREAD_META.clear()
+    server._profile_meta.clear()
 
     # Ensure server uses our JWT secret for decode()
     monkeypatch.setattr(server, "JWT_SECRET", TEST_JWT_SECRET, raising=False)
@@ -315,7 +328,7 @@ def client(tmp_path, monkeypatch) -> TestClient:
     async def normalize_storage_uri_fake(uri: str, conn: Dict[str, Any]) -> str:
         return (uri or "").rstrip("/")
 
-    # Patch session helpers used by server module
+    # Session helpers
     monkeypatch.setattr(server, "save_session", save_session_fake, raising=False)
     monkeypatch.setattr(server, "update_session", update_session_fake, raising=False)
     monkeypatch.setattr(server, "delete_session", delete_session_fake, raising=False)
@@ -332,6 +345,30 @@ def client(tmp_path, monkeypatch) -> TestClient:
     monkeypatch.setattr(server, "hydrate_thread_history", hydrate_thread_history_fake, raising=False)
     monkeypatch.setattr(server, "persist_thread_history", persist_thread_history_fake, raising=False)
     monkeypatch.setattr(server, "delete_thread_history", delete_thread_history_fake, raising=False)
+
+    # Supabase-backed paths: never hit a real project from tests.
+    monkeypatch.setattr(server, "persist_session_snapshot", persist_session_snapshot_fake, raising=False)
+    monkeypatch.setattr(server, "_resolve_shared_session_for_thread", resolve_shared_session_fake, raising=False)
+    monkeypatch.setattr(server, "load_portfolio", lambda dataset_id: None, raising=False)
+    monkeypatch.setattr(server, "load_profile", lambda dataset_id: None, raising=False)
+
+    def _schedule_persistence_fake(**kw):
+        PERSIST_CALLS.append(kw)
+
+    monkeypatch.setattr(server, "_schedule_small_file_persistence", _schedule_persistence_fake, raising=False)
+
+    # LLM-backed upload steps: deterministic stubs, no network.
+    def _viz_stub(**kw):
+        return {"visualization_status": "ready", "charts": []}
+
+    def _profile_full_stub(**kw):
+        return {"full_profiling_result": dict(PROFILE_RESULT), "profiling_status": "full_profile"}
+
+    monkeypatch.setattr(server, "build_visualization_config_from_sample", _viz_stub, raising=False)
+    monkeypatch.setattr(server, "profile_full", _profile_full_stub, raising=False)
+
+    # Upload finalizer: no re-assert sleeps in tests.
+    monkeypatch.setattr(server, "_UPLOAD_REASSERT_DELAYS_S", (), raising=False)
 
     # Storage helpers
     monkeypatch.setattr(server, "_store_and_key_from_uri", _store_and_key_from_uri_fake, raising=False)
@@ -384,6 +421,10 @@ def client(tmp_path, monkeypatch) -> TestClient:
 # ======================================================================================
 
 
+def _run(coro):
+    return asyncio.run(coro)
+
+
 def _do_upload(client: TestClient, user_id: str = "user-1") -> Dict[str, Any]:
     csv_bytes = b"a,b\n1,2\n3,4\n"
     files = {"file": ("test.csv", csv_bytes, "text/csv")}
@@ -395,6 +436,42 @@ def _do_upload(client: TestClient, user_id: str = "user-1") -> Dict[str, Any]:
     )
     assert resp.status_code == 200, resp.text
     return resp.json()
+
+
+def _rows(n: int) -> List[Dict[str, Any]]:
+    return [{"a": i, "b": i * 2} for i in range(n)]
+
+
+def _install_sampler(
+    monkeypatch,
+    portfolio: Dict[str, List[Dict[str, Any]]],
+    *,
+    sample_statistics: Optional[Dict[str, Any]] = None,
+    delay_s: float = 0.0,
+):
+    """Replace the sampler with one that returns `portfolio` (optionally slowly)."""
+
+    def _sampler(path, source_type, sample_size, use_ray=False, **kw):
+        if delay_s:
+            time.sleep(delay_s)
+        return {
+            "schema": {"a": "int", "b": "int"},
+            "ddl_schema": "CREATE TABLE t(a int, b int);",
+            "portfolio_samples": portfolio,
+            "sample_statistics": sample_statistics,
+            "profiling_result": {"data_shape": {"rows": 10, "columns": 2}},
+        }
+
+    monkeypatch.setattr(server, "sample_with_profiling", _sampler, raising=False)
+
+
+def _wait_for(predicate, timeout_s: float = 3.0, interval_s: float = 0.02) -> bool:
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(interval_s)
+    return predicate()
 
 
 # ======================================================================================
@@ -478,26 +555,420 @@ def test_upload_rejects_unsupported_extension(client: TestClient):
 
 
 # ======================================================================================
-# Datasets: list / get / preview
+# Upload performance changes: local copy, background push, capping, concurrency
 # ======================================================================================
 
 
-# def test_list_datasets_and_preview(client: TestClient):
-#     upload = _do_upload(client, user_id="u2")
-#     dsid = upload["dataset_id"]
+def test_upload_keeps_local_input_and_writes_sample_csv(client: TestClient):
+    out = _do_upload(client, user_id="local-keep")
+    sess = SESSIONS[out["session_id"]]
 
-#     resp = client.get("/datasets", headers=make_auth_headers("u2"))
-#     assert resp.status_code == 200, resp.text
-#     items = resp.json()
-#     assert len(items) == 1
-#     assert items[0]["dataset_id"] == dsid
+    work_input = Path(sess["work_local_input"])
+    assert work_input.exists(), "local input must be kept (no GCS pull-back)"
+    assert work_input.name == f"input_{out['dataset_id']}.csv"
+    assert work_input.read_bytes() == b"a,b\n1,2\n3,4\n"
 
-#     resp2 = client.get(f"/datasets/{dsid}/preview", headers=make_auth_headers("u2"))
-#     assert resp2.status_code == 200, resp2.text
-#     prev = resp2.json()
-#     assert prev["dataset_id"] == dsid
-#     assert prev["rows_sampled"] > 0
-#     assert prev["schema"]
+    # sample_input.csv is written alongside the LLM calls, before the response.
+    sample_csv = Path(sess["sample_local_input"])
+    assert sample_csv.exists()
+    with sample_csv.open() as fh:
+        assert len(list(csv.DictReader(fh))) == 2
+
+
+def test_upload_pushes_object_to_store_in_background(client: TestClient):
+    out = _do_upload(client, user_id="bg-push")
+    object_name = f"{out['dataset_id']}.csv"
+    store = storage_service.blob_store
+
+    assert _wait_for(lambda: object_name in store.objects), "background push never landed"
+    assert store.objects[object_name] == b"a,b\n1,2\n3,4\n"
+    assert SESSIONS[out["session_id"]]["object_name"] == object_name
+
+
+def test_upload_records_uri_when_push_finishes_first(client: TestClient, monkeypatch):
+    # Slow sampler: the (fast) push completes while sampling runs.
+    _install_sampler(monkeypatch, {"random_baseline": _rows(2)}, delay_s=0.3)
+
+    out = _do_upload(client, user_id="push-first")
+    sess = SESSIONS[out["session_id"]]
+    assert sess.get("data_source_location") == (
+        f"gs://fake-bucket/test/{out['dataset_id']}.csv"
+    )
+
+
+def test_upload_does_not_wait_for_slow_push(client: TestClient, monkeypatch):
+    store = storage_service.blob_store
+    orig_put = store.put_file
+
+    def slow_put(path, key):
+        time.sleep(1.0)
+        return orig_put(path, key)
+
+    monkeypatch.setattr(store, "put_file", slow_put)
+
+    out = _do_upload(client, user_id="slow-push")
+    sess = SESSIONS[out["session_id"]]
+    # Key must be ABSENT (not None) while the push is running, so a stale
+    # session copy merged back later can't overwrite the real URI.
+    assert "data_source_location" not in sess
+    # The push still completes in the background.
+    assert _wait_for(lambda: f"{out['dataset_id']}.csv" in store.objects, timeout_s=5.0)
+
+
+def test_upload_fails_when_push_already_failed(client: TestClient, monkeypatch):
+    _install_sampler(monkeypatch, {"random_baseline": _rows(2)}, delay_s=0.3)
+
+    def failing_put(path, key):
+        raise RuntimeError("bucket unavailable")
+
+    monkeypatch.setattr(storage_service.blob_store, "put_file", failing_put)
+
+    files = {"file": ("test.csv", b"a,b\n1,2\n", "text/csv")}
+    resp = client.post("/api/upload", files=files, headers=make_auth_headers("push-fail"))
+    assert resp.status_code == 500
+    assert "Failed to upload to storage" in resp.json()["detail"]
+    assert SESSIONS == {}, "failed upload must not leave a session behind"
+
+
+def test_upload_empty_dataset_rolls_back(client: TestClient, monkeypatch):
+    _install_sampler(monkeypatch, {"random_baseline": []})
+
+    files = {"file": ("empty.csv", b"a,b\n", "text/csv")}
+    resp = client.post("/api/upload", files=files, headers=make_auth_headers("empty-user"))
+    assert resp.status_code == 400
+    assert "Empty Dataset" in resp.json()["detail"]
+    assert SESSIONS == {}
+
+
+def test_upload_caps_response_and_session_rows(client: TestClient, monkeypatch):
+    cap = server.PREVIEW_RESPONSE_ROWS
+    n = cap + 200
+    _install_sampler(
+        monkeypatch,
+        {"random_baseline": _rows(n), "quantile_b": _rows(n)},
+    )
+
+    out = _do_upload(client, user_id="cap-user")
+    expected_samples = min(n, server.DEFAULT_SAMPLE_MAX_ROWS, cap)
+
+    # Response to the browser is capped.
+    assert len(out["samples"]) == expected_samples
+    assert out["rows_sampled"] == min(n, server.DEFAULT_SAMPLE_MAX_ROWS)
+    for name, rows in out["portfolio_samples"].items():
+        assert len(rows) <= cap, f"{name} not capped in response"
+    assert set(out["available_samples"]) == {"random_baseline", "quantile_b"}
+
+    # Redis session is capped and no longer carries the portfolio.
+    sess = SESSIONS[out["session_id"]]
+    assert len(sess["uploaded_csv_preview"]) <= cap
+    assert sess["portfolio_samples"] is None
+
+    # The full samples stay in-process for analysis.
+    meta = server._profile_meta[out["dataset_id"]]
+    assert len(meta["portfolio_samples"]["random_baseline"]) == n
+    assert len(meta["portfolio_samples"]["quantile_b"]) == n
+
+
+def test_upload_runs_profile_and_viz_concurrently(client: TestClient, monkeypatch):
+    """Both stubs wait on the same barrier: if the handler ran them one after
+    another, the first would time out and the upload would report a failure."""
+    barrier = threading.Barrier(2, timeout=3.0)
+
+    def profile_stub(**kw):
+        barrier.wait()
+        return {"full_profiling_result": dict(PROFILE_RESULT)}
+
+    def viz_stub(**kw):
+        barrier.wait()
+        return {"visualization_status": "ready"}
+
+    monkeypatch.setattr(server, "profile_full", profile_stub, raising=False)
+    monkeypatch.setattr(server, "build_visualization_config_from_sample", viz_stub, raising=False)
+    _install_sampler(
+        monkeypatch,
+        {"random_baseline": _rows(3)},
+        sample_statistics={"column_statistics": {}, "data_quality": {}},
+    )
+
+    out = _do_upload(client, user_id="concurrent-user")
+    assert out["profiling_result"] == PROFILE_RESULT
+    assert out["visualization_status"] == "ready"
+
+
+def test_upload_profile_failure_is_non_fatal(client: TestClient, monkeypatch):
+    def profile_boom(**kw):
+        raise RuntimeError("groq down")
+
+    monkeypatch.setattr(server, "profile_full", profile_boom, raising=False)
+    _install_sampler(
+        monkeypatch,
+        {"random_baseline": _rows(3)},
+        sample_statistics={"column_statistics": {}},
+    )
+
+    out = _do_upload(client, user_id="profile-fail")
+    assert out["profiling_result"] is None
+    assert out["visualization_status"] == "ready"
+
+
+def test_upload_viz_failure_marks_status_error(client: TestClient, monkeypatch):
+    def viz_boom(**kw):
+        raise RuntimeError("viz llm down")
+
+    monkeypatch.setattr(server, "build_visualization_config_from_sample", viz_boom, raising=False)
+
+    out = _do_upload(client, user_id="viz-fail")
+    assert out["visualization_status"] == "error"
+    assert SESSIONS[out["session_id"]]["visualization_status"] == "error"
+
+
+def test_upload_schedules_persistence_with_profile(client: TestClient, monkeypatch):
+    _install_sampler(
+        monkeypatch,
+        {"random_baseline": _rows(3)},
+        sample_statistics={"column_statistics": {}},
+    )
+
+    out = _do_upload(client, user_id="persist-user")
+    assert len(PERSIST_CALLS) == 1
+    call = PERSIST_CALLS[0]
+    assert call["dataset_id"] == out["dataset_id"]
+    assert call["full_profiling_result"] == PROFILE_RESULT
+    assert call["source_type"] == "csv"
+    assert Path(call["source_path"]).name == f"input_{out['dataset_id']}.csv"
+
+
+def test_preview_caps_rows(client: TestClient, monkeypatch):
+    cap = server.PREVIEW_RESPONSE_ROWS
+    n = cap + 200
+    _install_sampler(monkeypatch, {"random_baseline": _rows(n), "quantile_b": _rows(n)})
+
+    out = _do_upload(client, user_id="preview-cap")
+    resp = client.get(
+        f"/datasets/{out['dataset_id']}/preview",
+        headers=make_auth_headers("preview-cap"),
+    )
+    assert resp.status_code == 200, resp.text
+    prev = resp.json()
+    assert 0 < len(prev["samples"]) <= cap
+    for name, rows in (prev.get("portfolio_samples") or {}).items():
+        assert len(rows) <= cap, f"{name} not capped in preview"
+
+
+def test_send_message_uses_full_portfolio_from_profile_meta(client: TestClient, monkeypatch):
+    """The session no longer stores the portfolio; chat must still analyse the
+    FULL in-process sample, not the capped preview."""
+    cap = server.PREVIEW_RESPONSE_ROWS
+    n = cap + 200
+    _install_sampler(monkeypatch, {"random_baseline": _rows(n)})
+
+    captured: Dict[str, Any] = {}
+
+    class CapturingGraph(FakeGraph):
+        def invoke(self, state_in, config=None):
+            captured["sample_data"] = state_in.get("sample_data")
+            return super().invoke(state_in, config)
+
+    monkeypatch.setattr(server, "GRAPH", CapturingGraph(), raising=False)
+
+    load_calls: List[str] = []
+
+    def load_portfolio_spy(dataset_id):
+        load_calls.append(dataset_id)
+        return None
+
+    monkeypatch.setattr(server, "load_portfolio", load_portfolio_spy, raising=False)
+
+    out = _do_upload(client, user_id="chat-full")
+    resp = client.post(
+        f"/threads/{out['thread_id']}/messages",
+        json={"content": "average of b", "metadata": {"dataset_id": out["dataset_id"]}},
+        headers=make_auth_headers("chat-full"),
+    )
+    assert resp.status_code == 200, resp.text
+
+    assert len(captured["sample_data"]) == n
+    assert load_calls == [], "portfolio should come from _profile_meta, not Supabase"
+    # Writing state back must keep the session preview capped.
+    assert len(SESSIONS[out["session_id"]]["uploaded_csv_preview"]) <= cap
+
+
+def test_resolve_selected_sample_rows_caches_supabase_portfolio(client: TestClient, monkeypatch):
+    calls: List[str] = []
+
+    def load_portfolio_spy(dataset_id):
+        calls.append(dataset_id)
+        return {"random_baseline": [{"a": 1}]}
+
+    monkeypatch.setattr(server, "load_portfolio", load_portfolio_spy, raising=False)
+
+    sess = {"selected_sample_name": "random_baseline"}
+    rows1, name1 = server._resolve_selected_sample_rows(sess, "ds-cache")
+    rows2, name2 = server._resolve_selected_sample_rows(sess, "ds-cache")
+
+    assert rows1 == rows2 == [{"a": 1}]
+    assert name1 == name2 == "random_baseline"
+    assert calls == ["ds-cache"], "second call must hit the _profile_meta cache"
+
+
+# ======================================================================================
+# Upload storage finalizer + helpers
+# ======================================================================================
+
+
+def test_finalize_upload_storage_records_uri(client: TestClient):
+    SESSIONS["s-fin"] = {"user_id": "u", "dataset_id": "ds-fin"}
+
+    async def main():
+        async def put():
+            return "gs://fake-bucket/test/ds-fin.csv"
+
+        task = asyncio.create_task(put())
+        await server._finalize_upload_storage(task, "s-fin", "ds-fin", "ds-fin.csv")
+
+    _run(main())
+    sess = SESSIONS["s-fin"]
+    assert sess["data_source_location"] == "gs://fake-bucket/test/ds-fin.csv"
+    # send_message must re-save the durable snapshot with the cloud URI.
+    assert sess["snapshot_persisted"] is False
+
+
+def test_finalize_upload_storage_keeps_existing_uri(client: TestClient):
+    SESSIONS["s-keep"] = {
+        "user_id": "u", "dataset_id": "ds-keep",
+        "data_source_location": "gs://already/recorded.csv",
+    }
+
+    async def main():
+        async def put():
+            return "gs://fake-bucket/test/ds-keep.csv"
+
+        task = asyncio.create_task(put())
+        await server._finalize_upload_storage(task, "s-keep", "ds-keep", "ds-keep.csv")
+
+    _run(main())
+    assert SESSIONS["s-keep"]["data_source_location"] == "gs://already/recorded.csv"
+
+
+def test_finalize_upload_storage_deletes_orphan_when_session_gone(client: TestClient, monkeypatch):
+    deleted: List[Tuple[str, str]] = []
+    monkeypatch.setattr(
+        server, "_delete_orphan_upload",
+        lambda uri, object_name: deleted.append((uri, object_name)),
+        raising=False,
+    )
+
+    async def main():
+        async def put():
+            return "gs://fake-bucket/test/ds-orphan.csv"
+
+        task = asyncio.create_task(put())
+        await server._finalize_upload_storage(task, "no-such-session", "ds-orphan", "ds-orphan.csv")
+
+    _run(main())
+    assert deleted == [("gs://fake-bucket/test/ds-orphan.csv", "ds-orphan.csv")]
+
+
+def test_finalize_upload_storage_deletes_orphan_on_dataset_mismatch(client: TestClient, monkeypatch):
+    SESSIONS["s-other"] = {"user_id": "u", "dataset_id": "a-different-dataset"}
+    deleted: List[str] = []
+    monkeypatch.setattr(
+        server, "_delete_orphan_upload",
+        lambda uri, object_name: deleted.append(object_name),
+        raising=False,
+    )
+
+    async def main():
+        async def put():
+            return "gs://fake-bucket/test/ds-mismatch.csv"
+
+        task = asyncio.create_task(put())
+        await server._finalize_upload_storage(task, "s-other", "ds-mismatch", "ds-mismatch.csv")
+
+    _run(main())
+    assert deleted == ["ds-mismatch.csv"]
+    assert "data_source_location" not in SESSIONS["s-other"]
+
+
+def test_finalize_upload_storage_records_push_error(client: TestClient):
+    SESSIONS["s-err"] = {"user_id": "u", "dataset_id": "ds-err"}
+
+    async def main():
+        async def put():
+            raise RuntimeError("403 forbidden")
+
+        task = asyncio.create_task(put())
+        await server._finalize_upload_storage(task, "s-err", "ds-err", "ds-err.csv")
+
+    _run(main())
+    sess = SESSIONS["s-err"]
+    assert "403 forbidden" in sess["storage_error"]
+    assert "data_source_location" not in sess
+
+
+def test_delete_orphan_upload_removes_object(client: TestClient):
+    store = storage_service.blob_store
+    store.objects["orphan.csv"] = b"x"
+    server._delete_orphan_upload("gs://fake-bucket/test/orphan.csv", "orphan.csv")
+    assert "orphan.csv" not in store.objects
+
+
+def test_delete_orphan_upload_never_raises(client: TestClient, monkeypatch):
+    def boom(uri, object_name):
+        raise RuntimeError("no store")
+
+    monkeypatch.setattr(server, "_store_and_key_from_uri", boom, raising=False)
+    server._delete_orphan_upload("gs://x/y.csv", "y.csv")  # must not raise
+
+
+def test_put_upload_object_default_store(client: TestClient, tmp_path):
+    src = tmp_path / "src.csv"
+    src.write_bytes(b"a\n1\n")
+
+    uri = _run(server._put_upload_object(src, "obj.csv", None, {}))
+    assert uri == "gs://fake-bucket/test/obj.csv"
+    assert storage_service.blob_store.objects["obj.csv"] == b"a\n1\n"
+
+
+def test_put_upload_object_with_dest_uri_prefix(client: TestClient, tmp_path):
+    src = tmp_path / "src.csv"
+    src.write_bytes(b"a\n1\n")
+
+    _run(server._put_upload_object(src, "obj.csv", "gs://fake-bucket/uploads", {}))
+    # The fake resolver maps the URI's last segment to the base key.
+    assert "uploads/obj.csv" in storage_service.blob_store.objects
+
+
+def test_cap_rows_and_portfolio():
+    cap = server.PREVIEW_RESPONSE_ROWS
+    rows = _rows(cap + 10)
+    assert len(server._cap_rows(rows)) == cap
+    assert server._cap_rows(rows, 3) == rows[:3]
+    assert server._cap_rows(None) is None
+    assert server._cap_rows("not-a-list") == "not-a-list"
+
+    portfolio = {"a": _rows(cap + 10), "b": _rows(2), "meta": {"x": 1}}
+    capped = server._cap_portfolio(portfolio)
+    assert len(capped["a"]) == cap
+    assert len(capped["b"]) == 2
+    assert capped["meta"] == {"x": 1}
+    assert server._cap_portfolio(None) is None
+    # Original is not mutated.
+    assert len(portfolio["a"]) == cap + 10
+
+
+def test_stage_propagates_exceptions():
+    with pytest.raises(ValueError):
+        with server._stage("boom", "ds-x"):
+            raise ValueError("inside stage")
+
+    with server._stage("ok", "ds-x"):
+        pass
+
+
+# ======================================================================================
+# Datasets: list / get / preview
+# ======================================================================================
 
 
 def test_list_datasets_requires_auth(client: TestClient):
@@ -598,8 +1069,25 @@ def test_register_existing_rejects_unsupported_extension(client: TestClient):
     assert resp.status_code == 415
 
 
+def test_register_existing_caps_response_rows(client: TestClient, monkeypatch):
+    cap = server.PREVIEW_RESPONSE_ROWS
+    n = cap + 200
+    _install_sampler(monkeypatch, {"random_baseline": _rows(n)})
+
+    resp = client.post(
+        "/api/register-existing-storage",
+        json={"storage_uri": "s3://ext/prefix", "key": "foo.csv", "connection_id": "c1"},
+        headers=make_auth_headers("reg-cap"),
+    )
+    assert resp.status_code == 200, resp.text
+    out = resp.json()
+    assert len(out["samples"]) <= cap
+    for rows in (out.get("portfolio_samples") or {}).values():
+        assert len(rows) <= cap
+
+
 # ======================================================================================
-# Buckets listing (now via list_hierarchy)
+# Buckets listing (via list_hierarchy)
 # ======================================================================================
 
 
@@ -1274,8 +1762,6 @@ def test_tables_to_analysis_rejects_invalid_table_name(client: TestClient):
 
 
 def test_heavy_sampling_runs_off_event_loop(client: TestClient, monkeypatch):
-    import threading
-
     seen = {}
 
     def recording_sample_with_profiling(path, source_type, sample_size, use_ray=False, **kw):
@@ -1298,12 +1784,11 @@ def test_heavy_sampling_runs_off_event_loop(client: TestClient, monkeypatch):
 
 
 def test_blob_io_runs_off_event_loop(client: TestClient, monkeypatch):
-    import threading
-    from app.services import storage_service
-
+    """The upload push runs in a worker thread, and the upload no longer pulls
+    the object back from storage (sampling reads the local copy)."""
     seen = {}
-    orig_put = storage_service.blob_store.put_file
-    orig_get = storage_service.blob_store.get_file
+    store = storage_service.blob_store
+    orig_put = store.put_file
 
     def rec_put(path, key):
         seen["put"] = threading.current_thread().name
@@ -1311,23 +1796,22 @@ def test_blob_io_runs_off_event_loop(client: TestClient, monkeypatch):
 
     def rec_get(key, dest):
         seen["get"] = threading.current_thread().name
-        return orig_get(key, dest)
+        raise AssertionError("upload must not download the object it just pushed")
 
-    monkeypatch.setattr(storage_service.blob_store, "put_file", rec_put)
-    monkeypatch.setattr(storage_service.blob_store, "get_file", rec_get)
+    monkeypatch.setattr(store, "put_file", rec_put)
+    monkeypatch.setattr(store, "get_file", rec_get)
 
     _do_upload(client, user_id="blobio-user")
 
-    assert seen.get("put") and seen["put"] != "MainThread"
-    assert seen.get("get") and seen["get"] != "MainThread"
+    assert _wait_for(lambda: "put" in seen)
+    assert seen["put"] != "MainThread"
+    assert "get" not in seen
 
 
 def test_register_existing_sampler_runs_off_event_loop(client: TestClient, monkeypatch):
-    import threading
-
     seen = {}
 
-    def rec_sample_with_profiling(path, source_type, sample_size, use_ray=True, **kw):
+    def rec_sample_with_profiling(path, source_type, sample_size, use_ray=None, **kw):
         seen["thread"] = threading.current_thread().name
         return {
             "schema": {"a": "int", "b": "int"},
@@ -1395,7 +1879,6 @@ def test_validate_auth_config_ok_with_secret(monkeypatch):
 
 
 def _forge_empty_key_jwt(payload: Dict[str, Any]) -> str:
-    import base64
     import hashlib
     import hmac
 
@@ -1455,8 +1938,6 @@ def test_resolve_user_id_no_bearer(monkeypatch):
 
 
 def _seed_dataset_session(user_id: str, dataset_id: str, source_kind, storage_uri, object_name):
-    from app.services import session_service
-
     sid = f"sess-{dataset_id}"
     session_data = {
         "user_id": user_id,
@@ -1475,8 +1956,6 @@ def _seed_dataset_session(user_id: str, dataset_id: str, source_kind, storage_ur
 
 
 def _record_store_deletes(monkeypatch):
-    from app.services import storage_service
-
     deleted = []
     monkeypatch.setattr(
         storage_service.blob_store, "delete", lambda key: deleted.append(key)
@@ -1508,8 +1987,6 @@ def test_delete_dataset_preserves_registered_customer_source(client: TestClient,
     resp = client.delete("/datasets/ds-reg", headers=make_auth_headers("own-user"))
     assert resp.status_code == 204, resp.text
     assert deleted == []
-    from app.services import session_service
-
     assert server._k_session("sess-ds-reg") not in session_service.cache._data
 
 
@@ -1560,7 +2037,8 @@ def test_session_tasks_helper_tolerates_missing_and_malformed():
     assert server._session_tasks({"tasks": 42}) == []
 
 
-def test_get_tasks_empty_for_new_session(client: TestClient):
+def test_get_tasks_empty_for_new_session(client: TestClient, monkeypatch):
+    monkeypatch.setattr(server, "_discover_session_tasks", lambda sid, uid: [], raising=False)
     upload = _do_upload(client, user_id="tasks-user")
     session_id = upload["session_id"]
 
@@ -1763,8 +2241,6 @@ def test_scheduled_training_completion_message_hides_details_and_shows_actions()
 
 
 def test_json_safe_payload_handles_specials():
-    import math
-
     assert server._json_safe_payload(float("nan")) is None
     assert server._json_safe_payload(float("inf")) is None
     assert server._json_safe_payload(3.5) == 3.5
@@ -2091,8 +2567,6 @@ def test_send_message_fast_turn_leaves_no_pending_handle(client: TestClient):
 def test_send_message_slow_turn_returns_running_then_done(client: TestClient, monkeypatch):
     """A turn that overruns the deadline returns a running handle and the
     background task later stashes the finished result for polling."""
-    import time as _time
-
     monkeypatch.setattr(server, "TURN_SYNC_DEADLINE_S", 0.05, raising=False)
     monkeypatch.setattr(server, "_parse_fidelity_from_text", lambda t: None, raising=False)
     monkeypatch.setattr(server, "_parse_selected_sample_from_text", lambda t: None, raising=False)
@@ -2102,7 +2576,7 @@ def test_send_message_slow_turn_returns_running_then_done(client: TestClient, mo
         checkpointer = object()
 
         def invoke(self, state_in, config=None):
-            _time.sleep(0.4)  # overrun the 0.05s deadline reliably
+            time.sleep(0.4)  # overrun the 0.05s deadline reliably
             last = state_in["messages"][-1]
             content = getattr(last, "content", "")
             return {
@@ -2144,7 +2618,7 @@ def test_send_message_slow_turn_returns_running_then_done(client: TestClient, mo
         final_status = pr.json()["status"]
         if final_status == "done":
             break
-        _time.sleep(0.05)
+        time.sleep(0.05)
     assert final_status == "done"
 
 
@@ -2212,6 +2686,20 @@ def test_join_without_key_prompts_for_columns(client: TestClient, monkeypatch):
     assistant = [m for m in resp.json()["messages"] if m["role"] == "assistant"]
     assert assistant
     assert "join" in assistant[-1]["content"].lower()
+
+
+def test_multi_file_upload_creates_one_push_per_file(client: TestClient):
+    files = [
+        ("files", ("a.csv", b"x,y\n1,2\n", "text/csv")),
+        ("files", ("b.csv", b"x,y\n3,4\n", "text/csv")),
+    ]
+    up = client.post("/api/upload", files=files, headers=make_auth_headers("multi-push"))
+    assert up.status_code == 200, up.text
+    dsids = [d["dataset_id"] for d in up.json()["datasets"]]
+    assert len(dsids) == 2
+
+    store = storage_service.blob_store
+    assert _wait_for(lambda: all(f"{d}.csv" in store.objects for d in dsids))
 
 
 # ======================================================================================
@@ -2359,52 +2847,16 @@ def test_format_join_suggestions():
     assert "confidence=0.9" in out
 
 
-
-
-
 # ======================================================================================
 # GitHub Integration feature — integration + end-to-end tests
 # ======================================================================================
 #
-# These tests EXTEND test_server_integration.py. They reuse its `client` fixture,
-# `make_auth_headers`, and the in-memory SESSIONS store, and cover:
-#
-#   * server.py  — the four /api/integrations/* endpoints (list/connect/patch/delete)
+# Covers:
+#   * server.py — the four /api/integrations/* endpoints (list/connect/patch/delete)
 #   * integrations.py — resolve_github_config / _sync precedence + validate_github_repo_access
 #   * persistence_service.py — persist_job_definition_to_git (.py commit + JSON toggle,
 #                              per-user resolver, exec-status gating) and the
 #                              _persist_assets_background git wiring (git_job_repo)
-#
-# The suite patches at the exact seams the code uses:
-#   - server.py endpoints call the CRUD/validate helpers imported INTO the server
-#     namespace (server.list_integration_connections, server.validate_github_repo_access,
-#     server.encrypt_secret, server.decrypt_secret, ...).
-#   - persistence_service imports resolve_github_config at CALL TIME from
-#     app.api.integrations, and calls _do_git_put in its own module namespace.
-#   - integrations.resolve_github_config calls get_integration_connection + decrypt_secret
-#     in the integrations module namespace.
-#
-# Paste the contents below at the end of test_server_integration.py, OR keep this as a
-# sibling file — it re-imports the shared fixture from that module so pytest collects it.
-# ======================================================================================
-
-import asyncio
-import base64
-import json
-
-import pytest
-
-import app.api.server as server
-import app.api.integrations as integrations
-import app.services.persistence_service as persistence
-
-# Reuse the fixtures/helpers from the existing suite. If you paste this INTO
-# test_server_integration.py, delete this import line (they're already in scope).
-#from test_server_integration import client, make_auth_headers, SESSIONS  # noqa: F401
-
-
-# ======================================================================================
-# Helpers / fakes local to the integration tests
 # ======================================================================================
 
 
@@ -2429,11 +2881,8 @@ def _patch_encryption(monkeypatch):
 
 
 class _FakeSupabaseTable:
-    """Chainable stand-in for supabase-py's table query builder.
-
-    Records the last operation so tests can make CRUD deterministic without a DB.
-    Backed by a shared dict keyed by (user_id, provider).
-    """
+    """Chainable stand-in for supabase-py's table query builder, backed by a
+    shared dict keyed by (user_id, provider)."""
 
     def __init__(self, store):
         self._store = store
@@ -2499,9 +2948,7 @@ class _FakeSupabaseClient:
         return _FakeSupabaseTable(self._store)
 
 
-# ======================================================================================
-# server.py — GET /api/integrations
-# ======================================================================================
+# ---- server.py — GET /api/integrations ----
 
 
 def test_integrations_list_requires_auth(client):
@@ -2518,7 +2965,6 @@ def test_integrations_list_all_providers_when_none_connected(client, monkeypatch
     assert resp.status_code == 200, resp.text
     providers = {p["provider"]: p for p in resp.json()["integrations"]}
 
-    # All four supported providers are surfaced, all not-connected.
     assert set(providers) == {"github", "outlook", "slack", "jira"}
     for p in providers.values():
         assert p["enabled"] is False
@@ -2557,7 +3003,7 @@ def test_integrations_list_never_leaks_token(client, monkeypatch):
     assert resp.status_code == 200
     body_text = resp.text
     assert "SHOULD_NOT_APPEAR" not in body_text
-    assert "token_ciphertext" not in body_text  # the raw column is never serialized
+    assert "token_ciphertext" not in body_text
 
 
 def test_integrations_list_flags_system_default_for_github(client, monkeypatch):
@@ -2569,7 +3015,6 @@ def test_integrations_list_flags_system_default_for_github(client, monkeypatch):
     assert resp.status_code == 200
     providers = {p["provider"]: p for p in resp.json()["integrations"]}
     assert providers["github"]["using_system_default"] is True
-    # Non-github providers never claim the system default.
     assert providers["slack"]["using_system_default"] is False
 
 
@@ -2583,9 +3028,7 @@ def test_integrations_list_surfaces_backend_error_as_500(client, monkeypatch):
     assert "Could not load integrations" in resp.json()["detail"]
 
 
-# ======================================================================================
-# server.py — POST /api/integrations/github/connect
-# ======================================================================================
+# ---- server.py — POST /api/integrations/github/connect ----
 
 
 def test_github_connect_requires_auth(client):
@@ -2625,12 +3068,10 @@ def test_github_connect_success_stores_encrypted_token(client, monkeypatch):
     assert body["push_access"] is True
     assert body["repo"] == "guruvaidev/avaloka-jobs-intenal"
 
-    # The token was encrypted before storage; only ciphertext/iv were saved.
     assert saved["enabled"] is True
     assert saved["token_ciphertext"] == "ct-abc"
     assert saved["token_iv"] == "iv-xyz"
     assert saved["config_updates"] == {"repo": "guruvaidev/avaloka-jobs-intenal"}
-    # The raw PAT never reaches the storage layer.
     assert "ghp_realtoken" not in json.dumps(saved)
 
 
@@ -2647,7 +3088,6 @@ def test_github_connect_rejects_bad_repo_format(client, monkeypatch):
 
 def test_github_connect_rejects_missing_token(client, monkeypatch):
     _patch_encryption(monkeypatch)
-    # Empty token: Pydantic min_length=1 rejects it before the handler.
     resp = client.post(
         "/api/integrations/github/connect",
         json={"token": "", "repo": "o/r"},
@@ -2676,7 +3116,7 @@ def test_github_connect_no_push_access_403(client, monkeypatch):
     _patch_encryption(monkeypatch)
 
     async def _validate(token, repo):
-        return _github_ok(push=False)   # readable but not writable
+        return _github_ok(push=False)
     monkeypatch.setattr(server, "validate_github_repo_access", _validate, raising=False)
 
     resp = client.post(
@@ -2692,7 +3132,6 @@ def test_github_connect_missing_encryption_key_500(client, monkeypatch):
     async def _validate(token, repo):
         return _github_ok()
     monkeypatch.setattr(server, "validate_github_repo_access", _validate, raising=False)
-    # encrypt_secret returns None when DB_ENCRYPTION_KEY isn't configured.
     monkeypatch.setattr(server, "encrypt_secret", lambda v: None, raising=False)
 
     resp = client.post(
@@ -2705,7 +3144,6 @@ def test_github_connect_missing_encryption_key_500(client, monkeypatch):
 
 
 def test_github_connect_uses_canonical_full_name_from_github(client, monkeypatch):
-    """GitHub normalizes casing; the stored repo should be the API's full_name."""
     _patch_encryption(monkeypatch)
     saved = {}
 
@@ -2729,9 +3167,7 @@ def test_github_connect_uses_canonical_full_name_from_github(client, monkeypatch
     assert saved["repo"] == "GuruvaiDev/Avaloka-Jobs-Intenal"
 
 
-# ======================================================================================
-# server.py — PATCH /api/integrations/github
-# ======================================================================================
+# ---- server.py — PATCH /api/integrations/github ----
 
 
 def test_github_patch_requires_auth(client):
@@ -2773,7 +3209,6 @@ def test_github_patch_toggle_off_keeps_token(client, monkeypatch):
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["enabled"] is False
-    # A plain toggle must NOT resupply the token (it stays intact in storage).
     assert captured["enabled"] is False
     assert captured["config_updates"] is None
 
@@ -2807,7 +3242,6 @@ def test_github_patch_repo_change_revalidates_with_stored_token(client, monkeypa
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["repo"] == "o/new"
-    # The stored (decrypted) token was used to re-check the new repo.
     assert validated["token"] == "ghp_stored"
     assert validated["repo"] == "o/new"
 
@@ -2846,9 +3280,7 @@ def test_github_patch_bad_repo_format_422(client, monkeypatch):
     assert resp.status_code == 422
 
 
-# ======================================================================================
-# server.py — DELETE /api/integrations/github
-# ======================================================================================
+# ---- server.py — DELETE /api/integrations/github ----
 
 
 def test_github_disconnect_requires_auth(client):
@@ -2880,13 +3312,7 @@ def test_github_disconnect_backend_error_500(client, monkeypatch):
     assert "Failed to remove the GitHub connection" in resp.json()["detail"]
 
 
-# ======================================================================================
-# integrations.py — resolve_github_config precedence (async + sync)
-# ======================================================================================
-
-
-def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+# ---- integrations.py — resolve_github_config precedence (async + sync) ----
 
 
 def test_resolve_github_config_prefers_connection(monkeypatch):
@@ -2897,7 +3323,6 @@ def test_resolve_github_config_prefers_connection(monkeypatch):
         raising=False,
     )
     monkeypatch.setattr(integrations, "decrypt_secret", lambda blob: "ghp_conn", raising=False)
-    # Env is set too, but the connection must win.
     monkeypatch.setenv("GITHUB_SYSTEM_TOKEN", "ghp_env")
     monkeypatch.setenv("GITHUB_JOB_REGISTRY_REPO", "env/repo")
 
@@ -2931,7 +3356,6 @@ def test_resolve_github_config_none_when_nothing_available(monkeypatch):
 
 
 def test_resolve_github_config_disabled_connection_falls_back(monkeypatch):
-    # Connection exists but is disabled -> ignore it, use env.
     monkeypatch.setattr(
         integrations, "get_integration_connection",
         lambda uid, prov: {"enabled": False, "token_ciphertext": "ct", "token_iv": "iv",
@@ -2946,7 +3370,6 @@ def test_resolve_github_config_disabled_connection_falls_back(monkeypatch):
 
 
 def test_resolve_github_config_enabled_but_missing_token_falls_back(monkeypatch):
-    # Enabled row but decrypt yields nothing -> fall back to env.
     monkeypatch.setattr(
         integrations, "get_integration_connection",
         lambda uid, prov: {"enabled": True, "token_ciphertext": "ct", "token_iv": "iv",
@@ -2987,9 +3410,7 @@ def test_resolve_github_config_sync_matches_async(monkeypatch):
     assert cfg.repo == "user/repo"
 
 
-# ======================================================================================
-# integrations.py — validate_github_repo_access
-# ======================================================================================
+# ---- integrations.py — validate_github_repo_access ----
 
 
 class _FakeGHResp:
@@ -3003,12 +3424,10 @@ class _FakeGHResp:
 
 class _FakeGHClient:
     """AsyncClient stand-in that returns a preset response for GET /repos/...."""
+
     def __init__(self, resp=None, raise_exc=None):
         self._resp = resp
         self._raise = raise_exc
-
-    def __init_subclass__(cls, **kw):
-        pass
 
     async def __aenter__(self):
         return self
@@ -3066,9 +3485,7 @@ def test_validate_github_repo_access_network_error(monkeypatch):
     assert out["ok"] is False and "Could not reach GitHub" in out["error"]
 
 
-# ======================================================================================
-# integrations.py — CRUD against a fake Supabase client
-# ======================================================================================
+# ---- integrations.py — CRUD against a fake Supabase client ----
 
 
 def test_save_and_get_integration_connection_roundtrip(monkeypatch):
@@ -3076,7 +3493,6 @@ def test_save_and_get_integration_connection_roundtrip(monkeypatch):
     monkeypatch.setattr(integrations, "get_supabase_client",
                         lambda: _FakeSupabaseClient(store), raising=False)
 
-    # create
     integrations.save_integration_connection(
         "u1", "github", enabled=True,
         config_updates={"repo": "o/r"},
@@ -3098,7 +3514,6 @@ def test_save_integration_connection_merges_config(monkeypatch):
         config_updates={"repo": "o/r", "extra": "keep"},
         token_ciphertext="ct", token_iv="iv",
     )
-    # A repo-only update must preserve the other config key.
     integrations.save_integration_connection(
         "u1", "github", config_updates={"repo": "o/r2"})
     row = integrations.get_integration_connection("u1", "github")
@@ -3114,7 +3529,6 @@ def test_save_integration_connection_toggle_keeps_token(monkeypatch):
     integrations.save_integration_connection(
         "u1", "github", enabled=True, config_updates={"repo": "o/r"},
         token_ciphertext="ct", token_iv="iv")
-    # Toggle without a token: ciphertext must survive.
     integrations.save_integration_connection("u1", "github", enabled=False)
     row = integrations.get_integration_connection("u1", "github")
     assert row["enabled"] is False
@@ -3143,13 +3557,10 @@ def test_delete_integration_connection(monkeypatch):
                                              config_updates={"repo": "o/r"})
     assert integrations.delete_integration_connection("u1", "github") is True
     assert integrations.get_integration_connection("u1", "github") is None
-    # deleting again reports nothing removed
     assert integrations.delete_integration_connection("u1", "github") is False
 
 
-# ======================================================================================
-# persistence_service.py — persist_job_definition_to_git
-# ======================================================================================
+# ---- persistence_service.py — persist_job_definition_to_git ----
 
 
 def _mk_gh_config(source="connection", repo="guruvaidev/avaloka-jobs-intenal"):
@@ -3194,17 +3605,14 @@ def test_persist_job_definition_commits_py_and_json(monkeypatch):
     assert result["repo"] == "guruvaidev/avaloka-jobs-intenal"
 
     paths = [c["file_path"] for c in calls]
-    # Exactly two commits: the .py FIRST (Leela's requirement), then the JSON.
     assert len(calls) == 2
     assert paths[0].endswith("_transform.py")
     assert paths[1].endswith("_job_definition.json")
 
-    # The .py holds the real code, not a JSON blob.
     py = next(c for c in calls if c["file_path"].endswith(".py"))
     assert "import pandas as pd" in py["content"]
     assert "[Avaloka] Code persisted" in py["commit_msg"]
 
-    # The JSON links back to the .py and carries the machine record.
     job_json = json.loads(next(c for c in calls if c["file_path"].endswith(".json"))["content"])
     assert job_json["dataset_id"] == "d1"
     assert job_json["code_git_path"].endswith("_transform.py")
@@ -3234,7 +3642,7 @@ def test_persist_job_definition_skips_when_no_config(monkeypatch):
     _patch_git_put(monkeypatch)
 
     async def _resolve(uid):
-        return None   # no connection AND no env fallback
+        return None
     monkeypatch.setattr(integrations, "resolve_github_config", _resolve, raising=False)
 
     result = _run(persistence.persist_job_definition_to_git(
@@ -3259,12 +3667,12 @@ def test_persist_job_definition_skips_on_non_success(monkeypatch):
         user_id="u1", session_id="s1", dataset_id="d1",
         planner_definition={"job_name": "x"},
         coder_definition={"code": "print(1)"},
-        execution_result={"status": "error"},   # not a success status
+        execution_result={"status": "error"},
         code_object_key="k", prompt_ts="ts",
     ))
     assert result["status"] == "skipped"
     assert "not successful" in result["reason"]
-    assert calls == []   # nothing committed
+    assert calls == []
 
 
 def test_persist_job_definition_no_code_still_commits_json(monkeypatch):
@@ -3278,12 +3686,11 @@ def test_persist_job_definition_no_code_still_commits_json(monkeypatch):
     result = _run(persistence.persist_job_definition_to_git(
         user_id="u1", session_id="s1", dataset_id="d1",
         planner_definition={"job_name": "x"},
-        coder_definition={},           # no code
+        coder_definition={},
         execution_result={"status": "success"},
         code_object_key="k", prompt_ts="ts",
     ))
     assert result["status"] == "success"
-    # Only the JSON was written; no .py commit when there is no code.
     assert len(calls) == 1
     assert calls[0]["file_path"].endswith("_job_definition.json")
 
@@ -3307,44 +3714,33 @@ def test_persist_job_definition_reports_env_source(monkeypatch):
     assert result["repo"] == "avaloka/env-repo"
 
 
-# ======================================================================================
-# persistence_service.py — _persist_assets_background wires git_job_repo
-# ======================================================================================
+# ---- persistence_service.py — _persist_assets_background wires git_job_repo ----
 
 
 def test_persist_assets_background_stores_git_repo(monkeypatch):
-    """The background orchestrator must stash BOTH git_job_branch and git_job_repo
-    onto the session so the asset endpoints can link to the right repo."""
     captured = {}
 
-    # Task A (code -> store): success with an object key.
     async def _code(*a, **k):
         return {"status": "success", "object_key": "code-registry/x_transform.py"}
     monkeypatch.setattr(persistence, "persist_generated_code_to_store", _code, raising=False)
 
-    # Task B (job -> git): success returning branch + repo.
     async def _git(*a, **k):
         return {"status": "success", "branch": "main",
                 "repo": "guruvaidev/avaloka-jobs-intenal", "written": ["p.py"]}
     monkeypatch.setattr(persistence, "persist_job_definition_to_git", _git, raising=False)
 
-    # Task C / D: skip (no output/viz) so we isolate the git wiring.
-    async def _out(*a, **k):
+    async def _skip(*a, **k):
         return {"status": "skipped"}
-    async def _viz(*a, **k):
-        return {"status": "skipped"}
-    monkeypatch.setattr(persistence, "persist_execution_output_to_store", _out, raising=False)
-    monkeypatch.setattr(persistence, "persist_visualization_to_store", _viz, raising=False)
+    monkeypatch.setattr(persistence, "persist_execution_output_to_store", _skip, raising=False)
+    monkeypatch.setattr(persistence, "persist_visualization_to_store", _skip, raising=False)
 
-    # Capture the session update the orchestrator performs.
     async def _update_session(session_id, mutator):
         sess = {}
         mutator(sess)
         captured.update(sess)
         return sess
 
-    import app.services.session_service as ss
-    monkeypatch.setattr(ss, "update_session", _update_session, raising=False)
+    monkeypatch.setattr(session_service, "update_session", _update_session, raising=False)
 
     _run(persistence._persist_assets_background(
         user_id="u1", session_id="s1", dataset_id="d1",
@@ -3364,14 +3760,15 @@ def test_persist_assets_background_stores_git_repo(monkeypatch):
 
 
 def test_persist_assets_background_skips_git_when_no_planner(monkeypatch):
-    """Task B (git) only runs when exec_succeeded AND planner_definition are present."""
     git_called = {"n": 0}
 
     async def _code(*a, **k):
         return {"status": "success", "object_key": "code/x.py"}
+
     async def _git(*a, **k):
         git_called["n"] += 1
         return {"status": "success", "branch": "main", "repo": "o/r"}
+
     async def _skip(*a, **k):
         return {"status": "skipped"}
 
@@ -3380,16 +3777,15 @@ def test_persist_assets_background_skips_git_when_no_planner(monkeypatch):
     monkeypatch.setattr(persistence, "persist_execution_output_to_store", _skip, raising=False)
     monkeypatch.setattr(persistence, "persist_visualization_to_store", _skip, raising=False)
 
-    import app.services.session_service as ss
     async def _update_session(session_id, mutator):
         mutator({})
         return {}
-    monkeypatch.setattr(ss, "update_session", _update_session, raising=False)
+    monkeypatch.setattr(session_service, "update_session", _update_session, raising=False)
 
     _run(persistence._persist_assets_background(
         user_id="u1", session_id="s1", dataset_id="d1",
         generated_code="print(1)",
-        planner_definition=None,          # <- no planner def
+        planner_definition=None,
         coder_definition={"code": "print(1)"},
         execution_result={"status": "success"},
         exec_succeeded=True,
@@ -3400,25 +3796,15 @@ def test_persist_assets_background_skips_git_when_no_planner(monkeypatch):
     assert git_called["n"] == 0
 
 
-# ======================================================================================
-# End-to-end: connect via API, then a job push uses that connection
-# ======================================================================================
+# ---- End-to-end: connect via API, then a job push uses that connection ----
 
 
 def test_e2e_connect_then_job_push_uses_connection(client, monkeypatch):
-    """
-    Full green path in one test:
-      1) POST /connect stores an (encrypted) github connection in a fake Supabase.
-      2) persist_job_definition_to_git resolves THAT connection (source=connection)
-         and commits transform.py to the connected repo.
-    """
     store = {}
-    # Both the server endpoints and the integrations resolver share the same fake DB.
     monkeypatch.setattr(integrations, "get_supabase_client",
                         lambda: _FakeSupabaseClient(store), raising=False)
 
-    # --- 1) connect through the API ---
-    # server endpoints use the server-namespace CRUD + validate + encrypt.
+    # 1) connect through the API
     monkeypatch.setattr(server, "save_integration_connection",
                         integrations.save_integration_connection, raising=False)
     monkeypatch.setattr(server, "encrypt_secret", lambda v: _blob("CT", "IV"), raising=False)
@@ -3434,12 +3820,10 @@ def test_e2e_connect_then_job_push_uses_connection(client, monkeypatch):
     )
     assert connect.status_code == 200, connect.text
     assert connect.json()["repo"] == "guruvaidev/avaloka-jobs-intenal"
-    # the row landed in the fake DB, keyed by the JWT sub ("e2e-user")
     assert ("e2e-user", "github") in store
     assert store[("e2e-user", "github")]["token_ciphertext"] == "CT"
 
-    # --- 2) job push resolves that connection ---
-    # resolver decrypts the stored token; make decrypt deterministic.
+    # 2) job push resolves that connection
     monkeypatch.setattr(integrations, "decrypt_secret", lambda blob: "ghp_realtoken", raising=False)
     calls = _patch_git_put(monkeypatch)
     monkeypatch.setattr(persistence, "WRITE_JOB_DEFINITION_JSON", False, raising=False)
@@ -3453,9 +3837,1685 @@ def test_e2e_connect_then_job_push_uses_connection(client, monkeypatch):
     ))
 
     assert result["status"] == "success"
-    assert result["source"] == "connection"          # used the UI connection, not env
+    assert result["source"] == "connection"
     assert result["repo"] == "guruvaidev/avaloka-jobs-intenal"
     assert len(calls) == 1
     assert calls[0]["repo"] == "guruvaidev/avaloka-jobs-intenal"
-    assert calls[0]["token"] == "ghp_realtoken"       # the decrypted, stored token
+    assert calls[0]["token"] == "ghp_realtoken"
     assert "print('e2e')" in calls[0]["content"]
+
+
+
+
+
+
+
+
+
+
+
+
+
+# ======================================================================================
+# ADDITIONAL TESTS — append below the existing contents of test_server_integration.py
+#
+# These reuse the fixtures/helpers already defined in that file:
+#   client, SESSIONS, THREAD_TO_SESSION, PERSIST_CALLS, FakeGraph, FakeBlobStore,
+#   make_auth_headers, _do_upload, _install_sampler, _rows, _wait_for, _run, DummyResponse
+# ======================================================================================
+
+import hashlib
+
+from fastapi import HTTPException
+
+
+# --------------------------------------------------------------------------------------
+# Shared helpers for the new tests
+# --------------------------------------------------------------------------------------
+
+
+def _quiet_send(monkeypatch):
+    """Neutralise planner text parsers and background asset persistence so
+    send_message tests only exercise server.py routing."""
+    monkeypatch.setattr(server, "_parse_fidelity_from_text", lambda t: None, raising=False)
+    monkeypatch.setattr(server, "_parse_selected_sample_from_text", lambda t: None, raising=False)
+    monkeypatch.setattr(server, "_is_mode_switch_message", lambda t: False, raising=False)
+
+    async def _noop_persist(**kw):
+        return None
+
+    monkeypatch.setattr(server, "_persist_assets_background", _noop_persist, raising=False)
+
+
+def _send(client, upload, content, user, **extra):
+    body = {"content": content, "metadata": {"dataset_id": upload["dataset_id"]}}
+    body.update(extra)
+    return client.post(
+        f"/threads/{upload['thread_id']}/messages",
+        json=body,
+        headers=make_auth_headers(user),
+    )
+
+
+def _last_assistant(resp_json) -> str:
+    msgs = [m for m in resp_json.get("messages", []) if m["role"] == "assistant"]
+    assert msgs, f"no assistant message in {resp_json}"
+    return msgs[-1]["content"]
+
+
+def _patch_aid(monkeypatch, row):
+    """Make _resolve_session_from_aid return `row` (or None)."""
+    async def _fake(analysis_id, user_id):
+        return row
+
+    monkeypatch.setattr(server, "_resolve_session_from_aid", _fake, raising=False)
+
+
+def _patch_signed_url(monkeypatch):
+    async def _fake(key, conn_id=None, storage_uri=None):
+        return f"https://signed.example/{key}" if key else None
+
+    monkeypatch.setattr(server, "_generate_asset_signed_url", _fake, raising=False)
+
+
+class _FakeReq:
+    def __init__(self, headers=None, cookies=None):
+        self.headers = headers or {}
+        self.cookies = cookies or {}
+
+
+# ======================================================================================
+# _strip_blank_header_columns
+# ======================================================================================
+
+
+def test_strip_blank_header_columns_removes_trailing_comma(tmp_path):
+    p = tmp_path / "t.csv"
+    p.write_text("a,b,\n1,2,\n3,4,\n", encoding="utf-8")
+
+    dropped = server._strip_blank_header_columns(p)
+
+    assert dropped == [2]
+    assert p.read_text(encoding="utf-8") == "a,b\n1,2\n3,4\n"
+    assert not (tmp_path / "t.csv.clean").exists()
+
+
+def test_strip_blank_header_columns_keeps_blank_header_with_data(tmp_path):
+    p = tmp_path / "t.csv"
+    original = "a,b,\n1,2,x\n3,4,\n"
+    p.write_text(original, encoding="utf-8")
+
+    assert server._strip_blank_header_columns(p) == []
+    assert p.read_text(encoding="utf-8") == original
+    assert not (tmp_path / "t.csv.clean").exists()
+
+
+def test_strip_blank_header_columns_noop_when_all_headers_named(tmp_path):
+    p = tmp_path / "t.csv"
+    p.write_text("a,b\n1,2\n", encoding="utf-8")
+    assert server._strip_blank_header_columns(p) == []
+    assert p.read_text(encoding="utf-8") == "a,b\n1,2\n"
+
+
+def test_strip_blank_header_columns_non_utf8_is_ignored(tmp_path):
+    p = tmp_path / "t.csv"
+    p.write_bytes(b"\xff\xfe\x00a,\x00b,\n")
+    assert server._strip_blank_header_columns(p) == []
+
+
+def test_strip_blank_header_columns_missing_file(tmp_path):
+    assert server._strip_blank_header_columns(tmp_path / "missing.csv") == []
+
+
+# ======================================================================================
+# Upload: limits, overrides, multi-file grouping, header cleanup
+# ======================================================================================
+
+
+def test_upload_strips_trailing_comma_column_and_records_note(client: TestClient):
+    files = {"file": ("trailing.csv", b"a,b,\n1,2,\n3,4,\n", "text/csv")}
+    resp = client.post("/api/upload", files=files, headers=make_auth_headers("strip-user"))
+    assert resp.status_code == 200, resp.text
+    out = resp.json()
+
+    sess = SESSIONS[out["session_id"]]
+    assert Path(sess["work_local_input"]).read_bytes() == b"a,b\n1,2\n3,4\n"
+    notes = sess.get("ingest_notes") or []
+    assert any("empty column" in n for n in notes)
+
+    # The cleaned file is what gets pushed to storage.
+    store = storage_service.blob_store
+    key = f"{out['dataset_id']}.csv"
+    assert _wait_for(lambda: key in store.objects)
+    assert store.objects[key] == b"a,b\n1,2\n3,4\n"
+
+
+def test_upload_too_many_files_413(client: TestClient, monkeypatch):
+    monkeypatch.setattr(server, "MAX_UPLOAD_FILES", 1, raising=False)
+    files = [
+        ("files", ("a.csv", b"x\n1\n", "text/csv")),
+        ("files", ("b.csv", b"x\n2\n", "text/csv")),
+    ]
+    resp = client.post("/api/upload", files=files, headers=make_auth_headers("too-many"))
+    assert resp.status_code == 413
+    assert "Too many files" in resp.json()["detail"]
+    assert SESSIONS == {}
+
+
+def test_upload_per_file_size_limit_413(client: TestClient, monkeypatch):
+    monkeypatch.setattr(server, "MAX_UPLOAD_FILE_BYTES", 5, raising=False)
+    files = {"file": ("big.csv", b"a,b\n1,2\n3,4\n", "text/csv")}
+    resp = client.post("/api/upload", files=files, headers=make_auth_headers("big-file"))
+    assert resp.status_code == 413
+    assert "exceeds max size" in resp.json()["detail"]
+    assert SESSIONS == {}
+    # Temp upload files were cleaned up on rollback.
+    assert not list(server.TMP_ROOT.glob("upload_*"))
+
+
+def test_upload_total_size_limit_413(client: TestClient, monkeypatch):
+    monkeypatch.setattr(server, "MAX_UPLOAD_TOTAL_BYTES", 20, raising=False)
+    files = [
+        ("files", ("a.csv", b"a,b\n1,2\n3,4\n", "text/csv")),
+        ("files", ("b.csv", b"a,b\n5,6\n7,8\n", "text/csv")),
+    ]
+    resp = client.post("/api/upload", files=files, headers=make_auth_headers("total-big"))
+    assert resp.status_code == 413
+    assert "Total upload size" in resp.json()["detail"]
+    assert SESSIONS == {}
+
+
+def test_upload_infers_extension_from_content_type(client: TestClient):
+    files = {"file": ("noext", b"a,b\n1,2\n", "text/csv")}
+    resp = client.post("/api/upload", files=files, headers=make_auth_headers("ct-user"))
+    assert resp.status_code == 200, resp.text
+    sess = SESSIONS[resp.json()["session_id"]]
+    assert sess["input_data_type"] == "csv"
+    assert sess["object_name"].endswith(".csv")
+
+
+def test_upload_schema_json_override_applied(client: TestClient):
+    override = {"a": "string", "b": "string"}
+    files = {"file": ("s.csv", b"a,b\n1,2\n", "text/csv")}
+    resp = client.post(
+        "/api/upload",
+        files=files,
+        data={"schema_json": json.dumps(override)},
+        headers=make_auth_headers("schema-user"),
+    )
+    assert resp.status_code == 200, resp.text
+    out = resp.json()
+    assert out["schema"] == override
+    assert SESSIONS[out["session_id"]]["schema"] == override
+
+
+def test_upload_invalid_schema_json_is_ignored(client: TestClient):
+    files = {"file": ("s.csv", b"a,b\n1,2\n", "text/csv")}
+    resp = client.post(
+        "/api/upload",
+        files=files,
+        data={"schema_json": "{not json"},
+        headers=make_auth_headers("schema-bad"),
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["schema"] == {"a": "int", "b": "int"}
+
+
+def test_upload_files_field_single_file_returns_multi_response(client: TestClient):
+    files = [("files", ("only.csv", b"a,b\n1,2\n", "text/csv"))]
+    resp = client.post("/api/upload", files=files, headers=make_auth_headers("multi-one"))
+    assert resp.status_code == 200, resp.text
+    out = resp.json()
+    assert "datasets" in out and len(out["datasets"]) == 1
+    assert out["session_id"]
+
+
+def test_multi_upload_builds_group_index(client: TestClient):
+    files = [
+        ("files", ("a.csv", b"x,y\n1,2\n", "text/csv")),
+        ("files", ("b.csv", b"x,y\n3,4\n", "text/csv")),
+    ]
+    resp = client.post("/api/upload", files=files, headers=make_auth_headers("group-user"))
+    assert resp.status_code == 200, resp.text
+    out = resp.json()
+
+    group = SESSIONS[out["session_id"]]
+    dsids = [d["dataset_id"] for d in out["datasets"]]
+    assert group["dataset_ids"] == dsids
+    assert set(group["dataset_session_map"]) == set(dsids)
+
+    # Every member points back at the group and shares the thread.
+    for dsid, sid in group["dataset_session_map"].items():
+        member = SESSIONS[sid]
+        assert member["dataset_id"] == dsid
+        assert member["group_session_id"] == out["session_id"]
+        assert member["thread_id"] == out["thread_id"]
+
+
+def test_multi_upload_deduplicates_aliases(client: TestClient):
+    files = [
+        ("files", ("dup.csv", b"x\n1\n", "text/csv")),
+        ("files", ("dup.csv", b"x\n2\n", "text/csv")),
+    ]
+    resp = client.post("/api/upload", files=files, headers=make_auth_headers("dup-user"))
+    assert resp.status_code == 200, resp.text
+    aliases = [d["alias"] for d in resp.json()["datasets"]]
+    assert len(aliases) == 2
+    assert len(set(aliases)) == 2
+
+
+def test_upload_sets_secure_cookie(client: TestClient, monkeypatch):
+    monkeypatch.setenv("COOKIE_SECURE", "true")
+    files = {"file": ("c.csv", b"a\n1\n", "text/csv")}
+    resp = client.post("/api/upload", files=files, headers=make_auth_headers("cookie-user"))
+    assert resp.status_code == 200, resp.text
+    set_cookie = resp.headers.get("set-cookie", "")
+    assert server.COOKIE_NAME in set_cookie
+    assert "secure" in set_cookie.lower()
+    assert "httponly" in set_cookie.lower()
+
+
+# ======================================================================================
+# register-existing-folder
+# ======================================================================================
+
+
+def _owned_conn(monkeypatch, user_id: str):
+    async def _conn(connection_id: str) -> Dict[str, Any]:
+        return {"id": connection_id, "user_id": user_id, "provider": "gcp"}
+
+    monkeypatch.setattr(server, "get_cloud_connection", _conn, raising=False)
+
+
+def _folder_body(**over):
+    body = {"storage_uri": "gs://bkt", "folder": "tables/sales/", "connection_id": "conn-f"}
+    body.update(over)
+    return body
+
+
+def test_register_folder_requires_auth(client: TestClient):
+    resp = client.post("/api/register-existing-folder", json=_folder_body())
+    assert resp.status_code == 401
+
+
+def test_register_folder_foreign_connection_404(client: TestClient):
+    # Fixture's get_cloud_connection returns {} -> no owner -> rejected.
+    resp = client.post(
+        "/api/register-existing-folder",
+        json=_folder_body(),
+        headers=make_auth_headers("folder-user"),
+    )
+    assert resp.status_code == 404
+
+
+def test_register_folder_unrecognized_table_422(client: TestClient, monkeypatch):
+    _owned_conn(monkeypatch, "folder-user")
+    monkeypatch.setattr(
+        server, "detect_folder_table_type", lambda keys: {"table_type": "unknown"}, raising=False
+    )
+    resp = client.post(
+        "/api/register-existing-folder",
+        json=_folder_body(),
+        headers=make_auth_headers("folder-user"),
+    )
+    assert resp.status_code == 422
+    assert "Not a recognized" in resp.json()["detail"]
+
+
+def test_register_folder_iceberg_without_metadata_422(client: TestClient, monkeypatch):
+    _owned_conn(monkeypatch, "folder-user")
+    monkeypatch.setattr(
+        server, "detect_folder_table_type", lambda keys: {"table_type": "iceberg"}, raising=False
+    )
+    resp = client.post(
+        "/api/register-existing-folder",
+        json=_folder_body(),
+        headers=make_auth_headers("folder-user"),
+    )
+    assert resp.status_code == 422
+    assert "metadata.json" in resp.json()["detail"]
+
+
+def test_register_folder_parquet_success(client: TestClient, monkeypatch):
+    _owned_conn(monkeypatch, "folder-user")
+    monkeypatch.setattr(
+        server,
+        "detect_folder_table_type",
+        lambda keys: {"table_type": "parquet_dir", "glob": "**/*.parquet", "hive_partitioning": False},
+        raising=False,
+    )
+    seen: Dict[str, Any] = {}
+
+    def _sampler(path, source_type, sample_size, use_ray=False, **kw):
+        seen.update(path=path, source_type=source_type, use_ray=use_ray, kw=kw)
+        return {
+            "schema": {"a": "int", "b": "int"},
+            "ddl_schema": "CREATE TABLE t(a int, b int);",
+            "portfolio_samples": {"random_baseline": [{"a": 1, "b": 2}, {"a": 3, "b": 4}]},
+            "sample_statistics": None,
+        }
+
+    monkeypatch.setattr(server, "sample_with_profiling", _sampler, raising=False)
+
+    resp = client.post(
+        "/api/register-existing-folder",
+        json=_folder_body(),
+        headers=make_auth_headers("folder-user"),
+    )
+    assert resp.status_code == 200, resp.text
+    out = resp.json()
+    assert out["rows_sampled"] == 2
+
+    expected_glob = "gs://bkt/tables/sales/**/*.parquet"
+    assert seen["path"] == expected_glob
+    assert seen["source_type"] == "parquet"
+    assert seen["use_ray"] is False  # tiny folder stays off the cluster
+    assert seen["kw"]["hive_partitioning"] is False
+    assert "cloud_credentials" in seen["kw"]
+
+    sess = SESSIONS[out["session_id"]]
+    assert sess["folder_read_path"] == expected_glob
+    assert sess["folder_table_type"] == "parquet_dir"
+    assert sess["input_data_type"] == "parquet"
+    assert sess["source_kind"] == "registered"
+    assert sess["object_name"] is None
+    # The executable cloud source is the glob, not the bare folder.
+    assert server._full_cloud_uri(sess) == expected_glob
+
+    assert len(PERSIST_CALLS) == 1
+    assert PERSIST_CALLS[0]["source_type"] == "parquet"
+    assert out["dataset_id"] in server._profile_meta
+
+
+def test_register_folder_sampler_error_500_cleans_workdir(client: TestClient, monkeypatch):
+    _owned_conn(monkeypatch, "folder-user")
+    monkeypatch.setattr(
+        server,
+        "detect_folder_table_type",
+        lambda keys: {"table_type": "parquet_dir", "glob": "**/*.parquet"},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        server, "sample_with_profiling",
+        lambda **kw: {"error": "unreadable parquet"},
+        raising=False,
+    )
+    before = set(server.TMP_ROOT.iterdir())
+
+    resp = client.post(
+        "/api/register-existing-folder",
+        json=_folder_body(),
+        headers=make_auth_headers("folder-user"),
+    )
+    assert resp.status_code == 500
+    assert "unreadable parquet" in resp.json()["detail"]
+    assert SESSIONS == {}
+    assert set(server.TMP_ROOT.iterdir()) == before
+
+
+# ======================================================================================
+# /datasets listing
+# ======================================================================================
+
+
+def _seed_listed_session(user_id, sid, dataset_id, created_at, owner=None, **extra):
+    data = {
+        "user_id": owner or user_id,
+        "dataset_id": dataset_id,
+        "created_at": created_at,
+        "file_size_bytes": 10,
+        **extra,
+    }
+    cache = session_service.cache
+    cache._data[server._k_session(sid)] = json.dumps(data)
+    cache._sets.setdefault(server._k_user_sessions(user_id), set()).add(sid)
+
+
+def test_list_datasets_sorted_deduped_and_scoped(client: TestClient):
+    _seed_listed_session("lister", "s-old", "ds-old", "2026-01-01T00:00:00Z", filename="old.csv")
+    _seed_listed_session("lister", "s-new", "ds-new", "2026-03-01T00:00:00Z", filename="new.csv",
+                         alias="new", source_kind="uploaded", group_session_id="grp-1")
+    _seed_listed_session("lister", "s-new-dup", "ds-new", "2026-03-01T00:00:00Z")
+    # A blob that claims another owner must be filtered even if indexed here.
+    _seed_listed_session("lister", "s-foreign", "ds-foreign", "2026-05-01T00:00:00Z", owner="intruder")
+    # Index entry whose blob has expired.
+    session_service.cache._sets[server._k_user_sessions("lister")].add("s-expired")
+
+    resp = client.get("/datasets", headers=make_auth_headers("lister"))
+    assert resp.status_code == 200, resp.text
+    items = resp.json()
+
+    assert [it["dataset_id"] for it in items] == ["ds-new", "ds-old"]
+    new_item = items[0]
+    assert new_item["size_bytes"] == 10
+    assert new_item["group_session_id"] in ("grp-1",) or new_item["session_id"] == "s-new-dup"
+    old_item = items[1]
+    # Datasets uploaded alone fall back to their own session as the group.
+    assert old_item["group_session_id"] == old_item["session_id"] == "s-old"
+    assert old_item["filename"] == "old.csv"
+
+
+def test_preview_foreign_user_404(client: TestClient):
+    upload = _do_upload(client, user_id="prev-owner")
+    resp = client.get(
+        f"/datasets/{upload['dataset_id']}/preview",
+        headers=make_auth_headers("prev-intruder"),
+    )
+    assert resp.status_code == 404
+
+
+def test_preview_ignores_stale_session_id_of_other_user(client: TestClient):
+    owner = _do_upload(client, user_id="stale-owner")
+    mine = _do_upload(client, user_id="stale-me")
+    # Pass the OTHER user's session id; it must be ignored, not trusted.
+    resp = client.get(
+        f"/datasets/{mine['dataset_id']}/preview",
+        params={"session_id": owner["session_id"]},
+        headers=make_auth_headers("stale-me"),
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["session_id"] == mine["session_id"]
+
+
+# ======================================================================================
+# send_message routing
+# ======================================================================================
+
+
+class _MustNotRunGraph(FakeGraph):
+    def invoke(self, state_in, config=None):
+        raise AssertionError("graph must not be invoked for this turn")
+
+
+class _RaisingGraph(FakeGraph):
+    def __init__(self, exc):
+        self.exc = exc
+
+    def invoke(self, state_in, config=None):
+        raise self.exc
+
+
+class _OutputGraph(FakeGraph):
+    """Writes a 2-row CSV to output_location and optionally emits a scalar sentinel."""
+
+    def __init__(self, sentinel=None):
+        self.sentinel = sentinel
+
+    def invoke(self, state_in, config=None):
+        Path(state_in["output_location"]).write_text("a,b\n1,2\n3,4\n", encoding="utf-8")
+        stdout = "done"
+        if self.sentinel is not None:
+            stdout += (
+                "\n<<<AVALOKA_RESULT>>>" + json.dumps(self.sentinel) + "<<<END_AVALOKA_RESULT>>>"
+            )
+        return {
+            "messages": state_in["messages"] + [AIMessage(content="Result ready")],
+            "execution_result": {"status": "success", "stdout": stdout},
+            "ready_to_code": True,
+            "coder_definition": {"code": "print(1)"},
+            "visualization_config": {},
+            "visualization_status": "",
+        }
+
+
+def test_send_message_metadata_fast_path_skips_graph(client: TestClient, monkeypatch):
+    _quiet_send(monkeypatch)
+    monkeypatch.setattr(server, "GRAPH", _MustNotRunGraph(), raising=False)
+
+    upload = _do_upload(client, user_id="meta-user")
+    resp = _send(client, upload, "how many columns does this have?", "meta-user")
+    assert resp.status_code == 200, resp.text
+    text = _last_assistant(resp.json())
+    assert "2 columns" in text
+    assert "`a`" in text and "`b`" in text
+
+
+def test_send_message_metadata_fast_path_disabled_after_modification(client: TestClient, monkeypatch):
+    _quiet_send(monkeypatch)
+    upload = _do_upload(client, user_id="meta-mod")
+    SESSIONS[upload["session_id"]]["data_source_was_modified"] = True
+
+    resp = _send(client, upload, "how many columns does this have?", "meta-mod")
+    assert resp.status_code == 200, resp.text
+    # Stored shape is stale once the data was transformed, so the graph answers.
+    assert _last_assistant(resp.json()).startswith("Echo:")
+
+
+def test_send_message_graph_failure_returns_friendly_message(client: TestClient, monkeypatch):
+    _quiet_send(monkeypatch)
+    monkeypatch.setattr(
+        server, "GRAPH", _RaisingGraph(RuntimeError("Rate limit reached for model")), raising=False
+    )
+    upload = _do_upload(client, user_id="err-user")
+
+    resp = _send(client, upload, "average of b", "err-user")
+    assert resp.status_code == 200, resp.text
+    text = _last_assistant(resp.json())
+    assert "busy" in text
+    assert "Traceback" not in text
+    # The friendly message is also recorded in thread history.
+    hist = server.THREAD_META[upload["thread_id"]]["lc_msgs"]
+    assert any("busy" in getattr(m, "content", "") for m in hist)
+
+
+def test_send_message_returns_tabular_output_and_records_latest(client: TestClient, monkeypatch):
+    _quiet_send(monkeypatch)
+    monkeypatch.setattr(server, "GRAPH", _OutputGraph(), raising=False)
+    upload = _do_upload(client, user_id="tab-user")
+
+    resp = _send(client, upload, "show rows grouped by a", "tab-user")
+    assert resp.status_code == 200, resp.text
+    out = resp.json()
+    assert out["output_json"] == [{"a": 1, "b": 2}, {"a": 3, "b": 4}]
+
+    sess = SESSIONS[upload["session_id"]]
+    assert sess.get("latest_output_location")
+    assert sess.get("latest_output_row_count") == 2
+    assert sess.get("latest_output_is_trainable") is True
+
+
+def test_send_message_scalar_answer_suppresses_table(client: TestClient, monkeypatch):
+    _quiet_send(monkeypatch)
+    monkeypatch.setattr(
+        server, "GRAPH", _OutputGraph(sentinel={"kind": "scalar", "value": 42}), raising=False
+    )
+    upload = _do_upload(client, user_id="scalar-user")
+
+    resp = _send(client, upload, "what is the max of b", "scalar-user")
+    assert resp.status_code == 200, resp.text
+    out = resp.json()
+    assert out["output_json"] is None
+    assert out["output_file_data"] is None
+    assert "latest_output_location" not in SESSIONS[upload["session_id"]]
+
+
+def test_send_message_unknown_sample_rejected(client: TestClient, monkeypatch):
+    _quiet_send(monkeypatch)
+    monkeypatch.setattr(server, "GRAPH", _MustNotRunGraph(), raising=False)
+    upload = _do_upload(client, user_id="sample-user")
+
+    resp = _send(client, upload, "switch sample", "sample-user", selected_sample_name="nope")
+    assert resp.status_code == 200, resp.text
+    text = _last_assistant(resp.json())
+    assert "'nope' is not available" in text
+    assert "random_baseline" in text
+
+
+def test_send_message_stream_returns_sse(client: TestClient, monkeypatch):
+    _quiet_send(monkeypatch)
+    upload = _do_upload(client, user_id="sse-user")
+
+    resp = _send(client, upload, "hello", "sse-user", stream=True)
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["content-type"].startswith("text/event-stream")
+    assert "event: message" in resp.text
+    assert "event: done" in resp.text
+
+
+def test_send_message_compare_returns_join_suggestions(client: TestClient, monkeypatch):
+    _quiet_send(monkeypatch)
+    monkeypatch.setattr(server, "GRAPH", _MustNotRunGraph(), raising=False)
+    monkeypatch.setattr(
+        server, "suggest_join_keys",
+        lambda state: [{"left_dataset": "a", "right_dataset": "b",
+                        "left_key": "customer_id", "right_key": "customer_id",
+                        "confidence": 0.95}],
+        raising=False,
+    )
+    files = [
+        ("files", ("a.csv", b"customer_id,name\n1,A\n", "text/csv")),
+        ("files", ("b.csv", b"customer_id,amount\n1,10\n", "text/csv")),
+    ]
+    up = client.post("/api/upload", files=files, headers=make_auth_headers("cmp-user")).json()
+
+    headers = make_auth_headers("cmp-user")
+    headers["X-Avaloka-Session"] = up["session_id"]
+    resp = client.post(
+        f"/threads/{up['thread_id']}/messages",
+        json={"content": "compare these datasets"},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    text = _last_assistant(resp.json())
+    assert "a.customer_id" in text
+    assert "Join on customer_id" in text
+
+
+def test_send_message_join_with_explicit_key_reaches_graph_with_context(client: TestClient, monkeypatch):
+    _quiet_send(monkeypatch)
+    monkeypatch.setattr(server, "suggest_join_keys", lambda state: [], raising=False)
+    files = [
+        ("files", ("a.csv", b"customer_id,name\n1,A\n", "text/csv")),
+        ("files", ("b.csv", b"customer_id,amount\n1,10\n", "text/csv")),
+    ]
+    up = client.post("/api/upload", files=files, headers=make_auth_headers("join-key")).json()
+
+    headers = make_auth_headers("join-key")
+    headers["X-Avaloka-Session"] = up["session_id"]
+    resp = client.post(
+        f"/threads/{up['thread_id']}/messages",
+        json={"content": "join the two tables on customer_id"},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    text = _last_assistant(resp.json())
+    # FakeGraph echoes the augmented prompt: both datasets must be described.
+    assert text.startswith("Echo:")
+    assert text.count("[Dataset:") == 2
+    assert "csv_path:" in text
+
+
+def test_send_message_foreign_session_header_is_ignored(client: TestClient, monkeypatch):
+    _quiet_send(monkeypatch)
+    victim = _do_upload(client, user_id="victim")
+
+    headers = make_auth_headers("attacker")
+    headers["X-Avaloka-Session"] = victim["session_id"]
+    resp = client.post(
+        f"/threads/{victim['thread_id']}/messages",
+        json={"content": "show me everything"},
+        headers=headers,
+    )
+    assert resp.status_code == 400
+
+
+# ======================================================================================
+# Pure helpers: metadata questions / answers / job card
+# ======================================================================================
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("how many columns does this have?", True),
+        ("list the columns", True),
+        ("show the schema", True),
+        ("how many rows", True),
+        ("what is the date range", True),
+        ("what are the data types", True),
+        ("what is the average of b", False),
+        ("how many rows have nulls", False),
+        ("plot the columns", False),
+        ("", False),
+        ("how many columns " + "x" * 200, False),
+    ],
+)
+def test_is_metadata_only_question(text, expected):
+    assert server._is_metadata_only_question(text) is expected
+
+
+def test_build_metadata_answer_columns_with_dtypes():
+    sess = {"schema": {"a": "int", "b": "string"}}
+    ans = server._build_metadata_answer(sess, "how many columns")
+    assert "**2 columns**" in ans
+    assert "`a` — int" in ans and "`b` — string" in ans
+
+
+def test_build_metadata_answer_columns_without_dtypes():
+    sess = {"schema": ["a", "b", "c"]}
+    ans = server._build_metadata_answer(sess, "list the columns")
+    assert "**3 columns**" in ans
+    assert "`a`, `b`, `c`" in ans
+
+
+def test_build_metadata_answer_exact_rows():
+    sess = {"sample_statistics": {"data_shape": {"rows": 1234}}, "sample_status": "full_sample"}
+    ans = server._build_metadata_answer(sess, "how many rows")
+    assert "1,234 rows" in ans and "(exact)" in ans
+
+
+def test_build_metadata_answer_estimated_rows():
+    sess = {"sample_statistics": {"data_shape": {"rows": 500}}, "sample_status": "quick_sample"}
+    ans = server._build_metadata_answer(sess, "how many rows")
+    assert "approximately 500 rows" in ans
+
+
+def test_build_metadata_answer_partial_measurement_never_quotes_head_count():
+    sess = {
+        "file_size_bytes": 10_000_000,
+        "sample_status": "full_sample",
+        "sample_statistics": {
+            "data_shape": {"rows": 50},
+            "estimated_full_bytes": 1000,
+            "bytes_per_row": 100,
+        },
+    }
+    ans = server._build_metadata_answer(sess, "how many rows")
+    assert "100,000+ rows" in ans
+    assert "50 rows" not in ans
+
+
+def test_build_metadata_answer_date_range_from_stats():
+    sess = {
+        "sample_statistics": {
+            "column_statistics": {
+                "order_date": {"min": "2024-01-01", "max": "2024-12-31"},
+                "amount": {"min": 1, "max": 9},
+            }
+        }
+    }
+    ans = server._build_metadata_answer(sess, "what is the date range")
+    assert "`order_date`: 2024-01-01 → 2024-12-31" in ans
+    assert "amount" not in ans
+
+
+def test_build_metadata_answer_date_range_unknown_returns_none():
+    assert server._build_metadata_answer({}, "what is the date range") is None
+
+
+def test_build_deferred_job_card_has_no_numbers_and_truncates():
+    long_q = "q" * 400
+    card = server._build_deferred_job_card("task-123", "sales", long_q, "about 1 hour")
+    assert "`task-123`" in card
+    assert "sales" in card
+    assert "about 1 hour" in card
+    assert "q" * 297 + "..." in card
+    assert "q" * 301 not in card
+
+
+# ======================================================================================
+# Pure helpers: size estimation, row totals, partial-sample detection
+# ======================================================================================
+
+
+def test_estimated_inmemory_bytes_measured(monkeypatch):
+    monkeypatch.setenv("ANALYSIS_MEM_EXPANSION", "4.0")
+    sess = {"file_size_bytes": 1000,
+            "sample_statistics": {"estimated_full_bytes": 5000, "bytes_per_row": 50}}
+    assert server._estimated_inmemory_bytes(sess) == (5000, 50.0, "measured")
+
+
+def test_estimated_inmemory_bytes_partial_measurement_floored(monkeypatch):
+    monkeypatch.setenv("ANALYSIS_MEM_EXPANSION", "4.0")
+    sess = {"file_size_bytes": 1000,
+            "sample_statistics": {"estimated_full_bytes": 100, "bytes_per_row": 10}}
+    est, bpr, src = server._estimated_inmemory_bytes(sess)
+    assert (est, src) == (4000, "expansion_floor")
+
+
+def test_estimated_inmemory_bytes_from_rows_times_bpr(monkeypatch):
+    sess = {"sample_statistics": {"bytes_per_row": 10, "data_shape": {"rows": 20}}}
+    assert server._estimated_inmemory_bytes(sess) == (200, 10.0, "measured")
+
+
+def test_estimated_inmemory_bytes_expansion_fallback(monkeypatch):
+    monkeypatch.setenv("ANALYSIS_MEM_EXPANSION", "3.0")
+    assert server._estimated_inmemory_bytes({"file_size_bytes": 100}) == (300, 0.0, "expansion")
+
+
+def test_estimated_inmemory_bytes_bad_env_uses_default(monkeypatch):
+    monkeypatch.setenv("ANALYSIS_MEM_EXPANSION", "not-a-number")
+    assert server._estimated_inmemory_bytes({"file_size_bytes": 100})[0] == 400
+
+
+def test_estimated_inmemory_bytes_none():
+    assert server._estimated_inmemory_bytes({}) == (0, 0.0, "none")
+
+
+def test_session_total_rows_variants():
+    assert server._session_total_rows({"sample_statistics": {"data_shape": {"rows": 10}}}) == 10
+    assert server._session_total_rows(
+        {"sample_statistics": json.dumps({"data_shape": {"rows": 7}})}
+    ) == 7
+    assert server._session_total_rows({"total_rows_exact": 5}) == 5
+    assert server._session_total_rows({"total_rows_exact": True}) is None
+    assert server._session_total_rows({"sample_statistics": {"data_shape": {"rows": 0}}}) is None
+    assert server._session_total_rows({}) is None
+
+
+@pytest.mark.parametrize(
+    "kwargs,expected",
+    [
+        (dict(effective_fidelity="entire_dataset", sample_n=10, total_rows=10,
+              is_large_dataset=False, entire_on_head=False), False),
+        (dict(effective_fidelity="entire_dataset", sample_n=10, total_rows=100,
+              is_large_dataset=True, entire_on_head=True), True),
+        (dict(effective_fidelity="quick_sample", sample_n=10, total_rows=10,
+              is_large_dataset=True, entire_on_head=False), True),
+        (dict(effective_fidelity="portfolio_samples", sample_n=10, total_rows=1000,
+              is_large_dataset=False, entire_on_head=False), False),
+        (dict(effective_fidelity="quick_sample", sample_n=50, total_rows=100,
+              is_large_dataset=False, entire_on_head=False), True),
+        (dict(effective_fidelity="quick_sample", sample_n=100, total_rows=100,
+              is_large_dataset=False, entire_on_head=False), False),
+        (dict(effective_fidelity="quick_sample", sample_n=5, total_rows=None,
+              is_large_dataset=False, entire_on_head=False), False),
+    ],
+)
+def test_analysis_ran_on_partial_sample(kwargs, expected):
+    assert server._analysis_ran_on_partial_sample(**kwargs) is expected
+
+
+def test_analysis_ran_on_partial_sample_unknown_total_at_cap():
+    assert server._analysis_ran_on_partial_sample(
+        effective_fidelity="quick_sample",
+        sample_n=server.DEFAULT_SAMPLE_MAX_ROWS,
+        total_rows=None,
+        is_large_dataset=False,
+        entire_on_head=False,
+    ) is True
+
+
+def test_sample_fidelity_note_reports_row_counts():
+    note = server._sample_fidelity_note("quick_sample", [{}] * 1000, None, total_rows=5000)
+    assert "1,000-row sample of the 5,000-row file" in note
+
+
+def test_build_execution_context_flags_sampling():
+    ctx = server._build_execution_context("quick_sample", None, rows_analyzed=10, total_rows=100)
+    assert ctx["is_sampled"] is True
+    full = server._build_execution_context("entire_dataset", None, rows_analyzed=100, total_rows=100)
+    assert full["is_sampled"] is False
+    unknown = server._build_execution_context(None, None)
+    assert unknown["mode"] == server.FIDELITY_QUICK
+    assert unknown["is_sampled"] is False
+
+
+# ======================================================================================
+# Pure helpers: scalar results, checkpoints, csv helpers
+# ======================================================================================
+
+
+def test_scalar_result_from_sentinel_nested():
+    final = {"execution_result": {"logs": [
+        "noise",
+        {"stdout": 'x <<<AVALOKA_RESULT>>>{"kind":"scalar","value":7}<<<END_AVALOKA_RESULT>>> y'},
+    ]}}
+    assert server._scalar_result_from_state(final, None) == {"kind": "scalar", "value": 7}
+
+
+def test_scalar_result_from_one_by_one_table():
+    out = server._scalar_result_from_state({}, [{"count": 3}])
+    assert out == {"kind": "scalar", "value": 3, "columns": ["count"]}
+
+
+def test_scalar_result_malformed_sentinel_falls_back():
+    final = {"execution_result": {"stdout": "<<<AVALOKA_RESULT>>>not json<<<END_AVALOKA_RESULT>>>"}}
+    assert server._scalar_result_from_state(final, [{"a": 1, "b": 2}]) is None
+    assert server._scalar_result_from_state(final, [{"n": 9}])["value"] == 9
+
+
+def test_scalar_result_none_for_tables():
+    assert server._scalar_result_from_state({}, [{"a": 1}, {"a": 2}]) is None
+    assert server._scalar_result_from_state({}, None) is None
+
+
+def test_iter_strings_walks_nested():
+    assert sorted(server._iter_strings({"a": ["x", {"b": "y"}], "c": 1, "d": ("z",)})) == ["x", "y", "z"]
+
+
+def test_is_new_checkpoint_worthy():
+    assert server._is_new_checkpoint_worthy({}, [{"a": 1}], False) is False
+    assert server._is_new_checkpoint_worthy({}, [{"a": 1}], True) is True
+
+    out = [{"a": 1}]
+    fp = hashlib.sha256(json.dumps(out, sort_keys=True, default=str).encode()).hexdigest()
+    sess = {"gcs_output_object_key": "k", "last_output_fingerprint": fp}
+    assert server._is_new_checkpoint_worthy(sess, out, True) is False
+    assert server._is_new_checkpoint_worthy(sess, [{"a": 2}], True) is True
+
+
+def test_count_csv_rows_and_rows_to_columns(tmp_path):
+    p = tmp_path / "o.csv"
+    p.write_text("a,b\n1,2\n3,4\n5,6\n", encoding="utf-8")
+    assert server._count_csv_rows(p) == 3
+    assert server._count_csv_rows(tmp_path / "missing.csv") is None
+
+    assert server._rows_to_columns([{"x": 1, "y": 2}]) == ["x", "y"]
+    assert server._rows_to_columns([]) == []
+    assert server._rows_to_columns(None) == []
+    assert server._rows_to_columns([[1, 2]]) == []
+
+
+def test_record_latest_tabular_output_reads_file_when_no_preview(tmp_path):
+    p = tmp_path / "o.csv"
+    p.write_text("a\n1\n", encoding="utf-8")
+    sess: Dict[str, Any] = {}
+    assert server._record_latest_tabular_output(sess, str(p)) is True
+    assert sess["latest_output_columns"] == ["a"]
+    assert sess["latest_output_row_count"] == 1
+    # Single column is not trainable.
+    assert sess["latest_output_is_trainable"] is False
+
+
+def test_record_latest_tabular_output_missing_or_empty(tmp_path):
+    assert server._record_latest_tabular_output({}, str(tmp_path / "nope.csv")) is False
+    empty = tmp_path / "e.csv"
+    empty.write_text("a,b\n", encoding="utf-8")
+    assert server._record_latest_tabular_output({}, str(empty)) is False
+
+
+# ======================================================================================
+# Pure helpers: auth / config / misc
+# ======================================================================================
+
+
+def test_friendly_turn_error_messages():
+    assert "busy" in server._friendly_turn_error(RuntimeError("rate limit exceeded"))
+    assert "temporarily unavailable" in server._friendly_turn_error(
+        RuntimeError("error code: model_not_found")
+    )
+    assert "credentials" in server._friendly_turn_error(RuntimeError("Invalid API Key provided"))
+    generic = server._friendly_turn_error(ValueError("kaboom"))
+    assert "Something went wrong" in generic
+    assert "kaboom" not in generic
+
+
+def test_is_supabase_auth_failure():
+    class _CodeErr(Exception):
+        def __init__(self, code):
+            super().__init__("err")
+            self.code = code
+
+    assert server._is_supabase_auth_failure(_CodeErr(401)) is True
+    assert server._is_supabase_auth_failure(_CodeErr("403")) is True
+    assert server._is_supabase_auth_failure(_CodeErr("PGRST116")) is False
+    assert server._is_supabase_auth_failure(RuntimeError("Invalid API key")) is True
+    assert server._is_supabase_auth_failure(RuntimeError("Supabase env vars not set")) is True
+    assert server._is_supabase_auth_failure(RuntimeError("connection reset")) is False
+
+
+def test_read_version_env_override(monkeypatch):
+    monkeypatch.setenv("APP_VERSION", "9.9.9")
+    assert server._read_version() == "9.9.9"
+
+
+def test_read_version_oss_edition(monkeypatch):
+    monkeypatch.delenv("APP_VERSION", raising=False)
+    monkeypatch.setenv("AVALOKA_EDITION", "oss")
+    monkeypatch.delenv("AVALOKA_OSS_VERSION", raising=False)
+    assert server._read_version() == "1.0.0"
+    monkeypatch.setenv("AVALOKA_OSS_VERSION", "1.0.3")
+    assert server._read_version() == "1.0.3"
+
+
+def test_resolve_session_id_precedence():
+    req = _FakeReq(headers={"X-Avaloka-Session": "hdr"}, cookies={server.COOKIE_NAME: "cookie"})
+    assert server._resolve_session_id(req, "body") == "body"
+    assert server._resolve_session_id(req, None) == "hdr"
+    assert server._resolve_session_id(_FakeReq(cookies={server.COOKIE_NAME: "cookie"}), None) == "cookie"
+    assert server._resolve_session_id(_FakeReq(), None) is None
+
+
+def test_build_asset_history_parses_and_filters():
+    sess = {"code_assets": json.dumps([
+        {"object_key": "k1", "prompt_ts": "20260101_000000"},
+        {"prompt_ts": "missing-key"},
+        "garbage",
+    ])}
+    hist = server._build_asset_history(sess, "code_assets")
+    assert [(h.object_key, h.prompt_ts) for h in hist] == [("k1", "20260101_000000")]
+    assert server._build_asset_history({"code_assets": "not json"}, "code_assets") == []
+    assert server._build_asset_history({}, "code_assets") == []
+
+
+def test_group_members_snapshot_drops_none_values():
+    out = server._group_members_snapshot([
+        ("ds1", "s1", {"filename": "a.csv", "alias": None, "schema": {"x": "int"}, "secret": "nope"}),
+    ])
+    assert out == [{"filename": "a.csv", "schema": {"x": "int"},
+                    "dataset_id": "ds1", "session_id": "s1"}]
+
+
+def test_scheduled_task_has_chat_result_only():
+    assert server._scheduled_task_has_chat_result_only({"task_type": "start_inference"}) is True
+    assert server._scheduled_task_has_chat_result_only({"task_type": "stop_inference"}) is True
+    assert server._scheduled_task_has_chat_result_only({"task_type": "execute"}) is False
+
+
+def test_log_routing_shadow_bands(monkeypatch):
+    lines: List[str] = []
+
+    class _Rec:
+        def info(self, fmt, *args):
+            lines.append(args[0] if args else fmt)
+
+        def warning(self, *a, **k):
+            raise AssertionError("shadow logging must not fail")
+
+    monkeypatch.setattr(server, "logger", _Rec(), raising=False)
+    gb = server.LARGE_DATASET_THRESHOLD_BYTES
+
+    server._log_routing_shadow(analysis_max_inmemory_bytes=100, estimated_full_bytes=50, file_size_bytes=10)
+    server._log_routing_shadow(analysis_max_inmemory_bytes=100, estimated_full_bytes=200, file_size_bytes=10)
+    server._log_routing_shadow(analysis_max_inmemory_bytes=100, estimated_full_bytes=200, file_size_bytes=gb)
+
+    bands = [json.loads(l)["band"] for l in lines]
+    assert bands == ["below_cap", "cap_to_1gb", "above_1gb"]
+    assert json.loads(lines[1])["would_defer"] is True
+
+
+# ======================================================================================
+# Health / middleware
+# ======================================================================================
+
+
+def test_health_reports_redis_down_when_ping_fails(client: TestClient, monkeypatch):
+    async def _boom():
+        raise RuntimeError("redis down")
+
+    monkeypatch.setattr(session_service.cache, "ping", _boom)
+    resp = client.get("/health")
+    assert resp.status_code == 200
+    assert resp.json()["redis_connected"] is False
+
+
+def test_health_reports_upstream_unreachable(client: TestClient, monkeypatch):
+    async def _lg_down(method, path, **kw):
+        raise HTTPException(502, "down")
+
+    monkeypatch.setattr(server, "lg_request", _lg_down, raising=False)
+    resp = client.get("/health")
+    assert resp.status_code == 200
+    assert resp.json()["upstream_reachable"] is False
+
+
+def test_private_network_preflight_allowed_origin(client: TestClient, monkeypatch):
+    monkeypatch.setattr(server, "allow_origins", ["https://app.example"], raising=False)
+    resp = client.options(
+        "/datasets",
+        headers={
+            "Origin": "https://app.example",
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Private-Network": "true",
+            "Access-Control-Request-Headers": "authorization",
+        },
+    )
+    assert resp.status_code == 204
+    assert resp.headers["Access-Control-Allow-Private-Network"] == "true"
+    assert resp.headers["Access-Control-Allow-Origin"] == "https://app.example"
+    assert resp.headers["Access-Control-Allow-Headers"] == "authorization"
+
+
+def test_private_network_preflight_rejects_unknown_origin(client: TestClient, monkeypatch):
+    monkeypatch.setattr(server, "allow_origins", ["https://app.example"], raising=False)
+    resp = client.options(
+        "/datasets",
+        headers={
+            "Origin": "https://evil.example",
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Private-Network": "true",
+        },
+    )
+    assert "Access-Control-Allow-Private-Network" not in resp.headers
+
+
+# ======================================================================================
+# Threads: upstream delete failure
+# ======================================================================================
+
+
+def test_delete_thread_upstream_500_propagates(client: TestClient, monkeypatch):
+    upload = _do_upload(client, user_id="del-up")
+
+    async def _lg_500(method, path, **kw):
+        return DummyResponse(500, "upstream boom")
+
+    monkeypatch.setattr(server, "lg_request", _lg_500, raising=False)
+    resp = client.delete(f"/threads/{upload['thread_id']}", headers=make_auth_headers("del-up"))
+    assert resp.status_code == 500
+
+
+def test_delete_thread_upstream_404_is_tolerated(client: TestClient, monkeypatch):
+    upload = _do_upload(client, user_id="del-404")
+
+    async def _lg_404(method, path, **kw):
+        return DummyResponse(404, "gone")
+
+    monkeypatch.setattr(server, "lg_request", _lg_404, raising=False)
+    resp = client.delete(f"/threads/{upload['thread_id']}", headers=make_auth_headers("del-404"))
+    assert resp.status_code == 204
+
+
+# ======================================================================================
+# Tasks endpoints
+# ======================================================================================
+
+
+@pytest.mark.parametrize(
+    "method,path",
+    [
+        ("GET", "/tasks/t1/info"),
+        ("GET", "/tasks/t1/result/0"),
+        ("GET", "/tasks/t1/runs"),
+        ("GET", "/tasks/t1/status"),
+        ("DELETE", "/tasks/t1"),
+    ],
+)
+def test_task_endpoints_require_auth(client: TestClient, method, path):
+    resp = client.request(method, path)
+    assert resp.status_code == 401
+
+
+@pytest.mark.parametrize("path", ["/tasks/t1/runs", "/tasks/t1/result/0", "/tasks/t1/status"])
+def test_task_endpoints_404_when_task_not_in_session(client: TestClient, path):
+    upload = _do_upload(client, user_id="task-scope")
+    headers = make_auth_headers("task-scope")
+    headers["X-Avaloka-Session"] = upload["session_id"]
+    resp = client.get(path, headers=headers)
+    assert resp.status_code == 404
+
+
+def test_task_endpoint_rejects_foreign_session(client: TestClient):
+    upload = _do_upload(client, user_id="task-owner")
+    SESSIONS[upload["session_id"]]["tasks"] = ["t1"]
+    headers = make_auth_headers("task-intruder")
+    headers["X-Avaloka-Session"] = upload["session_id"]
+    resp = client.get("/tasks/t1/runs", headers=headers)
+    assert resp.status_code == 400
+
+
+# ======================================================================================
+# Assets endpoints
+# ======================================================================================
+
+
+def _seed_asset_session(sid, user_id, **extra):
+    SESSIONS[sid] = {"user_id": user_id, "dataset_id": "ds-a", **extra}
+
+
+def test_asset_code_404_without_key(client: TestClient):
+    _seed_asset_session("sa1", "asset-user")
+    resp = client.get("/api/assets/sa1/code", headers=make_auth_headers("asset-user"))
+    assert resp.status_code == 404
+
+
+def test_asset_code_returns_signed_url(client: TestClient, monkeypatch):
+    _patch_signed_url(monkeypatch)
+    _seed_asset_session("sa2", "asset-user", gcs_code_object_key="code/latest.py")
+    resp = client.get("/api/assets/sa2/code", headers=make_auth_headers("asset-user"))
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["signed_url"] == "https://signed.example/code/latest.py"
+
+
+def test_asset_code_specific_version(client: TestClient, monkeypatch):
+    _patch_signed_url(monkeypatch)
+    _seed_asset_session(
+        "sa3", "asset-user",
+        gcs_code_object_key="code/v2.py",
+        code_assets=[{"object_key": "code/v1.py", "prompt_ts": "20260101_000000"}],
+    )
+    headers = make_auth_headers("asset-user")
+    ok = client.get("/api/assets/sa3/code", params={"prompt_ts": "20260101_000000"}, headers=headers)
+    assert ok.status_code == 200
+    assert ok.json()["object_key"] == "code/v1.py"
+
+    missing = client.get("/api/assets/sa3/code", params={"prompt_ts": "19990101_000000"}, headers=headers)
+    assert missing.status_code == 404
+
+
+def test_asset_code_signed_url_failure_500(client: TestClient, monkeypatch):
+    async def _none(*a, **k):
+        return None
+
+    monkeypatch.setattr(server, "_generate_asset_signed_url", _none, raising=False)
+    _seed_asset_session("sa4", "asset-user", gcs_code_object_key="code/x.py")
+    resp = client.get("/api/assets/sa4/code", headers=make_auth_headers("asset-user"))
+    assert resp.status_code == 500
+
+
+def test_asset_output_returns_signed_url(client: TestClient, monkeypatch):
+    _patch_signed_url(monkeypatch)
+    _seed_asset_session("sa5", "asset-user", gcs_output_object_key="out/latest.csv")
+    resp = client.get("/api/assets/sa5/output", headers=make_auth_headers("asset-user"))
+    assert resp.status_code == 200
+    assert resp.json()["object_key"] == "out/latest.csv"
+
+
+def test_asset_job_404_without_branch(client: TestClient):
+    _seed_asset_session("sa6", "asset-user")
+    resp = client.get("/api/assets/sa6/job", headers=make_auth_headers("asset-user"))
+    assert resp.status_code == 404
+
+
+def test_asset_job_returns_github_url(client: TestClient, monkeypatch):
+    monkeypatch.setenv("GITHUB_JOB_REGISTRY_REPO", "org/jobs")
+    _seed_asset_session("sa7", "asset-user", git_job_branch="main")
+    resp = client.get("/api/assets/sa7/job", headers=make_auth_headers("asset-user"))
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["git_repo"] == "org/jobs"
+    assert body["github_url"] == "https://github.com/org/jobs/tree/main/jobs/asset-user/sa7"
+
+
+def test_assets_manifest_hidden_from_other_user(client: TestClient):
+    _seed_asset_session("sa8", "asset-owner")
+    resp = client.get("/api/assets/sa8", headers=make_auth_headers("asset-intruder"))
+    assert resp.status_code == 404
+
+
+# ======================================================================================
+# Analysis (insights) endpoints
+# ======================================================================================
+
+
+def test_resolve_aid_supabase_credential_failure_is_503(client: TestClient, monkeypatch):
+    def _bad_client():
+        raise RuntimeError("Supabase env vars not set")
+
+    monkeypatch.setattr(server, "get_supabase_client", _bad_client, raising=False)
+    resp = client.get("/analysis/aid-1/code", headers=make_auth_headers("aid-user"))
+    assert resp.status_code == 503
+    assert "credentials were rejected" in resp.json()["detail"]
+
+
+def test_resolve_aid_generic_failure_is_503(client: TestClient, monkeypatch):
+    def _bad_client():
+        raise ConnectionError("network unreachable")
+
+    monkeypatch.setattr(server, "get_supabase_client", _bad_client, raising=False)
+    resp = client.get("/analysis/aid-1/versions", headers=make_auth_headers("aid-user"))
+    assert resp.status_code == 503
+    assert "temporarily unavailable" in resp.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    "method,path,body",
+    [
+        ("GET", "/analysis/aid-x/code", None),
+        ("GET", "/analysis/aid-x/versions", None),
+        ("POST", "/analysis/aid-x/restore", {"prompt_ts": "20260101_000000"}),
+        ("POST", "/analysis/aid-x/refresh", None),
+    ],
+)
+def test_analysis_endpoints_404_when_aid_unknown(client: TestClient, monkeypatch, method, path, body):
+    _patch_aid(monkeypatch, None)
+    resp = client.request(method, path, json=body, headers=make_auth_headers("aid-user"))
+    assert resp.status_code == 404
+
+
+def test_analysis_code_returns_inline_text(client: TestClient, monkeypatch):
+    _patch_aid(monkeypatch, {"session_id": "s-code"})
+    _patch_signed_url(monkeypatch)
+    SESSIONS["s-code"] = {"user_id": "code-user", "gcs_code_object_key": "code/v1.py"}
+
+    class _Resp:
+        status_code = 200
+        text = "print('from gcs')"
+
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def get(self, url):
+            assert url == "https://signed.example/code/v1.py"
+            return _Resp()
+
+    monkeypatch.setattr(server.httpx, "AsyncClient", _Client, raising=False)
+
+    resp = client.get("/analysis/aid-c/code", headers=make_auth_headers("code-user"))
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["code"] == "print('from gcs')"
+    assert body["object_key"] == "code/v1.py"
+
+
+def test_analysis_code_404_when_session_owned_by_other(client: TestClient, monkeypatch):
+    _patch_aid(monkeypatch, {"session_id": "s-other"})
+    SESSIONS["s-other"] = {"user_id": "someone-else", "gcs_code_object_key": "code/v1.py"}
+    resp = client.get("/analysis/aid-o/code", headers=make_auth_headers("code-user"))
+    assert resp.status_code == 404
+
+
+def _seed_versioned_session(sid, user_id):
+    SESSIONS[sid] = {
+        "user_id": user_id,
+        "code_assets": [
+            {"object_key": "code/v1.py", "prompt_ts": "20260101_000000"},
+            {"object_key": "code/v2.py", "prompt_ts": "20260102_000000"},
+        ],
+        "output_assets": [
+            {"object_key": "out/v2.csv", "prompt_ts": "20260102_000000"},
+        ],
+        "gcs_code_object_key": "code/v2.py",
+        "gcs_output_object_key": "out/v2.csv",
+        "version_prompts": {"20260102_000000": "average of b"},
+    }
+
+
+def test_analysis_versions_lists_checkpoints(client: TestClient, monkeypatch):
+    _patch_aid(monkeypatch, {"session_id": "s-ver"})
+    _seed_versioned_session("s-ver", "ver-user")
+
+    resp = client.get("/analysis/aid-v/versions", headers=make_auth_headers("ver-user"))
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["current_prompt_ts"] == "20260102_000000"
+    latest = body["versions"][0]
+    assert latest["prompt"] == "average of b"
+    assert latest["created_at"].startswith("2026-01-02T00:00:00")
+    assert latest["has_output"] is True
+    assert body["versions"][1]["has_output"] is False
+
+
+def test_analysis_restore_repoints_only_present_artifacts(client: TestClient, monkeypatch):
+    _patch_aid(monkeypatch, {"session_id": "s-res"})
+    _patch_signed_url(monkeypatch)
+
+    async def _code_text(key, sess):
+        return f"# code for {key}"
+
+    monkeypatch.setattr(server, "_fetch_code_text", _code_text, raising=False)
+    _seed_versioned_session("s-res", "res-user")
+
+    resp = client.post(
+        "/analysis/aid-r/restore",
+        json={"prompt_ts": "20260101_000000"},
+        headers=make_auth_headers("res-user"),
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["code"] == "# code for code/v1.py"
+    assert body["output_signed_url"] is None
+
+    sess = SESSIONS["s-res"]
+    assert sess["gcs_code_object_key"] == "code/v1.py"
+    # v1 has no output -> current output pointer is left alone (non-destructive).
+    assert sess["gcs_output_object_key"] == "out/v2.csv"
+    assert sess["restored_from_prompt_ts"] == "20260101_000000"
+    # History is intact.
+    assert len(sess["code_assets"]) == 2
+
+
+def test_analysis_restore_unknown_version_404(client: TestClient, monkeypatch):
+    _patch_aid(monkeypatch, {"session_id": "s-res2"})
+    _seed_versioned_session("s-res2", "res-user")
+    resp = client.post(
+        "/analysis/aid-r/restore",
+        json={"prompt_ts": "19990101_000000"},
+        headers=make_auth_headers("res-user"),
+    )
+    assert resp.status_code == 404
+
+
+def test_analysis_refresh_404_without_code(client: TestClient, monkeypatch):
+    _patch_aid(monkeypatch, {"session_id": "s-ref"})
+    SESSIONS["s-ref"] = {"user_id": "ref-user"}
+    resp = client.post("/analysis/aid-f/refresh", headers=make_auth_headers("ref-user"))
+    assert resp.status_code == 404
+    assert "No code to refresh" in resp.json()["detail"]
+
+
+def test_analysis_refresh_500_when_code_unreadable(client: TestClient, monkeypatch):
+    _patch_aid(monkeypatch, {"session_id": "s-ref2"})
+
+    async def _none(key, sess):
+        return None
+
+    monkeypatch.setattr(server, "_fetch_code_text", _none, raising=False)
+    SESSIONS["s-ref2"] = {"user_id": "ref-user", "gcs_code_object_key": "code/x.py"}
+    resp = client.post("/analysis/aid-f/refresh", headers=make_auth_headers("ref-user"))
+    assert resp.status_code == 500
+
+
+def test_save_and_execute_rejects_empty_code(client: TestClient):
+    resp = client.post(
+        "/analysis/aid-1/save-and-execute",
+        json={"code": "   "},
+        headers=make_auth_headers("sae-user"),
+    )
+    assert resp.status_code == 422
+
+
+def test_analysis_feedback_invalid_type_422(client: TestClient):
+    resp = client.post(
+        "/analysis/aid-1/feedback",
+        json={"feedback_type": "meh"},
+        headers=make_auth_headers("fb-user"),
+    )
+    assert resp.status_code == 422
+
+
+# ======================================================================================
+# MCP credentials endpoints
+# ======================================================================================
+
+
+def _patch_mcp_row(monkeypatch, row):
+    monkeypatch.setattr(server, "_mcp_conn_select", lambda cid: row, raising=False)
+
+
+def test_mcp_encrypt_unknown_connection_404(client: TestClient, monkeypatch):
+    _patch_mcp_row(monkeypatch, None)
+    resp = client.post("/api/mcp-connections/c1/encrypt", json={"apiKey": "k"},
+                       headers=make_auth_headers("mcp-user"))
+    assert resp.status_code == 404
+
+
+def test_mcp_encrypt_foreign_connection_403(client: TestClient, monkeypatch):
+    _patch_mcp_row(monkeypatch, {"id": "c1", "user_id": "other"})
+    resp = client.post("/api/mcp-connections/c1/encrypt", json={"apiKey": "k"},
+                       headers=make_auth_headers("mcp-user"))
+    assert resp.status_code == 403
+
+
+def test_mcp_encrypt_requires_a_field(client: TestClient, monkeypatch):
+    _patch_mcp_row(monkeypatch, {"id": "c1", "user_id": "mcp-user"})
+    resp = client.post("/api/mcp-connections/c1/encrypt", json={},
+                       headers=make_auth_headers("mcp-user"))
+    assert resp.status_code == 422
+
+
+def test_mcp_encrypt_stores_ciphertext_and_blanks_plaintext(client: TestClient, monkeypatch):
+    _patch_mcp_row(monkeypatch, {"id": "c1", "user_id": "mcp-user"})
+    monkeypatch.setattr(server, "encrypt_secret",
+                        lambda v: {"ciphertext": f"ct({len(v)})", "iv": "iv"}, raising=False)
+    updates: List[Dict[str, Any]] = []
+    monkeypatch.setattr(server, "_mcp_conn_update", lambda cid, patch: updates.append(patch),
+                        raising=False)
+
+    resp = client.post("/api/mcp-connections/c1/encrypt", json={"apiKey": "secret-key"},
+                       headers=make_auth_headers("mcp-user"))
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["encrypted"] == ["api_key"]
+    assert updates == [{"api_key_ciphertext": "ct(10)", "api_key_iv": "iv", "api_key": ""}]
+    assert "secret-key" not in json.dumps(updates)
+
+
+def test_mcp_encrypt_without_key_configured_500(client: TestClient, monkeypatch):
+    _patch_mcp_row(monkeypatch, {"id": "c1", "user_id": "mcp-user"})
+    monkeypatch.setattr(server, "encrypt_secret", lambda v: None, raising=False)
+    resp = client.post("/api/mcp-connections/c1/encrypt", json={"username": "bob"},
+                       headers=make_auth_headers("mcp-user"))
+    assert resp.status_code == 500
+    assert "DB_ENCRYPTION_KEY" in resp.json()["detail"]
+
+
+def test_mcp_decrypt_success(client: TestClient, monkeypatch):
+    _patch_mcp_row(monkeypatch, {"id": "c1", "user_id": "mcp-user",
+                                 "api_key_ciphertext": "CT", "api_key_iv": "IV"})
+    monkeypatch.setattr(
+        server, "decrypt_secret",
+        lambda blob: f"plain:{blob['ciphertext']}" if blob.get("ciphertext") else None,
+        raising=False,
+    )
+    resp = client.post("/api/mcp-connections/c1/decrypt", headers=make_auth_headers("mcp-user"))
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"apiKey": "plain:CT", "username": None}
+
+
+def test_mcp_decrypt_key_mismatch_409(client: TestClient, monkeypatch):
+    _patch_mcp_row(monkeypatch, {"id": "c1", "user_id": "mcp-user",
+                                 "api_key_ciphertext": "CT", "api_key_iv": "IV"})
+    monkeypatch.setattr(server, "decrypt_secret", lambda blob: None, raising=False)
+    resp = client.post("/api/mcp-connections/c1/decrypt", headers=make_auth_headers("mcp-user"))
+    assert resp.status_code == 409
+
+
+def test_mcp_lookup_failure_500(client: TestClient, monkeypatch):
+    def _boom(cid):
+        raise RuntimeError("supabase down")
+
+    monkeypatch.setattr(server, "_mcp_conn_select", _boom, raising=False)
+    resp = client.post("/api/mcp-connections/c1/decrypt", headers=make_auth_headers("mcp-user"))
+    assert resp.status_code == 500
+
+
+# ======================================================================================
+# Database query tool routing + tables-to-analysis edge cases
+# ======================================================================================
+
+
+def _capture_mcp(monkeypatch, payload):
+    sent: List[Dict[str, Any]] = []
+
+    class _Resp:
+        status_code = 200
+
+        def json(self):
+            return payload
+
+        def raise_for_status(self):
+            return None
+
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, json, headers, timeout):
+            sent.append(json)
+            return _Resp()
+
+    monkeypatch.setattr(server.httpx, "AsyncClient", _Client, raising=False)
+    return sent
+
+
+@pytest.mark.parametrize(
+    "content,tool,args",
+    [
+        ("show tables", "list_tables", {}),
+        ("LIST TABLES", "list_tables", {}),
+        ("describe table users", "describe_table", {"table_name": "users"}),
+        ("SELECT 1", "query", {"sql": "SELECT 1"}),
+    ],
+)
+def test_database_query_tool_routing(client: TestClient, monkeypatch, content, tool, args):
+    sent = _capture_mcp(monkeypatch, {"ok": True})
+    resp = client.post(
+        "/api/v1/database/query",
+        json={"content": content, "customer_id": "c1", "metadata": {"api_key": "k"}},
+        headers=make_auth_headers("db-route"),
+    )
+    assert resp.status_code == 200, resp.text
+    assert sent[0]["params"]["name"] == tool
+    assert sent[0]["params"]["arguments"] == args
+
+
+def test_database_query_no_rows_creates_no_dataset(client: TestClient, monkeypatch):
+    _capture_mcp(monkeypatch, {"columns": ["id"], "rows": []})
+    resp = client.post(
+        "/api/v1/database/query",
+        json={"content": "SELECT id FROM t WHERE 1=0", "customer_id": "c1",
+              "metadata": {"api_key": "k"}},
+        headers=make_auth_headers("db-empty"),
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert not data.get("dataset_id")
+    assert "no rows" in _last_assistant(data)
+    assert SESSIONS == {}
+
+
+def test_database_query_records_source_table(client: TestClient, monkeypatch):
+    _capture_mcp(monkeypatch, {"columns": ["id"], "rows": [[1]]})
+    resp = client.post(
+        "/api/v1/database/query",
+        json={"content": "SELECT id FROM sales.orders", "customer_id": "c1",
+              "metadata": {"api_key": "k"}},
+        headers=make_auth_headers("db-src"),
+    )
+    assert resp.status_code == 200, resp.text
+    sess = SESSIONS[resp.json()["session_id"]]
+    assert sess["source_table"] == "sales.orders"
+    assert sess["customer_id"] == "c1"
+    assert sess["input_data_type"] == "db"
+
+
+def test_tables_to_analysis_duplicate_tables_get_unique_aliases(client: TestClient, monkeypatch):
+    async def _mcp(customer_id, api_key, sql):
+        return {"columns": ["id"], "rows": [[1], [2]]}
+
+    monkeypatch.setattr(server, "_run_mcp_db_query", _mcp, raising=False)
+    resp = client.post(
+        "/api/database/tables-to-analysis",
+        json={"tables": ["users", "users"], "customer_id": "c", "api_key": "k"},
+        headers=make_auth_headers("tta-dup"),
+    )
+    assert resp.status_code == 200, resp.text
+    out = resp.json()
+    assert [d["alias"] for d in out["datasets"]] == ["users", "users_2"]
+
+    group = SESSIONS[out["session_id"]]
+    assert group["dataset_ids"] == [d["dataset_id"] for d in out["datasets"]]
+
+
+def test_tables_to_analysis_mcp_error_rolls_back(client: TestClient, monkeypatch):
+    calls = {"n": 0}
+
+    async def _mcp(customer_id, api_key, sql):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return {"columns": ["id"], "rows": [[1]]}
+        return {"error": "permission denied"}
+
+    monkeypatch.setattr(server, "_run_mcp_db_query", _mcp, raising=False)
+    resp = client.post(
+        "/api/database/tables-to-analysis",
+        json={"tables": ["ok_table", "locked_table"], "customer_id": "c", "api_key": "k"},
+        headers=make_auth_headers("tta-err"),
+    )
+    assert resp.status_code == 400
+    assert "permission denied" in resp.json()["detail"]
+    assert SESSIONS == {}, "first table's session must be rolled back"
+
+
+def test_tables_to_analysis_empty_table_422(client: TestClient, monkeypatch):
+    async def _mcp(customer_id, api_key, sql):
+        return {"columns": ["id"], "rows": []}
+
+    monkeypatch.setattr(server, "_run_mcp_db_query", _mcp, raising=False)
+    resp = client.post(
+        "/api/database/tables-to-analysis",
+        json={"tables": ["empty"], "customer_id": "c", "api_key": "k"},
+        headers=make_auth_headers("tta-empty"),
+    )
+    assert resp.status_code == 422
+
+
+def test_tables_to_analysis_too_many_tables_413(client: TestClient, monkeypatch):
+    monkeypatch.setattr(server, "MAX_UPLOAD_FILES", 1, raising=False)
+    resp = client.post(
+        "/api/database/tables-to-analysis",
+        json={"tables": ["a", "b"], "customer_id": "c", "api_key": "k"},
+        headers=make_auth_headers("tta-many"),
+    )
+    assert resp.status_code == 413
+
+
+def test_tables_to_analysis_caps_limit(client: TestClient, monkeypatch):
+    seen_sql: List[str] = []
+
+    async def _mcp(customer_id, api_key, sql):
+        seen_sql.append(sql)
+        return {"columns": ["id"], "rows": [[1]]}
+
+    monkeypatch.setattr(server, "_run_mcp_db_query", _mcp, raising=False)
+    resp = client.post(
+        "/api/database/tables-to-analysis",
+        json={"tables": ["t"], "customer_id": "c", "api_key": "k", "limit": 10_000_000},
+        headers=make_auth_headers("tta-limit"),
+    )
+    assert resp.status_code == 200, resp.text
+    assert seen_sql == [f"SELECT * FROM t LIMIT {server.MAX_DB_SAMPLE_ROWS}"]

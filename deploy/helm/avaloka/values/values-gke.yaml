@@ -56,10 +56,10 @@ webui:
 gateway:
   enabled: true
   provider: gcp
-  # TEST instance only. app.example.com is a separate release with its own public
+  # TEST instance only. app.avaloka.ai is a separate release with its own public
   # IP — see values-gke-app.yaml.
   hosts:
-    - test.example.com
+    - test.avaloka.ai
   # Reserved out of band so the address outlives the release:
   #   gcloud compute addresses create avaloka-lb-ip --global --ip-version=IPV4
   addresses:
@@ -98,6 +98,9 @@ config:
 
 mlflow:
   artifactsDestination: "gs://avaloka-user-filestore/mlflow-artifacts"
+  # Celery launches distributed Ray training, whose checkpoints must use storage
+  # shared by every worker rather than a local path inside the Celery pod.
+  defaultArtifactRoot: "gs://avaloka-user-filestore/mlflow-artifacts"
 
 resources:
   requests:

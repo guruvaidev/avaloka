@@ -34,6 +34,25 @@ viz_llm: Optional[Any] = build_chat_model(
     groq_model=resolve_model("visualization"),
     groq_api_key=_VIZ_API_KEY,
 )
+# gpt-oss is a reasoning model: its thinking counts against max_tokens. At the
+# provider default (2048) it thought for the whole budget and returned an empty
+# answer ("finish=length ... content=''"), so every chart came from the fallback.
+_VIZ_MAX_TOKENS = int(os.getenv("AVALOKA_VIZ_MAX_TOKENS", "4096"))
+_VIZ_IS_REASONING = "gpt-oss" in str(resolve_model("visualization") or "").lower()
+
+
+def _invoke_viz_llm(prompt: str):
+    kwargs: Dict[str, Any] = {"max_tokens": _VIZ_MAX_TOKENS}
+    if _VIZ_IS_REASONING:
+        kwargs["reasoning_effort"] = "low"
+    try:
+        return viz_llm.invoke(prompt, **kwargs)
+    except Exception as exc:
+        # A provider that rejects these kwargs must not cost us the chart.
+        logger.warning("Viz LLM rejected tuning kwargs (%s); retrying plain.", exc)
+        return viz_llm.invoke(prompt)
+
+
 if viz_llm is not None:
     logger.info("Visualization LLM enabled for chart selection")
 else:
@@ -529,7 +548,7 @@ def _llm_suggest_chart_specs(viz_profile: Dict[str, Any]) -> List[Dict[str, Any]
     )
 
     try:
-        resp = viz_llm.invoke(system_prompt + "\n\n" + user_prompt)
+        resp = _invoke_viz_llm(system_prompt + "\n\n" + user_prompt)
         logger.info("Visualization LLM answered: %s", describe_response(resp))
         content = (resp.content or "").strip()
 
@@ -1073,6 +1092,16 @@ def visualization_agent_node(state: ETLState) -> ETLState:
             # this run's result; charting the input instead is never the more
             # useful thing to show.
             if result_rows:
+                # A single row with several columns is a summary, not a distribution:
+                # every "chart" of it is one bar. Keep the dataset's existing charts.
+                # {} and None make the API fall back to the session's upload-time
+                # config (and overwrite any stale checkpointed config).
+                if len(result_rows) == 1 and len(result_rows[0]) > 1:
+                    logger.info("Visualization agent: single-row summary result; keeping dataset charts")
+                    new_state = state.copy()
+                    new_state["visualization_config"] = {}
+                    new_state["visualization_status"] = None
+                    return new_state
                 is_echo = bool(uploaded_cols) and set(result_rows[0].keys()).issuperset(uploaded_cols)
                 if not is_echo:
                     sample_rows_raw = result_rows
@@ -1124,8 +1153,3 @@ def visualization_agent_node(state: ETLState) -> ETLState:
         new_state["visualization_config"] = {}
         new_state["visualization_status"] = f"error: {e}"
         return new_state
-
-
-
-
-

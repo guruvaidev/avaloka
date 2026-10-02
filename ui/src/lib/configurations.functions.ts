@@ -37,9 +37,9 @@ async function sendInviteEmailViaSmtp(opts: {
 
   // The mail function is deployed on the Cloud-managed project; authenticate
   // with the shared internal token (falls back to that project's service key).
-  const supabaseUrl = process.env["SUPABASE_URL"];
+  const supabaseUrl = process.env["SUPABASE_INCLUSTER_URL"];
   const serviceKey =
-    process.env["INTERNAL_MAIL_TOKEN"] || process.env["SUPABASE_SERVICE_ROLE_KEY"];
+    process.env["INTERNAL_MAIL_TOKEN"] || process.env["PRIMARY_SUPABASE_SERVICE_ROLE_KEY"];
   if (!supabaseUrl || !serviceKey) {
     return { userId, error: "Email service is not configured." };
   }

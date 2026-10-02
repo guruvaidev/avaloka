@@ -17,14 +17,14 @@
 # instance — that separation is what lets test be redeployed without risking prod.
 #
 # Usage:
-#   # test.example.com (values-gke.yaml defaults)
-#   ./deploy/gcp-lb-prereqs.sh --project my-project --hosts test.example.com
+#   # test.avaloka.ai (values-gke.yaml defaults)
+#   ./deploy/gcp-lb-prereqs.sh --project my-project --hosts test.avaloka.ai
 #
-#   # app.example.com (values-gke-app.yaml) — separate IP, separate cert map
-#   ./deploy/gcp-lb-prereqs.sh --project my-project --hosts app.example.com \
+#   # app.avaloka.ai (values-gke-app.yaml) — separate IP, separate cert map
+#   ./deploy/gcp-lb-prereqs.sh --project my-project --hosts app.avaloka.ai \
 #       --ip-name avaloka-app-lb-ip --cert-map avaloka-app-cert-map
 #
-#   ./deploy/gcp-lb-prereqs.sh --project my-project --hosts app.example.com --dry-run
+#   ./deploy/gcp-lb-prereqs.sh --project my-project --hosts app.avaloka.ai --dry-run
 #
 set -euo pipefail
 
@@ -95,7 +95,7 @@ else
 fi
 
 for host in "${HOST_LIST[@]}"; do
-  # Resource names allow no dots, so app.example.com -> app-avaloka-ai.
+  # Resource names allow no dots, so app.avaloka.ai -> app-avaloka-ai.
   slug="${host//./-}"
   cert_name="avaloka-cert-${slug}"
   entry_name="avaloka-entry-${slug}"
@@ -147,7 +147,7 @@ $(for host in "${HOST_LIST[@]}"; do printf '       %-24s A     %s\n' "$host" "$I
      Validation and renewal happen over 443, so the HTTPS-only Gateway (no :80
      listener) is fine.
 
-  2. Install the matching instance. For test.example.com:
+  2. Install the matching instance. For test.avaloka.ai:
 
        helm upgrade --install avaloka deploy/helm/avaloka \\
          --namespace avaloka --create-namespace \\
@@ -155,7 +155,7 @@ $(for host in "${HOST_LIST[@]}"; do printf '       %-24s A     %s\n' "$host" "$I
          --set gateway.addresses[0].value=${IP_NAME} \\
          --set gateway.tls.certMapName=${CERT_MAP_NAME}
 
-     For app.example.com — note the SEPARATE namespace, which is required because
+     For app.avaloka.ai — note the SEPARATE namespace, which is required because
      the chart names resources after the chart, not the release:
 
        helm upgrade --install avaloka-app deploy/helm/avaloka \\

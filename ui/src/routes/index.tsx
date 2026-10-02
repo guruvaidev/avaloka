@@ -19,8 +19,7 @@ const slide7 = { url: "/assets/slide-7.png" };
 import { supabase } from "@/integrations/supabase/client";
 import {
   checkMyAccountActive,
-  generateAdminMagicLink,
-  generateSupportAdminMagicLink,
+
   sendLoginMagicLink,
 } from "@/lib/admin-login.functions";
 
@@ -362,71 +361,6 @@ function LoginPage() {
                 >
                   {submitting ? "Sending…" : "Send Login Link"}
                 </Button>
-
-                <Button
-                  type="button"
-                  disabled={submitting}
-                  onClick={async () => {
-                    setSubmitting(true);
-                    try {
-                      const { token_hash, email: adminEmail } =
-                        await generateAdminMagicLink();
-                      setEmail(adminEmail);
-                      const { error } = await supabase.auth.verifyOtp({
-                        token_hash,
-                        type: "recovery",
-                      });
-                      if (error) throw error;
-                      localStorage.removeItem("admin-bypass");
-                      toast.success("Signed in as admin");
-                      navigate({ to: "/proanalysis" });
-                    } catch (err) {
-                      toast.error(
-                        err instanceof Error ? err.message : "Admin login failed",
-                      );
-                    } finally {
-                      setSubmitting(false);
-                    }
-                  }}
-                  className="h-11 w-full rounded-lg border border-dashed border-[#1565ef] bg-transparent px-4 py-1.5 text-base font-semibold text-[#1565ef] shadow-none hover:bg-[#1565ef]/5"
-                >
-                  {submitting ? "Signing in…" : "Go to Admin View"}
-                </Button>
-
-                <Button
-                  type="button"
-                  disabled={submitting}
-                  onClick={async () => {
-                    setSubmitting(true);
-                    try {
-                      const { token_hash, email: supportEmail } =
-                        await generateSupportAdminMagicLink();
-                      setEmail(supportEmail);
-                      const { error } = await supabase.auth.verifyOtp({
-                        token_hash,
-                        type: "recovery",
-                      });
-                      if (error) throw error;
-                      localStorage.removeItem("admin-bypass");
-                      toast.success("Signed in as support admin");
-                      navigate({ to: "/support-queries" });
-                    } catch (err) {
-                      toast.error(
-                        err instanceof Error
-                          ? err.message
-                          : "Support admin login failed",
-                      );
-                    } finally {
-                      setSubmitting(false);
-                    }
-                  }}
-                  className="h-11 w-full rounded-lg border border-dashed border-border bg-transparent px-4 py-1.5 text-base font-semibold text-foreground shadow-none hover:bg-muted"
-                >
-                  {submitting ? "Signing in…" : "Go to Support Admin"}
-                </Button>
-
-
-
                 <p className="text-center text-xs text-[color:var(--text-tertiary)]">
                   A secure login link will be sent to your inbox.
                 </p>

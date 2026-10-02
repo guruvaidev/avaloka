@@ -16,8 +16,9 @@ import {
   ReferenceLine,
   ResponsiveContainer,
   Tooltip as RTooltip,
-  Legend,
 } from "recharts";
+import { getLineRenderData, getPieRenderData } from "@/lib/chart-points";
+import { aggregateTitle, chartAxisTitles } from "@/lib/chart-axis-titles";
 
 export type ChartType = "line" | "area" | "bar" | "pie" | "donut" | "scatter";
 
@@ -31,6 +32,15 @@ export type Slide = {
   xKey: string;
   series: Series[];
   insights: string[];
+  /** Metadata from visualization_config (used by the Insights Avatar). */
+  id?: string;
+  chartKind?: "bar" | "line" | "pie" | "scatter" | "histogram";
+  xField?: string | null;
+  yField?: string | null;
+  aggregate?: string | null;
+  xAxisTitle?: string;
+  yAxisTitle?: string;
+  reason?: string | null;
 };
 
 export const PALETTE = ["#1565ef", "#f97066", "#12b76a", "#f79009", "#7a5af8", "#06aed4", "#ee46bc"];
@@ -86,7 +96,8 @@ function buildFromEncodings(raw: any, samples: any[]): { data: any[]; xKey: stri
   if (!xFieldRaw) return null;
   const xField = resolveFieldKey(samples, String(xFieldRaw));
   if (!xField) return null;
-  const aggregate = String(enc.y?.aggregate ?? "").toLowerCase();
+  const aggregate = String(enc.y?.aggregate ?? "").trim().toLowerCase();
+  if (!["", "count", "sum", "mean", "avg", "average", "median", "min", "max"].includes(aggregate)) return null;
   const topK = raw?.config?.top_k as number | undefined;
   let yFieldRaw = enc.y?.field as string | undefined;
   let yField = yFieldRaw ? (resolveFieldKey(samples, yFieldRaw) ?? undefined) : undefined;
@@ -112,7 +123,7 @@ function buildFromEncodings(raw: any, samples: any[]): { data: any[]; xKey: stri
     return {
       data,
       xKey: xField,
-      series: [{ dataKey: countKey, name: "Count", color: PALETTE[0] }],
+      series: [{ dataKey: countKey, name: "Count of records", color: PALETTE[0] }],
     };
   }
 
@@ -144,20 +155,33 @@ function buildFromEncodings(raw: any, samples: any[]): { data: any[]; xKey: stri
     }
     groups.set(key, g);
   }
-  let rows = Array.from(groups.entries()).map(([k, g]) => {
+  const counting = aggregate === "count" || (!aggregate && xField === yField);
+  const valueKey = counting ? countKey : xField === yField ? "__aggregate__" : yField;
+  let rows = Array.from(groups.entries()).filter(([, g]) => counting || g.vals.length > 0).map(([k, g]) => {
     let v: number;
-    if (yField === countKey || aggregate === "count" || xField === yField) v = g.count;
+    if (counting) v = g.count;
     else if (aggregate === "sum") v = g.sum;
+    else if (aggregate === "median") {
+      const sorted = [...g.vals].sort((a, b) => a - b);
+      const middle = Math.floor(sorted.length / 2);
+      v = sorted.length ? (sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2) : 0;
+    }
+    else if (aggregate === "min") v = g.vals.length ? Math.min(...g.vals) : 0;
+    else if (aggregate === "max") v = g.vals.length ? Math.max(...g.vals) : 0;
     else if (aggregate === "mean" || aggregate === "avg" || aggregate === "average")
       v = g.vals.length ? g.sum / g.vals.length : 0;
     else v = g.vals.length ? g.sum / g.vals.length : g.count;
-    return { [xField]: k, [yField!]: Number(v.toFixed(4)) };
+    return { [xField]: k, [valueKey!]: Number(v.toFixed(4)) };
   });
   if (topK && rows.length > topK) rows = rows.slice(0, topK);
   return {
     data: rows,
     xKey: xField,
-    series: [{ dataKey: yField!, name: yField === countKey ? "Count" : yField!, color: PALETTE[0] }],
+    series: [{
+      dataKey: valueKey!,
+      name: counting ? "Count of records" : aggregateTitle(aggregate || "mean", yField),
+      color: PALETTE[0],
+    }],
   };
 }
 
@@ -169,6 +193,33 @@ function pickInsights(raw: any): string[] {
 }
 
 export function normalizeChart(raw: any, samples?: any[]): Slide | null {
+  const slide = normalizeChartInner(raw, samples);
+  if (!slide) return null;
+  const enc = raw?.encodings ?? {};
+  const t = String(raw?.type ?? raw?.chart_type ?? raw?.kind ?? "").toLowerCase();
+  const kind: Slide["chartKind"] = enc?.x?.bin || t.includes("hist")
+    ? "histogram"
+    : slide.type === "donut" || slide.type === "pie"
+      ? "pie"
+      : slide.type === "area"
+        ? "line"
+        : slide.type;
+  const str = (v: unknown) => (v == null || v === "" ? null : String(v));
+  const encoded = Boolean(enc.x?.field || enc.y?.field || enc.y?.aggregate || enc.theta?.aggregate);
+  return {
+    ...slide,
+    id: raw?.id != null ? String(raw.id) : undefined,
+    chartKind: kind,
+    xField: str(enc.x?.field ?? enc.color?.field ?? raw?.xField ?? raw?.x_field),
+    yField: str(enc.y?.field ?? enc.theta?.field ?? raw?.yField ?? raw?.y_field),
+    aggregate: str(enc.y?.aggregate ?? enc.theta?.aggregate ?? raw?.aggregate),
+    xAxisTitle: encoded ? undefined : str(raw?.xAxisTitle ?? raw?.x_axis_title ?? raw?.xLabel ?? raw?.x_label) ?? undefined,
+    yAxisTitle: encoded ? undefined : str(raw?.yAxisTitle ?? raw?.y_axis_title ?? raw?.yLabel ?? raw?.y_label) ?? undefined,
+    reason: str(raw?.reason),
+  };
+}
+
+function normalizeChartInner(raw: any, samples?: any[]): Slide | null {
   if (!raw || typeof raw !== "object") return null;
   try {
     const type = pickType(raw);
@@ -367,61 +418,58 @@ export function DynamicChart({
   chartKey?: string;
 }) {
   const uid = (chartKey ?? slide.title ?? "chart").replace(/[^a-zA-Z0-9_-]/g, "_");
+  const axisTitles = chartAxisTitles(slide);
 
   if (slide.type === "pie" || slide.type === "donut") {
-    const key = slide.series[0]?.dataKey ?? "value";
-    const nameKey = slide.xKey;
-
-    // Group tiny categories into "Other" once we exceed 10 slices.
-    const raw = (slide.data ?? []).filter(
-      (d) => d && d[nameKey] != null && Number.isFinite(Number(d[key])),
-    );
-    if (!raw.length) return null;
-
-    let pieData = raw.map((d) => ({ name: String(d[nameKey]), value: Number(d[key]) }));
-    const MAX_SLICES = 10;
-    if (pieData.length > MAX_SLICES) {
-      const sorted = [...pieData].sort((a, b) => b.value - a.value);
-      const top = sorted.slice(0, MAX_SLICES - 1);
-      const otherVal = sorted.slice(MAX_SLICES - 1).reduce((s, r) => s + r.value, 0);
-      pieData = [...top, { name: "Other", value: otherVal }];
-    }
+    const pieData = getPieRenderData(slide);
+    if (!pieData.length) return null;
     const total = pieData.reduce((s, r) => s + (r.value || 0), 0) || 1;
     const pct = (v: number) => `${((v / total) * 100).toFixed(1)}%`;
 
     return (
-      <div className="w-full min-w-0" style={{ height, minHeight: height }}>
-        <ResponsiveContainer width="100%" height="100%">
-          <PieChart>
-            <RTooltip
-              formatter={(value: any, name: any) => [
-                `${formatNumberCompact(value)} (${pct(Number(value))})`,
-                name,
-              ]}
-            />
-            <Pie
-              data={pieData}
-              dataKey="value"
-              nameKey="name"
-              innerRadius={Math.max(40, height / 4)}
-              outerRadius={Math.max(60, height / 2.7)}
-              paddingAngle={2}
-            >
-              {pieData.map((_, i) => (
-                <Cell key={i} fill={PALETTE[i % PALETTE.length]} />
-              ))}
-            </Pie>
-            {!compact ? (
-              <Legend
-                wrapperStyle={{ fontSize: 11 }}
-                formatter={(value: any, _entry: any, index: number) => {
-                  const item = pieData[index];
-                  return item ? `${value} — ${formatNumberCompact(item.value)} (${pct(item.value)})` : value;
-                }}
+      <div className="flex h-auto w-full min-w-0 flex-wrap gap-3 overflow-visible">
+        <div className="h-[230px] min-h-[230px] min-w-[220px] flex-[1.2_1_0%] shrink-0">
+          <ResponsiveContainer width="100%" height="100%">
+            <PieChart>
+              <RTooltip
+                formatter={(value: any, name: any) => [
+                  `${formatNumberCompact(value)} (${pct(Number(value))})`,
+                  name,
+                ]}
               />
-            ) : null}
-          </PieChart>
-        </ResponsiveContainer>
+              <Pie
+                data={pieData}
+                dataKey="value"
+                nameKey="name"
+                innerRadius={Math.max(40, height / 4)}
+                outerRadius={Math.max(60, height / 2.7)}
+                paddingAngle={2}
+              >
+                {pieData.map((_, i) => (
+                  <Cell key={i} fill={PALETTE[i % PALETTE.length]} />
+                ))}
+              </Pie>
+            </PieChart>
+          </ResponsiveContainer>
+        </div>
+        {!compact ? (
+          <div className="max-h-[230px] min-w-[160px] flex-1 shrink-0 overflow-y-auto pr-1">
+            <ul className="flex w-full flex-col gap-1.5">
+              {pieData.map((item, i) => (
+                <li key={`${item.name}-${i}`} className="flex min-w-0 items-center gap-2 text-[11px] text-[#475467]">
+                  <span
+                    className="size-2 shrink-0 rounded-sm"
+                    style={{ backgroundColor: PALETTE[i % PALETTE.length] }}
+                  />
+                  <span className="min-w-0 flex-1 break-words">{item.name}</span>
+                  <span className="shrink-0 whitespace-nowrap text-[#101828]">
+                    {formatNumberCompact(item.value)} ({pct(item.value)})
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
       </div>
     );
 
@@ -430,7 +478,6 @@ export function DynamicChart({
   if (slide.type === "scatter") {
 
     const yKey = slide.series[0]?.dataKey ?? "y";
-    const yName = slide.series[0]?.name ?? yKey;
     return (
       <div className="w-full min-w-0" style={{ height, minHeight: height }}>
         <ResponsiveContainer width="100%" height="100%">
@@ -443,7 +490,7 @@ export function DynamicChart({
               tickLine={false}
               axisLine={false}
               height={compact ? 30 : 60}
-              label={compact ? undefined : { value: `X: ${slide.xKey}`, position: "insideBottom", offset: 0, fill: "#344054", fontSize: 12, fontWeight: 600 }}
+              label={compact ? undefined : { value: axisTitles.x, position: "insideBottom", offset: 0, fill: "#344054", fontSize: 12, fontWeight: 600 }}
             />
             <YAxis
               type="number"
@@ -453,7 +500,7 @@ export function DynamicChart({
               tickLine={false}
               axisLine={false}
               width={compact ? 40 : 72}
-              label={compact ? undefined : { value: `Y: ${yName}`, angle: -90, position: "insideLeft", offset: 10, fill: "#344054", fontSize: 12, fontWeight: 600, style: { textAnchor: "middle" } }}
+              label={compact ? undefined : { value: axisTitles.y, angle: -90, position: "insideLeft", offset: 10, fill: "#344054", fontSize: 12, fontWeight: 600, style: { textAnchor: "middle" } }}
             />
             <ZAxis range={[20, 20]} />
             <RTooltip cursor={{ strokeDasharray: "3 3" }} formatter={tooltipCompactFormatter} />
@@ -469,7 +516,6 @@ export function DynamicChart({
   if (slide.type === "bar") {
     const margin = compact ? { top: 4, right: 4, left: -16, bottom: 0 } : { top: 8, right: 16, left: 24, bottom: 56 };
     const tickSize = compact ? 9 : 10;
-    const yName = slide.series[0]?.name ?? slide.series[0]?.dataKey ?? "Value";
     return (
       <div className="w-full min-w-0" style={{ height, minHeight: height }}>
         <ResponsiveContainer width="100%" height="100%">
@@ -482,7 +528,7 @@ export function DynamicChart({
               axisLine={false}
               hide={compact}
               height={compact ? 30 : 60}
-              label={compact ? undefined : { value: `X: ${slide.xKey}`, position: "insideBottom", offset: 0, fill: "#344054", fontSize: 12, fontWeight: 600 }}
+              label={compact ? undefined : { value: axisTitles.x, position: "insideBottom", offset: 0, fill: "#344054", fontSize: 12, fontWeight: 600 }}
             />
             <YAxis
               tick={{ fill: "#667085", fontSize: tickSize }}
@@ -490,7 +536,7 @@ export function DynamicChart({
               tickLine={false}
               axisLine={false}
               width={compact ? 28 : 72}
-              label={compact ? undefined : { value: `Y: ${yName}`, angle: -90, position: "insideLeft", offset: 10, fill: "#344054", fontSize: 12, fontWeight: 600, style: { textAnchor: "middle" } }}
+              label={compact ? undefined : { value: axisTitles.y, angle: -90, position: "insideLeft", offset: 10, fill: "#344054", fontSize: 12, fontWeight: 600, style: { textAnchor: "middle" } }}
             />
             <RTooltip formatter={tooltipCompactFormatter} />
             {slide.series.map((s) => (
@@ -510,14 +556,14 @@ export function DynamicChart({
   }
 
 
-  const hasNegative = slide.data.some((d) =>
+  const lineData = getLineRenderData(slide).data;
+  const hasNegative = lineData.some((d) =>
     slide.series.some((s) => typeof d[s.dataKey] === "number" && d[s.dataKey] < 0),
   );
-  const yName = slide.series[0]?.name ?? slide.series[0]?.dataKey ?? "";
   return (
     <div className="w-full min-w-0" style={{ height, minHeight: height }}>
       <ResponsiveContainer width="100%" height="100%">
-        <ComposedChart data={slide.data} margin={compact ? { top: 8, right: 8, left: 0, bottom: 0 } : { top: 8, right: 16, left: 24, bottom: 56 }}>
+        <ComposedChart data={lineData} margin={compact ? { top: 8, right: 8, left: 0, bottom: 0 } : { top: 8, right: 16, left: 24, bottom: 56 }}>
           <defs>
             {slide.series.map((s, i) => (
               <linearGradient key={s.dataKey} id={`dc-grad-${uid}-${i}-${s.dataKey}`} x1="0" y1="0" x2="0" y2="1">
@@ -533,7 +579,7 @@ export function DynamicChart({
             tickLine={false}
             axisLine={false}
             height={compact ? 30 : 60}
-            label={compact ? undefined : { value: `X: ${slide.xKey}`, position: "insideBottom", offset: 0, fill: "#344054", fontSize: 12, fontWeight: 600 }}
+            label={compact ? undefined : { value: axisTitles.x, position: "insideBottom", offset: 0, fill: "#344054", fontSize: 12, fontWeight: 600 }}
           />
           <YAxis
             tick={{ fill: "#667085", fontSize: 10 }}
@@ -541,7 +587,7 @@ export function DynamicChart({
             tickLine={false}
             axisLine={false}
             width={compact ? 40 : 72}
-            label={compact ? undefined : { value: `Y: ${yName || "Value"}`, angle: -90, position: "insideLeft", offset: 10, fill: "#344054", fontSize: 12, fontWeight: 600, style: { textAnchor: "middle" } }}
+            label={compact ? undefined : { value: axisTitles.y, angle: -90, position: "insideLeft", offset: 10, fill: "#344054", fontSize: 12, fontWeight: 600, style: { textAnchor: "middle" } }}
           />
 
           {hasNegative && <ReferenceLine y={0} stroke="#1565ef" strokeWidth={1} />}

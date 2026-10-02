@@ -9,7 +9,15 @@ from urllib.parse import urlparse
 import pytest
 import requests
 
+# Overridable so the suite can point at a deployed API rather than a local one.
 API_URL = os.getenv("AVALOKA_API_URL", "http://localhost:8010")
+
+# These drive a live Avaloka API over HTTP: scheduling a task, polling it and
+# cancelling it. They are integration tests, not hermetic ones -- without this
+# marker they run in the default tier and error at setup on a refused
+# connection instead of skipping (docs/testing.md: skip with a reason, never
+# fail spuriously).
+pytestmark = pytest.mark.integration
 HEADERS = {"X-User-Id": "test_user"}
 
 # This suite drives the real scheduling stack end to end: it uploads a dataset
@@ -58,6 +66,12 @@ CSV_FILE_CONTENT = """OrderID,OrderDate,CustomerID,Region,Product,Quantity,UnitP
 
 @pytest.fixture(scope="module")
 def test_data():
+    try:
+        requests.get(f"{API_URL}/health", timeout=3)
+    except requests.exceptions.RequestException as exc:
+        pytest.skip(f"Avaloka API not reachable at {API_URL} ({exc.__class__.__name__}); "
+                    "start it to run the scheduler tests")
+
     csv_content = io.BytesIO(CSV_FILE_CONTENT.encode("utf-8"))
 
     r = requests.post(

@@ -234,9 +234,16 @@ def test_failed_validation_is_not_packaged_for_execution(failing_subgraph):
     })
     assert updates["coder_definition"] == {}
     assert updates["generated_code"] == ""
-    assert "will not be executed" in updates["execution_error"]
-    assert "SyntaxError" in updates["execution_error"]
+
+    message = updates["execution_error"]
+    # The user is told the request was not executed...
+    assert "nothing was executed" in message
+    # ...but the coder-facing feedback must NOT be pasted into chat. This used
+    # to read "Last validation feedback: SyntaxError: ..." — a raw traceback
+    # line in a user's conversation.
+    assert "SyntaxError" not in message
+    assert "Traceback" not in message
+
     # With no packaged code the parent router must end, not execute.
     assert wf.route_after_code(updates) == "end"
-    assert any("will not be executed" in getattr(m, "content", "")
-               for m in updates["messages"])
+    assert any(message == getattr(m, "content", "") for m in updates["messages"])

@@ -100,9 +100,7 @@ def _ensure_sse_url(url: str) -> str:
     trimmed = url.rstrip("/")
     return trimmed if trimmed.endswith("/sse") else trimmed + "/sse"
 
-_api_key = (os.environ.get("GROQ_API_KEY_PLANNING_AGENT")
-            or os.environ.get("GROQ_API_KEY_CODING_AGENT")
-            or os.environ.get("GROQ_API_KEY"))
+_api_key = os.environ.get("GROQ_API_KEY_PLANNING_AGENT") or os.environ.get("GROQ_API_KEY_CODING_AGENT") or os.environ.get("GROQ_API_KEY")
 
 memory_llm = build_chat_model(
     role="planning",

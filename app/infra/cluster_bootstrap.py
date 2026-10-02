@@ -84,6 +84,7 @@ def provision(args) -> int:
         # ReadWriteMany volume the Ray workers could share instead — so give them
         # the in-cluster MinIO. Cloud providers keep their own object storage.
         minio=args.provider not in ("gcp", "aws", "azure"),
+        local_images=args.provider == "local",
     )))
     if _any_failed(results):
         return _finish(results)
@@ -92,10 +93,11 @@ def provision(args) -> int:
     # at creation time. Apply them only after Helm has created those resources;
     # optional envFrom references do not trigger a restart when a ConfigMap or
     # Secret appears later.
-    print("\n[6/6] Deploy RayCluster + Ray Serve")
-    results.append(_print(ray_manager.apply_ray_cluster(namespace=args.namespace)))
-    if not _any_failed(results) and not args.skip_serve:
-        results.append(_print(ray_manager.deploy_ray_serve(namespace=args.namespace)))
+    if args.provider != "local":
+        print("\n[6/6] Deploy RayCluster + Ray Serve")
+        results.append(_print(ray_manager.apply_ray_cluster(namespace=args.namespace)))
+        if not _any_failed(results) and not args.skip_serve:
+            results.append(_print(ray_manager.deploy_ray_serve(namespace=args.namespace)))
 
     if args.data_stack:
         print("\n[+] Optional data stack")

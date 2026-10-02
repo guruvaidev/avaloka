@@ -1,0 +1,147 @@
+# How oss/1.6 is produced from develop-1.6.
+#
+# oss/1.6 is GENERATED, not maintained by hand. Every change lands on
+# develop-1.6; this manifest says what is withheld from the public tree and
+# what is added to it. Editing oss/1.6 directly will be overwritten.
+#
+# Regenerate with: scripts/generate-oss.sh
+
+# Paths on develop-1.6 that must never reach the public tree.
+exclude:
+  - path: artifacts/
+    reason: >-
+      Test output. Already in .gitignore on both branches, but these files
+      were committed before the ignore rule landed.
+  - path: ui/.lovable/
+    reason: Internal product planning notes, not part of the product.
+  - path: avaloka/arena/
+    reason: >-
+      Competition-grading tooling, not part of the distributed product.
+      tests/test_oss_readiness.py on oss/1.6 asserts it does not ship.
+  - path: tests/arena/
+    reason: Tests for avaloka/arena/, which is withheld above.
+  - path: "2.2.0"
+    reason: >-
+      Stray pip output committed by accident. Contains a developer's local
+      Windows path and username.
+  - path: docs/Avaloka-1.6-Master-Test-Plan.xlsx
+    reason: Superseded by docs/TEST_PLAN-1.6.md.
+  - path: research_paper/
+    reason: >-
+      Pre-move copy of the paper; docs/research/ is the live one.
+  - path: docs/research/
+    keep_globs: ["*.pdf", "README.md", "*.png"]
+    reason: >-
+      The public tree carries the compiled papers and the figure, not the
+      sources. The .tex, the .bib and the whole conference bundle stay on
+      develop-1.6, where the paper is actually written and rebuilt for a
+      submission. The LaTeX templates (natbib.sty, iclr2026_conference.bst,
+      fancyhdr.sty) are third-party licensed on top of that and cannot ship
+      under Apache-2.0.
+
+# Files that exist only on the public tree, applied after the exclusions.
+overlay:
+  - DCO
+  - GOVERNANCE.md
+  - MAINTAINERS.md
+  # The commercial boundary. develop-1.6 can provision managed GKE/EKS/AKS
+  # clusters; the public build gates that on cloud_provisioning, which
+  # app.core.editions already marks COMMERCIAL but nothing was checking.
+  # Overlaid rather than ported back, because develop-1.6 is where the
+  # enterprise capability lives.
+  - app/infra/providers/factory.py
+  # The internal README documents a LaTeX build against sources the public
+  # tree does not carry. This one explains why they are absent instead.
+  - docs/research/README.md
+
+# Sections replaced rather than added wholesale. The public quickstart does
+# not assume SUPABASE_JWT_SECRET or a running redis-server; develop's does.
+# Copying develop's README over the public one silently reverts that.
+splice:
+  - file: README.md
+    section: "## Quickstart"
+    from: oss/overlay/README.quickstart.md
+
+# Invariants checked after every generation. A failure blocks the push.
+assert_present:
+  README.md:
+    - "support@avaloka.ai"
+    - "at your own risk"
+    - "Not tested on"
+  app/infra/providers/factory.py:
+    - "CLOUD_PLATFORMS"
+    - "cloud_provisioning"
+  # The ignore rules are the only thing still guarding the withheld paths once
+  # the files themselves are gone. The generated tree lost them once, because
+  # the public .gitignore carried lines develop-1.6 did not.
+  .gitignore:
+    - "/artifacts/"
+    - "/scorecard.json"
+    - "ui/.lovable/"
+  # pyarrow==16.1.0 ships cp38-cp312 wheels only. An uncapped floor sends a
+  # 3.13+ interpreter into an Arrow C++ source build.
+  pyproject.toml:
+    - ">=3.10,<3.13"
+assert_absent:
+  README.md:
+    - "SUPABASE_JWT_SECRET"
+    - "redis-server"
+  # These were hardened on the integration branch, not on develop-1.6. The
+  # script's default SRC_BRANCH is develop-1.6, so generating from an
+  # un-merged develop would quietly republish a developer's home directory and
+  # a hardcoded version. Assert the hardened state rather than trusting the
+  # operator to pass the right SRC_BRANCH.
+  tests/kaggle_yellow_taxi_trip_data.py:
+    - "C:/Users/lowta"
+  avaloka/version.py:
+    - "__version__ = \"0.3.0\""
+
+# Deliberately NOT carried into the overlay, recorded so the omission does not
+# read as an oversight:
+#
+#   ui/src/components/analysis/AutoInsightsBotOverlay.tsx
+#   ui/src/lib/auto-insights-bot.ts
+#     Added to oss/1.6 on 2026-09-15 (f7deefa3) and mounted from __root.tsx.
+#     develop-1.6 superseded it on 2026-09-26 (e0025169) with
+#     ui/src/components/insights-avatar/ -- speech synthesis and recognition,
+#     a chart-explainer backend, scoped to AutoInsightsModal via a provider --
+#     and references the old module nowhere. Generation keeps the newer work
+#     and drops the older standalone overlay. Verified by date, not by shape.
+
+# Tree-level invariants. Globs that must match nothing in the generated tree.
+# These are the leaks that actually happened, not hypotheticals.
+assert_no_paths:
+  - "**/*.sty"          # third-party LaTeX packages, not Apache-2.0
+  - "**/*.bst"
+  - "**/math_commands.tex"
+  - "artifacts/**"      # committed test output
+  - "**/.lovable/**"    # internal planning notes
+  - "docs/research/**/*.tex"   # paper sources live on develop-1.6
+  - "docs/research/**/*.bib"
+  - "avaloka/arena/**"         # asserted by tests/test_oss_readiness.py
+  - "tests/arena/**"
+
+# Credential shapes that must not appear with a plausible payload attached.
+# A bare prefix, or a short obviously-fake tail, is a test fixture asserting
+# key-shape validation and is allowed; min_tail is how many trailing
+# credential-ish characters it takes before this is treated as a real secret.
+assert_no_secrets:
+  min_tail: 20
+  patterns:
+    - "sk-or-v1-"          # OpenRouter
+    - "gsk_"               # Groq
+    - "sk-ant-"            # Anthropic
+    - "ghp_"               # GitHub PAT
+  # PEM private-key headers are NOT spelled out here. Writing them into a
+  # tracked file makes this manifest itself match tests/contract/test_c1_repo_hygiene.py's
+  # private_key_pem scanner -- which is exactly the check working correctly.
+  # The scanner builds the headers at runtime instead; see pem_private_keys.
+  pem_private_keys: true
+
+# Paths that must not be reachable from the published ref -- not merely absent
+# from its tree. A tree-only check passes while the history behind the ref still
+# carries the file, which is how a .env that was force-added in July 2026 and
+# deleted in August reached the public repo in September.
+assert_unreachable:
+  - ".env"
+  - ".env.bak.pre-docker-switch"

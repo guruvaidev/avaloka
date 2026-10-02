@@ -15,6 +15,8 @@ from typing import Any
 import pandas as pd
 
 from avaloka.fireflies.base import Firefly
+from avaloka.goal_analysis import analyze_goal
+from avaloka.mission.context import MissionKind
 from avaloka.util import write_json
 
 
@@ -137,6 +139,15 @@ class AnalysisPlanner(Firefly):
         }
 
         self.ctx.blackboard["plan"] = plan
+        if self.ctx.kind == MissionKind.ANALYZE:
+            goal_result = analyze_goal(
+                self.ctx.blackboard["working_frame"], self.ctx.goal, profile,
+                sampled=bool(sampling.get("sampled")),
+            )
+            self.ctx.blackboard["goal_analysis"] = goal_result
+            plan["goal_analysis_status"] = goal_result["status"]
+            plan["goal_analysis_kind"] = goal_result["kind"]
+            write_json(self.ctx.path("goal_analysis.json"), goal_result)
         write_json(self.ctx.path("planner_graph.json"), plan)
 
         return (

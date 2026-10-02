@@ -1,6 +1,7 @@
 from __future__ import annotations
 import csv
 import os
+import re
 import traceback
 from typing import Any, Dict, List, Optional, Tuple, Union
 import pandas as pd
@@ -15,7 +16,7 @@ from file_handler.excel_connector import ExcelConnector
 # TODO(byte-routing): this row cap becomes redundant once byte-based routing
 # lands (estimated_bytes decides full-vs-defer); remove it then.
 DEFAULT_SAMPLE_MAX_ROWS = int(os.getenv("DEFAULT_SAMPLE_MAX_ROWS", "50000"))
-__all__ = ["sample_data_from_source", "DEFAULT_SAMPLE_MAX_ROWS"]
+__all__ = ["sample_data_from_source", "DEFAULT_SAMPLE_MAX_ROWS", "drop_blank_columns"]
 # If you still want to support ad-hoc local SQLite files, enable this.
 # Otherwise leave 0 and route SQL through Postgres MCP as per review.
 ENABLE_SQLITE = bool(int(os.getenv("ENABLE_SQLITE", "0")))
@@ -48,6 +49,37 @@ ARROW_TO_SQL_TYPE_MAP: Dict[str, str] = {
 }
 
 # =========================
+# Blank-column cleanup
+# =========================
+# A trailing delimiter in a CSV header ("a,b,c,") creates a column with no name
+# and no data: "" from csv.reader, "Unnamed: 3" from pandas. It carries no
+# information but flows into the schema, DDL, profile prompts and the session.
+_UNNAMED_RE = re.compile(r"^Unnamed: \d+(?:_level_\d+)?$")
+
+
+def drop_blank_columns(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]]:
+    """Drop columns whose header is blank/auto-named AND whose values are all empty.
+
+    A named column that happens to be empty is kept (it's real schema); an
+    unnamed column that holds data is kept too (dropping it would lose data).
+    Returns (df, dropped_column_names).
+    """
+    if df is None or df.empty or len(df.columns) == 0:
+        return df, []
+    dropped: List[str] = []
+    for col in df.columns:
+        name = str(col)
+        if name.strip() and not _UNNAMED_RE.match(name):
+            continue
+        series = df[col]
+        if series.isna().all() or series.astype(str).str.strip().eq("").all():
+            dropped.append(col)
+    if dropped:
+        df = df.drop(columns=dropped)
+    return df, [str(c) for c in dropped]
+
+
+# =========================
 # CSV helpers
 # =========================
 def _sniff_delimiter(path: Union[str, os.PathLike], sample_bytes: int = 8192) -> str:
@@ -78,7 +110,7 @@ def _reparse_csv_exact_fields(path: Union[str, os.PathLike], delimiter: str, enc
             if len(row) == expected:
                 good_rows.append(row)
 
-        # ---- NEW: normalize types/empties ----
+        # ---- normalize types/empties ----
         df_out = pd.DataFrame(good_rows, columns=header)
 
         # turn blank/whitespace-only cells into NA so "all-null stratify" is caught
@@ -136,21 +168,21 @@ def _read_csv_flex(path: Union[str, os.PathLike]) -> Tuple[pd.DataFrame, str, st
 def _has_too_few_fields(path: Union[str, os.PathLike], delimiter: str, encoding: str) -> bool:
     """
     Return True if any non-empty data line has fewer fields than the header.
-    Uses csv.reader to respect quoting.
+    Streams the file with csv.reader (respects quoting, incl. quoted newlines)
+    and stops at the first short row instead of loading every line into memory.
     """
     try:
-        with open(path, "r", encoding=encoding, errors="ignore") as f:
-            lines = [ln.rstrip("\r\n") for ln in f.readlines()]
-        if not lines:
-            return False
-        header_fields = next(csv.reader([lines[0]], delimiter=delimiter))
-        expected = len(header_fields)
-        for ln in lines[1:]:
-            if not ln.strip():
-                continue
-            row_fields = next(csv.reader([ln], delimiter=delimiter))
-            if len(row_fields) < expected:
-                return True
+        with open(path, "r", encoding=encoding, errors="ignore", newline="") as f:
+            reader = csv.reader(f, delimiter=delimiter)
+            header_fields = next(reader, None)
+            if not header_fields:
+                return False
+            expected = len(header_fields)
+            for row_fields in reader:
+                if not row_fields or not any(str(x).strip() for x in row_fields):
+                    continue
+                if len(row_fields) < expected:
+                    return True
         return False
     except Exception:
         # Be conservative: if we can't check, don't force an error here
@@ -219,10 +251,6 @@ _PANDAS_TO_SQL: Dict[str, str] = {
     "datetime64[ns]": "TIMESTAMP",
 }
 
-# def _generate_ddl_from_pandas(df: pd.DataFrame, table_name: str) -> str:
-#     cols: List[str] = [f"{name} {_PANDAS_TO_SQL.get(str(dtype), 'TEXT')}" for name, dtype in df.dtypes.items()]
-#     return f"CREATE TABLE {table_name} (\n  " + ",\n  ".join(cols) + "\n);"
-
 
 def _generate_ddl_from_pandas(df: pd.DataFrame, table_name: str) -> str:
     cols: List[str] = []
@@ -231,7 +259,7 @@ def _generate_ddl_from_pandas(df: pd.DataFrame, table_name: str) -> str:
         sql_type = _PANDAS_TO_SQL.get(dtype_str, "TEXT")
 
         # Name-based hints to distinguish common width variants when pandas collapses types
-        nl = name.lower()
+        nl = str(name).lower()
         if "i32" in nl or "int32" in nl:
             sql_type = "INT"
         elif "i64" in nl or "int64" in nl:
@@ -361,8 +389,9 @@ def sample_data_from_source(
             - "schema": List[str] of column names.
             - "rows": List[Dict[str, Any]] sampled records (size ≤ effective_cap).
             - "table_name": Name used for schema generation (None for CSV/TSV).
-            - "ddl_schema": CREATE TABLE statement (Spark-inferred; pandas fallback).
+            - "ddl_schema": CREATE TABLE statement (Arrow-inferred; pandas fallback).
             - "csv_path" / "encoding" / "delimiter": Provided for CSV/TSV inputs.
+            - "dropped_columns": blank/unnamed empty columns removed at load.
             - "error": None on success; error string on failure.
 
     Notes on caps:
@@ -376,6 +405,7 @@ def sample_data_from_source(
     excel_sheets: Optional[List[str]] = None
     excel_selected_sheet: Optional[str] = None
     warnings: List[str] = []
+    dropped_columns: List[str] = []
     try:
         # ---- Validate requested sample_size type ----
         if isinstance(sample_size, int):
@@ -391,11 +421,7 @@ def sample_data_from_source(
 
         # ---- Load data ----
         # TSV is the same file family as CSV and _read_csv_flex already sniffs
-        # the delimiter, so it belongs here rather than in the FileHandler
-        # branch, which has no TSV reader and raised "File type not supported"
-        # for a format /api/upload advertises in SUPPORTED_UPLOAD_EXTS. The
-        # rest of this function already assumed the pairing -- it writes
-        # csv_path/encoding/delimiter for `source_fmt in ("csv", "tsv")`.
+        # the delimiter, so it belongs here rather than in the FileHandler branch.
         if source_fmt in ("csv", "tsv"):
             df, used_encoding, used_delim = _read_csv_flex(path)
             table_name = "sample_table"
@@ -431,9 +457,7 @@ def sample_data_from_source(
 
         elif source_fmt in ("excel", "xlsx", "xls"):
             # Read Excel as a typed DataFrame (dtypes preserved) instead of
-            # round-tripping through a list of Python scalars, which would
-            # stringify dates and collapse numeric columns to object -> weaker
-            # profiling than the CSV path produced for identical data.
+            # round-tripping through a list of Python scalars.
             xl_conn = ExcelConnector(path, sheet_name=extra_args.get("sheet_name"))
             excel_sheets = xl_conn.list_sheets()
             excel_selected_sheet = xl_conn.selected_sheet
@@ -451,11 +475,7 @@ def sample_data_from_source(
                 )
 
         elif source_fmt == "xml":
-            # pandas reads XML directly; FileHandler has no XML reader, so this
-            # advertised format previously fell through and 500'd. read_xml
-            # needs a row-level xpath when the rows are not direct children of
-            # the root, so try the default and then a generic descendant match
-            # before giving up with a message that says what to do.
+            # pandas reads XML directly; FileHandler has no XML reader.
             try:
                 df = pd.read_xml(path)
             except Exception:
@@ -473,12 +493,19 @@ def sample_data_from_source(
         else:
             # Avro / JSON / Parquet / Delta / Iceberg… via your FileHandler
             reader = FileHandler(path, source_fmt, **(extra_args or {}))
-            #df = pd.DataFrame(reader.load_data(), columns=reader.get_columns())
             data = reader.load_data()
             cols = reader.get_columns() or None
             df = pd.DataFrame(data, columns=cols)
             table_name = "sample_table"
             used_encoding, used_delim = "utf-8", ","
+
+        # ---- Drop blank-header, all-empty columns (e.g. trailing comma) ----
+        df, dropped_columns = drop_blank_columns(df)
+        if dropped_columns:
+            warnings.append(
+                f"Dropped {len(dropped_columns)} empty column(s) with no header "
+                f"(usually a trailing delimiter): {dropped_columns}"
+            )
 
         if df is None or df.empty:
             return {
@@ -492,6 +519,7 @@ def sample_data_from_source(
                 "delimiter": used_delim if source_fmt in ("csv", "tsv") else None,
                 "sheets": excel_sheets,
                 "selected_sheet": excel_selected_sheet,
+                "dropped_columns": dropped_columns,
                 "warnings": warnings,
             }
 
@@ -499,11 +527,9 @@ def sample_data_from_source(
         effective_cap = DEFAULT_SAMPLE_MAX_ROWS if max_rows is None else int(max_rows)
 
         # ---- Byte-aware clamp (ported from sampling_agent_daft.create_base_sample) ----
-        # Row caps alone don't bound payload size: a wide frame (long-text / JSON
-        # columns) can blow the sample past what preview/LLM consumers handle.
-        # Same approach as the Daft sampler: measure bytes/row on a small head
-        # slice via Arrow, cap the sample at ~5 MB. Best-effort — if the Arrow
-        # conversion fails (exotic dtypes), keep the plain row cap.
+        # Row caps alone don't bound payload size: a wide frame can blow the sample
+        # past what preview/LLM consumers handle. Measure bytes/row on a head slice
+        # via Arrow and cap the sample at ~5 MB. Best-effort.
         try:
             _head_tbl = pa.Table.from_pandas(df.head(1000), preserve_index=False)
             _bytes_per_row = _head_tbl.nbytes / max(_head_tbl.num_rows, 1)
@@ -525,15 +551,12 @@ def sample_data_from_source(
             requested = int(sample_size)
         n = max(1, min(requested, effective_cap))
 
-
-        # Strict-on-short-lines only when caller asks for more rows than valid ones
-        if source_fmt == "csv":
-            try:
-                if _has_too_few_fields(path, used_delim, used_encoding) and n > len(df):
-                    raise ValueError("Malformed CSV: a row has too few fields")
-            except Exception:
-                # Raising here gets caught by the outer try/except and returned as an error
-                raise
+        # Strict-on-short-lines only when caller asks for more rows than valid ones.
+        # Check the cheap condition first: the short-row scan reads the whole file,
+        # and it only matters when n > len(df), which is rare.
+        if source_fmt == "csv" and n > len(df):
+            if _has_too_few_fields(path, used_delim, used_encoding):
+                raise ValueError("Malformed CSV: a row has too few fields")
 
         # ---- Sample ----
         if stratify_by and stratify_by in df.columns:
@@ -550,12 +573,14 @@ def sample_data_from_source(
         if source_fmt in ("csv", "tsv", "json", "parquet", "avro", "orc", "delta", "xml"):
             try:
                 arrow_schema = get_arrow_schema(path, source_fmt, df=df)
+                # parquet reads the footer schema from disk, which still includes
+                # any dropped blank columns -- keep the DDL in sync with `df`.
+                if dropped_columns and source_fmt == "parquet":
+                    keep = [n_ for n_ in arrow_schema.names if n_ in set(map(str, df.columns))]
+                    arrow_schema = pa.schema([arrow_schema.field(n_) for n_ in keep])
                 ddl_schema = generate_ddl_from_arrow_schema(table_name, arrow_schema)
             except Exception:
                 ddl_schema = _generate_ddl_from_pandas(df, table_name)
-
-        elif source_fmt in {"sqlite", "sql"}:
-            ddl_schema = _generate_ddl_from_pandas(df, table_name)
 
         else:
             ddl_schema = _generate_ddl_from_pandas(df, table_name)
@@ -575,6 +600,7 @@ def sample_data_from_source(
             "delimiter": used_delim if source_fmt in ("csv", "tsv") else None,
             "sheets": excel_sheets,
             "selected_sheet": excel_selected_sheet,
+            "dropped_columns": dropped_columns,
             "warnings": warnings,
         }
 

@@ -1,21 +1,31 @@
+import base64
 import csv
 import io
 import json
 import logging
 import os
 import re
+from pathlib import Path
+import pandas as pd
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import AIMessage, HumanMessage
 
 from app.graph.etl_state import ETLState
 from app.core.analysis_limits import byte_routing_enabled
 
-from app.agents.coder import coder_node
+from app.agents.coder import coder_node, coder_llm
 from app.agents.state import CodingAgentState
-from app.agents.validator import syntactic_validator_node, static_semantic_validator_node, logical_semantic_validator_node, execute_code_node
+from app.agents.multi_action import ActionPlan, execute_action_plan, plan_metric_actions
+from app.agents.validator import (
+    syntactic_validator_node,
+    static_semantic_validator_node,
+    logical_semantic_validator_node,
+    contract_validator_node,
+    execute_code_node,
+)
 import subprocess
 from app.agents.summarizer import summarize_etl_job
-from app.agents.planner import plan_etl_job, _detect_ambiguous_prompt_details
+from app.agents.planner import plan_etl_job, _detect_ambiguous_prompt_details, llm as planner_llm
 from app.agents.infra_agent import infra_agent_node
 from app.agents.execution_agent import execution_agent_node_local, execution_agent_node, execution_agent_node_ray
 from app.agents.planner_graph_agent import planner_graph_agent_node
@@ -23,6 +33,7 @@ from app.agents.visualization_agent import visualization_agent_node
 from app.agents.scheduler import task_scheduler_node
 from app.agents.avaloka_agent import avaloka_agent_node, route_avaloka
 from app.agents.claim_verifier import claim_verifier_node
+from app.agents.result_narrator import result_narrator_node
 
 logger = logging.getLogger(__name__)
 
@@ -30,11 +41,40 @@ logger = logging.getLogger(__name__)
 # imported) to avoid a circular import, since server.py imports build_graph
 # from this module. Keep the two values in sync.
 LARGE_DATASET_THRESHOLD_BYTES = 1 * 1024 * 1024 * 1024  # 1 GB
+STRUCTURED_ACTION_MAX_BYTES = min(
+    LARGE_DATASET_THRESHOLD_BYTES,
+    int(os.getenv("AVALOKA_STRUCTURED_ACTION_MAX_BYTES", str(32 * 1024 * 1024))),
+)
 
 
 # ---------------------------------------------------------------------------
 # Helpers: cloud provider / infra platform inference
 # ---------------------------------------------------------------------------
+def _validation_failure_message(final_coding_state: dict) -> str:
+    """User-facing text for 'code never passed validation'.
+
+    The raw validator feedback (SyntaxError, reviewer rationale) is written for
+    the coder LLM, not the user. It is logged; the user gets a reason and a way
+    forward.
+    """
+    raw = str(final_coding_state.get("llm_raw_response") or "")
+    if final_coding_state.get("syntax_error") and raw.count("```") % 2 == 1:
+        return (
+            "That request needs more code than I can write in one step, so I didn't run anything. "
+            "Try splitting it up — for example, ask about missing values first, then the "
+            "distribution of your target column, then how it varies across groups."
+        )
+    if final_coding_state.get("logical_semantic_error"):
+        return (
+            "I couldn't write this analysis without inventing thresholds or definitions that "
+            "aren't in your data, so I didn't run it. If you have specific cutoffs or definitions "
+            "in mind, include them in the request, or ask about a narrower part of the question."
+        )
+    return (
+        "I wasn't able to produce working code for that request, so nothing was run. "
+        "Try rephrasing it or breaking it into smaller steps."
+    )
+
 
 def _infer_cloud_provider(state: ETLState) -> str:
     uri = (state.get("data_source_location_cloud") or state.get("data_source_location") or "").lower()
@@ -164,20 +204,7 @@ def _latest_user_index(messages: list) -> int | None:
 # ---------------------------------------------------------------------------
 
 def route_planner_output(state: ETLState):
-    # ── Scheduler: training task type must be checked first (develop-1.2) ──
-    # if (state.get("task_schedule", {}) or {}).get("task_type") == "training":
-    #     return "schedule_task"
-
-    # ts = (state.get("task_schedule") or {})
-    # if ts.get("task_type") in ("training", "execute") and not state.get("ready_to_summarize"):
-    #     return "schedule_task"
-
-    # execution_mode = state.get("execution_mode", "cloud")
-
-    # # ── k8s-ray fast-path ──────────────────────────────────────────────────
-    # if execution_mode == "k8s-ray":
-    #     data_uri = (state.get("data_source_location_cloud") or "").strip()
-
+    # ── Scheduler: training task type must be checked first (develop-1.2) 
     if state.get("skip_to_training", False):
         return "train_models"
 
@@ -339,6 +366,8 @@ def route_after_graph(state: ETLState):
 # ---------------------------------------------------------------------------
 
 def route_after_code(state: ETLState):
+    if state.get("structured_action_plan"):
+        return "execute_actions"
     # Check if training is enabled and MTA is available
     enable_training = state.get("enable_training", False)
     mta_available = False
@@ -422,6 +451,10 @@ def check_validation_status(state: CodingAgentState) -> str:
         state.get("syntax_error")
         or state.get("static_semantic_error")
         or state.get("logical_semantic_error")
+        # A contract violation is a deterministic, self-stated failure: the
+        # result does not satisfy the acceptance criteria the blueprint itself
+        # published for this task. It retries on the same budget as the rest.
+        or state.get("contract_error")
     )
     if not has_error:
         return "end"
@@ -451,13 +484,18 @@ def build_coding_graph(checkpointer=None):
     workflow.add_node("validator_syntax", syntactic_validator_node)
     workflow.add_node("validator_static", static_semantic_validator_node)
     workflow.add_node("execute_code", execute_code_node)
+    workflow.add_node("validator_contract", contract_validator_node)
     workflow.add_node("validator_logical", logical_semantic_validator_node)
 
     workflow.set_entry_point("coder")
     workflow.add_edge("coder", "validator_syntax")
     workflow.add_edge("validator_syntax", "validator_static")
     workflow.add_edge("validator_static", "execute_code")
-    workflow.add_edge("execute_code", "validator_logical")
+    # The contract check runs on the executed result, before the LLM reviewer:
+    # a deterministic verdict is cheaper and more reliable than a judged one,
+    # and when it fires the reviewer has nothing to add.
+    workflow.add_edge("execute_code", "validator_contract")
+    workflow.add_edge("validator_contract", "validator_logical")
 
     workflow.add_conditional_edges(
         "validator_logical",
@@ -527,6 +565,145 @@ def get_user_prompt(messages: list) -> str:
     return ""
 
 
+def _describe_validation_failure(final_coding_state: dict) -> str:
+    """Explain a terminal validation failure in the user's terms.
+
+    The old message pasted ``code_validation_feedback`` straight into chat, so a
+    ``SyntaxError: unexpected EOF while parsing`` -- or, once contracts existed,
+    a JSON blob -- was what the user actually read. The feedback is written for
+    the coder, not for a person; this says what happened and what the user can
+    do about it, and keeps the raw text out of the reply.
+    """
+    violations = final_coding_state.get("contract_violations") or []
+    if final_coding_state.get("contract_error") and violations:
+        details = "\n".join(
+            f"  - {v.get('detail')}" for v in violations if isinstance(v, dict)
+        )
+        return (
+            "I could write code for this, but the result it produced didn't match "
+            "what the analysis was supposed to return, so I haven't used it:\n"
+            f"{details}\n\n"
+            "Rephrasing the request — especially naming the grouping and the "
+            "figure you want per group — usually resolves this."
+        )
+
+    if final_coding_state.get("syntax_error"):
+        return (
+            "I couldn't produce runnable code for this request after several "
+            "attempts, so nothing was executed. Narrowing the request to one "
+            "step at a time usually gets further."
+        )
+    if final_coding_state.get("static_semantic_error"):
+        return (
+            "The code I wrote referred to the data in a way that doesn't hold for "
+            "this dataset, so I stopped rather than return a misleading answer. "
+            "Naming the exact columns you want used usually resolves this."
+        )
+    if final_coding_state.get("logical_semantic_error"):
+        return (
+            "I wasn't able to satisfy myself that the code answered your question "
+            "correctly, so I haven't run it. Restating the question with the "
+            "specific figure you need usually resolves this."
+        )
+    return (
+        "I couldn't produce a result I trust for this request, so nothing was "
+        "executed. Try rephrasing or narrowing the question."
+    )
+
+
+def _structured_source(state: ETLState) -> Path | None:
+    """Use the same selected local dataset as the normal interactive path."""
+    if (state.get("analysis_defer_required") or state.get("task_schedule")
+            or state.get("execution_mode") == "k8s-ray" or state.get("folder_read_path")):
+        return None
+    if (len(state.get("datasets_context") or []) > 1
+            or len(state.get("multi_dataset_state") or []) > 1):
+        return None
+    if str(state.get("input_data_type") or "csv").lower() not in {"csv", "parquet"}:
+        return None
+    fidelity = state.get("analysis_fidelity")
+    candidates = [state.get("data_source_location")]
+    if fidelity == "entire_dataset":
+        candidates.extend([state.get("full_data_location"), state.get("data_source_location_local")])
+    else:
+        candidates.extend([state.get("sample_data_location"), state.get("data_source_location_local")])
+    for candidate in candidates:
+        if not candidate or str(candidate) == str(state.get("output_location")):
+            continue
+        path = Path(str(candidate))
+        try:
+            if (path.is_file() and path.suffix.lower() in {".csv", ".parquet"}
+                    and path.stat().st_size < STRUCTURED_ACTION_MAX_BYTES):
+                return path
+        except OSError:
+            continue
+    return None
+
+
+def execute_structured_actions_node(state: ETLState) -> dict:
+    """Compute typed result tables directly, retaining successful actions."""
+    plan = ActionPlan.model_validate(state["structured_action_plan"])
+    source = _structured_source(state)
+    if source is None:
+        message = "The selected dataset is no longer available for this analysis. Please upload it again."
+        return {
+            "messages": list(state.get("messages", [])) + [AIMessage(content=message)],
+            "execution_result": {"status": "failed", "message": message},
+            "multi_action_status": "incomplete",
+            "multi_action_missing": [{"id": action.id, "label": action.label, "reason": message} for action in plan.actions],
+            "output_tables": [], "output_json": None, "output_file_data": None,
+        }
+    try:
+        frame = pd.read_parquet(source) if source.suffix.lower() == ".parquet" else pd.read_csv(source, dtype=str)
+        result = execute_action_plan(frame, plan)
+    except Exception as exc:
+        logger.exception("Structured action execution failed")
+        message = "I couldn't read the selected dataset for this analysis. Please check its format and try again."
+        return {
+            "messages": list(state.get("messages", [])) + [AIMessage(content=message)],
+            "execution_result": {"status": "failed", "message": message},
+            "multi_action_status": "incomplete",
+            "multi_action_missing": [{"id": action.id, "label": action.label, "reason": message} for action in plan.actions],
+            "output_tables": [], "output_json": None, "output_file_data": None,
+        }
+
+    if result.missing:
+        missing_text = "; ".join(f"{item['label']} ({item['reason']})" for item in result.missing)
+        message = (
+            ("Incomplete analysis. I calculated the available metrics, but could not complete "
+             if result.tables else "Incomplete analysis. I could not complete ")
+            + f"{missing_text}. "
+            + "Please check the source values and column types; data cleansing or clarification may be needed."
+        )
+    else:
+        message = "All requested metrics are complete. The results are in the tables below."
+    if result.notes:
+        message += " Data preparation: " + " ".join(result.notes)
+    first_rows = result.tables[0]["rows"] if result.tables else None
+    file_data = None
+    if len(result.tables) == 1:
+        csv_text = pd.DataFrame(first_rows).to_csv(index=False)
+        csv_bytes = csv_text.encode("utf-8")
+        file_data = {
+            "filename": "multi_action_result.csv",
+            "content": "data:text/csv;base64," + base64.b64encode(csv_bytes).decode("ascii"),
+            "size": len(csv_bytes),
+        }
+    return {
+        "messages": list(state.get("messages", [])) + [AIMessage(content=message)],
+        "execution_result": {"status": "success" if result.tables else "failed", "message": message},
+        "execution_error": None if result.tables else message,
+        "fresh_output_produced": bool(result.tables),
+        "output_location": None,
+        "output_tables": result.tables,
+        "output_json": first_rows,
+        "output_file_data": file_data,
+        "multi_action_status": result.status,
+        "multi_action_missing": result.missing,
+        "multi_action_notes": result.notes,
+    }
+
+
 def coding_subgraph_node(state: ETLState) -> dict:
     global coding_graph, coder_node_is_mock, mocked_coder_node
     if coder_node_is_mock or hasattr(coder_node, "_mock_return_value"):
@@ -539,14 +716,6 @@ def coding_subgraph_node(state: ETLState) -> dict:
         if isinstance(mock_result, dict):
             return mock_result
         return dict(mock_result)
-
-    try:
-        requirements = subprocess.check_output(["pip", "freeze"]).decode("utf-8")
-    except Exception as e:
-        logger.error("Failed to get requirements: %s", e)
-        requirements = ""
-
-    sample_data = _preview_to_csv(state.get("uploaded_csv_preview"))
 
     user_prompt = state.get("user_prompt") or get_user_prompt(state.get("messages", []))
     clarification_details = _detect_ambiguous_prompt_details(user_prompt)
@@ -566,6 +735,35 @@ def coding_subgraph_node(state: ETLState) -> dict:
             "execution_error": clarification,
             "pending_clarification": clarification_details.get("pending_clarification"),
         }
+
+    if _structured_source(state) is not None:
+        analysis_prompt = user_prompt.split("\n[Analysis context]", 1)[0]
+        action_plan = plan_metric_actions(analysis_prompt, state.get("schema") or {}, planner_llm or coder_llm)
+        if action_plan is not None and action_plan.mode == "clarify":
+            clarification = action_plan.clarification or "Which dataset field should I use?"
+            return {
+                "messages": list(state.get("messages", [])) + [AIMessage(content=clarification)],
+                "ready_to_code": False, "ready_to_summarize": False,
+                "coder_definition": {}, "generated_code": "", "execution_error": clarification,
+                "structured_action_plan": None,
+            }
+        if action_plan is not None and action_plan.mode == "aggregate":
+            return {
+                "structured_action_plan": action_plan.model_dump(),
+                "multi_action_actions": [action.model_dump() for action in action_plan.actions],
+                "multi_action_missing": [], "multi_action_status": None,
+                "multi_action_notes": None,
+                "coder_definition": {}, "generated_code": "", "execution_error": None,
+                "output_tables": None,
+            }
+
+    try:
+        requirements = subprocess.check_output(["pip", "freeze"]).decode("utf-8")
+    except Exception as e:
+        logger.error("Failed to get requirements: %s", e)
+        requirements = ""
+
+    sample_data = _preview_to_csv(state.get("uploaded_csv_preview"))
 
     plan_text = state.get("plan")
     # Plans persisted by older sessions/tests may be dicts; the coder and its
@@ -593,6 +791,9 @@ def coding_subgraph_node(state: ETLState) -> dict:
         "messages": state.get("messages", []),
         "retry_count": 0,
         "coder_pseudocode": state.get("coder_pseudocode"),
+        "coder_contract": None,
+        "contract_error": None,
+        "contract_violations": None,
         "uploaded_csv_preview": state.get("uploaded_csv_preview"),
         "analysis_fidelity": state.get("analysis_fidelity"),
         "selected_sample_name": state.get("selected_sample_name"),
@@ -631,13 +832,11 @@ def coding_subgraph_node(state: ETLState) -> dict:
         final_coding_state.get("syntax_error")
         or final_coding_state.get("static_semantic_error")
         or final_coding_state.get("logical_semantic_error")
+        or final_coding_state.get("contract_error")
     )
+
     if validation_failed:
-        feedback = final_coding_state.get("code_validation_feedback") or "unspecified validation error"
-        refusal = (
-            "Generated code failed validation after all retries and will not be executed. "
-            f"Last validation feedback: {feedback}"
-        )
+        refusal = _describe_validation_failure(final_coding_state)
         logger.warning("coding_subgraph_node: %s", refusal)
         messages = list(state.get("messages", []))
         if not any(getattr(msg, "content", None) == refusal for msg in messages):
@@ -657,12 +856,20 @@ def coding_subgraph_node(state: ETLState) -> dict:
         "coder_raw_response": coder_message_text,
         "generated_code": generated_code,
         "coder_pseudocode": final_coding_state.get("coder_pseudocode"),
+        "coder_contract": final_coding_state.get("coder_contract"),
+        "contract_violations": final_coding_state.get("contract_violations"),
         "execution_output_data": final_coding_state.get("execution_output_data"),
         "execution_output_preview": final_coding_state.get("execution_output_preview"),
         "execution_stdout": final_coding_state.get("execution_stdout"),
         "execution_stderr": final_coding_state.get("execution_stderr"),
         "execution_error": final_coding_state.get("execution_error"),
         "logical_review_feedback": final_coding_state.get("logical_review_feedback"),
+        "structured_action_plan": None,
+        "multi_action_actions": None,
+        "multi_action_missing": None,
+        "multi_action_status": None,
+        "multi_action_notes": None,
+        "output_tables": None,
     }
 
     # ── Fidelity-based execution policy ─────────────────────────────────────
@@ -733,26 +940,17 @@ def coding_subgraph_node(state: ETLState) -> dict:
         else:
             updates["execution_mode"] = state.get("execution_mode") or "local"
 
-    messages = list(state.get("messages", []))
+    
+
+    # The generated script is an artifact (coder_definition / generated_code), not
+    # a chat reply. Appending it to `messages` made raw pandas code the latest
+    # AIMessage: the claim verifier then "checked" code (age_stats['25%']) and the
+    # chat carried no answer. The answer is written by narrate_result instead.
     primary_message = final_coding_state.get("primary_llm_response")
     if primary_message:
-        logger.warning("Primary coder response: %s", primary_message)
+        logger.debug("Primary coder response: %s", primary_message)
     if coder_message_text:
-        logger.warning("Coder raw response: %s", coder_message_text)
-
-    def append_if_new(content, current):
-        if not content:
-            return current
-        if any(getattr(msg, "content", None) == content for msg in current):
-            return current
-        return current + [AIMessage(content=content)]
-
-    updated_messages = messages
-    updated_messages = append_if_new(primary_message, updated_messages)
-    updated_messages = append_if_new(coder_message_text, updated_messages)
-
-    if len(updated_messages) != len(messages):
-        updates["messages"] = updated_messages
+        logger.debug("Coder raw response: %s", coder_message_text)
 
     return updates
 
@@ -869,12 +1067,14 @@ def build_graph(checkpointer=None):
     graph_builder.add_node("summarize_etl", summarize_etl_job)
     graph_builder.add_node("generate_planner_graph", planner_graph_agent_node)
     graph_builder.add_node("code_etl", coding_subgraph_node)
+    graph_builder.add_node("execute_actions", execute_structured_actions_node)
     graph_builder.add_node("provision_infra", infra_agent_node)
     graph_builder.add_node("schedule_task", task_scheduler_node)
     graph_builder.add_node("execute_on_ray", execution_agent_node_ray)
     graph_builder.add_node("execute_locally", execution_agent_node_local)
     graph_builder.add_node("execute_on_k8s", execution_agent_node)
     graph_builder.add_node("visualize", visualization_agent_node)
+    graph_builder.add_node("narrate_result", result_narrator_node)
     graph_builder.add_node("verify_claims", claim_verifier_node)
 
     # ── Optional MTA node ───────────────────────────────────────────────────
@@ -943,6 +1143,7 @@ def build_graph(checkpointer=None):
 
     # ── code_etl → conditional routing ─────────────────────────────────────
     route_after_code_map = {
+        "execute_actions": "execute_actions",
         "schedule_task":   "schedule_task",
         "execute_on_ray":  "execute_on_ray",
         "execute_on_k8s":  "execute_on_k8s",
@@ -955,6 +1156,7 @@ def build_graph(checkpointer=None):
     except ImportError:
         pass
     graph_builder.add_conditional_edges("code_etl", route_after_code, route_after_code_map)
+    graph_builder.add_edge("execute_actions", "verify_claims")
 
     # ── train_models → conditional routing ─────────────────────────────────
     try:
@@ -982,7 +1184,9 @@ def build_graph(checkpointer=None):
         )
 
     # ── terminal edges ─────────────────────────────────────────────────────
-    graph_builder.add_edge("visualize", "verify_claims")
+    # graph_builder.add_edge("visualize", "verify_claims")
+    graph_builder.add_edge("visualize", "narrate_result")
+    graph_builder.add_edge("narrate_result", "verify_claims")
     graph_builder.add_edge("schedule_task", "verify_claims")
     graph_builder.add_edge("verify_claims", END)
 

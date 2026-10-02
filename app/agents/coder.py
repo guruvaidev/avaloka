@@ -1,5 +1,4 @@
 # coder.py
-# coder.py
 import os
 import logging
 import json
@@ -17,6 +16,11 @@ from app.agents.preparation_agent import parse_numeric_token
 # through app.agents.coder, so the name must stay importable here even
 # though coder.py no longer calls it itself.
 from app.utils import generate_filename_timestamp  # noqa: F401
+from app.agents.blueprint_contract import (
+    BlueprintContract,
+    ContractError,
+    parse_blueprint,
+)
 
 # Load environment variables
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -39,12 +43,35 @@ coder_llm = build_chat_model(
     groq_model=resolve_model("coder"),
     groq_api_key=_coder_api_key,
 )
+
+# Output-token budget for a single retry when the first answer is cut off.
+# gpt-oss counts reasoning tokens against this too, so leave headroom.
+CODER_TRUNCATION_RETRY_MAX_TOKENS = int(
+    os.getenv("AVALOKA_CODER_TRUNCATION_RETRY_MAX_TOKENS", "8192")
+)
+
+_TRUNCATION_RETRY_NOTE = (
+    "\n\nIMPORTANT: your previous answer was cut off at the output limit before "
+    "the script was finished. Write a SHORTER complete script: do not copy the "
+    "schema or any column/dtype lists into the code (read df.columns / df.dtypes "
+    "at runtime), loop over columns instead of repeating blocks, and keep "
+    "comments to a minimum. The script must end with the __main__ block."
+)
+
+
+def _finish_reason(response: Any) -> str:
+    meta = getattr(response, "response_metadata", None) or {}
+    return str(meta.get("finish_reason") or "").lower()
+
 if coder_llm is None:
     logger.warning("Coder LLM disabled; set GROQ_API_KEY_CODING_AGENT to re-enable remote generation.")
 
 # --- Helper to extract code from markdown ---
 _PY_FENCE_RE = re.compile(r"```(?:python|py)\s*(.*?)```", re.DOTALL | re.IGNORECASE)
 _ANY_FENCE_RE = re.compile(r"```(?:[a-zA-Z0-9_+\-]+)?\s*(.*?)```", re.DOTALL)
+# An opening fence with no closing one: the response was cut off at the
+# output-token limit (finish_reason="length") before the model wrote ```.
+_OPEN_FENCE_RE = re.compile(r"```(?:[a-zA-Z0-9_+\-]+)?[ \t]*\r?\n")
 
 
 def extract_code_block(text: str) -> str:
@@ -52,6 +79,7 @@ def extract_code_block(text: str) -> str:
     Extract the first fenced code block from LLM output.
 
     Prefers ```python / ```py blocks, otherwise falls back to any ```...``` fenced block.
+    If only an opening fence exists (truncated response), returns everything after it.
     If no fences are found, returns the full text stripped.
     """
     if not text:
@@ -65,8 +93,14 @@ def extract_code_block(text: str) -> str:
     if m:
         return m.group(1).strip()
 
-    return text.strip()
+    # Unclosed fence. Returning the text as-is sent a literal "```python" to
+    # compile(), which reported "invalid syntax (<string>, line 1)" and hid the
+    # real cause (truncation). Drop the fence line and return the body.
+    m = _OPEN_FENCE_RE.search(text)
+    if m:
+        return text[m.end():].strip()
 
+    return text.strip()
 
 def _prompt_safe_path(value: Any) -> str:
     # The model copies paths from the avro example / stub code, and writes them
@@ -255,6 +289,47 @@ When the request asks to aggregate, group by, count, sum, average, a rate/percen
 2. NEVER return the full input rows or the whole dataframe for such a request. Returning the raw, unaggregated data (the same columns and roughly the same row count as the input) is incorrect and must not happen.
 3. For a rate/percentage/share request, compute the aggregated ratio per group (for a 0/1 outcome column, that is its mean per group), not the raw rows.
 4. For a histogram/distribution request, return the binned counts (bin label and count), not the raw column values.
+
+PROFILING / DATA-QUALITY RULE:
+When the request asks for dtypes, missing values, summary statistics, a row count or data-quality issues:
+1. Plan ONE output row per dataset column (column, dtype, non_null, missing, missing_pct, unique, numeric statistics, issues) plus a final "(dataset)" row carrying the total row count and dataset-level findings.
+2. Never plan a single wide row with one column per statistic, and never plan dicts or lists inside cells.
+3. Plan concrete checks whose results are counts (missing, duplicate rows, negative values in non-negative quantities, inconsistent capitalisation in person names, casing/whitespace variants, end-before-start date pairs). Never plan speculative findings.
+
+ACCEPTANCE CRITERIA (the contract):
+After the numbered steps, emit a fenced ```json block stating the postconditions the
+result DataFrame must satisfy. The validator checks these against the real result, so
+state what must be TRUE of the output, not how to compute it.
+
+```json
+{
+  "result_kind": "aggregate | row_transform | subset | reshape | scalar",
+  "source_columns": ["exact schema column names the computation reads"],
+  "result_columns": [
+    {"name": "<output column>", "role": "key | metric | passthrough",
+     "dtype": "numeric | string | datetime | boolean | any",
+     "min": <optional number>, "max": <optional number>}
+  ],
+  "row_relation": {"type": "one_per_group | same_as_input | fewer_than_input | at_most | exactly | unconstrained",
+                   "group_by": ["grouping column(s), for one_per_group"],
+                   "n": <number, for at_most/exactly>},
+  "unique_key": ["column(s) that must not repeat"],
+  "not_null": ["column(s) that must have no missing values"]
+}
+```
+
+Rules for the contract itself:
+- Use ONLY the field names and values listed above.
+- "source_columns" must be exact column names from the schema. Never invent one.
+- If the request aggregates, groups, counts, sums, averages, takes a rate/share, bins a
+  distribution, or plots X by Y, then result_kind is "aggregate" and row_relation is
+  "one_per_group" with the grouping column(s). That is what makes returning the raw
+  input rows a detectable failure.
+- A proportion, rate or share that you express as a 0-1 fraction gets "min": 0, "max": 1.
+- State only postconditions you are confident the correct result satisfies. An
+  over-tight contract rejects correct code; prefer omitting a criterion to guessing one.
+
+
 """
 
     details: List[str] = []
@@ -279,7 +354,10 @@ When the request asks to aggregate, group by, count, sum, average, a rate/percen
     if state.get("session_logic_signature"):
         human_prompt += f"\n[SESSION LOGIC SIGNATURE]:\n{state['session_logic_signature']}\n"
 
-    human_prompt += "\nRespond with numbered pseudocode steps only."
+    human_prompt += (
+        "\nRespond with the numbered pseudocode steps, then the fenced json "
+        "acceptance-criteria block."
+    )
 
     try:
         response = coder_llm.invoke(
@@ -296,6 +374,85 @@ When the request asks to aggregate, group by, count, sum, average, a rate/percen
     pseudocode = _coerce_response_text(response)
     logger.info("--- Generated pseudocode blueprint ---\n%s", pseudocode)
     return pseudocode
+
+
+def _split_blueprint(raw: str, state: CodingAgentState):
+    """Split a blueprint response into prose steps and a parsed contract.
+
+    A contract that cannot be read, or that asserts nothing checkable, is
+    discarded rather than trusted -- the pipeline then behaves exactly as it did
+    before contracts existed. A gate that silently passes everything is worse
+    than no gate.
+    """
+    steps, contract, problems = parse_blueprint(raw, schema=state.get("schema"))
+    for problem in problems:
+        logger.info("Blueprint contract: %s", problem)
+    if contract is not None:
+        logger.info("--- Blueprint contract ---\n%s",
+                    json.dumps(contract.to_dict(), indent=2))
+    return steps, contract
+
+
+def _contract_from_state(state: CodingAgentState):
+    """Re-hydrate the contract carried in state across a retry."""
+    raw = state.get("coder_contract")
+    if not raw:
+        return None
+    try:
+        return BlueprintContract.parse(raw)
+    except ContractError:
+        return None
+
+
+_GUARD_COLUMN_RE = re.compile(r"on the\s+'([^']+)'\s+column")
+
+
+def _contract_contradicts_math_guard(contract, math_err: str, state: CodingAgentState) -> bool:
+    """Should the blueprint's declared intent override the math-on-string guard?
+
+    The guard (``app/agents/planner.py::_detect_math_on_string_column``) decides
+    by regex over the user's wording which column an aggregation verb targets.
+    That guess misfires whenever a text or date column is merely *named* in a
+    request whose arithmetic lands somewhere else -- "monthly admission counts
+    from the date of admission ... 3-month rolling average" is refused outright
+    because 'Date of Admission' is the only column named and 'average' appears.
+
+    The blueprint now states the result columns explicitly. If none of them is
+    the flagged column, the plan is not producing "the average of <text
+    column>", the guard's premise is false, and the request should proceed.
+
+    Deliberately conservative: with no contract, or with no numeric metric
+    declared, the guard keeps its original behaviour.
+    """
+    if contract is None or not math_err:
+        return False
+
+    match = _GUARD_COLUMN_RE.search(math_err)
+    if not match:
+        return False
+    flagged = match.group(1)
+
+    numeric_metrics = [
+        c for c in contract.result_columns
+        if c.role == "metric" and c.dtype in {"numeric", "any"}
+    ]
+    if not numeric_metrics:
+        return False
+
+    # If any declared result column resolves to the flagged column, the plan
+    # really is trying to produce a value from it -- keep the block.
+    for spec in contract.result_columns:
+        if _contract_names_match(spec.name, flagged):
+            return False
+    return True
+
+
+def _contract_names_match(a: str, b: str) -> bool:
+    na = re.sub(r"[^a-z0-9]", "", str(a).lower())
+    nb = re.sub(r"[^a-z0-9]", "", str(b).lower())
+    if not na or not nb:
+        return False
+    return na == nb or na in nb or nb in na
 
 
 def _is_numeric_dtype(dtype: str) -> bool:
@@ -701,6 +858,8 @@ def coder_node(state: CodingAgentState) -> dict:
             "messages": _append_unique_message(state_messages, default_msg),
             "primary_llm_response": primary_msg,
             "coder_pseudocode": state.get("coder_pseudocode"),
+            "coder_contract": state.get("coder_contract"),
+            "contract_error": None,
         }
 
     if coder_llm is None:
@@ -724,6 +883,8 @@ def coder_node(state: CodingAgentState) -> dict:
                 "messages": _append_unique_message(state_messages, math_err),
                 "primary_llm_response": primary_msg,
                 "coder_pseudocode": state.get("coder_pseudocode"),
+            "coder_contract": state.get("coder_contract"),
+            "contract_error": None,
             }
         stub_code = _generate_stub_code(state)
         fallback_msg = "Generated deterministic stub code."
@@ -737,6 +898,8 @@ def coder_node(state: CodingAgentState) -> dict:
             "messages": _append_unique_message(state_messages, fallback_msg),
             "primary_llm_response": primary_msg,
             "coder_pseudocode": state.get("coder_pseudocode"),
+            "coder_contract": state.get("coder_contract"),
+            "contract_error": None,
         }
 
     # Defensive default to avoid KeyError. Only the avro ex_code below still
@@ -775,6 +938,8 @@ def coder_node(state: CodingAgentState) -> dict:
             "messages": _append_unique_message(state_messages, fallback_msg),
             "primary_llm_response": primary_msg,
             "coder_pseudocode": state.get("coder_pseudocode"),
+            "coder_contract": state.get("coder_contract"),
+            "contract_error": None,
         }
 
     if state.get("library_to_use") is None:
@@ -805,13 +970,35 @@ def coder_node(state: CodingAgentState) -> dict:
     # the same plan every time and was injected as "follow exactly", which
     # contradicts "fix based on the feedback" and made retries reproduce the
     # rejected code. The retry works from previous code + feedback instead.
-    if feedback and previous_code:
+    #
+    # Exception: a CONTRACT violation says the blueprint's own stated
+    # postconditions were not met. That is a failure of intent, not of syntax,
+    # and the previous code is the wrong thing to iterate on -- so the blueprint
+    # is regenerated with the violation in hand.
+    contract_retry = bool(state.get("contract_error"))
+    if feedback and previous_code and not contract_retry:
         pseudocode_plan = ""
+        contract = _contract_from_state(state)
     else:
         pseudocode_plan = _generate_pseudocode(state)
+        pseudocode_plan, contract = _split_blueprint(pseudocode_plan, state)
 
     # Guard: refuse math on string columns (LLM path)
     math_err = _detect_math_on_string_column_coder(state)
+    if math_err and _contract_contradicts_math_guard(contract, math_err, state):
+        # The guard is a keyword match over the prompt: it fires on "...average
+        # of that count" in a request whose only named column happens to be a
+        # date, and then terminally refuses a perfectly ordinary time-series
+        # question. The blueprint now states which columns the computation reads
+        # and what the result metric is, so when the plan does not actually
+        # apply arithmetic to the flagged text column, the declared intent wins
+        # over the regex guess.
+        logger.info(
+            "Math-on-string guard overridden by blueprint contract (declared "
+            "source columns %s do not apply arithmetic to the flagged column).",
+            list(contract.source_columns) if contract else [],
+        )
+        math_err = None
     if math_err:
         logger.info("Blocked math-on-string in LLM code path: %s", math_err)
         primary_msg = primary_response or math_err
@@ -829,6 +1016,8 @@ def coder_node(state: CodingAgentState) -> dict:
             "messages": _append_unique_message(state_messages, math_err),
             "primary_llm_response": primary_msg,
             "coder_pseudocode": pseudocode_plan,
+            "coder_contract": contract.to_dict() if contract else None,
+            "contract_error": None,
         }
 
     datasets = state.get("datasets_context") or state.get("multi_dataset_state") or []
@@ -1015,6 +1204,32 @@ USER-VISIBLE OUTPUT CONTRACT:
 - For scalar or summary requests such as min, max, range, count, average, totals, statistics, metrics, or diagnostics, return a small result DataFrame containing those values instead of returning the original df.
 - Example: for "minimum and maximum of TransactionID", return columns like column, minimum, maximum, absolute_range.
 
+PROFILING / DATA-QUALITY REQUESTS (dtypes, missing values, summary statistics, row count, "describe the data", data-quality issues):
+- Return a TIDY table with ONE ROW PER DATASET COLUMN and exactly these columns, in order:
+  column, dtype, non_null, missing, missing_pct, unique, mean, std, min, p25, median, p75, max, issues
+  Numeric statistics are filled for numeric columns and left NaN for text/date columns.
+- Append ONE final row with column="(dataset)": non_null = total row count, all statistics NaN,
+  issues = dataset-level findings.
+- NEVER return a single wide row with one column per statistic (age_mean, age_std, billing_mean, ...).
+- NEVER put a dict, list or Series into a cell - no df.dtypes.to_dict() or value_counts() inside a
+  DataFrame. dtype values are plain strings: str(df[c].dtype).
+- Every entry in `issues` is the result of a check that RAN and FOUND something, stated with its
+  count, e.g. "108 negative values", "534 exact duplicate rows". Never write speculative text such as
+  "may appear" or "possible". Use an empty string when a column has no findings.
+- Run at least these checks:
+  1) missing values per column;
+  2) exact duplicate rows (report on the (dataset) row);
+  3) negative values in numeric columns whose name implies a non-negative quantity
+     (amount, price, cost, bill, fee, charge, salary, age, count, qty, quantity, total);
+  4) person-name columns only (name, first_name, last_name, patient, customer, doctor): count values
+     whose capitalisation is inconsistent - not all-lower, not all-upper, and not title case;
+  5) text columns: distinct values that collapse after .str.strip().str.lower() (the same value
+     written with different casing or whitespace);
+  6) date columns that form a start/end pair (admission/discharge, start/end, order/ship): parse both
+     with pd.to_datetime(errors="coerce") and count rows where end < start;
+  7) outliers only by data-derived IQR fences (see DATA-DERIVED THRESHOLDS), never fixed domain ranges.
+- In regex patterns passed to .str.contains use non-capturing groups (?:...) so pandas does not warn.
+
 NEVER RE-SAMPLE THE DATAFRAME:
 - df is ALREADY the sample the user's fidelity setting selected. Do not call
   df.sample(), df.head(n) or df.iloc[:n] to "take a sample" before computing.
@@ -1148,6 +1363,15 @@ DIVISION SAFETY (ANTI-CRASH):
 - NEVER divide by a column or expression that can contain zero or NaN without guarding it. A single zero denominator raises ZeroDivisionError (in df.apply lambdas) or produces inf/NaN (in vectorized ops) and fails or corrupts the whole run.
 - Guard every division: replace zero denominators with NaN first, e.g. `denom = df['x'].replace(0, np.nan); df['ratio'] = df['num'] / denom`, or use `np.where(denom != 0, num / denom, np.nan)`. Import numpy as np when you use it.
 - Prefer vectorized division over `df.apply(lambda row: row['a'] / row['b'], axis=1)`; if you must use apply, guard the denominator inside the lambda.
+SCRIPT SIZE (YOUR RESPONSE HAS AN OUTPUT LIMIT):
+- Never copy the schema, a column list, or a dtype map into the script as a literal. Read them at runtime from df.columns and df.dtypes.
+- Keep comments to short single lines. No banner or divider comments.
+- For wide datasets, loop over columns instead of writing one block per column.
+
+DATA-DERIVED THRESHOLDS:
+- To flag outliers, unusual values or "unusual distributions", derive the cutoffs from the data itself: IQR fences (Q1 - 1.5*IQR, Q3 + 1.5*IQR), percentiles (p1/p99), z-scores, share of zeros, share of missing values.
+- Never hard-code domain reference ranges (clinical, financial, physical) unless the user supplied them. They are magic constants and will be rejected as fabrication.
+- Values that are impossible by the column's own meaning (negative ages, negative counts) may be flagged without any constant.
 
 DO NOT FABRICATE VALUES (ANTI-HALLUCINATION):
 - If the plan or request references a metric, entity, brand, category, threshold, or column that does NOT exist in the schema and has NO standard, universally-known definition derivable from existing columns (e.g. a branded product name, an invented "surge multiplier", "acceptance rating", or "score"), DO NOT invent a formula, magic constants, or category/label mappings, and DO NOT guess which coded value maps to which name.
@@ -1210,6 +1434,18 @@ if __name__ == "__main__":
 
     if pseudocode_plan:
         human_prompt += f"Pseudocode blueprint (follow exactly):\n{pseudocode_plan}\n\n"
+
+    if contract is not None:
+        # The coder is shown the same postconditions the validator will check,
+        # so the acceptance criteria are a shared contract rather than a hidden
+        # exam. This is what replaces the prompt's old four-part
+        # "AGGREGATION / CHART OUTPUT RULE": the constraint is now stated per
+        # task, in the plan, instead of memorised as a general rule.
+        human_prompt += (
+            "Acceptance criteria — the returned DataFrame is checked against "
+            "these and rejected if it does not satisfy them:\n"
+            f"{json.dumps(contract.to_dict(), indent=2)}\n\n"
+        )
     elif feedback and previous_code:
         # Retry: the plan is context, not a script to reproduce — the feedback
         # below takes precedence over it.
@@ -1224,9 +1460,11 @@ if __name__ == "__main__":
             f"```python\n{previous_code}\n```\n\n"
             "Validation Feedback:\n"
             f"{feedback}\n\n"
-            "Your previous code was REJECTED. Produce a materially different "
-            "implementation that resolves the feedback — do not resubmit the "
-            "same approach. If the feedback claims you invented a metric that "
+            "Your previous code was REJECTED. Resolve every point in the "
+            "feedback. Where the feedback names specific constants, columns or "
+            "lines, fix or remove exactly those and keep the parts that were not "
+            "criticised - do not resubmit the rejected approach for the flagged "
+            "parts, and do not rewrite or expand the rest. If the feedback claims you invented a metric that "
             "is actually derivable from schema columns by a standard "
             "definition, implement that standard derivation, cite the source "
             "columns in comments, and avoid the words 'assume' or "
@@ -1251,8 +1489,28 @@ if __name__ == "__main__":
         HumanMessage(content=human_prompt),
     ]
 
+
     response = coder_llm.invoke(llm_messages)
     logger.info("Coder LLM answered: %s", describe_response(response))
+
+    if _finish_reason(response) == "length":
+        logger.warning(
+            "Coder output hit the token limit; retrying once with max_tokens=%s "
+            "and a brevity instruction.",
+            CODER_TRUNCATION_RETRY_MAX_TOKENS,
+        )
+        retry_messages = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=human_prompt + _TRUNCATION_RETRY_NOTE),
+        ]
+        try:
+            response = coder_llm.invoke(
+                retry_messages, max_tokens=CODER_TRUNCATION_RETRY_MAX_TOKENS
+            )
+            logger.info("Coder LLM (truncation retry) answered: %s", describe_response(response))
+        except Exception as exc:
+            logger.warning("Coder truncation retry failed; keeping the truncated answer: %s", exc)
+
     raw_response = getattr(response, "content", str(response))
 
     generated_code = extract_code_block(raw_response)
@@ -1272,4 +1530,6 @@ if __name__ == "__main__":
         "messages": updated_messages,
         "primary_llm_response": primary_msg,
         "coder_pseudocode": pseudocode_plan,
+        "coder_contract": contract.to_dict() if contract else None,
+        "contract_error": None,
     }

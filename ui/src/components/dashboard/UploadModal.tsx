@@ -9,7 +9,6 @@ import { projectDashboardKey } from "@/lib/api/project-dashboard";
 import { backendApi } from "@/lib/api/backendApi";
 // import { setPendingDashboardAnalysis } from "@/lib/pending-dashboard-analysis";
 import { cx } from "@/lib/utils/cx";
-import { finishAutoInsightsBot, startAutoInsightsBot } from "@/lib/auto-insights-bot";
 import { toast } from "sonner";
 
 const ACCEPTED = [".csv", ".xlsx", ".xls", ".json",".parquet"];
@@ -335,7 +334,6 @@ export function UploadModal({
   const start = async () => {
     if (!file || !response || !batch) return;
     // Close instantly so the dataset details are not visible while we persist.
-    startAutoInsightsBot();
     onOpenChange(false);
     const vizConfig = response.visualization_config ?? null;
     const primaryName = response.filename ?? response.alias ?? file.name;

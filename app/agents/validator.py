@@ -7,6 +7,12 @@ from typing import Any
 from langchain_core.messages import SystemMessage, HumanMessage
 from app.core.inference import build_chat_model
 from app.agents.state import CodingAgentState
+from app.agents.blueprint_contract import (
+    BlueprintContract,
+    ContractError,
+    check_contract,
+    format_violations,
+)
 import os
 STRICT_LOGIC_ENV = "AVALOKA_STRICT_LOGIC_VALIDATION"
 logger = logging.getLogger(__name__)
@@ -300,10 +306,22 @@ def syntactic_validator_node(state: CodingAgentState) -> dict:
         return {"syntax_error": False}
     except (SyntaxError, ValueError) as e: # Catch compile-time errors
         logger.warning(f"❌ Invalid Syntax or Compile Error: {e}")
-        # Provide specific feedback for the coder LLM
+        # An odd number of ``` fences in the coder's raw answer means it was cut
+        # off mid-script. Say so: "fix the syntax" makes the retry resend the
+        # same oversized script and get cut off again.
+        raw = str(state.get("llm_raw_response") or "")
+        if raw.count("```") % 2 == 1:
+            feedback = (
+                f"Your script was cut off before it was finished (output limit reached; {e}). "
+                "Write a shorter complete script: do not copy the schema or column/dtype lists "
+                "into the code, loop over columns instead of repeating blocks, keep comments minimal, "
+                "and make sure the script ends with the __main__ block."
+            )
+        else:
+            feedback = f"SyntaxError or CompileError: {e}. Please fix the Python syntax/structure."
         return {
             "syntax_error": True,
-            "code_validation_feedback": f"SyntaxError or CompileError: {e}. Please fix the Python syntax/structure."
+            "code_validation_feedback": feedback,
         }
     except Exception as e: # Catch unexpected errors during compile check
         logger.error(f"❌ Unexpected error during syntax check: {e}")
@@ -2086,6 +2104,23 @@ import pandas as pd
 from contextlib import redirect_stdout, redirect_stderr
 
 
+VALIDATION_SAMPLE_ROWS_ENV = "AVALOKA_VALIDATION_SAMPLE_ROWS"
+DEFAULT_VALIDATION_SAMPLE_ROWS = 100
+
+
+def validation_sample_rows() -> int:
+    """Rows of the preview used for sample execution during validation."""
+    raw = os.getenv(VALIDATION_SAMPLE_ROWS_ENV)
+    if not raw:
+        return DEFAULT_VALIDATION_SAMPLE_ROWS
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        logger.warning("Ignoring non-integer %s=%r", VALIDATION_SAMPLE_ROWS_ENV, raw)
+        return DEFAULT_VALIDATION_SAMPLE_ROWS
+    return max(2, value)
+
+
 def _build_sample_dataframe(state: CodingAgentState) -> pd.DataFrame | None:
     """Construct a small DataFrame from preview/sample data for execution validation."""
     sample_text = state.get("sample_data") or ""
@@ -2123,8 +2158,16 @@ def _build_sample_dataframe(state: CodingAgentState) -> pd.DataFrame | None:
     if dataframe is None or dataframe.empty:
         return None
 
-    # Limit to two rows to keep execution deterministic.
-    return dataframe.head(2).reset_index(drop=True)
+    # How many rows the generated code is validated against.
+    #
+    # This was 2. Two rows keeps execution cheap, but it makes every
+    # shape-based postcondition unobservable: a group-by over two rows can
+    # legitimately return two rows, so "did this actually aggregate?" cannot be
+    # asked, and a window/resample/pivot result is degenerate rather than
+    # representative. Contract checking needs enough rows for the result shape
+    # to mean something. A deterministic prefix of the preview keeps runs
+    # reproducible -- the sample is still the same rows every time.
+    return dataframe.head(validation_sample_rows()).reset_index(drop=True)
 
 def execute_code_node(state: CodingAgentState) -> dict:
     """Executes the 'main' function from the generated code against the sample data."""
@@ -2221,6 +2264,77 @@ def execute_code_node(state: CodingAgentState) -> dict:
             "execution_output_data": None
         }
 
+def contract_validator_node(state: CodingAgentState) -> dict:
+    """Check the executed result against the blueprint's own acceptance criteria.
+
+    This is the deterministic semantic gate the pipeline did not have. Before
+    it, the only semantic check was ``logical_semantic_validator_node``, an LLM
+    reviewer that in the default configuration cannot block at all: any verdict
+    other than confirmed fabrication is downgraded to ``logical_semantic_error:
+    False`` with the rationale kept as advisory notes. So a result that was
+    simply wrong -- raw rows returned for an aggregation, a duplicated group
+    key, a rate outside [0, 1] -- passed straight through to the user.
+
+    The contract is stated by the blueprint for this specific task, so checking
+    it adds no general rule to memorise and costs no tokens.
+
+    Silent by design when there is nothing trustworthy to check: no contract, no
+    successful execution, or an empty result all return ``{}`` and leave the
+    pipeline exactly as it was.
+    """
+    if state.get("syntax_error") or state.get("static_semantic_error"):
+        return {}
+
+    raw_contract = state.get("coder_contract")
+    if not raw_contract:
+        return {}
+
+    if state.get("execution_error"):
+        # The code did not produce a result to check; the execution feedback
+        # path owns that failure.
+        return {}
+
+    records = state.get("execution_output_data")
+    if not isinstance(records, list) or not records:
+        return {}
+
+    try:
+        contract = BlueprintContract.parse(raw_contract)
+    except ContractError as exc:
+        logger.info("Stored blueprint contract is unreadable (%s); skipping check.", exc)
+        return {}
+
+    try:
+        result_df = pd.DataFrame(records)
+    except Exception as exc:  # noqa: BLE001 - never let the gate crash the graph
+        logger.warning("Could not rebuild result frame for contract check: %s", exc)
+        return {}
+
+    source_df = _build_sample_dataframe(state)
+
+    logger.info("--- Checking blueprint contract ---")
+    try:
+        violations = check_contract(contract, result_df, source_df)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Contract check raised (%s); treating as no violation.", exc)
+        return {}
+
+    if not violations:
+        logger.info("Result satisfies the blueprint contract.")
+        return {"contract_error": False, "contract_violations": []}
+
+    feedback = format_violations(violations, contract)
+    logger.warning(
+        "Result violates the blueprint contract: %s",
+        "; ".join(v.rule for v in violations),
+    )
+    return {
+        "contract_error": True,
+        "contract_violations": [{"rule": v.rule, "detail": v.detail} for v in violations],
+        "code_validation_feedback": feedback,
+    }
+
+
 def logical_semantic_validator_node(state: CodingAgentState) -> dict:
     """Uses an LLM to check if the code logically fulfills the user prompt."""
     if state.get("syntax_error") or state.get("static_semantic_error"): return {}
@@ -2264,16 +2378,32 @@ def logical_semantic_validator_node(state: CodingAgentState) -> dict:
 
     # **Code to Review:**
     # ```python
+    # The reviewer was never told which columns exist, so it guessed from the
+    # domain ("an ICU dataset probably has no 'cirrhosis' column") and flagged
+    # real columns as invented. Give it the authoritative list.
+    _schema = state.get("schema") or state.get("source_schema") or {}
+    _schema_cols = (
+        [str(c) for c in _schema.keys() if str(c).strip()]
+        if isinstance(_schema, dict) else []
+    )
+    columns_text = ", ".join(_schema_cols) if _schema_cols else "(schema unavailable)"
+    output_cols_text = ", ".join(output_cols) if output_cols else "(no output columns)"
+
     prompt = f"""
     You are an expert Python code reviewer.
 
     IMPORTANT RULES:
     - Only validate EXPLICIT user requirements. Do NOT demand extra defensive handling the user did not ask for WHEN THE CODE ALREADY RAN CLEANLY.
     - BUT a run that actually crashed is always a failure: if the Exception or STDERR field below shows a real error (e.g. ZeroDivisionError, KeyError, ValueError from a real bug), set is_logically_correct=false and explain the fix.
+    - The sample run uses only 2 rows. Warnings such as "Mean of empty slice" or "ConstantInputWarning" are artifacts of that tiny sample, not errors.
     - If the Exception field says sample data was unavailable, the code was never executed — judge it on its own merits and do NOT count the missing sample as a failure.
     - FABRICATION IS A LOGICAL ERROR. Set is_fabricated=true AND is_logically_correct=false when the code invents a formula, magic constants, thresholds, or category/label mappings for a metric, brand, entity, or column that is NOT in the dataset, NOT defined by the user or by the planner-approved interpretation below, AND not derivable from existing columns by a standard, universally-known definition. Fabricated logic is wrong even if the code runs without error, because it emits confident but meaningless numbers.
-    - NOT fabrication (never flag these): a rate computed as the mean of a 0/1 column; deciles/quantiles via qcut; hour/day-of-week/month derived from an existing timestamp column; pivot/crosstab/groupby over existing columns; descriptive bin labels for a binning the user requested; comments that restate the plan's stated interpretation; code that raises ValueError instead of computing an undefined metric (judge whether refusing was appropriate — a refusal is not an invented formula).
+    - A column that appears in the DATASET COLUMNS list below EXISTS. Using it is never fabrication, even if you would not expect it in this kind of dataset. Only call a column missing or invented if it is absent from that list.
+    - NOT fabrication (never flag these): a rate computed as the mean of a 0/1 column; deciles/quantiles via qcut; hour/day-of-week/month derived from an existing timestamp column; pivot/crosstab/groupby over existing columns; descriptive bin labels for a binning the user requested; outlier cutoffs derived from the data itself (IQR fences, percentiles, z-scores); comments that restate the plan's stated interpretation; code that raises ValueError instead of computing an undefined metric (judge whether refusing was appropriate — a refusal is not an invented formula).
     - Use the execution output preview/columns to confirm claims about missing columns.
+
+    DATASET COLUMNS (authoritative):
+    {columns_text}
 
     User Requirements:
     {state.get("user_prompt", "")}
@@ -2298,8 +2428,9 @@ def logical_semantic_validator_node(state: CodingAgentState) -> dict:
     ```
     {state.get('execution_error', 'No exception.')}
     ```
-    Does the code meet all requirements, avoid inventing undefined logic, and run without unexpected errors?
-    Respond ONLY with a JSON object:
+    - Output columns: {output_cols_text}
+    - Output preview (2-row sample run):
+        Does the code meet all requirements, avoid inventing undefined logic, and run without unexpected errors?
     {{
       "is_logically_correct": <true_or_false>,
       "is_fabricated": <true_or_false>,

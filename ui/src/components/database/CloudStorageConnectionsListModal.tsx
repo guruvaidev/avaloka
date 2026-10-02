@@ -90,7 +90,7 @@ export function CloudStorageConnectionsListModal({
   return (
     <>
       <Dialog open={open} onOpenChange={(o) => (o ? onOpenChange(true) : close())}>
-        <DialogContent className="max-w-[640px] gap-0 overflow-hidden rounded-xl border border-border p-0 [&>button]:hidden">
+        <DialogContent className="max-w-[640px] gap-0 overflow-hidden rounded-xl border border-border bg-background p-0 [&>button]:hidden">
           <div className="flex items-center justify-between border-b border-border bg-background px-5 py-4">
             <div className="flex items-center gap-2.5">
               <Cloud className="h-5 w-5 text-foreground" strokeWidth={1.75} />

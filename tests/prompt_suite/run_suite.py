@@ -2,7 +2,7 @@
 """Avaloka test-suite runner — v1 / v2 / v4, batched, live terminal output.
 
 Endpoints/credentials come from env vars (see README): AVALOKA_API_URL,
-AVALOKA_AUTH_URL, AVALOKA_ANON_KEY, AVALOKA_TEST_EMAIL/PASSWORD, AVALOKA_CONNS.
+AVALOKA_AUTH_URL, AVALOKA_ANON_KEY, AVALOKA_TEST_EMAIL, AVALOKA_CONNS.
 
   python3 run_suite.py --suite v4 --list                 # show batches
   python3 run_suite.py --suite v4 --batch F2             # run one batch
@@ -26,11 +26,10 @@ import urllib.request, urllib.error
 BASE = Path(__file__).resolve().parent
 API = os.environ.get("AVALOKA_API_URL", "http://localhost:9000")
 KONG = os.environ.get("AVALOKA_AUTH_URL", "http://localhost:30091")
-ANON = os.environ.get("AVALOKA_ANON_KEY", "")
+ANON = os.environ.get("AVALOKA_ANON_KEY", "") or os.environ.get("AVALOKA_SERVICE_KEY", "")
 EMAIL = os.environ.get("AVALOKA_TEST_EMAIL", "")
-PASSWORD = os.environ.get("AVALOKA_TEST_PASSWORD", "")
-DATA_DIR = Path.home() / "v3assets"           # housing.csv / train.csv live here
-CONNS = Path(os.environ.get("AVALOKA_CONNS", str(Path.home() / "v3assets" / "conns.json")))
+DATA_DIR = Path(os.environ.get("DATA_DIR", str(Path.home() / "v3assets")))           # housing.csv / train.csv live here
+CONNS = Path(os.environ.get("AVALOKA_CONNS", os.path.join(DATA_DIR, "conns.json")))
 STATE_F = BASE / "state.json"
 BUCKET_PREFIX = "gs://avaloka-test-user-filestore/user-upload/inputs"
 
@@ -116,9 +115,17 @@ class Runner:
         return h
 
     def login(self):
-        code, r, _ = http("POST", f"{KONG}/auth/v1/token?grant_type=password",
-                          {"email": EMAIL, "password": PASSWORD}, {"apikey": ANON}, 30)
-        assert code == 200 and r.get("access_token"), f"login failed: {code} {r}"
+        code, r, _ = http("POST", f"{KONG}/auth/v1/admin/generate_link", 
+                          {"type":"magiclink", "email": EMAIL, "redirect_to": "http://localhost:30090"}, 
+                          {"apikey": ANON, "authorization": f"Bearer {ANON}"},
+                          30
+                        )
+        assert code == 200 and r.get("email_otp"), f"login failed: {code} {r}"
+        code, r, _ = http("POST", f"{KONG}/auth/v1/verify", 
+                            {"type":"magiclink", "email": EMAIL, "token": r["email_otp"]}, 
+                            {"apikey": ANON, "authorization": f"Bearer {ANON}"},
+                            30
+                        )
         self.token = r["access_token"]
 
     def auth(self): return {"Authorization": f"Bearer {self.token}"}

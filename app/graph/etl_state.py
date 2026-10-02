@@ -76,8 +76,17 @@ class ETLState(TypedDict):
     # Code generation fields
     generated_code: Optional[str]
     coder_pseudocode: Optional[str]
+    coder_contract: Optional[dict]
+    contract_error: Optional[bool]
+    contract_violations: Optional[list]
     coder_raw_response: Optional[str]
     logical_review_feedback: Optional[str]
+    multi_action_actions: Optional[List[Dict[str, Any]]]
+    multi_action_missing: Optional[List[Dict[str, Any]]]
+    multi_action_status: Optional[str]
+    multi_action_notes: Optional[List[str]]
+    structured_action_plan: Optional[Dict[str, Any]]
+    output_tables: Optional[List[Dict[str, Any]]]
 
     # Execution and output fields
     # Using Any instead of pd.DataFrame to avoid Pydantic schema generation issues

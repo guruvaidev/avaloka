@@ -1655,7 +1655,6 @@ def training_main() -> None:
         use_gpu=use_gpu,
         resources_per_worker={"CPU": cpus_per_worker - 1},
         placement_strategy="SPREAD",
-        trainer_resources={"CPU": 1}
     )
     print(
         f"[ScalingConfig] num_workers={scaling_config.num_workers} "

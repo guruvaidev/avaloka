@@ -19,6 +19,11 @@ class ChatResponse(BaseModel):
     task_info: Optional[Dict[str, Any]] = None
     output_file_data: Optional[Dict[str, Any]] = None
     output_json: Optional[List[Dict[str, Any]]] = None
+    output_tables: Optional[List[Dict[str, Any]]] = None
+    multi_action_status: Optional[str] = None
+    multi_action_actions: Optional[List[Dict[str, Any]]] = None
+    multi_action_missing: Optional[List[Dict[str, Any]]] = None
+    multi_action_notes: Optional[List[str]] = None
     # Planner deliberation trace (ChatGPT-style "thinking") — present when
     # the planner model ran with reasoning_format="parsed".
     reasoning: Optional[str] = None
@@ -447,3 +452,39 @@ class BucketListResponse(BaseModel):
     folders: List[BucketFolder] = Field(default_factory=list)
     # [{ "key": "...", "size": "...", "updated": "..." }]
     objects: List[Dict[str, str]]
+
+
+
+
+# -------------------------------------------------------------------
+# Insights avatar: explain charts on the Auto Insights page
+# -------------------------------------------------------------------
+
+class InsightChartIn(BaseModel):
+    id: str
+    title: Optional[str] = None
+    type: Optional[str] = None
+    x_field: Optional[str] = None
+    y_field: Optional[str] = None
+    aggregate: Optional[str] = None
+    reason: Optional[str] = None
+    points: List[Dict[str, Any]] = Field(default_factory=list, max_length=500)
+
+
+class InsightTurnIn(BaseModel):
+    role: str
+    text: str = Field(..., max_length=2000)
+
+
+class InsightExplainIn(BaseModel):
+    question: str = Field(..., min_length=1, max_length=500)
+    charts: List[InsightChartIn] = Field(..., min_length=1, max_length=12)
+    dataset_id: Optional[str] = None
+    dataset_name: Optional[str] = None
+    focus_chart_id: Optional[str] = None
+    history: List[InsightTurnIn] = Field(default_factory=list, max_length=20)
+
+
+class InsightExplainOut(BaseModel):
+    answer: str
+    focus_chart_ids: List[str] = Field(default_factory=list)

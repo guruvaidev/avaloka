@@ -11,15 +11,23 @@ Tables required (run the SQL migration below in the Supabase dashboard first):
 Environment variables:
     SUPABASE_URL              — e.g. https://xxxx.supabase.co
     SUPABASE_SERVICE_ROLE_KEY — service role key (server-side only)
+    AVALOKA_PERSIST_WORKERS   — concurrent upserts in persist_full_profile
+                                (default 4; 1 = sequential, the old behaviour)
+    AVALOKA_PERSIST_FULL_SAMPLE — "auto" (default): skip the 'full' sample when
+                                it duplicates random_baseline; "always": write
+                                it anyway; "never": never write it
 """
 
 from __future__ import annotations
 
+import concurrent.futures
 import logging
 import os
 import re
+import threading
+import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +36,24 @@ SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 
 TABLE_PROFILES = os.getenv("SUPABASE_PROFILES_TABLE", "dataset_profiles")
 TABLE_SAMPLES  = os.getenv("SUPABASE_SAMPLES_TABLE",  "dataset_samples")
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.getenv(name, str(default))))
+    except ValueError:
+        return default
+
+
+# Each sample upsert is one HTTP round trip of several MB of JSON (2-10 s each
+# on the ICU file). Running them concurrently turns ~30 s into roughly the
+# slowest single upsert.
+_PERSIST_WORKERS = _env_int("AVALOKA_PERSIST_WORKERS", 4)
+
+# The display sample stored as phase 'full' is random_baseline[:sample_size];
+# with the server's sample size it is the whole of random_baseline, so writing
+# it again doubles the largest upload for no new data.
+_PERSIST_FULL_SAMPLE = os.getenv("AVALOKA_PERSIST_FULL_SAMPLE", "auto").strip().lower()
 
 # SQL migration — run once in the Supabase dashboard
 MIGRATION_SQL = """
@@ -138,6 +164,9 @@ def warn_on_supabase_credential_mismatch() -> None:
         logger.error("[supabase] %s", problem)
 
 
+_CLIENT_CACHE: Dict[Tuple[str, str], Any] = {}
+_CLIENT_LOCK = threading.Lock()
+
 def get_supabase_client():
     """Return a configured Supabase client, or raise RuntimeError if env vars are missing.
 
@@ -157,11 +186,25 @@ def get_supabase_client():
             f"Supabase env vars not set ({missing}). "
             "Set them in your .env file or environment."
         )
-    try:
-        from supabase import create_client  # type: ignore
-    except ImportError:
-        raise RuntimeError("supabase package not installed. Run: pip install supabase")
-    return create_client(url, key)
+
+    # Reuse one client per (url, key): creating a client per call meant a new
+    # connection + TLS handshake on every lookup. Keyed on the credentials read
+    # above, so a changed env value still yields a fresh client.
+    cache_key = (url, key)
+    client = _CLIENT_CACHE.get(cache_key)
+    if client is not None:
+        return client
+    with _CLIENT_LOCK:
+        client = _CLIENT_CACHE.get(cache_key)
+        if client is None:
+            try:
+                from supabase import create_client  # type: ignore
+            except ImportError:
+                raise RuntimeError("supabase package not installed. Run: pip install supabase")
+            client = create_client(url, key)
+            _CLIENT_CACHE.clear()          # drop clients for stale credentials
+            _CLIENT_CACHE[cache_key] = client
+    return client
 
 
 def _safe_json(obj: Any) -> Any:
@@ -297,27 +340,36 @@ def upsert_sample(
 
 
 def load_sample(dataset_id: str, phase: str = "full") -> Optional[List[Dict]]:
-    """Load the row data for a given dataset and phase. Returns None if not found."""
+    """Load the row data for a given dataset and phase. Returns None if not found.
+
+    phase 'full' falls back to 'random_baseline' when no 'full' row exists:
+    persist_full_profile no longer stores 'full' when it would duplicate
+    random_baseline, so readers of 'full' keep getting the same rows.
+    """
     try:
         client = get_supabase_client()
     except RuntimeError as e:
         logger.warning(f"[persistence] Skipping load_sample: {e}")
         return None
 
-    try:
+    def _fetch(p: str) -> Optional[List[Dict]]:
         res = (
             client.table(TABLE_SAMPLES)
             .select("rows_data,rows_count,columns")
             .eq("dataset_id", dataset_id)
-            .eq("phase", phase)
+            .eq("phase", p)
             .order("created_at", desc=True)
             .limit(1)
             .execute()
         )
         data = getattr(res, "data", None) or []
-        if not data:
-            return None
-        return data[0].get("rows_data")
+        return data[0].get("rows_data") if data else None
+
+    try:
+        rows = _fetch(phase)
+        if rows is None and phase == "full":
+            rows = _fetch("random_baseline")
+        return rows
     except Exception as exc:
         logger.error(f"[persistence] load_sample failed for {dataset_id!r}/{phase!r}: {exc}", exc_info=True)
         return None
@@ -412,7 +464,6 @@ def persist_quick_profile(
     """
     pr = agent_res.get("profiling_result") or {}
     dq = pr.get("data_quality") or {}
-    pm = pr.get("portfolio_metadata") or {}
     schema = agent_res.get("schema") or {}
     cols = list(schema.keys()) if isinstance(schema, dict) else list(schema)
     rows = agent_res.get("rows") or []
@@ -438,6 +489,12 @@ def persist_quick_profile(
         upsert_sample(dataset_id=dataset_id, phase="quick", rows=rows, columns=cols)
 
 
+def _full_sample_is_duplicate(rows: List[Dict], portfolio_samples: Dict[str, List[Dict]]) -> bool:
+    """True when `rows` is a prefix of random_baseline (the usual case)."""
+    baseline = portfolio_samples.get("random_baseline") or []
+    return bool(rows) and len(rows) <= len(baseline) and rows == baseline[:len(rows)]
+
+
 def persist_full_profile(
     dataset_id: str,
     full_result: Dict[str, Any],
@@ -451,11 +508,18 @@ def persist_full_profile(
     """
     Persist the full profile, display sample, and all portfolio samples after the background
     job completes. Designed to run in a thread pool since the Supabase calls are blocking HTTP.
+
+    The profile and sample upserts are independent rows, so they run concurrently
+    (AVALOKA_PERSIST_WORKERS). The 'full' display sample is skipped when it is just a
+    copy of random_baseline (AVALOKA_PERSIST_FULL_SAMPLE=auto); load_sample('full')
+    falls back to random_baseline in that case.
     """
+    _t_persist = time.monotonic()
     pr = full_result.get("profiling_result") or {}
     dq = pr.get("data_quality") or {}
     pm = pr.get("portfolio_metadata") or {}
     ds = pr.get("data_shape") or {}
+    
     schema = full_result.get("schema") or {}
     cols = list(schema.keys()) if isinstance(schema, dict) else list(schema)
     rows = full_result.get("rows") or []
@@ -469,33 +533,61 @@ def persist_full_profile(
     portfolio_sample_uris = full_result.get("portfolio_sample_uris") or {}
     pr_to_store = {**pr, "portfolio_sample_uris": portfolio_sample_uris} if portfolio_sample_uris else pr
 
-    upsert_profile(
-        dataset_id=dataset_id,
-        phase="full_profile",
-        user_id=user_id,
-        source_path=source_path,
-        source_type=source_type,
-        tier=pm.get("sizing_tier"),
-        exact_rows=exact_rows,
-        sample_pct=sample_pct,
-        phase_a_elapsed_s=phase_a_elapsed_s,
-        phase_b_elapsed_s=phase_b_elapsed_s,
-        column_count=len(cols),
-        completeness_pct=(dq.get("overall_completeness") or 0) * 100 or None,
-        profiling_result=pr_to_store,
-        error=full_result.get("error"),
-    )
-
-    if rows:
-        upsert_sample(dataset_id=dataset_id, phase="full", rows=rows, columns=cols)
-
-    # Save individual portfolio samples
     portfolio_samples: Dict[str, List[Dict]] = full_result.get("portfolio_samples") or {}
+
+    # Build the list of independent writes.
+    jobs: List[Tuple[str, Any, tuple, dict]] = [(
+        "profile:full_profile",
+        upsert_profile,
+        (dataset_id, "full_profile"),
+        dict(
+            user_id=user_id,
+            source_path=source_path,
+            source_type=source_type,
+            tier=pm.get("sizing_tier"),
+            exact_rows=exact_rows,
+            sample_pct=sample_pct,
+            phase_a_elapsed_s=phase_a_elapsed_s,
+            phase_b_elapsed_s=phase_b_elapsed_s,
+            column_count=len(cols),
+            completeness_pct=(dq.get("overall_completeness") or 0) * 100 or None,
+            profiling_result=pr_to_store,
+            error=full_result.get("error"),
+        ),
+    )]
+
+    skipped_full = False
+    if rows:
+        if _PERSIST_FULL_SAMPLE == "never":
+            skipped_full = True
+        elif _PERSIST_FULL_SAMPLE == "always" or not _full_sample_is_duplicate(rows, portfolio_samples):
+            jobs.append(("sample:full", upsert_sample, (dataset_id, "full", rows, cols), {}))
+        else:
+            skipped_full = True
+
     for sample_name, sample_rows in portfolio_samples.items():
         if sample_rows:
-            upsert_sample(
-                dataset_id=dataset_id,
-                phase=sample_name,
-                rows=sample_rows,
-                columns=cols,
-            )
+            jobs.append((f"sample:{sample_name}", upsert_sample,
+                         (dataset_id, sample_name, sample_rows, cols), {}))
+
+    workers = min(_PERSIST_WORKERS, len(jobs))
+    if workers <= 1:
+        for _label, fn, args, kwargs in jobs:
+            fn(*args, **kwargs)
+    else:
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=workers, thread_name_prefix="persist-upsert"
+        ) as pool:
+            futures = {pool.submit(fn, *args, **kwargs): label for label, fn, args, kwargs in jobs}
+            for fut in concurrent.futures.as_completed(futures):
+                try:
+                    fut.result()       # upsert_* already log and swallow their own errors
+                except Exception as exc:
+                    logger.error("[persistence] %s failed for %r: %s", futures[fut], dataset_id, exc)
+
+    logger.info(
+        "[persistence] persist_full_profile dataset_id=%r done in %.2fs "
+        "(%d samples, %d workers%s)",
+        dataset_id, time.monotonic() - _t_persist, len(portfolio_samples), workers,
+        ", skipped duplicate 'full' sample" if skipped_full else "",
+    )

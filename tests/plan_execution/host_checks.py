@@ -1,4 +1,3 @@
-from pathlib import Path
 """Host-side portion of the Master Test Plan: cluster, images, git, DAB.
 
 These cannot run inside the pod (they need docker, kind, the git history, or
@@ -6,13 +5,19 @@ the DAB checkout). Same status vocabulary as the pod harness; nothing is PASS
 that was not executed.
 """
 from __future__ import annotations
+
 import json, os, re, subprocess, sys
+from pathlib import Path
 
-REPO = "/private/tmp/claude-505/-Users-leelakrishna-code-ki-avaloka-dev/a7110187-1b85-47b9-b71d-32e2fb8209ca/scratchpad/temp16"
-import os
-
-# The checkout under test. Was one developer's absolute path.
+#: The checkout under test. Both of these were absolute paths belonging to one
+#: machine -- a developer's home directory and a scratch directory that no
+#: longer exists -- so the module only ran where it was written.
 MAIN = os.getenv("AVALOKA_REPO_ROOT", str(Path(__file__).resolve().parents[2]))
+
+#: A second checkout, used to compare trees. Defaults to the same tree, which
+#: makes the comparison a no-op rather than an error on a fresh clone.
+REPO = os.getenv("AVALOKA_COMPARE_ROOT", MAIN)
+
 RESULTS = {}
 
 def record(cid, status, actual, evidence=""):

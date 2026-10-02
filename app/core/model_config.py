@@ -41,17 +41,15 @@ class UnsupportedModelError(RuntimeError):
 # Which models a Groq-only backend can actually serve
 # --------------------------------------------------------------------------- #
 
-#: Prefixes Groq hosts. Groq serves open-weight models plus its own Compound
-#: agentic systems; it does not host OpenAI's hosted GPT line, Anthropic, or
-#: Gemini. ``openai/gpt-oss-*`` IS on Groq — it is the open-weight release, not
-#: the hosted GPT API — which is exactly the kind of confusion this list exists
-#: to settle.
+#: Prefixes Groq hosts: open-weight models (Llama, gpt-oss, Qwen, etc.). Groq
+#: does not host OpenAI's hosted GPT line, Anthropic, or Gemini. ``openai/gpt-oss-*``
+#: IS on Groq — it is the open-weight release, not the hosted GPT API — which is
+#: exactly the kind of confusion this list exists to settle. (Groq's Compound
+#: agentic systems were decommissioned 2026-09-21 and are no longer listed here.)
 GROQ_SERVEABLE_PREFIXES: Tuple[str, ...] = (
     "llama-",            # llama-3.1-*, llama-3.3-*
     "meta-llama/",       # meta-llama/llama-4-*
-    "openai/gpt-oss",    # open-weight gpt-oss, NOT the hosted GPT API
-    "compound",          # compound-beta, compound-beta-mini
-    "groq/compound",     # newer Compound naming
+    "openai/gpt-oss",
     "qwen",
     "deepseek-r1",
     "mixtral-",
@@ -59,8 +57,7 @@ GROQ_SERVEABLE_PREFIXES: Tuple[str, ...] = (
     "whisper-",
 )
 
-#: Prefixes that are definitely NOT on Groq, with the provider that serves them.
-#: Used to produce an actionable error rather than "model not found".
+
 _FOREIGN_MODEL_PROVIDERS: Dict[str, str] = {
     "gpt-5": "openai",
     "gpt-4": "openai",
@@ -68,6 +65,10 @@ _FOREIGN_MODEL_PROVIDERS: Dict[str, str] = {
     "o3": "openai",
     "claude-": "anthropic",
     "gemini-": "vertex",
+    # Retired Groq models — kept here so a stale config fails loudly at startup
+    # with an actionable message instead of a provider 404 mid-run.
+    "compound": "groq (decommissioned 2026-09-21)",
+    "groq/compound": "groq (decommissioned 2026-09-21)",
 }
 
 
@@ -111,7 +112,7 @@ DEFAULT_MODELS: Dict[str, str] = {
     # account at all (verified: HTTP 404). Even when it did, an 8B model
     # deciding whether generated code is correct was a false-confidence risk,
     # and this gate is the last thing between a bad plan and an executed query.
-    "validator":   "groq/compound",
+    "validator":   "openai/gpt-oss-120b",
 
     # Plan -> JSON contract. Every downstream agent trusts this output, so a
     # dropped constraint here propagates silently. 20b is sufficient for

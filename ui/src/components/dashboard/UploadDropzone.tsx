@@ -45,7 +45,7 @@ export function UploadDropzone({ projectId, projectName, redirectTo, disabled = 
         ref={inputRef}
         type="file"
         multiple
-        accept=".csv,.xls,.xlsx,.json"
+        accept=".csv,.xls,.xlsx,.json,.parquet"
         className="hidden"
         onChange={(e) => {
           const files = Array.from(e.target.files ?? []);
@@ -85,7 +85,7 @@ export function UploadDropzone({ projectId, projectName, redirectTo, disabled = 
           <h3 className="mt-6 text-md font-semibold text-primary">
             Select or drag &amp; drop file to analyze data
           </h3>
-          <p className="mt-1 text-sm text-tertiary">CSV, Excel or JSON (100MB)</p>
+          <p className="mt-1 text-sm text-tertiary">CSV, Excel or JSON, Parquet (100MB)</p>
         </div>
       </div>
 
@@ -96,7 +96,7 @@ export function UploadDropzone({ projectId, projectName, redirectTo, disabled = 
         projectId={projectId}
         projectName={projectName}
         redirectTo={redirectTo}
-        onStandaloneAnalysisSaved={onStandaloneAnalysisSaved}
+        // onStandaloneAnalysisSaved={onStandaloneAnalysisSaved}
       />
     </div>
   );

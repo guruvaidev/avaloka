@@ -181,9 +181,20 @@ app/sample_data/
 # Internal engineering task spec — kept local, not part of the public repo
 test_plan.md
 
-# Run output — these were committed once and should not be again.
+# Debug scripts belong under scripts/, reading keys from the environment.
+/test.py
+/test_milvus_integration.py
+
+# Default output directories created by the avaloka CLI.
 /avaloka-analysis/
 /avaloka-model/
+/avaloka-batch/
+/avaloka-fleet/
+
+# stray pip output committed by accident
+2.2.0
+
+# Run output — these were committed once and should not be again.
 /artifacts/
 /scorecard.json
 

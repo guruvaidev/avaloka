@@ -326,3 +326,8 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# CLI helper, not a pytest test: pytest reads the csv_path parameter as a
+# fixture request and errors at setup. Keep it runnable via __main__ only.
+test_new_sampler.__test__ = False

@@ -718,7 +718,7 @@ function SelectField({ icon, value, onChange, placeholder, options }: { icon: Re
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="flex-1 cursor-pointer appearance-none bg-transparent pr-6 outline-none"
+        className="flex-1 pl-2 cursor-pointer appearance-none bg-transparent pr-6 outline-none dark:bg-[#111418] dark:text-white"
       >
         <option value="" disabled>{placeholder ?? "Select…"}</option>
         {options.map((opt) => (
@@ -1717,7 +1717,7 @@ function IntegrationCard({
         : "Connect";
 
   return (
-    <div className="flex flex-col rounded-xl border border-border bg-white">
+    <div className="flex flex-col rounded-xl border border-border bg-white dark:bg-[#111418]">
       <div className="flex items-start justify-between gap-3 p-4">
         <div className="flex items-center gap-3">
           <span

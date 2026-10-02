@@ -4,77 +4,38 @@ All notable changes to Avaloka are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.0.0] — 2026-09-14 — first open-source release
+## [1.6.0] — 2026-09-16
 
-The first public release of Avaloka. The engine is the same one used internally
-on the 1.6 line; this is its own version line because it is the first release
-anyone outside the team can run.
+The 1.6 development line. Numbered to match `VERSION`, the Helm chart and the
+version `GET /version` serves — those had drifted to five different answers
+(DEFECT E14.01), and a release bump now moves them together.
 
-### Run it with no network at all
+### Fixed
 
-- The sentence-transformers embedding model (~88 MB) is **baked into the API
-  image at build time**. Retrieval previously fetched it from huggingface.co on
-  the first query, which was slow enough to abort the memory retrieval and
-  impossible on an air-gapped host. Verified with `docker run --network none`.
-- `docs/INSTALL.md` documents the fully offline path, including a `--network
-  none` check you can run rather than trust.
-- Nothing calls home: no telemetry, no licence call, no model download.
+- **A forgeable auth stack shipped as the chart default** (DEFECT E9.19, P0).
+  `values.yaml` enabled in-cluster Supabase with Supabase's *published* demo
+  signing key, which `secret.yaml` adopts as the API's `SUPABASE_JWT_SECRET` —
+  so anyone could mint a `service_role` token. Supabase is now off by default,
+  credentials ship empty, and the chart refuses to render if you enable it
+  without supplying your own.
+- **One test file aborted the whole test suite.** A module-level `sys.exit(1)`
+  in `tests/planner_graph_agent/` made pytest report INTERNALERROR and run
+  nothing at all, which is why CI could not pass.
+- **The API server no longer imports Daft to start.** Daft was imported at
+  module scope for a single availability flag; on any interpreter whose wheel
+  does not match the CPU, that import raises SIGILL rather than ImportError and
+  kills the process.
+- **Vendored loader copies had drifted 96 lines** — the inference image was
+  missing the non-UTF-8 encoding fallback entirely, so a CSV that loaded in the
+  agent failed in the deployed service.
 
-### Fixes that a first-run user would otherwise have hit immediately
+### Changed
 
-- **MinIO is pulled from quay.io.** `minio/minio` and `minio/mc` are no longer
-  pullable anonymously from Docker Hub — even `:latest` — so the pod never
-  started and the first upload returned `HTTP 500`. The `mc` image matters by a
-  second route: it runs the bucket-creation hook.
-- **The API image can be built at all.** The Vertex extra pinned
-  `google-cloud-storage<3` against a `>=3.4` requirement.
-- **`.tsv` and `.xml` upload** instead of returning `HTTP 500` for formats the
-  API advertises as supported.
-- **A provider with no usable key says so**, naming the variable, instead of
-  degrading silently to canned text. A valid key for the *wrong* provider used
-  to look exactly like no key at all.
-- **Small datasets are read whole.** A size threshold was defined and never
-  used, so anything under 1 GB was sampled — including a 12-row file, which was
-  then reported to the user as "computed on a 12-row sample".
-
-### Conversation
-
-- "What is in this dataset?" is answerable with no model configured. The
-  deterministic fallback held the computed schema and asked the user what they
-  wanted instead of showing it.
-- "Where should I start?" is no longer parsed as a SQL `WHERE` clause.
-- "train a model to predict churn" routes to training, not inference.
-- The sampling caveat's own suggested phrase — "run this on the entire dataset"
-  — now does something.
-
-### Memory plane
-
-- Milvus ships in the chart with etcd, reusing the deployed MinIO.
-- Chroma has a persistent volume. It was an `emptyDir`, so every pod restart
-  silently erased what the system had learned.
-- The retrieval circuit breaker was 3.0s against a 4–6s retrieval, so it
-  aborted every call. The loop now persists across restarts.
-- It exists to carry context forward. We make no claim that it improves
-  analyses, and we have not measured that.
-
-### Security and honest defaults
-
-- No hardcoded Supabase project token in the edge functions.
-- Shipping code no longer reads a private bucket belonging to the maintainers.
-- The chart still defaults to Supabase's **published** demo credentials so a
-  local install works with no setup — but they are labelled as public, rotation
-  is documented, and `supabase.requireOwnCredentials` makes the chart refuse to
-  render while they are in place. **Change them before any shared deployment.**
-
-### Evidence
-
-- All 126 Master Test Plan cases were executed against a live Kubernetes
-  deployment: 73 PASS / 2 FAIL / 45 BLOCKED / 5 MANUAL / 1 N/A. The report and
-  the harness that produced it are in `docs/test-reports/`.
-- The two failures are conversational probes whose scores move run to run; that
-  instability is the finding, and neither number is quoted as a score.
-- The 45 blocked cases each name the dependency they need (cloud accounts,
-  additional database servers, a Ray cluster, a load generator).
+- Images publish to GHCR with content-addressed tags, so a deployment pulls what
+  already exists instead of rebuilding it.
+- `scripts/doctor.py` reports whether the environment will actually work,
+  including an x86_64-under-Rosetta Python, which breaks native wheels in a way
+  that looks like a hang.
 
 ## [0.2] — 2026
 

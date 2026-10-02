@@ -1,0 +1,86 @@
+# Permanent test MongoDB for the "test mongo" connection.
+# Apply once per cluster:  kubectl apply -f deploy/k8s/avaloka-mongo-test.yaml
+# Not part of the Helm chart, so make up / helm rollback never delete it.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: avaloka-mongo-auth
+  namespace: test-avaloka-deployment
+stringData:
+  MONGO_INITDB_ROOT_USERNAME: root
+  MONGO_INITDB_ROOT_PASSWORD: example
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: avaloka-mongo-seed
+  namespace: test-avaloka-deployment
+data:
+  seed.js: |
+    db = db.getSiblingDB("shop");
+    db.orders.insertMany([
+      { order_id: 1, customer: "Alice", amount: 250, status: "shipped" },
+      { order_id: 2, customer: "Bob",   amount: 120, status: "pending" },
+      { order_id: 3, customer: "Cara",  amount: 400, status: "shipped" }
+    ]);
+    print("seeded orders: " + db.orders.countDocuments());
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: avaloka-mongo
+  namespace: test-avaloka-deployment
+spec:
+  selector:
+    app: avaloka-mongo
+  ports:
+    - port: 27017
+      targetPort: 27017
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: avaloka-mongo
+  namespace: test-avaloka-deployment
+spec:
+  serviceName: avaloka-mongo
+  replicas: 1
+  selector:
+    matchLabels:
+      app: avaloka-mongo
+  template:
+    metadata:
+      labels:
+        app: avaloka-mongo
+    spec:
+      containers:
+        - name: mongo
+          image: mongo:7
+          ports:
+            - containerPort: 27017
+          envFrom:
+            - secretRef:
+                name: avaloka-mongo-auth
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+          volumeMounts:
+            - name: data
+              mountPath: /data/db
+            - name: seed
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+      volumes:
+        - name: seed
+          configMap:
+            name: avaloka-mongo-seed
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: standard-rwo
+        resources:
+          requests:
+            storage: 10Gi

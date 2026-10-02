@@ -117,8 +117,89 @@ def _has_explicit_filter_value(text: str, field: str = "") -> bool:
     return any(re.search(rf"\b{re.escape(value)}\b", normalized) for value in _TEMPORAL_VALUE_TERMS)
 
 
-def _detect_ambiguous_prompt_details(prompt: str) -> Optional[dict]:
-    """Return clarification metadata when a prompt needs a missing filter value."""
+def _column_tokens(name: str) -> tuple[str, ...]:
+    spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", str(name))
+    return tuple(re.findall(r"[a-z]+|\d+", spaced.lower()))
+
+
+def _metric_columns(state: Optional[ETLState]) -> List[str]:
+    """Use one active dataset, never a union of unrelated connected datasets."""
+    if not isinstance(state, dict):
+        return []
+    columns = state.get("uploaded_csv_columns") or []
+    if isinstance(columns, str):
+        try:
+            columns = json.loads(columns)
+        except (TypeError, ValueError):
+            columns = []
+    if not isinstance(columns, (list, tuple)):
+        columns = []
+    if not columns:
+        schema = state.get("schema") or {}
+        if isinstance(schema, str):
+            try:
+                schema = json.loads(schema)
+            except (TypeError, ValueError):
+                schema = {}
+        if isinstance(schema, dict):
+            columns = list(schema)
+    if not columns:
+        datasets = state.get("multi_dataset_state") or []
+        if isinstance(datasets, list) and len(datasets) == 1 and isinstance(datasets[0], dict):
+            columns = datasets[0].get("columns") or []
+    return list(dict.fromkeys(str(col).strip() for col in columns if str(col).strip()))
+
+
+def _detect_metric_ambiguity(prompt: str, state: Optional[ETLState]) -> Optional[dict]:
+    """Find underspecified column groups from the active schema, not query verbs."""
+    columns = _metric_columns(state)
+    if len(columns) < 2 or _TRAINING_INTENT_RE.search(prompt):
+        return None
+    if isinstance(state, dict) and state.get("avaloka_intent") in {
+        "chit_chat", "onboarding", "status", "ml_training", "ml_inference",
+    }:
+        return None
+
+    words = set(_column_tokens(prompt))
+    candidates = [(column, set(_column_tokens(column))) for column in columns]
+    for measure in _column_tokens(prompt):
+        # Only tokens shared by at least two qualified schema columns can be
+        # ambiguous. The length floor avoids grammar fragments such as "is".
+        if len(measure) < 3:
+            continue
+        if re.search(rf"\b(?:all|each|every|both)\s+{re.escape(measure)}\b", prompt, re.IGNORECASE):
+            continue
+        if re.search(rf"\b{re.escape(measure)}\s+(?:columns|fields|metrics)\b", prompt, re.IGNORECASE):
+            continue
+        options = [column for column, tokens in candidates
+                   if measure in tokens and len(tokens) > 1]
+        if len(options) < 2:
+            continue
+        # An exact column or an explicitly named qualifier resolves the choice.
+        if any(_column_tokens(column) == (measure,) for column in columns):
+            continue
+        if any(set(_column_tokens(column)).issubset(words) for column in options):
+            continue
+        qualified = [set(_column_tokens(column)) - {measure} for column in options]
+        if len({tuple(sorted(parts)) for parts in qualified}) < 2:
+            continue
+        labels = [" ".join(_column_tokens(column)) for column in options]
+        choices = ", ".join(labels[:-1]) + f" or {labels[-1]}"
+        return {
+            "message": f"Which {measure} measure do you mean: {choices}?",
+            "pending_clarification": {
+                "type": "metric_choice", "measure": measure,
+                "columns": options, "original_prompt": prompt,
+                "source_agent": "planner",
+            },
+        }
+    return None
+
+
+def _detect_ambiguous_prompt_details(
+    prompt: str, state: Optional[ETLState] = None,
+) -> Optional[dict]:
+    """Return clarification metadata for missing filters or ambiguous measures."""
     text = _strip_runtime_context(prompt)
     if not text:
         return None
@@ -165,9 +246,9 @@ def _detect_ambiguous_prompt_details(prompt: str) -> Optional[dict]:
         ):
             continue
 
-        # If a concrete value is already supplied, let the planner proceed.
+        # This filter is resolved; still check whether its metric is ambiguous.
         if _has_explicit_filter_value(field):
-            return None
+            continue
 
         return {
             "message": (
@@ -182,6 +263,8 @@ def _detect_ambiguous_prompt_details(prompt: str) -> Optional[dict]:
             },
         }
 
+    return _detect_metric_ambiguity(text, state)
+
 
 def _detect_ambiguous_prompt(prompt: str) -> Optional[str]:
     """Return a clarification question when a prompt needs a missing filter value."""
@@ -193,16 +276,41 @@ def _resolve_pending_clarification(pending: Optional[dict], reply: str) -> Optio
     """Resolve a stored clarification with the user's latest reply."""
     if not isinstance(pending, dict):
         return None
-    if pending.get("type") != "filter_value":
+    kind = pending.get("type")
+    if kind not in ("filter_value", "metric_choice"):
         return None
 
     value = _strip_runtime_context(reply)
     if not value:
         return None
 
-    field = str(pending.get("field") or "").strip()
     original_prompt = str(pending.get("original_prompt") or "").strip()
-    if not field or not original_prompt:
+    if not original_prompt:
+        return None
+
+    if kind == "metric_choice":
+        options = [str(col) for col in pending.get("columns") or []]
+        measure = str(pending.get("measure") or "")
+        reply_words = set(_column_tokens(value))
+        # A new question about a different subject is not an answer to the
+        # outstanding choice, even if it happens to reuse one qualifier.
+        if "?" in value and len(reply_words) > 2 and measure not in reply_words:
+            return None
+        chosen = []
+        for column in options:
+            tokens = set(_column_tokens(column))
+            other_tokens = set().union(*(
+                set(_column_tokens(other)) for other in options if other != column
+            ))
+            unique = tokens - other_tokens
+            if tokens.issubset(reply_words) or (unique and unique.issubset(reply_words)):
+                chosen.append(column)
+        if len(chosen) != 1:
+            return None
+        return f"{original_prompt.rstrip(' .?!')}. Use the {chosen[0]} column for {measure}."
+
+    field = str(pending.get("field") or "").strip()
+    if not field:
         return None
 
     if _has_explicit_filter_value(value, field):
@@ -545,7 +653,7 @@ def _extract_failed_respond_to_user_text(exc: Exception) -> Optional[str]:
     """Recover a respond_to_user answer from a rejected tool call.
 
     Two shapes reach us, and both mean "the model wrote the reply but did not
-    wrap it as a tool call", which Groq rejects under tool_choice="required":
+    wrap it as a tool call", which Groq rejects under tool_choice="any":
 
       1. ``<function=respond_to_user {...}</function>`` -- the wrapper is there
          but malformed.
@@ -732,10 +840,134 @@ def _classify_planner_route(user_input: str, csv_info: str) -> str:
         logger.warning("Planner route classifier failed: %s", exc)
     return "continue_planning"
 
+_WEEKDAY_NAMES = (
+    r"monday|tuesday|wednesday|thursday|friday|saturday|sunday"
+    r"|mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun"
+)
+#: Celery crontab numbering: Sunday is 0.
+_WEEKDAY_NUMBER = {
+    "mon": 1, "monday": 1, "tue": 2, "tues": 2, "tuesday": 2, "wed": 3, "wednesday": 3,
+    "thu": 4, "thur": 4, "thurs": 4, "thursday": 4, "fri": 5, "friday": 5,
+    "sat": 6, "saturday": 6, "sun": 0, "sunday": 0,
+}
+_CLOCK_RE = r"\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.m\.|p\.m\.)?"
+
 _SCHEDULE_TRIGGER_RE = re.compile(
-    r"\bschedule\b|\brun\s+every\b|\bevery\s+\d+\s+(?:second|minute|hour|day)s?\b|\bfrom\s+now\b",
+    r"\bschedule\b|\brun\s+every\b|\bevery\s+\d+\s+(?:second|minute|hour|day)s?\b|\bfrom\s+now\b"
+    # Calendar cadences (docs/USER_GUIDE.md: "Every Monday 9am recompute fraud
+    # rate by ProductCD"). A weekday names a schedule on its own; "day",
+    # "morning" and the adverbs need a clock time so that "average sales every
+    # day" and "daily sales by region" stay analysis questions.
+    rf"|\b(?:every|each)\s+(?:{_WEEKDAY_NAMES}|weekday|weekend)s?\b"
+    rf"|\b(?:every|each)\s+(?:day|morning|night|evening)\s+(?:at\s+)?{_CLOCK_RE}\b"
+    rf"|\b(?:daily|nightly|hourly|weekly)\s+at\s+{_CLOCK_RE}\b",
     re.IGNORECASE,
 )
+
+#: One calendar cadence with an optional clock time on either side:
+#: "every Monday 9am", "each weekday at 8:30", "10 pm every Sunday",
+#: "every day at 18:15", "daily at 6am".
+_CALENDAR_CADENCE_RE = re.compile(
+    rf"(?:\b(?:at\s+)?(?P<t1>\d{{1,2}}(?::\d{{2}})?)\s*(?P<ap1>am|pm|a\.m\.|p\.m\.)\s+)?"
+    rf"\b(?:every|each)\s+(?P<unit>{_WEEKDAY_NAMES}|weekday|weekend|day|morning|night|evening)s?\b"
+    rf"(?:\s+(?:at\s+)?(?P<t2>\d{{1,2}}(?::\d{{2}})?)\s*(?P<ap2>am|pm|a\.m\.|p\.m\.)?(?=\W|$))?"
+    rf"|\b(?P<adv>daily|nightly|hourly|weekly)\s+at\s+(?P<t3>\d{{1,2}}(?::\d{{2}})?)\s*(?P<ap3>am|pm|a\.m\.|p\.m\.)?(?=\W|$)",
+    re.IGNORECASE,
+)
+
+
+def _clock_to_hour_minute(clock: str, ampm: Optional[str], unit: str) -> Optional[Tuple[int, int]]:
+    """'9am' -> (9, 0); '10 pm' -> (22, 0); '18:15' -> (18, 15); '7' + night -> (19, 0)."""
+    hour_s, _, minute_s = (clock or "").partition(":")
+    try:
+        hour, minute = int(hour_s), int(minute_s or 0)
+    except ValueError:
+        return None
+    ap = (ampm or "").replace(".", "").lower()
+    if ap == "pm" and hour < 12:
+        hour += 12
+    elif ap == "am" and hour == 12:
+        hour = 0
+    elif not ap and unit in ("night", "evening", "nightly") and hour < 12:
+        hour += 12
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        return None
+    return hour, minute
+
+
+def _parse_calendar_cadence(lower: str) -> Optional[Tuple[dict, bool]]:
+    """Crontab fields for a weekday / day-at-time cadence, or None.
+
+    Returns (fields, concrete). A weekday without a time is concrete at 00:00;
+    "every morning" with no time is a schedule but not a concrete one, so the
+    caller leaves it to the LLM.
+    """
+    m = _CALENDAR_CADENCE_RE.search(lower)
+    if not m:
+        return None
+    unit = (m.group("unit") or m.group("adv") or "").lower()
+    clock = m.group("t1") or m.group("t2") or m.group("t3")
+    ampm = m.group("ap1") or m.group("ap2") or m.group("ap3")
+    if unit in _WEEKDAY_NUMBER:
+        day_of_week: Any = _WEEKDAY_NUMBER[unit]
+    elif unit == "weekday":
+        day_of_week = "1-5"
+    elif unit == "weekend":
+        day_of_week = "0,6"
+    else:
+        day_of_week = "*"
+    if clock:
+        hm = _clock_to_hour_minute(clock, ampm, unit)
+        if hm is None:
+            return {"day_of_week": day_of_week, "hour": 0, "minute": 0}, False
+        hour, minute = hm
+        if unit == "hourly":
+            return {"day_of_week": "*", "hour": "*", "minute": minute}, True
+        return {"day_of_week": day_of_week, "hour": hour, "minute": minute}, True
+    if unit in _WEEKDAY_NUMBER or unit in ("weekday", "weekend"):
+        return {"day_of_week": day_of_week, "hour": 0, "minute": 0}, True
+    return {"day_of_week": day_of_week, "hour": 0, "minute": 0}, False
+
+
+_CADENCE_STRIP_RES = [
+    re.compile(
+        rf"(?:\b(?:at\s+)?\d{{1,2}}(?::\d{{2}})?\s*(?:am|pm|a\.m\.|p\.m\.)\s+)?"
+        rf"\b(?:every|each)\s+(?:\d+\s+)?"
+        rf"(?:second|minute|hour|day|week|month|{_WEEKDAY_NAMES}|weekday|weekend|morning|night|evening)s?\b"
+        rf"(?:\s+(?:at\s+)?\d{{1,2}}(?::\d{{2}})?\s*(?:am|pm|a\.m\.|p\.m\.)?(?=\W|$))?",
+        re.IGNORECASE),
+    re.compile(rf"\b(?:daily|weekly|monthly|hourly|nightly)\b(?:\s+at\s+{_CLOCK_RE}(?=\W|$))?", re.IGNORECASE),
+    re.compile(r"\b\d+\s+(?:seconds?|minutes?|hours?|days?)\s+from\s+now\b", re.IGNORECASE),
+    re.compile(r"\b(?:and\s+|then\s+)?(?:please\s+)?schedule\s+(?:this|it|that)?\s*(?:to\s+(?:run|execute))?(?=\W|$)", re.IGNORECASE),
+    re.compile(r"\b(?:and\s+)?(?:re-?)?run\s+(?:this|it|that)\s*$", re.IGNORECASE),
+]
+
+#: Appended to the request the coder sees for a scheduled analysis. Without it
+#: "recompute the fraud rate by ProductCD every 2 minutes" was coded as fraud
+#: rate per 2-minute bucket of TransactionDT: the cadence leaked into the maths.
+_SCHEDULED_RUN_NOTE = (
+    "\n\n(This analysis is run by the task scheduler on its own cadence. "
+    "Compute it once per run; do not implement timing, time buckets or scheduling in the code.)"
+)
+
+
+def _analysis_request_without_cadence(text: str) -> str:
+    """The analysis a scheduling request asks for, with the cadence removed.
+
+    "Every Monday 9am recompute fraud rate by ProductCD" -> "recompute fraud
+    rate by ProductCD". Returns "" when nothing analysable is left ("schedule
+    this to run every day at 6"), so the caller keeps whatever the earlier turn
+    planned.
+    """
+    cleaned = text or ""
+    for pattern in _CADENCE_STRIP_RES:
+        cleaned = pattern.sub(" ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,.;:-")
+    cleaned = re.sub(r"^(?:and|then|please)\s+", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s*,?\s*\b(?:and|then)$", "", cleaned, flags=re.IGNORECASE).strip(" ,.;:-")
+    if len(cleaned.split()) < 2 or not re.search(r"[A-Za-z]", cleaned):
+        return ""
+    return cleaned
 
 
 def _parse_task_schedule_from_text(text: str) -> Optional[Tuple[dict, bool]]:
@@ -759,8 +991,13 @@ def _parse_task_schedule_from_text(text: str) -> Optional[Tuple[dict, bool]]:
     }
     concrete = False
 
+    calendar = _parse_calendar_cadence(lower)
     every_n = re.search(r"\bevery\s+(\d+)?\s*(second|minute|hour|day)s?\b", lower)
-    if "every minute" in lower or "each minute" in lower:
+    if calendar is not None:
+        fields, concrete = calendar
+        schedule.update({"schedule_type": "repetitive", "day_of_month": "*", "second": 0,
+                         "max_runs": -1, **fields})
+    elif "every minute" in lower or "each minute" in lower:
         schedule.update({"schedule_type": "repetitive", "minute": "*", "second": 0, "max_runs": -1})
         concrete = True
     elif every_n:
@@ -1073,9 +1310,8 @@ class PlannerOutput(BaseModel):
     tool_call: ToolCall
 
 
-_planner_api_key = (os.environ.get("GROQ_API_KEY_PLANNING_AGENT")
+_planner_api_key = os.environ.get("GROQ_API_KEY_PLANNING_AGENT") or os.environ.get("GROQ_API_KEY")
 
-              or os.environ.get("GROQ_API_KEY"))
 # Active inference provider for the planner (default Groq). The planner runs
 # unchanged against any provider (local OpenAI-spec model in k8s, Groq,
 # OpenRouter, Bedrock, Vertex, Azure) — see app/core/inference.py. Reasoning
@@ -1174,6 +1410,14 @@ if llm is None:
         "Planner LLM disabled; set GROQ_API_KEY_PLANNING_AGENT (or configure the "
         "selected INFERENCE_PROVIDER) to re-enable remote generation."
     )
+
+# TOOL_CHOICE is read at call time, so it must be bound whether or not the
+# LLM was configured at import. Binding it only in the else branch meant that
+# with no API key -- CI, and any deployment missing the planning key -- the
+# name was never defined, and the first invoke raised NameError instead of
+# reporting the disabled LLM. Tests that patch `llm` hit it too: patching the
+# object does not bind a global the module never created.
+TOOL_CHOICE = "any" if type(llm).__name__ == "ChatVertexAI" else "required"
 
 
 def _routing_llm():
@@ -1628,7 +1872,21 @@ def _detect_math_on_string_column(user_input: str, state: ETLState) -> Optional[
     """
     if not isinstance(user_input, str):
         user_input = str(user_input or "")
-    lower_text = user_input.lower()
+    # FIX ❶: judge only what the user typed. The appended "[Analysis context] ..."
+    # block (fidelity, sample name, byte size) is system metadata and must not be
+    # matched against column names or aggregation keywords.
+    lower_text = _strip_runtime_context(user_input).lower()
+
+    # FIX ❷: counting questions are not numeric aggregations of a column.
+    # "What is the total number of patients?", "how many rows", "count of X",
+    # "number of unique Y" count rows/values; they work on text columns too
+    # (nunique / len), so the guard has nothing to protect here.
+    if re.search(
+        r"\bhow\s+many\b|\bnumber\s+of\b|\bcount\b|\btotal\s+(?:number|count)\b"
+        r"|\bdistinct\b|\bunique\b",
+        lower_text,
+    ):
+        return None
 
     # Mathematical aggregation keywords that require numeric data
     _MATH_AGG_KEYWORDS = [
@@ -1649,10 +1907,7 @@ def _detect_math_on_string_column(user_input: str, state: ETLState) -> Optional[
     # "by region") or computes a derived expression ("sales / quantity",
     # "Ship Date - Order Date", "difference between ..."), then any string column
     # named in the prompt is a group-by key or an operand — NOT the target of the
-    # aggregation. Blocking here produces false "can't do math on a text column"
-    # errors on legitimate grouped/derived questions, so defer to the coder,
-    # which groups and derives correctly. This only relaxes the guard; a plain
-    # "average of <text column>" with no grouping is still caught below.
+    # aggregation. Defer to the coder.
     if re.search(
         r"\bper\b|\bfor\s+each\b|\bfor\s+every\b|\bby\s+each\b"
         r"|\bgroup(?:ed)?\s+by\b|\bby\s+[a-z_]+\b"
@@ -1663,7 +1918,6 @@ def _detect_math_on_string_column(user_input: str, state: ETLState) -> Optional[
         return None
 
     # --- Identify which column the user is targeting ---
-    # Try schema dict first (column -> dtype)
     schema = state.get("schema") or {}
     if isinstance(schema, str):
         try:
@@ -1671,13 +1925,15 @@ def _detect_math_on_string_column(user_input: str, state: ETLState) -> Optional[
         except Exception:
             schema = {}
 
-    # Also build column list from uploaded_csv_columns as fallback
     columns_from_state = [str(c) for c in (state.get("uploaded_csv_columns") or [])]
     all_columns = list(schema.keys()) if isinstance(schema, dict) else columns_from_state
+    # FIX ❸: a blank header (trailing comma in the CSV) is not a real column.
+    # re.escape('') builds the pattern \b\b, which matches every prompt, so ''
+    # was always "mentioned" and always non-numeric -> every aggregation blocked.
+    all_columns = [str(c) for c in all_columns if str(c).strip()]
+    if not all_columns:
+        return None
 
-    # Extract column name mentioned in the user prompt
-    # Patterns like: "mean of the 'weekday' column", "calculate sum of weekday",
-    #                "average of event_name_1"
     target_col = None
     col_patterns = [
         # 'column_name' or "column_name" in quotes
@@ -1689,7 +1945,6 @@ def _detect_math_on_string_column(user_input: str, state: ETLState) -> Optional[
         m = re.search(pattern, lower_text)
         if m:
             candidate = m.group(1).strip()
-            # Match against actual columns (case-insensitive)
             for col in all_columns:
                 if col.lower() == candidate.lower():
                     target_col = col
@@ -1697,24 +1952,8 @@ def _detect_math_on_string_column(user_input: str, state: ETLState) -> Optional[
             if target_col:
                 break
 
-    # Fallback: no column was attached to the aggregation verb, so consider any
-    # column named anywhere in the prompt.
-    #
-    # This used to take the FIRST match in schema order and block on it, which
-    # refused legitimate requests outright. Reported case:
-    #
-    #   "Replace missing video_views_for_the_last_30_days with the average
-    #    across all channels, and return Youtuber and
-    #    video_views_for_the_last_30_days."
-    #
-    # The average targets a float column. `Youtuber` appears only in the RETURN
-    # clause -- but it sorts earlier in the schema, so it was picked, found to be
-    # text, and the whole turn was rejected before the planner ever ran.
-    #
-    # So: a numeric column named anywhere in the prompt means the user has a
-    # viable target in mind, and the coder is better placed than a regex to work
-    # out which. Only block when EVERY column mentioned is non-numeric, which is
-    # the case this guard exists for ("what is the average Youtuber?").
+    # Fallback: consider any column named anywhere in the prompt. Only block
+    # when EVERY mentioned column is non-numeric.
     if target_col is None:
         mentioned = [
             col for col in all_columns
@@ -1728,9 +1967,7 @@ def _detect_math_on_string_column(user_input: str, state: ETLState) -> Optional[
     if target_col is None:
         return None  # can't determine which column - let the LLM handle it
 
-    is_string_col = _column_is_non_numeric(target_col, schema, state)
-
-    if is_string_col:
+    if _column_is_non_numeric(target_col, schema, state):
         return (
             f"Cannot perform mathematical operation ('{requested_agg}') on the "
             f"'{target_col}' column because it contains text/string values, not numbers. "
@@ -1740,7 +1977,6 @@ def _detect_math_on_string_column(user_input: str, state: ETLState) -> Optional[
         )
 
     return None
-
 
 def _collect_known_columns(state: ETLState) -> List[str]:
     """Gather every column name the planner knows about from all state sources."""
@@ -1896,6 +2132,7 @@ def _identifier_reference_candidates(text: str) -> list[str]:
 #: column reference: "engagement rate", "churn score", "satisfaction index".
 #: Deliberately narrow -- these are the shapes whose formula the model has to
 #: guess, which is exactly when it invents one.
+_FAB_METRIC_HEADS = frozenset({"rate", "ratio", "score", "index", "margin"})
 _FAB_METRIC_HEAD_RE = re.compile(
     r"\b([a-z][a-z0-9]*(?:[ _-][a-z][a-z0-9]*){0,2}"
     r"[ _-](?:rate|ratio|score|index|margin))\b",
@@ -2033,7 +2270,16 @@ def _fab_candidate_anchored(candidate: str, columns: List[str], dataset_vocab: s
     tokens = _fab_tokenize(candidate)
     if not tokens:
         return True
-    return all(_fab_token_anchored(token, dataset_vocab) for token in tokens)
+    if all(_fab_token_anchored(token, dataset_vocab) for token in tokens):
+        return True
+    # "fraud rate" on a dataset with isFraud: the head noun says what to
+    # compute, the qualifier says from what. When every qualifier token is in
+    # the data the metric is derivable, not invented; "engagement rate" with
+    # no engagement column still fails here and goes to the LLM judge.
+    qualifiers = tokens - _FAB_METRIC_HEADS
+    return bool(qualifiers) and qualifiers != tokens and all(
+        _fab_token_anchored(token, dataset_vocab) for token in qualifiers
+    )
 
 
 def _build_fabrication_message(columns: List[str], missing: List[str]) -> dict:
@@ -4373,7 +4619,35 @@ def plan_etl_job(state: ETLState) -> ETLState:
         user_prompt = resolved_prompt
         resolved_pending_clarification = True
 
-    clarification_details = _detect_ambiguous_prompt_details(_prompt_to_check)
+    pending = state.get("pending_clarification")
+    if not resolved_pending_clarification and isinstance(pending, dict) and pending.get("type") == "metric_choice":
+        # A short, unrecognised answer is still a choice attempt. A new
+        # substantive request supersedes the old question instead of trapping
+        # the user in a clarification loop.
+        reply_tokens = set(_column_tokens(_prompt_to_check))
+        option_tokens = set().union(*(
+            set(_column_tokens(col)) for col in pending.get("columns") or []
+        )) - {str(pending.get("measure") or "")}
+        still_choosing = (
+            "?" not in _prompt_to_check
+            and not _TRAINING_INTENT_RE.search(_prompt_to_check)
+            and not re.search(r"\b(cancel|never\s?mind|forget it)\b", _prompt_to_check, re.IGNORECASE)
+            and (len(reply_tokens) <= 2 or bool(reply_tokens & option_tokens))
+        )
+        if still_choosing:
+            options = [" ".join(_column_tokens(col)) for col in pending.get("columns") or []]
+            clarification = f"Please choose one: {', '.join(options)}."
+            state.update({
+                "messages": state.get("messages", []) + [AIMessage(content=clarification)],
+                "ready_to_code": False,
+                "ready_to_summarize": False,
+                "enable_training": False,
+                "plan": None,
+            })
+            return _preserve_infra(state)
+        state["pending_clarification"] = None
+
+    clarification_details = _detect_ambiguous_prompt_details(_prompt_to_check, state)
     if clarification_details:
         clarification = clarification_details["message"]
         logger.info("Planner: asking clarification for ambiguous prompt: %s", _prompt_to_check[:120])
@@ -4426,7 +4700,15 @@ def plan_etl_job(state: ETLState) -> ETLState:
         state.setdefault("plan", state.get("planner_definition", ""))
         return _preserve_infra(state)
 
-    if state.get("task_schedule") and state["task_schedule"].get("task_type") == "execute":
+    # Only a schedule that arrived together with a plan may bypass the LLM. A
+    # stray task_schedule with nothing to run (the conversational agent used to
+    # inject one) must not mute the planner: the schedule_task tool is what
+    # fills in the cron from the user's words.
+    if (
+        state.get("task_schedule")
+        and state["task_schedule"].get("task_type") == "execute"
+        and state.get("ready_to_code")
+    ):
         logger.info("Planner: task_schedule already set for execute → bypassing LLM, letting router decide")
         return _preserve_infra(state)
     # Seed Ray fields (RAY PATCH)
@@ -4853,6 +5135,13 @@ def plan_etl_job(state: ETLState) -> ETLState:
                 "ready_to_code": _stype == "execute",   # training schedules never code
                 "enable_training": False,
             })
+            _analysis = _analysis_request_without_cadence(_strip_runtime_context(user_input))
+            if _analysis and _stype == "execute":
+                # The coder ranks a plan above user_prompt, and no plan was
+                # made this turn: one left over from an earlier turn would be
+                # coded instead of this request.
+                new_state["user_prompt"] = _analysis + _SCHEDULED_RUN_NOTE
+                new_state["plan"] = None
             return _preserve_infra(new_state)
 
     # Build csv_info (multi-dataset first)
@@ -5235,12 +5524,15 @@ def plan_etl_job(state: ETLState) -> ETLState:
         r"\bschedule\b|\bcron\b"
         r"|\b(?:run|re-?run|execute|refresh|repeat)\b[^.?!\n]{0,50}\bevery\b"
         r"|\bevery\s+(?:morning|night|evening)\b"
-        r"|\bdaily\s+at\b",
+        r"|\bdaily\s+at\b"
+        rf"|\b(?:every|each)\s+(?:{_WEEKDAY_NAMES}|weekday|weekend)s?\b"
+        rf"|\b(?:every|each)\s+day\s+(?:at\s+)?{_CLOCK_RE}\b"
+        rf"|\b(?:nightly|hourly|weekly)\s+at\s+{_CLOCK_RE}\b",
         lower_input,
     ))
     _tool_choice = (
         {"type": "function", "function": {"name": "schedule_task"}}
-        if _schedule_intent else "required"
+        if _schedule_intent else TOOL_CHOICE
     )
     if _schedule_intent:
         logger.info("Scheduling intent detected; forcing schedule_task tool selection.")
@@ -5479,6 +5771,10 @@ def plan_etl_job(state: ETLState) -> ETLState:
                         "ready_to_code": is_executing,
                         "enable_training": False,
                     })
+                    _analysis = _analysis_request_without_cadence(_strip_runtime_context(user_input))
+                    if _analysis and is_executing:
+                        state["user_prompt"] = _analysis + _SCHEDULED_RUN_NOTE
+                        state["plan"] = None
 
             elif tool_call and tool_call.name == "task_status":
                 state.update({

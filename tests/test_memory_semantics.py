@@ -32,59 +32,46 @@ from unittest.mock import MagicMock, patch
 # Venv-isolation: stub out packages that may be missing
 # ---------------------------------------------------------------------------
 
-#: Names this module actually replaced in sys.modules. Only these may have
-#: mocks assigned onto them -- see _mock_attrs.
-_STUBBED: set = set()
+# Modules this file actually fabricated. Anything absent from this set is the
+# genuine installed package and must never be mutated below: pytest imports
+# every test module during collection, so a MagicMock assigned onto the real
+# langgraph.graph or langchain_core.messages is what every later test in the
+# session sees, not just this one.
+_FABRICATED: set[str] = set()
 
 
 def _stub(name):
     """Register a throwaway module so `import <name>` never raises.
 
-    Returns the module to configure, or None when the real package is present
-    and must be left alone.
-
-    The docstring here used to describe the bug rather than prevent it: this
-    stubbed every name in the list, real or not, and "these entries are never
-    torn down". Stubbing a package that genuinely exists put a copy in
-    sys.modules for the rest of the session -- and the assignments below then
-    set HumanMessage, AIMessage and BaseMessage to MagicMock on it. Every test
-    module imported after this one therefore got MagicMock where it expected a
-    message class, which is why tests/test_mta_v2_unit.py failed 30 assertions
-    in a full run and passed all 82 on its own.
-
-    So the rule is now the one the old docstring claimed: stub only what is
-    genuinely unimportable. With a complete install nothing here is stubbed and
-    nothing leaks; in a minimal venv the stubs still do their job.
+    Only stubs what is genuinely unimportable. These entries are never torn
+    down, so stubbing a module that really exists leaves a MagicMock in
+    sys.modules for the whole session and every later test module that imports
+    it gets the mock instead of the real thing.
     """
     if name in sys.modules:
-        return sys.modules[name] if name in _STUBBED else None
+        return sys.modules[name]
 
     try:
-        importlib.import_module(name)
+        real = importlib.import_module(name)
     except Exception:
-        pass
-    else:
-        return None                     # real package present: do not touch it
+        real = None
 
+    if real is not None:
+        # The genuine package is installed: hand it back untouched and leave
+        # sys.modules alone. Registering a mutable copy here is what leaked
+        # mocks into the rest of the session -- the copy became the entry every
+        # later importer resolved, so once the assignments below replaced
+        # StateGraph or HumanMessage on it, every other test module saw the
+        # mock instead of the real class.
+        return real
+
+    # Genuinely unimportable: fabricate a stub whose attribute access yields
+    # mocks, so `from x.y import z` still resolves.
     mod = types.ModuleType(name)
-    # Attribute access returns another stub so `from x.y import z` works.
     mod.__getattr__ = lambda _n: MagicMock()
     sys.modules[name] = mod
-    _STUBBED.add(name)
+    _FABRICATED.add(name)
     return mod
-
-
-def _mock_attrs(name, **attrs):
-    """Assign mock attributes, but only onto a module we actually stubbed.
-
-    Doing this to a real module corrupts it for every later test in the
-    session, which is the failure mode this file used to cause.
-    """
-    if name not in _STUBBED:
-        return
-    mod = sys.modules[name]
-    for attr, value in attrs.items():
-        setattr(mod, attr, value)
 
 # Core stubs — must be registered before any app imports
 for _pkg in [
@@ -110,41 +97,78 @@ for _pkg in [
 ]:
     _stub(_pkg)
 
-# Mock attributes, applied only to modules that were actually stubbed. When the
-# real packages are installed every call below is a no-op, which is the whole
-# point: this file must not reach into a working langchain_core and replace its
-# message classes with MagicMock for the rest of the session.
-_mock_attrs("groq", APIError=type("APIError", (Exception,), {}))
-_mock_attrs("langchain_groq", ChatGroq=MagicMock)
-_mock_attrs("langchain_core.messages",
-            AIMessage=MagicMock, HumanMessage=MagicMock,
-            BaseMessage=MagicMock, SystemMessage=MagicMock)
-_mock_attrs("langchain_core.prompts", ChatPromptTemplate=MagicMock)
-_mock_attrs("pymilvus", **{a: MagicMock() for a in (
-    "connections", "Collection", "CollectionSchema", "FieldSchema",
-    "DataType", "utility")})
-_mock_attrs("celery.utils.log", get_logger=MagicMock(return_value=MagicMock()))
-_mock_attrs("celery", Celery=MagicMock,
-            shared_task=lambda *a, **kw: (lambda f: f))
-_mock_attrs("redbeat.schedulers", **{n: MagicMock for n in (
-    "RedBeatScheduler", "RedBeatSchedulerEntry", "RedBeatJSONEncoder",
-    "RedBeatJSONDecoder", "get_redis", "ensure_conf")})
-_mock_attrs("langgraph.graph", StateGraph=MagicMock, END="END")
-_mock_attrs("app.agents.infra_agent", infra_agent_node=MagicMock)
-_mock_attrs("app.infra.ray_job_runner", run_rayjob_from_yaml=MagicMock)
+# groq.APIError
+if "groq" in _FABRICATED:
+    sys.modules["groq"].APIError = type("APIError", (Exception,), {})
 
-# Parent-package wiring, also only where we stubbed the parent.
-for _parent, _child, _attr in (
-    ("langchain_core", "langchain_core.messages", "messages"),
-    ("langchain_core", "langchain_core.prompts", "prompts"),
-    ("redbeat", "redbeat.schedulers", "schedulers"),
-    ("langgraph", "langgraph.graph", "graph"),
-    ("app.infra", "app.infra.k8s_invoker", "k8s_invoker"),
-    ("app.infra", "app.infra.ray_job_runner", "ray_job_runner"),
-    ("app.core", "app.core.celery_app", "celery_app"),
+# langchain_groq.ChatGroq
+if "langchain_groq" in _FABRICATED:
+    sys.modules["langchain_groq"].ChatGroq = MagicMock
+
+# langchain_core.messages named imports
+if "langchain_core.messages" in _FABRICATED:
+    _lcm = sys.modules["langchain_core.messages"]
+    for _cls_name in ("AIMessage", "HumanMessage", "BaseMessage", "SystemMessage"):
+        setattr(_lcm, _cls_name, MagicMock)
+
+# langchain_core.prompts
+if "langchain_core.prompts" in _FABRICATED:
+    sys.modules["langchain_core.prompts"].ChatPromptTemplate = MagicMock
+
+# pymilvus top-level attributes
+if "pymilvus" in _FABRICATED:
+    _pym = sys.modules["pymilvus"]
+    for _attr in ("connections", "Collection", "CollectionSchema", "FieldSchema",
+                  "DataType", "utility"):
+        setattr(_pym, _attr, MagicMock())
+
+# celery.utils.log
+if "celery.utils.log" in _FABRICATED:
+    sys.modules["celery.utils.log"].get_logger = MagicMock(return_value=MagicMock())
+if "celery" in _FABRICATED:
+    sys.modules["celery"].Celery = MagicMock
+    sys.modules["celery"].shared_task = lambda *a, **kw: (lambda f: f)  # passthrough
+
+# redbeat.schedulers — all names as mocks
+if "redbeat.schedulers" in _FABRICATED:
+    _rb = sys.modules["redbeat.schedulers"]
+    for _n in ("RedBeatScheduler", "RedBeatSchedulerEntry", "RedBeatJSONEncoder",
+               "RedBeatJSONDecoder", "get_redis", "ensure_conf"):
+        setattr(_rb, _n, MagicMock)
+
+# langgraph.graph — StateGraph and END
+if "langgraph.graph" in _FABRICATED:
+    _lg = sys.modules["langgraph.graph"]
+    _lg.StateGraph = MagicMock
+    _lg.END = "END"
+
+# app.core.celery_app — expose celery_app and AvalokaScheduler
+if "app.core.celery_app" in _FABRICATED:
+    _ca = sys.modules["app.core.celery_app"]
+    _ca.celery_app = MagicMock()
+    _ca.AvalokaScheduler = MagicMock
+    if "app.core" in _FABRICATED:
+        sys.modules["app.core"].celery_app = _ca
+
+# app.agents.infra_agent
+if "app.agents.infra_agent" in _FABRICATED:
+    # Never mock this onto the real module: tests/test_infra_integration.py
+    # imports infra_agent_node and would silently exercise a MagicMock.
+    sys.modules["app.agents.infra_agent"].infra_agent_node = MagicMock
+
+# Wire sub-modules into parents
+for _parent, _attr, _child in (
+    ("langchain_core", "messages", "langchain_core.messages"),
+    ("langchain_core", "prompts", "langchain_core.prompts"),
+    ("redbeat", "schedulers", "redbeat.schedulers"),
+    ("langgraph", "graph", "langgraph.graph"),
+    ("app.infra", "k8s_invoker", "app.infra.k8s_invoker"),
+    ("app.infra", "ray_job_runner", "app.infra.ray_job_runner"),
 ):
-    if _parent in _STUBBED and _child in sys.modules:
+    if _parent in _FABRICATED:
         setattr(sys.modules[_parent], _attr, sys.modules[_child])
+if "app.infra.ray_job_runner" in _FABRICATED:
+    sys.modules["app.infra.ray_job_runner"].run_rayjob_from_yaml = MagicMock
 
 
 
@@ -406,28 +430,21 @@ class TestMemoryPlaneCircuitBreaker:
         from app.services.memory_plane import MemoryOrchestrator
         return MemoryOrchestrator(llm_client=None)
 
-    #: The default the module documents, and the reason it is not lower:
-    #: retrieval measures 4.4s warm and 5.8s cold against a healthy deployment,
-    #: so the original 3.0s breaker fired on every call and the memory plane
-    #: never returned anything -- indistinguishable from "nothing learned yet".
-    #: 20s leaves headroom for a cold embedding load without letting a hung
-    #: backend stall a turn. Change both this and the module comment together.
-    DOCUMENTED_DEFAULT_TIMEOUT = 20.0
-
     def test_default_timeout_matches_documented_contract(self):
-        """The default must be the one the module documents.
+        """The module header documents a 20s default; the constant must agree.
 
-        This has drifted twice in opposite directions -- once to 105s, once
-        down to a 3.0s that aborted every retrieval -- and neither showed up as
-        anything but missing memory hints. The number is asserted here so a
-        change to it has to be a deliberate one.
+        The value has drifted from its documentation twice: once to 105s while
+        the header still said 3.0, and then the 3s contract itself proved wrong
+        (a successful retrieval measures 4-6s, so the breaker fired on every
+        call and the memory plane never returned anything). The header and
+        the constant were moved to 20s together; this pins that they stay
+        together.
         """
         import app.services.memory_plane as mp
-        expected = float(os.environ.get(
-            "MEMORY_CIRCUIT_BREAKER_TIMEOUT", str(self.DOCUMENTED_DEFAULT_TIMEOUT)))
+        expected = float(os.environ.get("MEMORY_CIRCUIT_BREAKER_TIMEOUT", "20.0"))
         assert mp._CIRCUIT_BREAKER_TIMEOUT == expected
         if "MEMORY_CIRCUIT_BREAKER_TIMEOUT" not in os.environ:
-            assert mp._CIRCUIT_BREAKER_TIMEOUT == self.DOCUMENTED_DEFAULT_TIMEOUT
+            assert mp._CIRCUIT_BREAKER_TIMEOUT == 20.0
 
     def test_timeout_triggers_empty_hints(self):
         """A retrieval that outlives the breaker window yields the safe

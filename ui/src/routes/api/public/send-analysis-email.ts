@@ -7,7 +7,10 @@ const CORS: Record<string, string> = {
   "Access-Control-Max-Age": "86400",
 };
 
-const FUNCTION_URL = "https://dfhfytnflbybvgsifuam.supabase.co/functions/v1/send-analysis-email";
+// const FUNCTION_URL = "https://dfhfytnflbybvgsifuam.supabase.co/functions/v1/send-analysis-email";
+const FUNCTION_URL =
+  process.env.SEND_ANALYSIS_EMAIL_URL ??
+  `${process.env.SUPABASE_INCLUSTER_URL ?? "http://avaloka-supabase-kong:8000"}/functions/v1/send-analysis-email`;
 
 function json(body: Record<string, unknown>, status = 200) {
   return new Response(JSON.stringify(body), {

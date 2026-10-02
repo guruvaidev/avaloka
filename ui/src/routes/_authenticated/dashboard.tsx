@@ -31,7 +31,6 @@ export const Route = createFileRoute("/_authenticated/dashboard")({
 });
 
 
-const SAMPLE_MEMBERS = [{ initials: "AB" }, { initials: "CD" }, { initials: "EF" }, { initials: "GH" }];
 
 function toAnalysisRows(
   list: {
@@ -65,7 +64,7 @@ function toAnalysisRows(
       src: a.created_by_avatar ?? undefined,
     },
 
-    members: SAMPLE_MEMBERS,
+    members: [],
   }));
 }
 
@@ -176,7 +175,7 @@ function DashboardPage() {
         }
       }}
       onTogglePin={(id, next) => {
-        if (blocked("Managing projects")) return;
+         if (blocked("Managing projects")) return;
         toggleFlag.mutate({ id, field: "pinned", value: next });
       }}
       onDeleteProject={
@@ -268,7 +267,7 @@ function DashboardPage() {
           pendingAnalysisNotice={!!pendingAnalysisId}
           canCreate={canCreate}
           onCreateProject={(name, description) => {
-            if (blocked("Creating projects")) return;
+             if (blocked("Managing projects")) return;
             create.mutate({ name, description }, {
               onSuccess: async (p) => {
                 if (pendingAnalysisId) {

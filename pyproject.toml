@@ -4,11 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "avaloka"
-version = "1.0.0"
+version = "1.6.0"
 description = "CLI-first agentic data-science execution platform that turns datasets and business objectives into validated reports, reproducible models and deployable inference services within explicit time and cost budgets."
 readme = "README_CLI.md"
-# pyarrow==16.1.0 ships cp38-cp312 wheels only; without a ceiling pip on 3.13+
-# attempts an Arrow C++ source build and fails far from the cause.
+# Capped, not open-ended: pyarrow==16.1.0 publishes cp38-cp312 wheels only.
+# Without the ceiling, pip on a 3.13+ interpreter tries to build Arrow C++
+# from source and fails a long way from the actual cause.
 requires-python = ">=3.10,<3.13"
 # PEP 639 licence expression. Do NOT also add the legacy
 # "License :: OSI Approved :: ..." classifier -- setuptools rejects the pair:

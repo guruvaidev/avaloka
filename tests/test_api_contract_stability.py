@@ -41,6 +41,15 @@ NEW_FIELDS = {
     "evaluation_report", "evaluation_beats_baseline",
     "verification_report", "verification_safe_to_present",
     "agent_errors",
+    # Added by the multi-action work (PR #404): one prompt can now carry several
+    # requested actions, and the response reports each one's status separately
+    # instead of collapsing them into a single result. output_tables carries the
+    # per-action result tables. Declared here rather than widened away, because
+    # the point of this test is that an API field cannot appear without someone
+    # saying so.
+    "multi_action_actions", "multi_action_missing",
+    "multi_action_notes", "multi_action_status",
+    "output_tables",
 }
 
 

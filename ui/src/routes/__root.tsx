@@ -16,7 +16,6 @@ import { reportLovableError } from "../lib/lovable-error-reporting";
 import { Toaster } from "@/components/ui/sonner";
 import { useThemeApplier } from "@/lib/theme";
 import { TrainingJobsProvider } from "@/lib/training-jobs";
-import { AutoInsightsBotOverlay } from "@/components/analysis/AutoInsightsBotOverlay";
 
 function NotFoundComponent() {
   return (
@@ -142,7 +141,6 @@ function RootComponent() {
       <TrainingJobsProvider>
         {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
         <Outlet />
-        <AutoInsightsBotOverlay />
       </TrainingJobsProvider>
       <Toaster position="top-center" richColors />
     </QueryClientProvider>

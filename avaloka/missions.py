@@ -63,6 +63,12 @@ def _run(ctx: MissionContext, fireflies: list[type], on_progress: ProgressFn) ->
         "fireflies": ctx.ledger.as_list(),
         "budget": {"limit_usd": ctx.budget.limit_usd, "spent_usd": round(ctx.budget.spent_usd, 4)},
     }
+    if ctx.blackboard.get("goal_analysis"):
+        summary["goal_analysis"] = {
+            "kind": ctx.blackboard["goal_analysis"]["kind"],
+            "status": ctx.blackboard["goal_analysis"]["status"],
+            "scope": ctx.blackboard["goal_analysis"]["scope"],
+        }
     if ctx.blackboard.get("training_summary"):
         ts = ctx.blackboard["training_summary"]
         # The baseline travels with the score. A metric reported on its own

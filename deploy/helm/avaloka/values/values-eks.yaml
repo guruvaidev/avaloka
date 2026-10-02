@@ -35,8 +35,8 @@ gateway:
   # Must match the GatewayClass you created for the controller's ALB controller.
   className: alb
   hosts:
-    - test.example.com
-    - app.example.com
+    - test.avaloka.ai
+    - app.avaloka.ai
   tls:
     enabled: true
     # Not `secret`: the AWS controller ignores listeners[].tls.certificateRefs and

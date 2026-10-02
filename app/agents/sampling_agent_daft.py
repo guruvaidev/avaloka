@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import re
 import json
+import math
 import importlib.util
 import logging
 
@@ -18,10 +19,31 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from pathlib import Path
 from collections import Counter
 
+# Daft draws a progress bar on stderr for any query that runs longer than a
+# moment ("🗡️ 🐟[1/5] In Memory Scan ..."). It interleaves with the server log
+# and can overwrite log lines. Off by default; set DAFT_PROGRESS_BAR=1 to see it.
+# Must be set before Daft is imported (it is imported lazily below).
+os.environ.setdefault("DAFT_PROGRESS_BAR", "0")
+
 # Configuration
 DEFAULT_SAMPLE_MAX_ROWS = int(os.getenv("DEFAULT_SAMPLE_MAX_ROWS", "1000"))
 PORTFOLIO_SAMPLE_SIZE = int(os.getenv("PORTFOLIO_SAMPLE_SIZE", "10000"))
 MAX_PORTFOLIO_SAMPLES = int(os.getenv("MAX_PORTFOLIO_SAMPLES", "5"))
+
+# Candidate detection computes every column's stats in one pass over the
+# in-memory base sample (PyArrow) instead of 2-3 Daft queries per column.
+# Set AVALOKA_SAMPLER_BATCHED_CANDIDATES=0 to restore the per-column queries.
+_BATCHED_CANDIDATES = os.getenv("AVALOKA_SAMPLER_BATCHED_CANDIDATES", "1").strip().lower() not in {"0", "false", "no"}
+
+_NUMERIC_DTYPE_TOKENS = (
+    'int8', 'int16', 'int32', 'int64',
+    'uint8', 'uint16', 'uint32', 'uint64',
+    'float32', 'float64', 'decimal', 'double',
+)
+
+
+def _is_numeric_dtype_str(col_type_str: str) -> bool:
+    return any(t in col_type_str for t in _NUMERIC_DTYPE_TOKENS)
 
 
 def calculate_adaptive_sample_sizes(total_rows: int) -> Tuple[int, int]:
@@ -123,7 +145,6 @@ __all__ = ["sample_with_profiling", "DEFAULT_SAMPLE_MAX_ROWS"]
 RAY_CPUS = os.getenv("AVALOKA_RAY_CPUS")
 RAY_MEMORY_GB = os.getenv("AVALOKA_RAY_MEMORY_GB")
 RAY_ADDRESS = os.getenv("AVALOKA_RAY_ADDRESS")
-#RAY_SHUTDOWN_AFTER = os.getenv("AVALOKA_RAY_SHUTDOWN", "1").strip().lower() not in {"0", "false", "no"}
 
 # Persist the local Ray cluster for the process lifetime. Tearing it down and
 # re-initing leaves Daft's process-global runner pointed at the dead cluster's
@@ -325,7 +346,6 @@ def _s3_client_from_creds(cloud_credentials: Optional[Dict[str, Any]]):
 def _azure_client_from_creds(cloud_credentials: Optional[Dict[str, Any]]):
     """Azure BlobServiceClient using the connection's account/key/SAS, falling back to env vars."""
     from azure.storage.blob import BlobServiceClient  # type: ignore
-    import os
     account = access_key = sas_token = None
     if isinstance(cloud_credentials, dict):
         account = (
@@ -358,12 +378,8 @@ def init_ray_cluster(num_cpus: Optional[int] = None, memory_gb: Optional[float] 
     if not RAY_AVAILABLE:
         logger.warning("Ray not installed. Using Daft native executor.")
         return False
-    
-    # if _RAY_INITIALIZED and _DAFT_RAY_CONFIGURED:
-    #     logger.info("Ray+Daft already initialized")
-    #     return True
 
-     # If we think Ray is up but the cluster actually died, our cached Daft
+    # If we think Ray is up but the cluster actually died, our cached Daft
     # runner is now stale. Reset so we re-init cleanly rather than submitting
     # to a dead actor.
     if _RAY_INITIALIZED and not (RAY_AVAILABLE and ray.is_initialized()):
@@ -523,15 +539,10 @@ def should_use_ray(
     if RAY_ADDRESS:
         return True
 
-    # # Cloud files: Ray parallelises Daft's I/O across workers for faster reading
-    # if is_cloud_file:
-    #     return True
-
     # Cloud files benefit from Ray only when large enough to be worth the
     # cluster startup + parallel I/O. A tiny partitioned folder does not.
     if is_cloud_file and (file_size_mb >= 256 or (total_rows and total_rows >= threshold_rows)):
         return True
-
 
     if total_rows and total_rows < threshold_rows:
         return False
@@ -723,7 +734,6 @@ def _detect_csv_encoding(path: str) -> str:
 def _convert_to_utf8_if_needed(path: str, encoding: str, delimiter: str) -> str:
     """Convert a non-UTF-8 CSV to a UTF-8 temp file so Daft can read it."""
     import tempfile
-    import shutil
     
     if encoding.lower() in ["utf-8", "utf8", "utf-8-sig"]:
         return path
@@ -878,6 +888,42 @@ def _load_file_with_daft(path: str, source_type: str, **kwargs) -> Tuple[Optiona
         raise
 
 
+# A trailing delimiter in a CSV header ("a,b,c,") gives a column named "" of
+# dtype Null (Daft) or "Unnamed: N" (pandas-backed readers). It carries no data
+# but flows into the schema, DDL, profile prompts, viz prompt and the session.
+_BLANK_COLUMN_RE = re.compile(r"^Unnamed: \d+(?:_level_\d+)?$")
+
+
+def _drop_blank_columns(df: "daft.DataFrame") -> Tuple["daft.DataFrame", List[str]]:
+    """Drop columns whose header is blank/auto-named AND that hold no values.
+
+    An unnamed column that holds data is kept (dropping it would lose data); a
+    named column that happens to be empty is kept too (it is real schema).
+    `df` must already be materialised; the result is re-materialised.
+    """
+    try:
+        fields = list(df.schema())
+        drop: List[str] = []
+        for field in fields:
+            name = field.name
+            if str(name).strip() and not _BLANK_COLUMN_RE.match(str(name)):
+                continue
+            if str(field.dtype).lower() == "null":
+                drop.append(name)
+                continue
+            try:
+                if df.where(daft.col(name).not_null()).count_rows() == 0:
+                    drop.append(name)
+            except Exception:
+                continue
+        if not drop or len(drop) == len(fields):
+            return df, []
+        return df.exclude(*drop).collect(), drop
+    except Exception as e:
+        logger.debug(f"Blank-column check skipped: {e}")
+        return df, []
+
+
 def create_base_sample(
     path: str,
     source_type: str,
@@ -906,23 +952,19 @@ def create_base_sample(
 
     # Choose the right partitioning call for the current Daft runner.
     #   RayRunner  → repartition(N)    distributes across Ray workers (requires RayRunner)
-    #   NativeRunner → into_partitions(N) re-slices cheaply without shuffle
+    #   NativeRunner → nothing; the native runner already parallelises the scan
     # We inspect the live Daft context (_is_daft_on_ray_runner) instead of the
     # _DAFT_RAY_CONFIGURED flag, which can be stale when daft.set_runner_ray()
     # was called but silently failed a second time in the same process.
     try:
-        import os as _os
-        if _is_daft_on_ray_runner() and ray.is_initialized():
+        if _is_daft_on_ray_runner() and RAY_AVAILABLE and ray.is_initialized():
             ray_resources = ray.available_resources()
             available_cpus = int(ray_resources.get("CPU", 1))
             num_partitions = _compute_partitions(available_cpus, file_size_mb)
             logger.info(f"🔄 [RayRunner] repartition({num_partitions}) across {available_cpus} CPUs ({file_size_mb:.0f} MB)")
             df_lazy = df_lazy.repartition(num_partitions)
         else:
-            local_cpus = _os.cpu_count() or 4
-            num_partitions = _compute_partitions(local_cpus, file_size_mb)
-            logger.info(f"🔄 [NativeRunner] into_partitions({num_partitions}) across {local_cpus} CPUs ({file_size_mb:.0f} MB)")
-            df_lazy = df_lazy.into_partitions(num_partitions)
+            logger.info(f"🔄 [NativeRunner] native parallel scan ({file_size_mb:.0f} MB)")
     except Exception as e:
         logger.warning(f"Failed to set partitions: {e}. Continuing with Daft defaults.")
 
@@ -931,11 +973,16 @@ def create_base_sample(
     total_rows = len(full_df)
     logger.info(f"✅ Loaded {total_rows:,} rows")
 
+    full_df, dropped_cols = _drop_blank_columns(full_df)
+    if dropped_cols:
+        logger.info(f"🧹 Dropped {len(dropped_cols)} empty column(s) with no header: {dropped_cols}")
+
     if total_rows == 0:
         logger.warning("Source has 0 rows; returning empty sample")
         return full_df, full_df, 0, temp_files, 0.0
 
-    sample = df_lazy.limit(1000).to_arrow()
+    # full_df is already in memory; df_lazy.limit() would re-read the source file.
+    sample = full_df.limit(1000).to_arrow()
     bytes_per_row = sample.nbytes / max(sample.num_rows, 1)
     max_base_sample_rows = max(min(int(5_242_880 / bytes_per_row), max_base_sample_rows), 1)
 
@@ -978,7 +1025,6 @@ def calculate_skewness(df: daft.DataFrame, column: str) -> float:
         if len(clean_data) < 10:
             return 0.0
             
-        import statistics
         mean = statistics.mean(clean_data)
         std = statistics.stdev(clean_data) if len(clean_data) > 1 else 0
         if std == 0:
@@ -999,11 +1045,7 @@ def analyze_column_batch(df: daft.DataFrame, column: str, col_type_str: str, thr
     Returns dict with: unique_count, sparsity (for categorical), skew (for numeric)
     """
     try:
-        is_numeric = any(numeric_type in col_type_str for numeric_type in [
-            'int8', 'int16', 'int32', 'int64', 
-            'uint8', 'uint16', 'uint32', 'uint64',
-            'float32', 'float64', 'decimal', 'double'
-        ])
+        is_numeric = _is_numeric_dtype_str(col_type_str)
         
         unique_count = df.select(column).distinct().count_rows()
         
@@ -1048,8 +1090,20 @@ def identify_stratification_columns(
     logger.info("Identifying stratification candidates")
     
     schema = df.schema()
-    
-    candidates = _identify_columns_sequential(df, schema, min_cardinality, low_cardinality_threshold, medium_cardinality_threshold)
+
+    candidates = None
+    if _BATCHED_CANDIDATES:
+        try:
+            candidates = _identify_columns_arrow(
+                df, schema, min_cardinality, low_cardinality_threshold, medium_cardinality_threshold
+            )
+        except Exception as e:
+            logger.warning(f"Batched candidate detection failed ({e}); using per-column queries")
+            candidates = None
+    if candidates is None:
+        candidates = _identify_columns_sequential(
+            df, schema, min_cardinality, low_cardinality_threshold, medium_cardinality_threshold
+        )
     
     priority_map = {"categorical_low": 0, "categorical_medium": 1, "numerical_skewed": 2}
     
@@ -1064,46 +1118,146 @@ def identify_stratification_columns(
     return final_candidates
 
 
-def _identify_columns_sequential(df, schema, min_cardinality, low_cardinality_threshold, medium_cardinality_threshold):
-    """Sequential fallback for column analysis."""
+def _classify_candidate(
+    col_name: str,
+    col_type_str: str,
+    unique_count: int,
+    metric_fn,
+    min_cardinality: int,
+    low_cardinality_threshold: int,
+    medium_cardinality_threshold: int,
+) -> Optional[Tuple[str, str, int, float]]:
+    """Shared classification rule for both detection paths.
+
+    metric_fn(is_numeric) returns sparsity (categorical) or skew (numeric).
+    """
+    if unique_count < min_cardinality:
+        return None
+
+    if not _is_numeric_dtype_str(col_type_str):
+        sparsity = metric_fn(False)
+        if unique_count <= low_cardinality_threshold:
+            logger.info(f"  → {col_name}: categorical_low ({unique_count} unique, sparsity {sparsity:.2f})")
+            return (col_name, "categorical_low", unique_count, sparsity)
+        if unique_count <= medium_cardinality_threshold:
+            logger.info(f"  → {col_name}: categorical_medium ({unique_count} unique, sparsity {sparsity:.2f})")
+            return (col_name, "categorical_medium", unique_count, sparsity)
+        return None
+
+    skew = metric_fn(True)
+    if unique_count > low_cardinality_threshold:
+        logger.info(f"  → {col_name}: numerical_skewed ({unique_count} unique, skew {skew:.2f})")
+        return (col_name, "numerical_skewed", unique_count, skew)
+    return None
+
+
+def _arrow_sparsity(arr, threshold: int = 1000) -> float:
+    """Fraction of groups smaller than `threshold` (matches calculate_sparsity).
+
+    The null group counts as 0, like Daft's count(column) in the per-column path.
+    """
+    import pyarrow.compute as pc
+    vc = pc.value_counts(arr)
+    if len(vc) == 0:
+        return 0.0
+    counts = vc.field("counts").to_pylist()
+    is_null = vc.field("values").is_null().to_pylist()
+    counts = [0 if null else c for c, null in zip(counts, is_null)]
+    return sum(1 for c in counts if c < threshold) / len(counts)
+
+
+def _arrow_skew(arr, head_rows: int = 5000) -> float:
+    """Absolute skewness of the first `head_rows` values (matches calculate_skewness)."""
+    import numpy as np
+    import pyarrow as pa
+    import pyarrow.compute as pc
+    head = pc.drop_null(arr.slice(0, head_rows))
+    if len(head) < 10:
+        return 0.0
+    x = pc.cast(head, pa.float64(), safe=False).to_numpy(zero_copy_only=False)
+    x = x[np.isfinite(x)]
+    if len(x) < 10:
+        return 0.0
+    mean = x.mean()
+    std = x.std(ddof=1)
+    if not std or not np.isfinite(std):
+        return 0.0
+    return float(abs(np.mean((x - mean) ** 3) / std ** 3))
+
+
+def _identify_columns_arrow(df, schema, min_cardinality, low_cardinality_threshold, medium_cardinality_threshold):
+    """Candidate detection in one pass over the materialised base sample.
+
+    The base sample is already in memory (a few thousand rows), so converting it
+    to Arrow once and computing distinct counts, group sizes and skew per column
+    in PyArrow/NumPy replaces 2-3 Daft queries per column (~170 queries and
+    ~2.8 s on an 85-column file). Any column PyArrow can't handle falls back to
+    the per-column Daft path for that column only.
+    """
+    import pyarrow as pa
+    import pyarrow.compute as pc
+
+    table = df.to_arrow()
     candidates = []
-    
+
     for col_name in df.column_names:
         try:
-            col_type = schema[col_name]
-            
-            unique_count = df.select(col_name).distinct().count_rows()
-            
-            if unique_count < min_cardinality:
-                continue
-            
-            col_type_str = str(col_type).lower()
-            is_numeric = any(numeric_type in col_type_str for numeric_type in [
-                'int8', 'int16', 'int32', 'int64', 
-                'uint8', 'uint16', 'uint32', 'uint64',
-                'float32', 'float64', 'decimal', 'double'
-            ])
-            
-            if not is_numeric:
-                sparsity = calculate_sparsity(df, col_name)
-                
-                if unique_count <= low_cardinality_threshold:
-                    candidates.append((col_name, "categorical_low", unique_count, sparsity))
-                    logger.info(f"  → {col_name}: categorical_low ({unique_count} unique, sparsity {sparsity:.2f})")
-                elif unique_count <= medium_cardinality_threshold:
-                    candidates.append((col_name, "categorical_medium", unique_count, sparsity))
-                    logger.info(f"  → {col_name}: categorical_medium ({unique_count} unique, sparsity {sparsity:.2f})")
-            else:
-                skew = calculate_skewness(df, col_name)
-                
-                if unique_count > low_cardinality_threshold:
-                    candidates.append((col_name, "numerical_skewed", unique_count, skew))
-                    logger.info(f"  → {col_name}: numerical_skewed ({unique_count} unique, skew {skew:.2f})")
-        
+            col_type_str = str(schema[col_name]).lower()
+        except Exception:
+            col_type_str = ""
+        try:
+            arr = table.column(col_name)
+            if isinstance(arr, pa.ChunkedArray):
+                arr = arr.combine_chunks()
+            unique_count = pc.count_distinct(arr, mode="all").as_py()
+
+            def _metric(is_numeric: bool, _arr=arr) -> float:
+                return _arrow_skew(_arr) if is_numeric else _arrow_sparsity(_arr)
+
+            result = _classify_candidate(
+                col_name, col_type_str, unique_count, _metric,
+                min_cardinality, low_cardinality_threshold, medium_cardinality_threshold,
+            )
         except Exception as e:
-            logger.warning(f"Failed to analyze {col_name}: {e}")
-            continue
-    
+            logger.debug(f"Arrow stats failed for {col_name} ({e}); using Daft for this column")
+            result = _classify_column_daft(
+                df, schema, col_name,
+                min_cardinality, low_cardinality_threshold, medium_cardinality_threshold,
+            )
+        if result:
+            candidates.append(result)
+
+    return candidates
+
+
+def _classify_column_daft(df, schema, col_name, min_cardinality, low_cardinality_threshold, medium_cardinality_threshold):
+    """Per-column Daft queries (original behaviour); used as the fallback."""
+    try:
+        col_type_str = str(schema[col_name]).lower()
+        unique_count = df.select(col_name).distinct().count_rows()
+
+        def _metric(is_numeric: bool) -> float:
+            return calculate_skewness(df, col_name) if is_numeric else calculate_sparsity(df, col_name)
+
+        return _classify_candidate(
+            col_name, col_type_str, unique_count, _metric,
+            min_cardinality, low_cardinality_threshold, medium_cardinality_threshold,
+        )
+    except Exception as e:
+        logger.warning(f"Failed to analyze {col_name}: {e}")
+        return None
+
+
+def _identify_columns_sequential(df, schema, min_cardinality, low_cardinality_threshold, medium_cardinality_threshold):
+    """Sequential fallback for column analysis (2-3 Daft queries per column)."""
+    candidates = []
+    for col_name in df.column_names:
+        result = _classify_column_daft(
+            df, schema, col_name,
+            min_cardinality, low_cardinality_threshold, medium_cardinality_threshold,
+        )
+        if result:
+            candidates.append(result)
     return candidates
 
 
@@ -1316,7 +1470,6 @@ def _is_missing(value: Any) -> bool:
     if value is None:
         return True
     if isinstance(value, float):
-        import math
         return math.isnan(value)
     if isinstance(value, str):
         v = value.strip().lower()
@@ -1331,6 +1484,29 @@ def _to_float(value: Any) -> Optional[float]:
         return float(value)
     except:
         return None
+
+
+def _numeric_summary(values) -> Dict[str, Any]:
+    """mean/std/median/quartiles/min/max/n_unique of finite floats, via NumPy.
+
+    Replaces statistics.fmean/pstdev/median: statistics.pstdev computes with
+    exact fractions and was the bulk of the ~1.4 s spent aggregating stats.
+    Quartiles keep the original index rule (sorted[n//4], sorted[3n//4]).
+    """
+    import numpy as np
+    x = np.asarray(values, dtype=float)
+    s = np.sort(x)
+    n = len(s)
+    return {
+        "mean": float(x.mean()),
+        "std": float(x.std()) if n > 1 else 0.0,
+        "median": float(np.median(x)),
+        "percentile_25": float(s[n // 4]),
+        "percentile_75": float(s[3 * n // 4]),
+        "min": float(s[0]),
+        "max": float(s[-1]),
+        "n_unique": int(np.unique(x).size),
+    }
 
 
 def _compute_categorical_stats_hybrid(
@@ -1406,26 +1582,19 @@ def _compute_numeric_stats_hybrid(
         quantile_dict = quantile_sample.collect().to_arrow()
 
         values_quantile = quantile_dict.column(col_name).to_pylist() if col_name in quantile_dict.column_names else []
-        # Use pre-collected base_dict
         values_base = base_dict.column(col_name).to_pylist() if col_name in base_dict.column_names else []
-        
-        numeric_quantile = [_to_float(v) for v in values_quantile if _to_float(v) is not None]
-        numeric_base = [_to_float(v) for v in values_base if _to_float(v) is not None]
+
+        numeric_quantile = [f for f in (_to_float(v) for v in values_quantile) if f is not None and math.isfinite(f)]
+        numeric_base = [f for f in (_to_float(v) for v in values_base) if f is not None and math.isfinite(f)]
         
         if not numeric_quantile or not numeric_base:
             return {"type": "numeric", "error": "No numeric values found"}
-        
-        # From quantile sample: percentiles, min, max
-        sorted_quantile = sorted(numeric_quantile)
-        percentile_25 = sorted_quantile[len(sorted_quantile) // 4]
-        median = statistics.median(numeric_quantile)
-        percentile_75 = sorted_quantile[3 * len(sorted_quantile) // 4]
-        min_val = min(numeric_quantile)
-        max_val = max(numeric_quantile)
-        
-        # From base sample: mean, std
-        mean = statistics.fmean(numeric_base)
-        std = statistics.pstdev(numeric_base) if len(numeric_base) > 1 else 0.0
+
+        import numpy as np
+        q = _numeric_summary(numeric_quantile)
+        base_arr = np.asarray(numeric_base, dtype=float)
+        mean = float(base_arr.mean())
+        std = float(base_arr.std()) if len(base_arr) > 1 else 0.0
         
         # Missing ratio from base
         missing_count = sum(1 for v in values_base if _is_missing(v))
@@ -1433,8 +1602,8 @@ def _compute_numeric_stats_hybrid(
         
         # Skewness from quantile sample (better tail coverage)
         if std > 0 and len(numeric_quantile) > 2:
-            third_moment = sum((x - mean) ** 3 for x in numeric_quantile) / len(numeric_quantile)
-            skewness = third_moment / (std ** 3)
+            xq = np.asarray(numeric_quantile, dtype=float)
+            skewness = float(np.mean((xq - mean) ** 3) / (std ** 3))
         else:
             skewness = 0.0
         
@@ -1442,16 +1611,16 @@ def _compute_numeric_stats_hybrid(
             "type": "numeric",
             "mean": round(mean, 4),
             "std": round(std, 4),
-            "median": round(median, 4),
-            "percentile_25": round(percentile_25, 4),
-            "percentile_75": round(percentile_75, 4),
-            "min": round(min_val, 4),
-            "max": round(max_val, 4),
+            "median": round(q["median"], 4),
+            "percentile_25": round(q["percentile_25"], 4),
+            "percentile_75": round(q["percentile_75"], 4),
+            "min": round(q["min"], 4),
+            "max": round(q["max"], 4),
             "skewness": round(skewness, 4),
             "missing_ratio": round(missing_ratio, 4),
             "missing_count": missing_count,
             "count": len(numeric_base),
-            "n_unique": len(set(numeric_base)),
+            "n_unique": int(np.unique(base_arr).size),
             "source_sample": "quantile + base"
         }
     except Exception as e:
@@ -1459,51 +1628,102 @@ def _compute_numeric_stats_hybrid(
         return {"type": "numeric", "error": str(e)}
 
 
+def _numeric_stats_dict(finite_vals, missing_count: int, missing_ratio: float) -> Dict[str, Any]:
+    if not len(finite_vals):
+        return {
+            "type": "numeric", "count": 0, "missing_count": missing_count,
+            "missing_ratio": round(missing_ratio, 4), "n_unique": 0,
+            "min": None, "max": None, "mean": None, "std": None, "median": None,
+            "percentile_25": None, "percentile_75": None, "skewness": 0.0,
+            "source_sample": "base",
+        }
+    s = _numeric_summary(finite_vals)
+    return {
+        "type": "numeric",
+        "count": len(finite_vals),
+        "missing_count": missing_count,
+        "missing_ratio": round(missing_ratio, 4),
+        "n_unique": s["n_unique"],
+        "min": round(s["min"], 4),
+        "max": round(s["max"], 4),
+        "mean": round(s["mean"], 4),
+        "std": round(s["std"], 4),
+        "median": round(s["median"], 4),
+        "percentile_25": round(s["percentile_25"], 4),
+        "percentile_75": round(s["percentile_75"], 4),
+        "skewness": 0.0,
+        "source_sample": "base",
+    }
+
+
 def _compute_stats_from_base(values: List[Any]) -> Dict[str, Any]:
-    """Compute stats from base sample (fallback when no specialized sample exists)."""
-    missing_count = sum(1 for v in values if _is_missing(v))
-    missing_ratio = missing_count / len(values) if values else 0.0
-    
-    numeric_vals = [_to_float(v) for v in values if _to_float(v) is not None]
-    
-    # Determine if numeric (≥10% of values are numeric)
-    if numeric_vals and len(numeric_vals) >= max(3, len(values) * 0.1):
-        # Numeric column
-        sorted_vals = sorted(numeric_vals)
-        return {
-            "type": "numeric",
-            "count": len(numeric_vals),
-            "missing_count": missing_count,
-            "missing_ratio": round(missing_ratio, 4),
-            "n_unique": len(set(numeric_vals)),
-            "min": round(min(numeric_vals), 4),
-            "max": round(max(numeric_vals), 4),
-            "mean": round(statistics.fmean(numeric_vals), 4),
-            "std": round(statistics.pstdev(numeric_vals), 4) if len(numeric_vals) > 1 else 0.0,
-            "median": round(statistics.median(numeric_vals), 4),
-            "percentile_25": round(sorted_vals[len(sorted_vals) // 4], 4),
-            "percentile_75": round(sorted_vals[3 * len(sorted_vals) // 4], 4),
-            "skewness": 0.0,
-            "source_sample": "base"
-        }
-    else:
-        # Categorical column
-        norm_vals = [str(v) if not _is_missing(v) else "<missing>" for v in values]
-        counts = Counter(norm_vals)
-        top_values = counts.most_common(15)
-        
-        return {
-            "type": "categorical",
-            "n_unique": len(counts),
-            "top_values": [
-                {"value": val, "count": cnt, "frequency": round(cnt / len(values), 4)}
-                for val, cnt in top_values
-            ],
-            "missing_ratio": round(missing_ratio, 4),
-            "missing_count": missing_count,
-            "count": len(values) - missing_count,
-            "source_sample": "base"
-        }
+    """Compute stats from base sample (fallback when no specialized sample exists).
+
+    One pass over the values (the old version converted each value twice), and
+    NumPy instead of the statistics module for the numeric summary. A column is
+    numeric when >=10% of values parse as floats (NaN counts, as before); NaN
+    and inf are excluded from the summary numbers themselves.
+    """
+    n_total = len(values)
+    missing_count = 0
+    parsed = 0
+    finite: List[float] = []
+    for v in values:
+        if _is_missing(v):
+            missing_count += 1
+        f = _to_float(v)
+        if f is not None:
+            parsed += 1
+            if math.isfinite(f):
+                finite.append(f)
+    missing_ratio = missing_count / n_total if n_total else 0.0
+
+    if parsed and parsed >= max(3, n_total * 0.1):
+        return _numeric_stats_dict(finite, missing_count, missing_ratio)
+
+    # Categorical column
+    norm_vals = [str(v) if not _is_missing(v) else "<missing>" for v in values]
+    counts = Counter(norm_vals)
+    top_values = counts.most_common(15)
+
+    return {
+        "type": "categorical",
+        "n_unique": len(counts),
+        "top_values": [
+            {"value": val, "count": cnt, "frequency": round(cnt / n_total, 4)}
+            for val, cnt in top_values
+        ],
+        "missing_ratio": round(missing_ratio, 4),
+        "missing_count": missing_count,
+        "count": n_total - missing_count,
+        "source_sample": "base"
+    }
+
+
+def _compute_stats_from_arrow_column(column) -> Dict[str, Any]:
+    """Base-sample stats for one Arrow column.
+
+    Integer/float columns take a vectorised path (every non-null value parses
+    as a float, so the numeric/categorical decision and missing count follow
+    directly from null and NaN counts). Everything else goes through
+    _compute_stats_from_base on Python values, as before.
+    """
+    import numpy as np
+    import pyarrow as pa
+    import pyarrow.compute as pc
+
+    col_type = column.type
+    if pa.types.is_integer(col_type) or pa.types.is_floating(col_type):
+        n_total = len(column)
+        non_null = pc.drop_null(column)
+        x = pc.cast(non_null, pa.float64(), safe=False).to_numpy(zero_copy_only=False)
+        nan_count = int(np.isnan(x).sum())
+        parsed = len(x)                          # NaN parses, as in _to_float
+        if parsed and parsed >= max(3, n_total * 0.1):
+            missing_count = column.null_count + nan_count
+            missing_ratio = missing_count / n_total if n_total else 0.0
+            return _numeric_stats_dict(x[np.isfinite(x)], missing_count, missing_ratio)
+    return _compute_stats_from_base(column.to_pylist())
 
 
 def aggregate_statistics_from_portfolio(
@@ -1520,11 +1740,9 @@ def aggregate_statistics_from_portfolio(
     """
     logger.info("Aggregating statistics from portfolio")
     
-    # Materialize base sample once for efficiency
-    #Collect ONCE, use dict everywhere
+    # Materialize base sample once; reuse the Arrow table everywhere
     base_dict = base_sample.collect().to_arrow()
     column_names = [c for c in base_sample.column_names if c != "_weight"]
-    total_rows = len(base_dict[column_names[0]]) if column_names else 0
     
     col_stats = {}
     
@@ -1535,20 +1753,15 @@ def aggregate_statistics_from_portfolio(
             quant_key = f"quantile_{col_name}"
             
             if strat_key in portfolio:
-                # Use hybrid categorical stats
-                # Pass collected base_dict instead of re-collecting dataframe
                 col_stats[col_name] = _compute_categorical_stats_hybrid(
                     portfolio[strat_key], base_dict, col_name
                 )
             elif quant_key in portfolio:
-                # Use hybrid numeric stats
-                # Pass collected base_dict instead of re-collecting dataframe
                 col_stats[col_name] = _compute_numeric_stats_hybrid(
                     portfolio[quant_key], base_dict, col_name
                 )
             else:
-                # Fallback to base sample
-                col_stats[col_name] = _compute_stats_from_base(base_dict.column(col_name).to_pylist())
+                col_stats[col_name] = _compute_stats_from_arrow_column(base_dict.column(col_name))
                 
         except Exception as e:
             logger.warning(f"Error computing stats for {col_name}: {e}")
@@ -1618,7 +1831,6 @@ def _estimate_dataset_size(
 
             def _gcs_metadata_and_head(gcs_path: str):
                 """Return (total_bytes, head_bytes) for a gs:// path."""
-                # parse  gs://bucket/object
                 without_scheme = gcs_path[len("gs://"):]
                 bucket_name, _, blob_path = without_scheme.partition("/")
                 client = _gcs_client_from_creds(cloud_credentials)
@@ -1626,7 +1838,6 @@ def _estimate_dataset_size(
                 blobs: list = []
 
                 if not blob_path or blob_path.endswith("/"):
-                    # directory prefix — list all blobs
                     blobs = list(client.list_blobs(bucket_name, prefix=blob_path or ""))
                 elif "*" in blob_path:
                     import fnmatch
@@ -1639,7 +1850,6 @@ def _estimate_dataset_size(
                         blobs = [b]
 
                 total_bytes = sum(b.size for b in blobs if b.size)
-                # read head of first blob
                 head = b""
                 if blobs:
                     first = blobs[0]
@@ -1684,7 +1894,6 @@ def _estimate_dataset_size(
                 """Return (total_bytes, head_bytes) for an az:// or https://…blob.core path."""
                 client = _azure_client_from_creds(cloud_credentials)
 
-                # az://container/blob
                 without_scheme = az_path.split("//", 1)[-1]
                 container_name, _, blob_path = without_scheme.partition("/")
                 container = client.get_container_client(container_name)
@@ -1711,7 +1920,6 @@ def _estimate_dataset_size(
                 elif path.startswith(("az://", "https://")) and "blob.core" in path:
                     total_bytes, head_bytes = _azure_metadata_and_head(path)
                 else:
-                    # Unknown cloud scheme — fall through to conservative default
                     logger.warning(f"[size_estimate] Unknown cloud scheme for {path!r}, using default")
             except Exception as e:
                 logger.warning(f"[size_estimate] Native SDK metadata failed for {path!r}: {e}")
@@ -1741,7 +1949,6 @@ def _estimate_dataset_size(
             abs_path = os.path.abspath(path)
 
             if os.path.isdir(abs_path):
-                # Directory: sum all matching file sizes
                 import glob as glob_mod
                 ext = ".parquet" if source_fmt == "parquet" else (".csv" if source_fmt == "csv" else ".json")
                 all_files = glob_mod.glob(os.path.join(abs_path, "**", f"*{ext}"), recursive=True)
@@ -1768,7 +1975,6 @@ def _estimate_dataset_size(
                 except Exception:
                     pass
 
-            # Read first 64 KB
             head_bytes = b""
             if sample_file:
                 try:
@@ -1784,7 +1990,6 @@ def _estimate_dataset_size(
 
     except Exception as e:
         logger.warning(f"[size_estimate] Size estimation failed for {path!r}: {e}")
-        # For cloud paths, default to a large estimate so background refinement is triggered
         if any(path.startswith(p) for p in ["gs://", "s3://", "az://", "http://", "https://"]):
             logger.warning(
                 "[size_estimate] Cloud path with failed estimation — defaulting to 500k rows "
@@ -1844,7 +2049,12 @@ def sample_with_profiling(
             file_size_mb=file_size_mb,
             **extra_args
         )
+        
         temp_files.extend(returned_temp_files)
+
+        # base_sample is a lazy .sample() over full_df; every stratification and
+        # stats query below would otherwise re-run it. Materialise it once.
+        base_sample = base_sample.collect()
         
         display_sample_size, portfolio_sample_size = calculate_adaptive_sample_sizes(total_rows)
         
@@ -1856,6 +2066,11 @@ def sample_with_profiling(
             total_rows=total_rows,  # avoids redundant count_rows() inside portfolio
         )
         
+        # Materialise each portfolio sample once. Stats aggregation and the fused
+        # output collection below both reuse these instead of re-running the
+        # stratified/quantile plans (each of which re-scans full_df).
+        portfolio = {name: df.collect() for name, df in portfolio.items()}
+
         stats_result = aggregate_statistics_from_portfolio(portfolio, base_sample)
         column_statistics = stats_result.get("column_statistics", {})
         data_quality = stats_result.get("data_quality", {})
@@ -1871,7 +2086,7 @@ def sample_with_profiling(
         try:
             _PORTFOLIO_TAG = "__portfolio_name__"
 
-            # Tag each lazy plan with its name so we can split rows back after a single
+            # Tag each plan with its name so we can split rows back after a single
             # .collect() — instead of calling collect() once per portfolio sample.
             tagged_parts: list = []
             for name, df in portfolio.items():
@@ -1924,7 +2139,6 @@ def sample_with_profiling(
 
         sample_rows = portfolio_output.get("random_baseline", [])[:sample_size]
 
-        #schema = base_sample.column_names
         schema = {f.name: str(f.dtype) for f in base_sample.schema()}
         logger.info(f"=== SAMPLER SCHEMA OUTPUT === {schema}")
         ddl_lines = [f"CREATE TABLE {Path(path).stem} ("]
