@@ -62,6 +62,14 @@ jobs:
             key: ray
             dockerfile: deploy/docker/Dockerfile.ray
           - name: avaloka-ui
+            # ui/Dockerfile's first instruction is `COPY package*.json ./`, and
+            # there is no package.json at the repository root -- so with the
+            # default context this image has never built: `npm ci` fails with
+            # "can only install with an existing package-lock.json". Verified by
+            # building both ways: context=. exits 1, context=ui succeeds.
+            # That is why avaloka-ui is the only one of the four images that has
+            # never been published to GHCR.
+            context: ui
             key: ui
             dockerfile: ui/Dockerfile
           - name: avaloka-functions
@@ -141,7 +149,7 @@ jobs:
         if: steps.exists.outputs.found == 'true' && steps.published.outputs.skip != 'true'
         uses: docker/build-push-action@v6
         with:
-          context: .
+          context: ${{ matrix.context || '.' }}
           file: ${{ matrix.dockerfile }}
           # arm64 matters: Apple Silicon is most of the likely audience, and a
           # single-arch image fails there in a way that reads as a broken chart

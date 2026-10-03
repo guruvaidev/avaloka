@@ -311,10 +311,23 @@ dependency — Postgres, Redis, MinIO, Chroma, Supabase and the LangGraph server
 ```bash
 kind create cluster --name avaloka          # or use an existing cluster
 
-# The chart pulls the API, web UI, Supabase edge-functions and Ray images
-# from ghcr.io/guruvaidev, published by CI for every release. Nothing to
-# build. If you are on a commit whose images are not published yet, or you
-# are offline, build and side-load them instead:
+# Which images are actually published, checked 2026-10-02:
+#   ghcr.io/guruvaidev/avaloka-api:main        published, amd64 + arm64
+#   ghcr.io/guruvaidev/avaloka-ray:main        published, amd64 + arm64
+#   ghcr.io/guruvaidev/avaloka-functions:main  published, amd64 + arm64
+#   ghcr.io/guruvaidev/avaloka-ui              NOT PUBLISHED -- build it locally
+#
+# avaloka-ui has never been pushed: the images workflow built it with the
+# repository root as the Docker context, where ui/Dockerfile's first
+# instruction (`COPY package*.json ./`) matches nothing and `npm ci` fails.
+# Fixed in .github/workflows/images.yml, but no successful run has published
+# it yet, so `webui.enabled` (on by default) needs a local build:
+#
+#   docker build -t avaloka-ui:latest -f ui/Dockerfile ui   # context is ui, not .
+#   kind load docker-image avaloka-ui:latest --name avaloka
+#
+# `pullPolicy: IfNotPresent` means a side-loaded image is used and the registry
+# is never consulted. To build and load everything instead:
 #   make -C deploy images-status               # what would need building?
 #   make -C deploy images-pull PROVIDER=local  # pull + kind-load what exists
 #   make -C deploy images PROVIDER=local       # build + kind-load the rest
