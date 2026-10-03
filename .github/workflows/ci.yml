@@ -23,7 +23,7 @@ jobs:
       matrix:
         # The range docs/INSTALL.md claims to support. Claiming it and not
         # testing it is how 3.12 quietly stops working.
-        python: ["3.10", "3.11", "3.12"]
+        python: ["3.11", "3.12"]
 
     steps:
       - uses: actions/checkout@v4

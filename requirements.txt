@@ -141,7 +141,16 @@ connectorx
 markdownify
 chromadb
 beautifulsoup4
-sqlalchemy
+# Capped below 2.1 deliberately. SQLAlchemy 2.1 changed which DBAPI a bare
+# postgresql:// URL selects -- psycopg2 on 2.0.x, psycopg (v3) on 2.1.x --
+# and only psycopg2-binary is installed here. With 2.1 resolved, every
+# Postgres transfer fails at create_engine with
+#   ModuleNotFoundError: No module named 'psycopg'
+# Verified: make_url("postgresql://...").get_dialect().driver returns
+# psycopg2 on 2.0.54 and psycopg on 2.1.1.
+# Moving to psycopg3 is the eventual fix and wants its own change: add
+# psycopg[binary] and drop this cap together.
+sqlalchemy>=2.0,<2.1
 # JWT authentication  
 PyJWT>=2.8.0
 

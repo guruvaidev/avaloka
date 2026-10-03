@@ -1,7 +1,7 @@
 # Avaloka
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue.svg)](docs/versions.md)
+[![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue.svg)](docs/versions.md)
 [![Ray](https://img.shields.io/badge/runs%20on-Ray%20%2F%20KubeRay-028CF0.svg)](https://www.ray.io/)
 
 **A team of specialist AI agents that takes a dataset from raw rows to a served

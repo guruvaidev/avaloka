@@ -171,15 +171,26 @@ class BaseSQLDataSink(DataSink[dict]):
         it retry-safe — instead of falling back to an unsafe direct append.
         Returns an empty list if reflection fails (the caller then aborts).
         """
-        engine = self._engine()
+        # create_engine() is inside the try on purpose. It is where SQLAlchemy
+        # imports the DBAPI driver named by the URL, so a DSN of
+        # postgresql+psycopg:// with psycopg (v3) absent raises
+        # ModuleNotFoundError here -- not at connect time. With this call outside
+        # the try, that escaped and the caller never reached the clear
+        # "no insertable columns" abort below; the user got a bare
+        # ModuleNotFoundError from inside SQLAlchemy instead. A driver that is
+        # not installed is a destination we cannot reflect from, which is
+        # exactly the case this function documents returning [] for.
+        engine = None
         try:
+            engine = self._engine()
             cols = sa.inspect(engine).get_columns(self.target_table)
         except Exception as e:
-            logger.warning("[SQLSink] Could not reflect columns for '%s': %s",
-                           self.target_table, e)
+            logger.warning("[SQLSink] Could not reflect columns for '%s': %s: %s",
+                           self.target_table, type(e).__name__, e)
             return []
         finally:
-            engine.dispose()
+            if engine is not None:
+                engine.dispose()
 
         insertable: list[str] = []
         for c in cols:
