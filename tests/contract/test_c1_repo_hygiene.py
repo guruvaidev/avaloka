@@ -435,7 +435,12 @@ EGRESS_CHANNELS: Dict[str, Tuple[re.Pattern, str, Set[str]]] = {
             "app/core/model_fallback.py",
             "app/services/embedding_utils.py",
             "app/services/memory_runtime.py",
-            "app/services/milvus_recorder.py",
+            # milvus_recorder.py is NOT listed: its only OPENAI_API_KEY mentions are
+            # in docstrings documenting the cascade. It delegates to
+            # embedding_utils.embed_text (above), which is where the key is read
+            # (:79) and OpenAIEmbeddings().embed_query is called (:85). The
+            # third party and the module that reaches it are both still declared;
+            # only the module that merely describes the behaviour is not.
         },
     ),
     "supabase_dataset_rows": (
@@ -491,13 +496,19 @@ def _modules_matching(pattern: re.Pattern, modules: Sequence[str]) -> Set[str]:
 
 
 def _code_only(text: str) -> str:
-    """Source with comments and docstrings removed.
+    """Source with comments and docstrings blanked, everything else byte-identical.
 
-    The inventory asks which modules *send* data to a third party. Matching the
-    raw text answers a different question: app/api/server.py:417 mentions
-    dataset_samples in a comment explaining what is capped, and was reported as
-    a new egress module on that basis. Tokenising and dropping COMMENT and
-    docstring tokens makes the channel patterns match code again.
+    Blanks the comment/docstring spans IN PLACE rather than reassembling the file
+    from tokens. The first version joined tokens with newlines, which split
+    `boto3.client("s3")` into seven lines and broke every multi-token channel
+    pattern -- eleven modules including app/core/storage.py stopped matching
+    cloud_object_storage, so the inventory reported them as removed when the code
+    had not changed at all.
+
+    The reason to blank at all: the inventory asks which modules *send* data to a
+    third party. app/api/server.py mentions dataset_samples in a comment
+    explaining what is capped, and was reported as a new egress module on that
+    basis.
     """
     import io
     import tokenize
@@ -506,19 +517,34 @@ def _code_only(text: str) -> str:
         toks = list(tokenize.generate_tokens(io.StringIO(text).readline))
     except (tokenize.TokenError, IndentationError, SyntaxError):
         return text  # unparseable: fall back to the stricter raw match
-    kept, prev_meaningful = [], None
+
+    lines = text.splitlines(keepends=True)
+    offsets, pos = [], 0
+    for line in lines:
+        offsets.append(pos)
+        pos += len(line)
+
+    def at(row: int, col: int) -> int:
+        return offsets[row - 1] + col
+
+    spans, prev = [], None
     for tok in toks:
         if tok.type == tokenize.COMMENT:
+            spans.append((at(*tok.start), at(*tok.end)))
             continue
-        # A STRING in statement position is a docstring, not data flow.
-        if tok.type == tokenize.STRING and prev_meaningful in (
+        if tok.type == tokenize.STRING and prev in (
             None, tokenize.INDENT, tokenize.DEDENT, tokenize.NEWLINE, tokenize.NL,
         ):
-            continue
-        kept.append(tok.string)
+            spans.append((at(*tok.start), at(*tok.end)))
         if tok.type not in (tokenize.NL, tokenize.COMMENT):
-            prev_meaningful = tok.type
-    return "\n".join(kept)
+            prev = tok.type
+
+    out = list(text)
+    for a, b in spans:
+        for i in range(a, min(b, len(out))):
+            if out[i] != "\n":
+                out[i] = " "      # keep offsets and line structure intact
+    return "".join(out)
 
 
 @pytest.mark.parametrize("channel", sorted(EGRESS_CHANNELS))
