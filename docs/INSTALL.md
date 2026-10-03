@@ -349,6 +349,11 @@ while to build cold; the others are small.
 `/health` reports `graph_ready`, `redis_connected` and whether the LangGraph
 server upstream is reachable — check it before anything else.
 
+> **Configure model keys through Helm values, never `kubectl patch`.** The
+> secret is re-rendered from chart values on every `helm upgrade`, so a patched
+> key is silently wiped and the agent quietly falls back to canned replies.
+> Use `--set-string secrets.groqApiKey=…` (see `values.yaml`).
+
 ### A-minus. Just the API container
 
 If you only want the API — no cluster, no chart — the published image runs on
@@ -374,11 +379,6 @@ The CLI is in the same image, as a module rather than on `PATH`:
 docker run --rm -v "$PWD:/data" ghcr.io/guruvaidev/avaloka-api:main \
   python -m avaloka analyze /data/sales.csv --goal "why did revenue drop?"
 ```
-
-> **Configure model keys through Helm values, never `kubectl patch`.** The
-> secret is re-rendered from chart values on every `helm upgrade`, so a patched
-> key is silently wiped and the agent quietly falls back to canned replies.
-> Use `--set-string secrets.groqApiKey=…` (see `values.yaml`).
 
 ### B. Local processes
 
