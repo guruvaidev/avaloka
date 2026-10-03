@@ -117,7 +117,7 @@ kedro>=0.19.0
 # does not have, and `./scripts/install.sh` then dies in 21 seconds. The
 # psycopg2-binary line below already provides `import psycopg2` (verified:
 # 2.9.13 imports from the wheel), which is what MLflow's SQLAlchemy URL needs.
-psycopg2-binary>=2.9.0
+psycopg2-binary>=2.9.13
 # psycopg (v3): the driver a bare postgresql:// URL selects on SQLAlchemy 2.1+.
 # [binary] so there is a wheel and no libpq build -- the trap that made plain
 # psycopg2 fatal on a clean machine. Wheels cover cp311-cp315 on manylinux and
