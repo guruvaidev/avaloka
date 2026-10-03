@@ -74,7 +74,7 @@ def check_python() -> None:
              "Some dependencies have no wheel yet for this version. "
              "3.11 is what CI and the shipped image use.")
     else:
-        bad(f"{label} — Avaloka needs Python 3.10 to 3.12",
+        bad(f"{label} — Avaloka needs Python 3.11 to 3.12",
             "Re-run the installer as: PYTHON=/path/to/python3.11 ./scripts/install.sh")
 
 

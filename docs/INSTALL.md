@@ -23,7 +23,7 @@ Verify at any time:
 
 | | Minimum | Notes |
 | --- | --- | --- |
-| Python | **3.10 – 3.12** | 3.11 is what CI and the shipped image use |
+| Python | **3.11 – 3.12** | 3.11 is what CI and the shipped image use. 3.10 is NOT supported: session writes use `asyncio.timeout`, added in 3.11 |
 | OS | Linux, macOS | Windows via WSL2 |
 | Memory | 8 GB | 16 GB+ for local Ray |
 | Disk | 5 GB | plus your data |
@@ -37,10 +37,10 @@ Verify at any time:
 > PYTHON=/opt/homebrew/bin/python3.11 ./scripts/install.sh
 > ```
 
-> **3.13 and newer are untested.** `pyproject.toml` declares `>=3.10` with no
+> **3.13 and newer are untested.** `pyproject.toml` declares `>=3.11,<3.13` with
 > upper bound, so pip will install on a newer interpreter and then fail later
 > on a dependency with no matching wheel — a confusing failure a long way from
-> its cause. `scripts/install.sh` looks for 3.12, 3.11 or 3.10 in that order;
+> its cause. `scripts/install.sh` looks for 3.12 then 3.11;
 > let it choose unless you have a reason not to.
 
 Optional, depending on what you run:
@@ -475,7 +475,7 @@ A printed `384` means the model resolved from the image.
 status, and every capability with the reason it is on or off. Paste that output
 into any support request — it never includes your licence token.
 
-**"Python 3.10+ required, found 2.7"** — see the macOS note above.
+**"Python 3.11+ required, found 2.7"** — see the macOS note above.
 
 **A capability is off and I expected it on.** Run the check. If the reason says
 *not in this build*, the code is not installed — that is a commercial

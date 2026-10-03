@@ -10,7 +10,13 @@ readme = "README_CLI.md"
 # Capped, not open-ended: pyarrow==16.1.0 publishes cp38-cp312 wheels only.
 # Without the ceiling, pip on a 3.13+ interpreter tries to build Arrow C++
 # from source and fails a long way from the actual cause.
-requires-python = ">=3.10,<3.13"
+# 3.11 is the floor, not 3.10: app/services/session_service.py uses
+# `async with asyncio.timeout(...)`, which does not exist before 3.11. On 3.10
+# it raised AttributeError, the broad except in save_session swallowed it, and
+# every session write silently returned False -- which that function documents
+# as "this turn's state is not durable". Eight tests caught it only once CI
+# actually exercised a write on 3.10.
+requires-python = ">=3.11,<3.13"
 # PEP 639 licence expression. Do NOT also add the legacy
 # "License :: OSI Approved :: ..." classifier -- setuptools rejects the pair:
 #   InvalidConfigError: License classifiers have been superseded by license
@@ -33,7 +39,6 @@ classifiers = [
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",

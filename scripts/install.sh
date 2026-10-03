@@ -49,7 +49,7 @@ VENV_PATH=".venv"
 INDEX_URL="${AVALOKA_INDEX_URL:-https://pypi.avaloka.ai/simple}"
 USE_VENV=1
 CHECK_ONLY=0
-MIN_PY_MINOR=10
+MIN_PY_MINOR=11
 
 RED=$'\033[31m'; GREEN=$'\033[32m'; YELLOW=$'\033[33m'; BOLD=$'\033[1m'; OFF=$'\033[0m'
 say()  { printf '%s\n' "$*"; }
@@ -85,7 +85,7 @@ say "${BOLD}Avaloka installer${OFF} — edition: ${BOLD}${EDITION}${OFF}"
 
 PYTHON="${PYTHON:-}"
 if [[ -z "$PYTHON" ]]; then
-  for candidate in python3.12 python3.11 python3.10 python3; do
+  for candidate in python3.12 python3.11 python3; do
     if command -v "$candidate" >/dev/null 2>&1; then PYTHON="$candidate"; break; fi
   done
 fi
