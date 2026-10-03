@@ -112,17 +112,14 @@ dvc>=3.0.0
 kedro>=0.19.0
 
 # Database and Cloud Storage
-# psycopg2 (source) deliberately NOT listed. It publishes no wheels, so pip
-# always builds it and needs pg_config from libpq-dev -- which a clean machine
-# does not have, and `./scripts/install.sh` then dies in 21 seconds. The
-# psycopg2-binary line below already provides `import psycopg2` (verified:
-# 2.9.13 imports from the wheel), which is what MLflow's SQLAlchemy URL needs.
+# psycopg2 (source) deliberately NOT listed: no wheels, so pip builds it and
+# needs pg_config from libpq-dev. A clean machine does not have it and
+# ./scripts/install.sh dies in 20s. psycopg2-binary below provides the same
+# `import psycopg2`.
 psycopg2-binary>=2.9.0
 # psycopg (v3): the driver a bare postgresql:// URL selects on SQLAlchemy 2.1+.
 # [binary] so there is a wheel and no libpq build -- the trap that made plain
-# psycopg2 fatal on a clean machine. Wheels cover cp311-cp315 on manylinux and
-# both macOS architectures. psycopg2-binary stays for explicit
-# postgresql+psycopg2:// URLs and operator-supplied MLflow backend URIs.
+# psycopg2 fatal on a clean machine. Wheels cover cp311-cp315.
 psycopg[binary]>=3.1
 pymysql>=1.1.0 
 google-auth>=2.23.0
@@ -148,9 +145,8 @@ markdownify
 chromadb
 beautifulsoup4
 # No upper cap. SQLAlchemy 2.1 changed which DBAPI a bare postgresql:// URL
-# selects -- psycopg2 on 2.0.x, psycopg (v3) on 2.1.x. Verified with
-# make_url("postgresql://...").get_dialect().driver. psycopg (v3) is installed
-# above so the new default resolves, rather than pinning away from upstream.
+# selects -- psycopg2 on 2.0.x, psycopg (v3) on 2.1.x. psycopg is installed
+# below so the new default resolves instead of pinning away from it.
 sqlalchemy>=2.0
 # JWT authentication  
 PyJWT>=2.8.0

@@ -22,9 +22,9 @@ analysis, writes and validates the Python, runs it locally or on a Ray cluster,
 trains a model, serves it, and records every artifact along the way.
 
 An instrument is only as good as its calibration, so three of those agents
-exist to check the other six. Avaloka refuses to train on leaked data, makes
-every model beat a trivial baseline, and checks the prose it writes against the
-numbers it computed. Where that evidence is thin,
+exist to check the work of the others. Avaloka refuses to train on leaked
+data, makes every model beat a trivial baseline, and checks the prose it writes
+against the numbers it computed. Where that evidence is thin,
 [we say where](docs/test-reports/three-pillar-coverage.md).
 
 📖 **[Full documentation](docs/index.html)** · 🚀 **[Install Guide](docs/INSTALL.md)** · 📊 **[Benchmarks](docs/benchmarks.md)**
@@ -59,7 +59,7 @@ baseline, and a benchmark that can fail.
 
 ## The team
 
-Nine roles, one shared state object. The **Planner** is the team lead — it
+Twelve roles, one shared state object. The **Planner** is the team lead — it
 talks to you and decides the next step; everything else is a specialist it
 delegates to.
 
@@ -177,25 +177,24 @@ scored 1.00 before *and* after five real defects were fixed, because no task
 carried the shape that triggers them. Full scorecard and an account of what it
 does **not** measure: [docs/benchmarks.md](docs/benchmarks.md).
 
-**External benchmarks.** Avaloka runs against
-[DataAgentBench](https://github.com/ucbepic/DataAgentBench) (UC Berkeley EPIC
-lab) — 54 queries over PostgreSQL, MongoDB, SQLite and DuckDB, graded by the
-official per-query validators, against the unmodified upstream scaffold. The
-harness lives in `benchmarks/external/dab/` and deliberately vendors none of
-DAB's questions, gold answers or validators. An official run is five trials per
-query. Task design is separately aligned with the framing established by
-DABstep (Adyen / Hugging Face), cited in the [research paper](docs/research/).
-
-Scorecards are **not committed** — `benchmarks/results/` gitignores `*.json`
-and `*.md`, so a run's output stays local by design. Ask for the current
-numbers rather than expecting to find them in this tree.
+**External benchmarks.** Work against third-party suites is tracked in the
+[research notes](docs/research/) rather than here; no external-benchmark harness
+is committed to this tree, so there is nothing in it you can run today.
 
 **Tests.** `pytest -m "not cluster and not cloud and not integration"` is the
 gate that must stay green: unit and contract tests, no cluster and no network.
-The wider suite (end-to-end, integration, k8s) needs Redis, a running server
-and cloud credentials. **77 tests across it currently fail** — down from 395,
-by fixing causes rather than deleting tests. Each remaining one needs its own
-diagnosis. See [Testing](docs/testing.md).
+It runs with no API key and no services, which is what makes it the gate a
+contributor and a fork pull request can actually run. That is the marker
+expression `scripts/ci.sh` uses, which `.github/workflows/ci.yml` runs on
+Python 3.11 and 3.12. The wider suite (end-to-end, integration, k8s) sits
+outside that gate because it needs Redis, a running server and cloud
+credentials. [Testing](docs/testing.md) covers how to stand those up and run it.
+
+**Live-provider CI.** Two scheduled workflows check the paths a hermetic suite
+cannot: `.github/workflows/live-provider-weekly.yml` calls real hosted
+providers, and `live-local-model-nightly.yml` exercises a local model server.
+Both drive `tests/live/`, and both are separate from the gate above so a
+provider outage cannot redden a pull request.
 
 ---
 
@@ -210,17 +209,23 @@ any of these.
 
 | Layer | We use — rather than our own |
 | --- | --- |
-| Distributed compute | Ray + KubeRay, Spark, Arrow, Daft — not our own scheduler |
-| Storage & formats | PostgreSQL, MinIO (S3), Parquet, Delta, Iceberg, Avro — not a bespoke artifact format |
+| Distributed compute | Ray + KubeRay, Arrow, Daft — not our own scheduler |
+| Storage & formats | PostgreSQL, S3-compatible object storage, Parquet, Delta, Iceberg, Avro — not a bespoke artifact format |
 | Vector & memory | Chroma, Milvus, Redis — not our own index |
 | ML & tracking | PyTorch, scikit-learn, ONNX, MLflow — not our own AutoML |
 | Agent runtime | LangGraph / LangChain, Model Context Protocol — not a proprietary agent protocol |
 | Platform | Kubernetes, Helm, FastAPI, Pydantic, Celery, Supabase — not our own web, job or identity stack |
-| Data engine | pandas, NumPy, DuckDB, SQLAlchemy — not our own dataframe |
+| Data engine | pandas, NumPy, SQLAlchemy, SQLite — not our own dataframe |
 
 Each of these is independently maintained and audited by a community far larger
 than ours, and none of it is hidden behind our abstraction — you can verify any
 number Avaloka reports by running the layer underneath it yourself.
+
+One caveat worth stating before you deploy: the chart's default object store is
+MinIO, and MinIO's images are not currently pullable from the registries the
+chart points at. Treat in-cluster object storage as the part of a Kubernetes
+install most likely to need your own attention, and read
+[Deployment](docs/deployment.md) before assuming the default works.
 
 Full per-project attribution and licences are in [NOTICE](NOTICE). Our thanks
 to all of those communities, and to [Groq](https://groq.com/) for the inference
@@ -261,8 +266,10 @@ each boundary is enforced in code: [docs/EDITIONS.md](docs/EDITIONS.md).
 
 ## Documentation
 
-Everything is indexed at **[docs/index.html](docs/index.html)**. The paths people
-ask for most often:
+**[docs/DOCS_MAP.md](docs/DOCS_MAP.md)** lists every document, what it is for and
+who it is written for — including which ones describe proposals rather than
+shipped behaviour. [docs/index.html](docs/index.html) is the same set as a page.
+The paths people ask for most often:
 
 | | |
 | --- | --- |

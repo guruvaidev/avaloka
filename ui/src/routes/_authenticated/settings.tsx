@@ -30,9 +30,9 @@ export const Route = createFileRoute("/_authenticated/settings")({
 
 type TabId = "my-details" | "profile" | "appearance" | "email" | "notifications" | "integrations" | "billing";
 
-const TABS: { id: TabId; label: string; ownerOnly?: boolean; billing?: boolean }[] = [
+const TABS: { id: TabId; label: string; ownerOnly?: boolean; billing?: boolean; enterpriseOnly?: boolean;}[] = [
   { id: "my-details", label: "My details" },
-  { id: "profile", label: "Profile" },
+  { id: "profile", label: "Profile" , enterpriseOnly: true },
   { id: "appearance", label: "Appearance" },
   { id: "email", label: "Email" },
   { id: "notifications", label: "Notifications" },
@@ -489,7 +489,9 @@ function SettingsPage() {
   }), [userId, email, form, setForm, avatarPreviewUrl, uploadAvatar, uploadingAvatar, companyLogoPreviewUrl, uploadCompanyLogo, uploadingCompanyLogo, profileReadOnly]);
 
   const activePlanQ = useActivePlan();
+  const currentPlan = activePlanQ.data?.plan ?? "free";
   const isFreePlan = (activePlanQ.data?.plan ?? "free") === "free";
+  const isEnterprisePlan = currentPlan === "enterprise";
   // Ownership can also come from the server-resolved plan, which is the source
   // of truth when the client-side organization lookup fails (e.g. during trial).
   const canSeeBilling = isFreePlan || isOrgOwner || activePlanQ.data?.isOrgOwner === true;
@@ -499,9 +501,10 @@ function SettingsPage() {
       TABS.filter((t) => {
         if (t.ownerOnly && !isOrgOwner) return false;
         if (t.billing && !canSeeBilling) return false;
+        if (t.enterpriseOnly && !isEnterprisePlan) return false;
         return true;
       }),
-    [isOrgOwner, canSeeBilling],
+    [isOrgOwner, canSeeBilling, isEnterprisePlan],
   );
 
   // Redirect away if user lands on a hidden tab — only once ownership and the

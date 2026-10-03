@@ -98,45 +98,36 @@ reasonably up to date — and a valid work email address.
 
 Self-hosting instead? See [INSTALL.md](INSTALL.md).
 
-### Creating your account
+### Signing in
 
-If your organisation already has a workspace, ask your administrator to invite
-you rather than signing up separately — that way your account is attached to the
-right team and its data.
+**There is no password.** Avaloka signs you in with an emailed link — a magic
+link — so there is nothing to choose, remember, or reset.
 
-1. Go to the Avaloka sign-in page.
-2. Click **Sign Up / Get Started** in the top-right corner.
-3. Enter your **Email**.
-4. Enter a **Password**.
-5. Re-enter it in **Confirm Password**.
-6. Enter your full name and organisation.
-7. Review the Terms of Service and Privacy Policy, then accept them.
-8. Click **Create Account**.
+1. Open the Avaloka sign-in page.
+2. Type your email address into the single **Enter your email** field.
+3. Submit it. You will see **"Check your email for the magic link"**.
+4. Open the email and click the link. You land back in Avaloka, already signed
+   in, and the workspace loads.
 
-Avaloka sends a verification email. **You cannot sign in until you verify your
-address.** Open the message and click **Verify Email**. If it has not arrived
-within a few minutes, check your spam folder, or click **Resend email** on the
-verification screen.
+That is the whole flow (`ui/src/routes/index.tsx:259-278`). Because of it:
 
-### Logging in
+- **There is no sign-up form.** Access comes from an invitation. If your
+  organisation already has a workspace, ask your administrator to invite you;
+  accepting the invitation is what attaches your account to the right team and
+  its data. Submitting an email that has no account will not create one.
+- **There is no "Forgot password?", and nothing to reset.** If you cannot get
+  in, the question is whether the link reached your inbox — check spam, and
+  check you used the same address the invitation went to.
+- **There is no "Remember me".** Your browser holds the session until it
+  expires or you sign out. On a shared machine, sign out — the `/logout` route
+  does it, and signing out clears local and session storage as well as the
+  Supabase session (`ui/src/routes/logout.tsx`).
 
-1. Click **Log In** in the top-right corner.
-2. Enter your registered email and password.
-3. *(Optional)* Select **Remember me** to stay signed in on this device. Leave it clear on shared or public computers.
-4. Click **Log In**.
+If your account has been deactivated, the page says so directly rather than
+silently failing to send a link — you will see a message pointing you at your
+organisation administrator.
 
 First time in, you will see an onboarding flow and an empty workspace.
-
-### Resetting a forgotten password
-
-1. On the login page, click **Forgot password?**
-2. Enter your registered email and click **Send reset link**.
-3. Open the reset email and click **Reset Password**. The link is single-use and expires.
-4. Enter and confirm your new password, then click **Update Password**.
-
-For security, Avaloka shows the same confirmation whether or not the address is
-registered. If no email arrives, the likeliest cause is that you signed up with
-a different address.
 
 ---
 
@@ -144,8 +135,11 @@ a different address.
 
 ### Uploading a file
 
-Click **Upload File**. Accepted formats are **CSV, Excel, JSON, and Parquet**,
-up to **100 MB per file**.
+Click **Upload File**. Accepted formats are **CSV, Excel (`.xlsx`, `.xls`),
+JSON, and Parquet**, up to **100 MB per file**. You can select several files at
+once; a single upload is capped at **10 files and 200 MB in total**. Files
+uploaded together are grouped as one catalog entry rather than appearing as a
+scatter of separate datasets.
 
 > **[Screenshot placeholder — `upload-complete.png`]**
 > *A finished upload with the dataset open.*
@@ -222,9 +216,10 @@ answer happens.
 ## 4. Visualization
 
 Avaloka creates charts for you automatically. Whenever you upload a dataset or
-run an analysis, the **Auto Insights** panel fills with **three to five charts**
+run an analysis, the **Auto Insights** panel fills with **up to five charts**
 chosen to explain the data in front of you. You do not have to ask, or pick
-chart types.
+chart types. Fewer than five is normal — a narrow dataset simply has less worth
+charting.
 
 > **[Screenshot placeholder — `auto-insights-panel.png`]**
 > *Auto Insights with automatically generated charts.*
@@ -247,6 +242,12 @@ Charts are interactive — hover for values, click the expand icon for fullscree
 | **Bar** | Comparing categories, such as sales per region |
 | **Line** | Change over time or another ordered axis |
 | **Pie** | How a whole splits into parts, for a small number of categories |
+| **Scatter** | The relationship between two numeric columns |
+| **Histogram** | The distribution of one numeric column |
+
+Those five are the whole set. Asking for a chart type outside it — a heatmap,
+say — will get you something else rather than an error, so if the shape matters,
+ask for one of the five.
 
 ---
 
@@ -347,8 +348,10 @@ All eight file formats are available when writing to a cloud bucket.
 
 ### Databases you can query but not transfer into
 
-You can register and query **SQLite, SQL Server, Oracle, and MariaDB**.
-Transfers currently target **MySQL and PostgreSQL** only.
+You can register and query **SQLite, SQL Server, Oracle, MariaDB, and
+MongoDB** in addition to MySQL and PostgreSQL. Transfers currently target
+**MySQL and PostgreSQL** only. If you are planning a migration, plan it around
+the transfer list, not the query list.
 
 ---
 
@@ -453,17 +456,19 @@ startup all schedule their own jobs when requested through chat.
 
 | What you see | What to do |
 | --- | --- |
-| Cannot sign in after registering | Verify your email first — the account is inactive until you do |
-| No verification or reset email | Check spam; the likeliest cause is a different address at signup |
+| No sign-in link arrived | Check spam. The likeliest cause is a different address from the one your invitation went to |
+| "Your account has been deactivated" | Contact your organisation administrator; re-sending the link will not help |
+| Looking for a password field | There isn't one — sign-in is by emailed link. See §2 |
 | A capability is refused | It may be gated by your edition — see [EDITIONS.md](EDITIONS.md) |
 | Two answers give different numbers | One was sampled, one was complete. Ask "on the entire dataset" for the authoritative figure |
 | Training will not start | The integrity screen found leakage. Read the finding — a leaking feature usually should be dropped |
 | A model reports poor results | It did not beat the baseline. The signal may not be in the data |
 | A transfer will not read my file | Check the read formats in §6 — reads are narrower than writes |
-| Upload rejected | Files are limited to 100 MB; use a connection for larger data |
+| Upload rejected | 100 MB per file, and 10 files / 200 MB per upload. Split the batch, or use a connection for larger data |
+| Charts look nothing like what I asked for | Only bar, line, pie, scatter and histogram are produced — see §4 |
 
-Always log out on shared devices: click your profile icon in the top-right and
-select **Log Out**.
+Always log out on shared devices — signing out clears the stored session along
+with local and session storage.
 
 ---
 

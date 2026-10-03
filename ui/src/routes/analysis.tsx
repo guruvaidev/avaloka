@@ -935,6 +935,34 @@ function AnalysisPage() {
   const [selectedSampleName, setSelectedSampleName] = useState<string | undefined>(undefined);
   const [datasetChips, setDatasetChips] = useState<DatasetChip[]>([]);
   const [datasetsExpanded, setDatasetsExpanded] = useState(false);
+  const [activePreviewDatasetId, setActivePreviewDatasetId] =
+  useState<string | null>(null);
+  const previewDatasets = useMemo(
+  () =>
+    selectedDatasetIds
+      .map((id) => datasetChips.find((d) => d.id === id))
+      .filter(Boolean) as DatasetChip[],
+  [selectedDatasetIds, datasetChips],
+);
+useEffect(() => {
+  if (previewDatasets.length === 0) {
+    setActivePreviewDatasetId(null);
+    return;
+  }
+
+  setActivePreviewDatasetId((current) => {
+    if (
+      current &&
+      previewDatasets.some(
+        (dataset) => dataset.id === current
+      )
+    ) {
+      return current;
+    }
+
+    return previewDatasets[0].id;
+  });
+}, [previewDatasets]);
 
   // Analysis output from sendMessage
   const [analysisRows, setAnalysisRows] = useState<Record<string, unknown>[] | null>(null);
@@ -1081,6 +1109,7 @@ function AnalysisPage() {
       });
 
       if (!nowSelected) return;
+      setActivePreviewDatasetId(dataset.id);
 
       const label = datasetChipLabel(dataset.name);
       setAutoInsightsDatasetName(dataset.name);
@@ -1152,6 +1181,118 @@ function AnalysisPage() {
     },
     [analysisId, aidFromUrl, sessionId],
   );
+  const handlePreviewDatasetChange = useCallback(
+  async (dataset: DatasetChip) => {
+    // A Data Preview tab can only display a dataset
+    // that is currently selected in the chat.
+    if (!selectedDatasetIds.includes(dataset.id)) {
+      return;
+    }
+
+    setActivePreviewDatasetId(dataset.id);
+
+    // Dataset preview is already cached.
+    if (dataset.samples?.length) {
+      const schema = normalizeDatasetSchema(
+        dataset.schema,
+        dataset.samples,
+      );
+
+      setPersistedDataset({
+        filename: dataset.name,
+        schema,
+        samples: dataset.samples,
+        rows_sampled:
+          dataset.rowsSampled ?? dataset.samples.length,
+        size_mb: dataset.sizeMb,
+      });
+
+      setAutoInsightsSamples(dataset.samples);
+
+      const config =
+        dataset.visualizationConfig ??
+        deriveVizFromRows(dataset.samples);
+
+      setAutoInsightsConfig(config);
+      setAnalysisVizConfig(config);
+      setAutoInsightsStatus(
+        dataset.visualizationStatus ??
+          (config ? "ready" : undefined),
+      );
+
+      return;
+    }
+
+    // Preview isn't cached, so fetch this specific dataset.
+    try {
+      const sess = dataset.sessionId ?? sessionId ?? null;
+
+      const preview: any = sess
+        ? await backendApi.getDatasetPreview(dataset.id, sess)
+        : await backendApi.previewUploadedDataset(dataset.id);
+
+      const rows: any[] = Array.isArray(preview?.samples)
+        ? preview.samples
+        : Array.isArray(preview?.rows)
+          ? preview.rows
+          : [];
+
+      if (!rows.length) {
+        return;
+      }
+
+      const schema = normalizeDatasetSchema(
+        preview?.schema ?? preview?.columns,
+        rows,
+      );
+
+      const config =
+        preview?.visualization_config ??
+        preview?.visualization_configs ??
+        deriveVizFromRows(rows);
+
+      // Cache the preview on THIS dataset only.
+      setDatasetChips((chips) =>
+        chips.map((chip) =>
+          chip.id === dataset.id
+            ? {
+                ...chip,
+                samples: rows,
+                schema,
+                visualizationConfig: config,
+                visualizationStatus: config
+                  ? "ready"
+                  : undefined,
+                rowsSampled:
+                  preview?.rows_sampled ?? rows.length,
+              }
+            : chip,
+        ),
+      );
+
+      setPersistedDataset({
+        filename: dataset.name,
+        schema,
+        samples: rows,
+        rows_sampled:
+          preview?.rows_sampled ?? rows.length,
+        size_mb: dataset.sizeMb,
+      });
+
+      setAutoInsightsSamples(rows);
+      setAutoInsightsConfig(config);
+      setAnalysisVizConfig(config);
+      setAutoInsightsStatus(config ? "ready" : undefined);
+    } catch (err) {
+      console.warn(
+        "[data-preview-tab] preview failed",
+        dataset.id,
+        err,
+      );
+    }
+  },
+  [selectedDatasetIds, sessionId],
+);
 
 
   /** Per-dataset tabs for the Auto Insights modal (grouped uploads).
@@ -4295,8 +4436,18 @@ function AnalysisPage() {
                             {view === "preview" ? (
                               <>
                                 <DataPreviewPanel
+                                  datasets={previewDatasets}
+                                  activeDatasetId={activePreviewDatasetId}
+                                  onDatasetChange={handlePreviewDatasetChange}
                                   dataset={persistedDataset}
-                                  filename={autoInsightsDatasetName ?? navState?.filename}
+                                  filename={
+                                    previewDatasets.find(
+                                      (dataset) =>
+                                        dataset.id === activePreviewDatasetId
+                                    )?.name ??
+                                    autoInsightsDatasetName ??
+                                    navState?.filename
+                                  }
                                 />
                                 {renderResultToolbar()}
                               </>
@@ -6837,9 +6988,15 @@ type UploadedDataset = {
 function DataPreviewPanel({
   dataset: datasetProp,
   filename,
+  datasets = [],
+  activeDatasetId,
+  onDatasetChange,
 }: {
   dataset?: UploadedDataset | null;
   filename?: string;
+  datasets?: DatasetChip[];
+  activeDatasetId?: string | null;
+  onDatasetChange?: (dataset: DatasetChip) => void;
 }) {
   const sessionDataset = useUploadedDataset();
   const dataset = datasetProp ?? sessionDataset;
@@ -6854,6 +7011,41 @@ function DataPreviewPanel({
 
   return (
     <div className="mt-4 flex flex-col">
+      {datasets.length > 1 ? (
+      <div className="mb-4 overflow-x-auto border-b border-secondary">
+        <div className="flex min-w-max items-end gap-1">
+          {datasets.map((dataset) => {
+            const active =
+              dataset.id === activeDatasetId;
+
+            return (
+              <button
+                key={dataset.id}
+                type="button"
+                onClick={() =>
+                  onDatasetChange?.(dataset)
+                }
+                title={dataset.name}
+                className={cx(
+                  "relative max-w-[240px] whitespace-nowrap px-3 py-2 text-sm font-semibold transition",
+                  active
+                    ? "text-[#1565ef]"
+                    : "text-tertiary hover:text-primary",
+                )}
+              >
+                <span className="truncate">
+                  {datasetChipLabel(dataset.name)}
+                </span>
+
+                {active && (
+                  <span className="absolute inset-x-0 bottom-0 h-0.5 bg-[#1565ef]" />
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    ):(
       <div className="mb-3 min-w-0">
         <h3 className="truncate text-sm font-semibold text-primary">{title}</h3>
         <p className="mt-0.5 text-xs text-tertiary">
@@ -6861,6 +7053,7 @@ function DataPreviewPanel({
           {formatDatasetSize(dataset?.size_mb) ? ` · ${formatDatasetSize(dataset?.size_mb)}` : ""}
         </p>
       </div>
+    )}
       <div className="flex flex-col overflow-hidden">
         {rows.length === 0 || columns.length === 0 ? (
           <p className="text-sm text-tertiary">

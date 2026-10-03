@@ -10,12 +10,9 @@ readme = "README_CLI.md"
 # Capped, not open-ended: pyarrow==16.1.0 publishes cp38-cp312 wheels only.
 # Without the ceiling, pip on a 3.13+ interpreter tries to build Arrow C++
 # from source and fails a long way from the actual cause.
-# 3.11 is the floor, not 3.10: app/services/session_service.py uses
-# `async with asyncio.timeout(...)`, which does not exist before 3.11. On 3.10
-# it raised AttributeError, the broad except in save_session swallowed it, and
-# every session write silently returned False -- which that function documents
-# as "this turn's state is not durable". Eight tests caught it only once CI
-# actually exercised a write on 3.10.
+# 3.11 is the floor: session_service.py uses `async with asyncio.timeout(...)`,
+# added in 3.11. On 3.10 it raised AttributeError, save_session swallowed it and
+# returned False -- which it documents as "state is not durable". Silent loss.
 requires-python = ">=3.11,<3.13"
 # PEP 639 licence expression. Do NOT also add the legacy
 # "License :: OSI Approved :: ..." classifier -- setuptools rejects the pair:

@@ -16,11 +16,17 @@ By participating you agree to abide by our [Code of Conduct](CODE_OF_CONDUCT.md)
 - [Testing](#testing)
 - [Commit and PR conventions](#commit-and-pr-conventions)
 - [Licensing of contributions](#licensing-of-contributions)
+- [Sign your work](#sign-your-work)
+- [Project Structure](#project-structure)
 
 ## Ways to contribute
 
 - **Report bugs** and request features via the issue tracker.
 - **Improve documentation** — the `docs/` tree, this file, and inline docstrings.
+  Edit them at the source: the public tree under `oss/` is **generated** by
+  `scripts/generate-oss.sh` from `oss/manifest.yaml`, so a change made there is
+  overwritten by the next generation. See
+  [`docs/oss-branch-model.md`](docs/oss-branch-model.md).
 - **Add a data connector** under `file_handler/` (see the existing CSV/Parquet
   connectors for the interface).
 - **Add or harden an agent** under `app/agents/`.
@@ -33,9 +39,14 @@ By participating you agree to abide by our [Code of Conduct](CODE_OF_CONDUCT.md)
 
 ### Prerequisites
 
-- **Python 3.11+** (the container images use `python:3.11-slim`; the app and the
-  Ray cluster must run matching Ray versions — see [`docs/versions.md`](docs/versions.md)).
-- **Java 11–17** on `PATH` for PySpark (`JAVA_HOME` set).
+- **Python 3.11 or 3.12.** `pyproject.toml` pins `>=3.11,<3.13`: 3.11 is the
+  floor because `app/services/session_service.py` uses `asyncio.timeout`, and
+  3.13 is excluded because `pyarrow==16.1.0` ships no wheel for it. The
+  container images use `python:3.11-slim`, and the app and the Ray cluster must
+  run matching Ray versions — see [`docs/versions.md`](docs/versions.md).
+- **Graphviz** (the system package, not just the pip binding) if you are
+  touching the planner-graph agent — without the `dot` binary those tests skip
+  themselves, which is why CI installs it explicitly.
 - For deployment work: `docker`, `kubectl`, `helm` v3+, and `kind` for a local
   cluster. The cloud provider code is present but gated: provisioning managed
   clusters is a commercial capability, so `gcloud` / `aws` / `eksctl` / `az` are
@@ -44,12 +55,23 @@ By participating you agree to abide by our [Code of Conduct](CODE_OF_CONDUCT.md)
 ### Set up the environment
 
 ```bash
-git clone <repository-url>
-cd avaloka-dev
-python -m venv agents-env
-source agents-env/bin/activate          # Windows: agents-env\Scripts\activate
-pip install -r requirements.txt
+git clone https://github.com/guruvaidev/avaloka.git
+cd avaloka
+./scripts/install.sh                    # creates .venv and installs with --prefer-binary
+source .venv/bin/activate               # Windows: .venv\Scripts\activate
 ```
+
+Use the installer rather than `pip install -r requirements.txt` directly. It
+pins the interpreter range, passes `--prefer-binary` so pip cannot silently fall
+back to building `cryptography` from source, and is the *same* script
+`.github/workflows/ci.yml` runs — so a break in it fails CI instead of being
+discovered by the next person to clone the repository.
+`python scripts/doctor.py` checks an existing environment and explains what is
+wrong with it. Note that `install.sh --help` advertises a `--doctor` flag which
+the argument parser does not accept (`scripts/install.sh:60-71`) — it exits
+`unknown option`. `--check` is the flag that exists, and it reports the resolved
+edition rather than the environment. See
+[docs/INSTALL.md](docs/INSTALL.md#check-the-environment-any-time).
 
 Copy the environment template and fill in your own keys — **never commit real
 secrets**:
@@ -58,9 +80,14 @@ secrets**:
 cp .env.example .env   # then edit; .env is .gitignore'd
 ```
 
-At minimum you need `GROQ_API_KEY_PLANNING_AGENT` and `GROQ_API_KEY_CODING_AGENT`
-for the agents to run. See the README's *Configuration* section for the full
-list.
+At minimum you need **one model key** and `SUPABASE_JWT_SECRET` (the API
+refuses to start without the latter). The provider defaults to OpenRouter and is
+otherwise resolved from whichever key is present — OpenRouter, then Groq, then
+OpenAI — so `OPENROUTER_API_KEY` alone is enough; `INFERENCE_PROVIDER` pins it
+explicitly, and per-agent overrides are `AVALOKA_<AGENT>_PROVIDER`. The
+resolution order and the per-provider quirks are documented in
+`app/core/inference.py`. `.env.example` is the list to work from — it carries
+58 variables, commented by purpose.
 
 ### Run it locally
 
@@ -72,8 +99,8 @@ uvicorn app.api.server:app --host 0.0.0.0 --port 9000 --reload
 streamlit run app/api/streamlit_app.py
 
 # Mission-planning CLI (in-process, no backend required)
-python -m app.interfaces.cli.main plan app/sample_data/sales_data.csv \
-    --goal "Explain churn drivers" --rows 84000000 --json
+python -m app.interfaces.cli.main plan app/sample_data/salaries.csv \
+    --goal "Explain what drives salary" --rows 84000000 --json
 ```
 
 ## Project layout
@@ -83,7 +110,7 @@ full map.
 
 | Area | Path | What lives here |
 | ---- | ---- | --------------- |
-| Agents | `app/agents/` | Planner, Coder, Validator, Execution, Sampling, Profiling, DTA, MTA v1/v2, Visualization, Scheduler |
+| Agents | `app/agents/` | Planner, Coder, Validator, Execution, Sampling, Profiling, DTA, MTA v1/v2, Visualization, Scheduler, and the evidence layer — Integrity, Evaluation, Claim Verifier |
 | HTTP API | `app/api/` | FastAPI server (`server:app`), LangGraph workflow, schemas |
 | Graph state | `app/graph/etl_state.py` | The `ETLState` TypedDict shared across agents |
 | Execution routing | `app/execution/` | Router, estimator, environment for local/Ray/k8s selection |
@@ -93,6 +120,10 @@ full map.
 | Infra | `app/infra/` | `cluster_bootstrap`, `ray_manager`, `deploy_stack`, `providers/` |
 | Deployment | `deploy/` | Helm charts, Dockerfiles, kind config, per-cloud values, Makefile |
 | Connectors | `file_handler/` | CSV, Excel, Parquet, Avro, Delta, Iceberg, JSON, XML |
+| CLI package | `avaloka/` | The `avaloka` command, its mission/firefly engine and the benchmark suite — a separate package from `app/` |
+| Scripts | `scripts/` | `install.sh`, `doctor.py`, `generate-oss.sh` |
+| Public tree | `oss/` | Generated, not hand-edited — see [`docs/oss-branch-model.md`](docs/oss-branch-model.md) |
+| CI | `.github/workflows/` | `ci.yml` (the gate), `images.yml`, and the two live tiers |
 | Tests | `tests/` | Unit + integration; see [`docs/testing.md`](docs/testing.md) |
 
 ## Coding conventions
@@ -128,7 +159,7 @@ hermetic.
 pytest -m "not cluster and not cloud and not integration"
 
 # A specific area
-pytest tests/test_coder_integration.py -v      # coder (needs GROQ keys)
+pytest tests/test_coder_integration.py -v      # coder; marked `integration`, needs a model key
 pytest tests/infra/ -v                          # deployment logic
 
 # Cluster / cloud tiers (see docs/testing.md for the full matrix)
@@ -137,7 +168,11 @@ pytest -m cluster -v
 ```
 
 Markers (registered in `pytest.ini`): `cloud`, `integration`, `cluster`,
-`kuberay`, `slow`. Tests that need an external service (a live cluster, cloud
+`kuberay`, `kaggle`, `slow`, `defect`, and the prompt-suite tiers `single`,
+`multi`, `transfer`, `operations`. `defect` is always paired with
+`xfail(strict=True)`, so a confirmed defect's test fails the suite the moment
+the defect is fixed and the marker is not removed. Tests that need an external
+service (a live cluster, cloud
 credentials, an LLM key, a database) must **skip with a specific reason** when
 that service is absent — never hang or fail spuriously. Follow the skip patterns
 already used across the suite (`pytest.skip(...)`, `pytest.importorskip(...)`,
@@ -147,6 +182,13 @@ already used across the suite (`pytest.skip(...)`, `pytest.importorskip(...)`,
 kube-context for destructive operations without `AVALOKA_TEST_ALLOW_CLOUD=1`.
 Cluster tests use the `avaloka-test` namespace, never `default`. See the safety
 rails in [`docs/testing.md`](docs/testing.md).
+
+**The live tier.** `tests/live/` calls real providers, and is driven only by
+the scheduled workflows `.github/workflows/live-provider-weekly.yml` and
+`live-local-model-nightly.yml` — never by the pull-request gate, so a provider
+outage cannot redden your PR. If you change provider or tool-calling code, say
+in the PR that the live tier is the thing that will catch a regression and that
+it runs on a schedule rather than on merge.
 
 New behavior should come with tests. Bug fixes should come with a regression
 test that fails before the fix.
@@ -198,8 +240,9 @@ license's redistribution clause 4b) — a line in the PR description is enough.
 ## Sign your work
 
 Every commit needs a `Signed-off-by` line certifying the
-[Developer Certificate of Origin](DCO) — that you wrote the change, or have the
-right to contribute it under this project's licence:
+[Developer Certificate of Origin](https://developercertificate.org/) — that you
+wrote the change, or have the right to contribute it under this project's
+licence:
 
 ```bash
 git commit -s -m "your message"
@@ -235,12 +278,16 @@ avaloka-dev/
 │   │   ├── scheduler.py           # Celery/RedBeat task scheduling
 │   │   ├── execution_agent.py     # Local / K8s / Ray code execution
 │   │   ├── visualization_agent.py # Chart generation
-│   │   ├── sampling_agent.py      # PySpark dataset sampling
+│   │   ├── sampling_agent.py      # pandas/PyArrow dataset sampling
 │   │   ├── sampling_agent_v2.py   # MCP-based sampling (database-agnostic)
 │   │   ├── sampling_agent_daft.py # Daft-powered portfolio sampling with profiling
 │   │   ├── sampling_async.py      # Async quick-sample helper
 │   │   ├── sampling_persistence.py # Supabase-backed profile cache
 │   │   ├── profiling_agent.py     # Semantic data profiling (domain, quality, column ranking)
+│   │   ├── integrity_agent.py     # Leakage, duplicate splits, temporal leakage
+│   │   ├── evaluation_agent.py    # Cross-validated scoring vs. a mandatory baseline
+│   │   ├── claim_verifier.py      # Prose checked against computed numbers (no LLM)
+│   │   ├── pii_agent.py           # PII detection and keyed hashing
 │   │   ├── model_training_agent.py # MTA v1 orchestration node
 │   │   ├── state.py               # CodingAgentState TypedDict
 │   │   ├── mta/                   # MTA v1 modules
@@ -296,7 +343,7 @@ avaloka-dev/
 │   │   ├── helpers.py             # API utility functions
 │   │   └── config.py              # API configuration
 │   ├── graph/                     # State management
-│   │   └── etl_state.py           # ETLState TypedDict (84+ fields)
+│   │   └── etl_state.py           # ETLState TypedDict (~156 annotated fields)
 │   ├── execution/                 # Execution routing
 │   │   ├── router.py              # local / Ray / k8s selection from plan + fidelity
 │   │   ├── estimator.py           # cost & runtime estimation
@@ -318,10 +365,11 @@ avaloka-dev/
 │   │   ├── cloud_provisioner.py   # cluster lifecycle dispatch
 │   │   ├── k8s_invoker.py         # Kubernetes operations
 │   │   ├── providers/             # ClusterProvider abstraction
-│   │   │   ├── factory.py         # local | gcp | aws  (azure = roadmap)
+│   │   │   ├── factory.py         # local | gcp | aws | azure
 │   │   │   ├── local_kind.py      # kind (Kubernetes-in-Docker)
 │   │   │   ├── gcp_gke.py         # Google Kubernetes Engine
 │   │   │   ├── aws_eks.py         # Amazon EKS
+│   │   │   ├── azure_aks.py       # Azure Kubernetes Service
 │   │   │   └── base.py            # run_command + provider interface
 │   │   ├── config/                # Kubernetes configurations
 │   │   ├── manifests/             # Helm values (Postgres, Kafka, Milvus, etc.)
@@ -342,7 +390,7 @@ avaloka-dev/
 │   │   ├── persistence_service.py # Async asset persistence (cloud storage + GitHub registry)
 │   │   ├── session_service.py     # Thread-based session store
 │   │   └── storage_service.py     # Storage abstraction layer
-│   └── sample_data/               # Test datasets (35+ subdirectories)
+│   └── sample_data/               # A handful of small sample CSVs
 ├── file_handler/                  # File-format connectors
 │   ├── handler.py                 # Unified format dispatcher
 │   ├── csv_connector.py
@@ -353,7 +401,7 @@ avaloka-dev/
 │   ├── iceberg_connector.py
 │   ├── json_connector.py
 │   └── xml_connector.py
-├── tests/                         # Comprehensive test suite (55+ files)
+├── tests/                         # Test suite (~270 modules)
 │   ├── sampler/                   # Sampling agent tests
 │   ├── infra/                     # Infrastructure tests
 │   ├── execution-agent/           # Execution agent tests
@@ -367,6 +415,7 @@ avaloka-dev/
 │   ├── test_scheduler_integration.py
 │   ├── test_wbs06_asset_persistence.py # Asset persistence tests
 │   ├── test_connectors.py         # File connector tests
+│   ├── live/                      # Live-provider tier (scheduled CI only)
 │   └── test_*.py                  # Integration and E2E tests
 ├── deploy/                        # Kubernetes deployment
 │   ├── Makefile                   # make up / connect / status / down
@@ -375,15 +424,26 @@ avaloka-dev/
 │   ├── helm/avaloka/              # avaloka app Helm chart
 │   ├── helm/ray/                  # RayCluster + RayService CRs
 │   └── avaloka/values/            # per-cloud overlays (gke/eks/aks/minikube/onprem)
+├── avaloka/                       # The `avaloka` CLI package (separate from app/)
+│   ├── cli.py                     # analyze | train | chat | batch | infer |
+│   │                              #   deploy | coordinate | benchmark | version
+│   ├── fireflies/                 # The nine specialist clones
+│   ├── benchmark/                 # `python -m avaloka.benchmark run`
+│   ├── io/                        # loader.py (formats) + sources.py (URIs)
+│   └── missions.py                # run_analyze / run_train
+├── scripts/                       # install.sh, doctor.py, generate-oss.sh
+├── oss/                           # Generated public tree + manifest.yaml (do not hand-edit)
+├── .github/workflows/             # ci.yml (the gate), images.yml, the two live tiers
 ├── ui/                            # React.js web UI (built with Lovable) + local Supabase
 ├── docs/                          # Architecture, deployment, API, CLI guides
-├── docs/research/                # Research paper: draft, ICLR source, PDF
+│   └── research/                  # Research paper: draft, ICLR source, PDF
 ├── requirements.txt               # Python dependencies
-├── docker-compose.scheduler.yml   # Celery/RedBeat + Redis stack
+├── pyproject.toml                 # Package metadata; pins Python >=3.11,<3.13
+├── deploy/compose/docker-compose.scheduler.yml   # Celery/RedBeat + Redis stack
 ├── langgraph.json                 # LangGraph CLI config
-├── kind-ray-local-multi.yaml      # Kind cluster config for local Ray
-├── bitbucket-pipelines.yml        # CI/CD pipeline
-└── README.md                      # This file
+├── deploy/k8s/kind-ray-local-multi.yaml          # Kind cluster config for local Ray
+├── bitbucket-pipelines.yml        # Legacy Bitbucket pipeline; CI runs on GitHub Actions
+└── CONTRIBUTING.md                # This file
 ```
 
 ---

@@ -66,7 +66,12 @@ checks the narrative against the computed numbers before you see it.
 Work happens in a **thread** — a conversation bound to one or more datasets.
 Threads hold history, preferences, and produced artifacts, so later requests can
 refer to earlier ones ("the cleaned dataset from before"). Threads are listed,
-resumed, and deleted through the UI, the API, or the CLI.
+resumed, and deleted through the UI or the HTTP API (`GET /threads`,
+`DELETE /threads/{id}`). **Neither command-line tool manages threads** — the
+`avaloka` CLI runs self-contained missions over a file, and
+`app.interfaces.cli.main` plans and prices a workload. The only thread-aware CLI
+flag is `viz --planner-graph THREAD_ID`, which fetches one thread's graph from a
+running API.
 
 ---
 
@@ -80,12 +85,19 @@ resumed, and deleted through the UI, the API, or the CLI.
 Then either open the web UI, or drive it over HTTP:
 
 ```bash
-curl -X POST $AVALOKA_API/threads
-curl -X POST $AVALOKA_API/api/upload -F file=@sales.csv
-curl -X POST $AVALOKA_API/threads/$THREAD/messages \
+# Every non-public route needs a bearer JWT; see api.md for how to mint one.
+AUTH="Authorization: Bearer $AVALOKA_JWT"
+
+curl -X POST $AVALOKA_API/threads -H "$AUTH"
+curl -X POST $AVALOKA_API/api/upload -H "$AUTH" \
+     -F file=@app/sample_data/salaries.csv
+curl -X POST $AVALOKA_API/threads/$THREAD/messages -H "$AUTH" \
      -H 'content-type: application/json' \
-     -d '{"message":"What is in this dataset?"}'
+     -d '{"role":"user","content":"What is in this dataset?"}'
 ```
+
+The message field is `content`, not `message` (`MessageCreateIn`,
+`app/api/schemas.py:173`). An unauthenticated request gets `401`, not a result.
 
 Full installation instructions, including edition licensing, are in
 [INSTALL.md](INSTALL.md).
@@ -94,9 +106,14 @@ Full installation instructions, including edition licensing, are in
 
 ## 3. Data capabilities
 
-The thirteen capability areas below are the product's functional surface. Each
-is exercised by an internal conformance suite of 281 prompts, so the examples
-here reflect requests Avaloka is tested against rather than aspirations.
+The thirteen capability areas below are the product's functional surface, and
+they are the thirteen batches (`F1`…`F13`) of the `v4` prompt suite. The
+examples here are drawn from `tests/prompt_suite/suites/`, which holds **245
+items across four suites** — `v4` 86, `v2` 96, `v1` 44, and an opt-in `heavy`
+suite of 19 entire-dataset items that is k8s-only. They are requests Avaloka is
+exercised against; a suite item is not by itself proof that a given run
+succeeds. The runner and its caveats are in
+`tests/prompt_suite/README.md`.
 
 ### 3.1 Ingestion and catalog
 
@@ -128,7 +145,14 @@ extracts is one catalog entry rather than a scatter of UUIDs.
 | Columnar | Parquet, Avro |
 | Table formats | Delta Lake, Apache Iceberg |
 
-Compressed variants of the text formats are handled transparently.
+> **Reading a format and uploading it are not the same door.** The browser
+> upload control accepts `.csv`, `.xls`, `.xlsx`, `.json`, `.parquet` only
+> (`ui/src/components/dashboard/UploadModal.tsx:14`). The wider list above is
+> what the read path can handle once data is *registered in place* — Delta and
+> Iceberg come from `deltalake` and `pyiceberg` (`requirements.txt:62-63`) via
+> the Daft sampling path. To bring Delta, Iceberg, Avro, XML or TSV in, register
+> the location (`/api/register-existing-folder`,
+> `/api/register-existing-storage`) rather than uploading a file.
 
 ### 3.2 Discovery and profiling
 
@@ -244,7 +268,14 @@ Every run is registered: `GET /api/models` lists them,
 include cross-validated metrics and a comparison against a mandatory trivial
 baseline — a model that does not beat the baseline is reported as such.
 
-*ML training and inference are commercial capabilities.*
+*ML training and inference are **cost**-gated, not commercial.* Both are granted
+in `OSS_CAPABILITIES` (`app/core/editions.py:148-149`): the Model Training Agent
+ships in the open-source distribution and a self-hosted operator trains and
+serves on their own hardware with no cap. What the gate governs is what a
+*hosted* plan may spend on training compute (`GATE_REASON`,
+`app/core/editions.py:127-128`). What is commercial is dispatching that work to
+managed cloud infrastructure Avaloka provisioned — `cloud_provisioning` plus
+`scheduled_delivery`.
 
 ### 4.3 Inference and serving
 
@@ -255,7 +286,10 @@ baseline — a model that does not beat the baseline is reported as such.
 `POST /api/models/{run_id}/configure-inference-service` stands up an endpoint;
 `POST /api/models/{run_id}/inference` scores records;
 `POST /api/models/{run_id}/stop-inference-service` tears it down. Serving scales
-to zero when idle so a deployed endpoint does not bill continuously.
+to zero when idle so a deployed endpoint does not bill continuously — the
+default is **two hours** without a request, `INFERENCE_IDLE_TIMEOUT_S`
+(`app/agents/mta_v2/inference_autoscale.py:58`). The first request after a
+scale-down brings back one warm replica, so expect a cold start on it.
 
 ---
 
@@ -263,16 +297,24 @@ to zero when idle so a deployed endpoint does not bill continuously.
 
 > "Histogram of median_income with a sensible bin count."
 > "Bar chart: survival rate by Pclass."
-> "Heatmap of order volume: order_dow vs order_hour_of_day."
+> "Scatter of median_income vs median_house_value with a trend line."
 
 Chart type, binning, and axes are inferred from the data and the question.
 Visuals are artifacts of the thread, retrievable via
 `GET /api/assets/{session_id}`.
 
+**Five chart types are produced:** `bar`, `line`, `pie`, `scatter`, `histogram`
+(`app/agents/visualization_agent.py:503`). There is no heatmap renderer — a
+prompt asking for one will come back as something else, so do not plan around
+it. If an LLM key is configured the agent proposes specs; without one it falls
+back to a heuristic policy and still produces charts.
+
 Charts also appear **without being asked for**: every upload and every analysis
-that produces a dataset refreshes an automatic set of three to five charts
-chosen to explain the data in front of you. Asking a chart-shaped question
-steers what gets rendered.
+that produces a dataset refreshes an automatic set of **up to five** charts
+chosen to explain the data in front of you (`MAX_TOTAL_CHARTS = 5`,
+`app/agents/visualization_agent.py:245`; the per-category sub-caps are 2
+distribution, 2 relationship, 1 category). Fewer than five is normal — a narrow
+dataset yields fewer. Asking a chart-shaped question steers what gets rendered.
 
 ---
 
@@ -338,15 +380,20 @@ Six checks run before a model is fit:
 | Temporal leakage | Training on rows that postdate the test period |
 | Constant / near-constant features | No signal, distorted importance |
 
-Findings are reported with a `safe_to_train` verdict. Target leakage is the most
-common silent failure in automated data science: a leaking model reports
-excellent metrics and fails in production.
+These are the six `check_*` functions in `app/agents/integrity_agent.py:115-219`,
+and the correlation threshold is `LEAKAGE_CORRELATION_THRESHOLD = 0.98`
+(`app/agents/mta_v2/training_docker_image/src/data_integrity.py:16`). Findings
+are reported with a `safe_to_train` verdict
+(`app/agents/integrity_agent.py:88`), and a BLOCKER finding blocks training.
+Target leakage is the most common silent failure in automated data science: a
+leaking model reports excellent metrics and fails in production.
 
 ### 7.2 Evaluation with a mandatory baseline
 
 Every model is cross-validated with the splitter the data actually requires —
-time series get `TimeSeriesSplit`, grouped data gets `GroupKFold` — and the
-choice is recorded with its reason. Every result is scored against a trivial
+time series get `TimeSeriesSplit`, grouped data gets `GroupKFold`, and
+everything else `StratifiedKFold` or `KFold` — and the choice is recorded with
+its reason (`choose_splitter`, `app/agents/evaluation_agent.py:184-190`). Every result is scored against a trivial
 baseline, and **"beats baseline" requires clearing fold-to-fold noise**, not
 merely a higher mean.
 
@@ -369,14 +416,17 @@ asked to grade another model's honesty, so the check cannot itself hallucinate.
 | Type | Supported |
 | --- | --- |
 | Object storage | Amazon S3, Google Cloud Storage, Azure Blob Storage |
-| Databases — query and register | PostgreSQL, MySQL, SQLite, SQL Server, Oracle, MariaDB |
+| Databases — query and register | PostgreSQL, MySQL, SQLite, SQL Server, Oracle, MariaDB, MongoDB |
 | Databases — transfer target | PostgreSQL, MySQL |
-| Local | Filesystem paths, direct upload (100 MB per file) |
+| Local | Filesystem paths, direct upload (100 MB per file, 10 files and 200 MB per request) |
 | URLs | Direct HTTP(S) sources |
 
 > **Registering a database and transferring into it are different capabilities.**
-> Six engines can be registered and queried; transfers currently target
-> PostgreSQL and MySQL. Plan a migration around the second list, not the first.
+> **Seven** engines can be registered and queried — `SUPPORTED_DB_TYPES`,
+> `app/mcp_server/customer_dbs.py:38` — while transfers target PostgreSQL and
+> MySQL only (`_DB_TYPES`,
+> `app/agents/data_transfer_agent/data_transfer_agent.py:52`). Plan a migration
+> around the second list, not the first.
 
 Connections are registered once and referred to by name:
 
@@ -424,9 +474,11 @@ All eight write formats are available when the destination is a cloud bucket.
 
 ### 8.3 HTTP API
 
-47 endpoints across threads and messaging, datasets and upload, analysis and
-code, assets, models and inference, tasks and scheduling, connections, and
-health. Full reference: [api.md](api.md).
+`app/api/server.py` declares 53 routes — threads and messaging, datasets and
+upload, analysis and code, assets, models and inference, tasks and scheduling,
+mission planning, connections and integrations, and health. Counts in prose go
+stale; `GET /docs` on a running server is authoritative. Full reference:
+[api.md](api.md).
 
 The essential loop:
 
@@ -459,12 +511,44 @@ particular account is compiled in. See [deployment.md](deployment.md).
 
 ### 8.6 Model providers
 
-Avaloka is not tied to one LLM vendor. Groq, OpenRouter, OpenAI-compatible
-endpoints, AWS Bedrock, GCP Vertex AI, Azure AI, and **in-cluster or local
-models** (vLLM, Ollama) are all selectable by configuration. If a provider fails
-or deprecates a model, Avaloka falls back automatically — including to a local
-model sized for the machine it is running on, so an outage degrades service
-rather than stopping it.
+Avaloka is not tied to one LLM vendor. The switch is `INFERENCE_PROVIDER`
+(`app/core/inference.py:68-102`):
+
+| Value | Provider |
+| --- | --- |
+| `openrouter` | OpenRouter (**the default**) |
+| `groq` | Groq Cloud |
+| `openai` | OpenAI |
+| `bedrock` | AWS Bedrock |
+| `vertex` | GCP Vertex AI |
+| `azure` | Azure AI / Azure OpenAI |
+| `local` | In-cluster or local OpenAI-spec model — `vllm` and `ollama` are aliases for this |
+
+**The default is OpenRouter, and it is key-aware.** With `INFERENCE_PROVIDER`
+unset, `_default_provider_with_a_usable_key()` picks OpenRouter if
+`OPENROUTER_API_KEY` is set, else Groq if a Groq key is, else OpenAI if an
+OpenAI key is, else OpenRouter so the failure reports itself
+(`app/core/inference.py:129`). An **explicit** setting is never second-guessed:
+`INFERENCE_PROVIDER=openrouter` with no key disables the LLM and logs why. The
+provider can also be set per agent — `INFERENCE_PROVIDER_PLANNING`,
+`INFERENCE_PROVIDER_CODING`, `AVALOKA_<AGENT>_PROVIDER`.
+
+> The module docstring in `app/core/inference.py:22` still says "Groq stays the
+> default". It is stale — `_PROVIDER_ALIASES[""]` resolves to `openrouter`
+> (`app/core/inference.py:82`). Trust the code, and expect some log messages to
+> still name Groq.
+
+`tool_choice` is resolved per provider rather than per client class, because
+`local`, `openrouter` and `openai` all build the same `ChatOpenAI` object and the
+two that matter need opposite values: OpenRouter rejects `required`, Ollama
+needs it, and Vertex spells it `any`
+(`tool_choice_for_provider`, `app/core/inference.py:177`). If you add a provider,
+add it there too.
+
+If a provider fails or deprecates a model, Avaloka falls back automatically —
+including to a local model sized for the machine it is running on
+(`AVALOKA_DEPLOYMENT_PROFILE`, `app/core/model_fallback.py:479`), so an outage
+degrades service rather than stopping it.
 
 ---
 
@@ -527,14 +611,34 @@ A capability is unavailable for exactly one of three reasons:
 execution, file connectors.
 
 **Cost-gated** (open when self-hosted): distributed Ray execution, entire-dataset
-scans, scheduling, batch jobs.
+scans, scheduling, batch jobs, **ML training, ML inference**.
 
 **Commercial:** database connectors, cloud connectors, cloud provisioning,
-ML training, ML inference, scheduled delivery, team collaboration, analysis
-sharing and comments, notifications, swarm intelligence, SSO and audit.
+scheduled delivery, team collaboration, analysis sharing and comments,
+notifications, swarm intelligence, SSO and audit.
 
-`./scripts/install.sh --check` reports what your install resolves to. Full
-matrix: [EDITIONS.md](EDITIONS.md).
+These two lists are `GATE_REASON` in `app/core/editions.py:106-130` — read it
+there if the two ever disagree. ML training and inference sit in the cost list,
+not the commercial one: the training code ships, and a self-hosted operator pays
+their own compute bill.
+
+`./scripts/install.sh --check` reports what your install resolves to (it execs
+`scripts/check_edition.py`). Full matrix: [EDITIONS.md](EDITIONS.md).
+
+Two caveats worth knowing before you plan around this list:
+
+- **The matrix is a declaration, not a runtime permission check.** Outside
+  tests, `resolve_capabilities()` is consulted at exactly one gating call site
+  today — the public build's provider factory, for `cloud_provisioning`. The
+  rest of the boundary is enforced by the commercial code not being in the
+  distribution. See "How the boundary is enforced" in
+  [EDITIONS.md](EDITIONS.md).
+- **`swarm_intelligence` is marked `COMMERCIAL`, but `avaloka/swarm.py` is
+  present in this tree** and `avaloka coordinate` narrates through it. The
+  comment at `app/core/editions.py:85` says swarm is "present on the
+  develop-1.7 line only"; that is not true of the tree you are reading. Treat
+  the swarm capability flag as unsettled rather than as a description of what
+  ships.
 
 ---
 
@@ -548,6 +652,8 @@ matrix: [EDITIONS.md](EDITIONS.md).
 | A model reports poor results | It did not beat the baseline | This is a real finding, not a failure — the signal may not be in the data |
 | Startup fails naming a variable | Cloud identity is unconfigured | Set the named variable; Avaloka does not assume a project or registry |
 | A provider returns 404 for a model | Model deprecated upstream | Fallback should engage automatically; verify with `scripts/ops/verify_models.py` |
+| "LLM disabled" in the logs | No key for the selected provider | The default provider is OpenRouter — set `OPENROUTER_API_KEY`, or set `INFERENCE_PROVIDER` to one whose key you have (§8.6) |
+| `401` on every API call | `SUPABASE_JWT_SECRET` unset or not matching your token | See [api.md](api.md); `GET /debug/whoami` returns `null` when the token does not verify |
 
 ---
 
@@ -563,7 +669,7 @@ matrix: [EDITIONS.md](EDITIONS.md).
 | 6 | Training & registry | "Looks good — train it." |
 | 7 | Inference & serving | "Deploy this model for predictions." |
 | 8 | Data transfer | "Transfer aisles.csv from the instacart connection to the walmart connection." |
-| 9 | Visualization | "Heatmap of order volume: order_dow vs order_hour_of_day." |
+| 9 | Visualization | "Scatter of median_income vs median_house_value with a trend line." |
 | 10 | Scheduling | "Every Monday 9am, recompute the fraud rate by ProductCD." |
 | 11 | Fidelity & scale | "Now compute that on the entire dataset." |
 | 12 | Memory & preferences | "Always include row counts in any table you show me." |
@@ -580,7 +686,11 @@ matrix: [EDITIONS.md](EDITIONS.md).
 | `AZURE_SUBSCRIPTION_ID` · `AZURE_LOCATION` · `AZURE_CONTAINER_REGISTRY` | Azure identity |
 | `AVALOKA_DEPLOYMENT_PROFILE` | `laptop` \| `cluster` — sizes the local model tier |
 | `AVALOKA_EDITION` · licence key | Edition selection |
-| `DEFAULT_SAMPLE_MAX_ROWS` | Sampling ceiling for exploration |
+| `DEFAULT_SAMPLE_MAX_ROWS` | Sampling ceiling for exploration (default `50000`, `app/agents/sampling_agent.py:18`) |
+| `INFERENCE_PROVIDER` | LLM provider; default `openrouter`, see §8.6 |
+| `SUPABASE_JWT_SECRET` · `SUPABASE_URL` | API authentication — see [api.md](api.md) |
+| `AVALOKA_MAX_UPLOAD_FILE_BYTES` · `AVALOKA_MAX_UPLOAD_FILES` · `AVALOKA_MAX_UPLOAD_TOTAL_BYTES` | Upload ceilings (100 MB · 10 · 200 MB) |
+| `INFERENCE_IDLE_TIMEOUT_S` | Idle seconds before a served model scales to zero (default `7200`) |
 
 Provider and model variables are documented in `.env.example`.
 

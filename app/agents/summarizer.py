@@ -8,11 +8,9 @@ using Pydantic models for validation and JSON schema generation.
 import json
 import logging
 import os
-import re
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field, ValidationError
 
 from app.core.inference import build_chat_model
@@ -22,21 +20,35 @@ from app.utils import extract_json_block
 logger = logging.getLogger(__name__)
 
 from app.core.model_config import resolve as resolve_model
-from app.core.model_fallback import attach_fallback
+from app.core.model_fallback import attach_fallback  # noqa: F401
 from app.core.log_utils import describe_response, preview
 
+_SUMMARIZER_MODEL = resolve_model("summarizer")
 _summarizer_api_key = (os.environ.get("GROQ_API_KEY_CODING_AGENT")
-              or os.environ.get("GROQ_API_KEY"))
+                       or os.environ.get("GROQ_API_KEY"))
 summarizer_llm = build_chat_model(
     role="coding",
     agent="SUMMARIZER",
     tier="small",
     temperature=0,
-    groq_model=resolve_model("summarizer"),
+    groq_model=_SUMMARIZER_MODEL,
     groq_api_key=_summarizer_api_key,
 )
 if summarizer_llm is None:
     logger.warning("Summarizer LLM disabled; set GROQ_API_KEY_CODING_AGENT to re-enable remote generation.")
+
+# gpt-oss is a reasoning model: its thinking counts against max_tokens.
+#
+# This call set neither, so gpt-oss-20b used the provider defaults (medium
+# effort, 2,048 tokens). It sometimes reasoned through the whole budget and
+# returned nothing -- twice in a row in one turn, 9.8s for no JSON -- and even
+# when it answered it took ~6s to restate a plan that is already decided.
+# Turning a finished plan into JSON needs little reasoning, so the default is
+# "low" with more room. A retry after an empty answer thinks LESS, not longer.
+_SUMMARIZER_MAX_TOKENS = int(os.getenv("AVALOKA_SUMMARIZER_MAX_TOKENS", "4096"))
+_SUMMARIZER_EFFORT = os.getenv("AVALOKA_SUMMARIZER_REASONING_EFFORT", "low")
+_IS_REASONING = "gpt-oss" in (_SUMMARIZER_MODEL or "").lower()
+_EFFORT_STEP_DOWN = {"high": "medium", "medium": "low"}
 
 
 # Pydantic models for schema validation
@@ -59,7 +71,11 @@ class ETLJob(BaseModel):
     notes: Optional[str] = Field(None, description="Any additional notes or comments about the ETL job.")
 
 
-def _create_summary_prompt(messages: list, error_message: Optional[str] = None):
+# The schema never changes at runtime; build its prompt text once.
+_SCHEMA_JSON_STR = json.dumps(ETLJob.model_json_schema(), indent=2)
+
+
+def _create_summary_messages(messages: list, error_message: Optional[str] = None) -> List[Any]:
     """
     Creates a consolidated prompt from the conversation history.
     """
@@ -71,14 +87,10 @@ def _create_summary_prompt(messages: list, error_message: Optional[str] = None):
         elif isinstance(msg, HumanMessage):
             conversation_text += f"\nHuman: {msg.content}\n"
 
-    # Corrected line for Pydantic v2: get schema dict, then dump to string
-    schema_dict = ETLJob.model_json_schema()
-    schema_json_str = json.dumps(schema_dict, indent=2)
-
     system_prompt = (
         "Based on the following conversation, output a valid JSON string that "
         "summarizes the ETL job. The JSON **must** adhere to this exact schema:\n\n"
-        f"```json\n{schema_json_str}\n```\n\n"
+        f"```json\n{_SCHEMA_JSON_STR}\n```\n\n"
         "The output **must** be given in the format:\n\n"
         "```json\n{name: value, name: value, ...}\n```\n\n"
         "**Important Rules:**\n"
@@ -90,19 +102,35 @@ def _create_summary_prompt(messages: list, error_message: Optional[str] = None):
         f"{'You failed to generate valid JSON last time. The error was: ' + error_message if error_message else ''}\n"
     )
 
-    return ChatPromptTemplate.from_messages([
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=conversation_text)
-    ])
+    # Plain message list (no ChatPromptTemplate): the conversation can contain
+    # literal "{...}" (JSON, code), which a template would try to fill in.
+    return [SystemMessage(content=system_prompt), HumanMessage(content=conversation_text)]
+
+
+def _finish_reason(resp: Any) -> str:
+    meta = getattr(resp, "response_metadata", None) or {}
+    return str(meta.get("finish_reason") or "").lower()
+
+
+def _invoke(messages: List[Any], effort: str = _SUMMARIZER_EFFORT):
+    kwargs: Dict[str, Any] = {"max_tokens": _SUMMARIZER_MAX_TOKENS}
+    if _IS_REASONING:
+        kwargs["reasoning_effort"] = effort
+    try:
+        return summarizer_llm.invoke(messages, **kwargs)
+    except Exception as exc:
+        # A provider that rejects these kwargs must not cost us the summary.
+        logger.warning("Summarizer LLM rejected tuning kwargs (%s); retrying plain.", exc)
+        return summarizer_llm.invoke(messages)
 
 
 def summarize_etl_job(state: ETLState) -> ETLState:
     """
     Summarize ETL job from conversation history with retry mechanism
-    
+
     Args:
         state: Current ETL state
-        
+
     Returns:
         Updated ETL state with job definition
     """
@@ -121,6 +149,8 @@ def summarize_etl_job(state: ETLState) -> ETLState:
 
     max_retries = 2
     error_message = None
+    raw_response = ""
+    effort = _SUMMARIZER_EFFORT
 
     if summarizer_llm is None:
         logger.info("Skipping summarization because GROQ_API_KEY_CODING_AGENT is not configured.")
@@ -139,15 +169,22 @@ def summarize_etl_job(state: ETLState) -> ETLState:
     for attempt in range(max_retries):
         try:
             # Create a fresh, consolidated prompt for each attempt
-            prompt = _create_summary_prompt(messages, error_message)
-            chain = prompt | summarizer_llm
-
-            response = chain.invoke({})
-            raw_response = response.content.strip()
+            response = _invoke(_create_summary_messages(messages, error_message), effort=effort)
+            raw_response = (response.content or "").strip()
             logger.info("Summarizer LLM answered (attempt %s): %s",
                         attempt + 1, describe_response(response))
             logger.debug("Summarizer raw response (attempt %s): %s",
                          attempt + 1, preview(raw_response, 2000))
+
+            if not raw_response and _finish_reason(response) == "length":
+                # Reasoning used the whole budget. The next attempt thinks less.
+                lower = _EFFORT_STEP_DOWN.get(effort)
+                if lower:
+                    effort = lower
+                raise ValueError(
+                    "No answer: the token budget was used up by reasoning. "
+                    "Output the JSON directly."
+                )
 
             json_str = extract_json_block(raw_response)
 

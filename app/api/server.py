@@ -4107,10 +4107,22 @@ async def send_message(
     thread_id: str,
     body: MessageCreateIn,
 ):
+    # _ensure_thread_local(thread_id)
+    # # Restore chat history from Redis after a process restart (no-op while
+    # # the in-process copy is already populated).
+    # await hydrate_thread_history(thread_id)
+    _t_req = time.monotonic()
+
+    def _tmark(stage: str) -> None:
+        # One line per stage, elapsed since the request arrived. Grep "[turn-timing]".
+        logger.info("[turn-timing] thread=%s %-18s +%.2fs",
+                    thread_id[:8], stage, time.monotonic() - _t_req)
+
     _ensure_thread_local(thread_id)
     # Restore chat history from Redis after a process restart (no-op while
     # the in-process copy is already populated).
     await hydrate_thread_history(thread_id)
+    _tmark("history")
 
     user_id = _resolve_user_id(request)
     if not user_id:
@@ -4181,6 +4193,8 @@ async def send_message(
             status.HTTP_400_BAD_REQUEST,
             "No session found. Pass X-Avaloka-Session header/cookie or include metadata.dataset_id that belongs to this user.",
         )
+    
+    _tmark("session_resolved")
     # ----------------------------------------------------
     # 2) Multi-upload group: group_session_id owns dataset index
     # ----------------------------------------------------
@@ -4283,11 +4297,22 @@ async def send_message(
     # lands (the frontend may create the analyses row only after the first turn),
     # then stop. Keyed by this request's thread_id, which matches the row.
     if not _truthy_session_value(primary_sess.get("snapshot_persisted")):
-        if await persist_session_snapshot(thread_id, primary_sess) > 0:
-            primary_sess["snapshot_persisted"] = True
-            await update_session(
-                primary_sid, lambda cur: cur.update({"snapshot_persisted": True})
-            )
+        # A durability backup for rebuild-on-miss: nothing in this turn reads
+        # it, so the user must not wait on the Supabase round-trip.
+        async def _persist_snapshot_bg(_tid=thread_id, _sid=primary_sid,
+                                       _snap=dict(primary_sess)) -> None:
+            try:
+                if await persist_session_snapshot(_tid, _snap) > 0:
+                    await update_session(
+                        _sid, lambda cur: cur.update({"snapshot_persisted": True})
+                    )
+            except Exception:
+                logger.debug("[snapshot] background persist failed", exc_info=True)
+
+        _snap_task = asyncio.create_task(_persist_snapshot_bg())
+        _upload_storage_tasks.add(_snap_task)          # keep a strong ref
+        _snap_task.add_done_callback(_upload_storage_tasks.discard)
+    _tmark("snapshot")
 
     # ----------------------------------------------------
     # 4.5) Fidelity + selected-sample resolution (chat-driven)
@@ -4371,6 +4396,7 @@ async def send_message(
     )
     if _resolved_name and primary_sess.get("selected_sample_name") != _resolved_name:
         primary_sess["selected_sample_name"] = _resolved_name
+    _tmark("sample_rows")
 
     _file_size_bytes = int(primary_sess.get("file_size_bytes") or 0)
     _is_large_dataset = _file_size_bytes >= LARGE_DATASET_THRESHOLD_BYTES
@@ -4787,6 +4813,7 @@ async def send_message(
         )
     # ---- Join key suggestions (for compare/join flows) ----
     join_key_suggestions = await asyncio.to_thread(suggest_join_keys, multi_dataset_state)
+    _tmark("join_keys")
 
 
     # ----------------------------------------------------
@@ -5019,6 +5046,7 @@ async def send_message(
                 "user's most-recent active database customer_id=%r table=%r",
                 _active_db_customer_id, _active_db_source_table,
             )
+    _tmark("dta_bridge")
     logger.info(
         "DTA source bridge: input_data_type=%s data_source_location=%r customer_id=%r "
         "source_table=%r connection_id=%r -> active_db_customer_id=%r active_db_source_table=%r",
@@ -5372,6 +5400,7 @@ async def send_message(
 
 
 
+    _tmark("pre_graph_done")
     # # ----------------------------------------------------
     # # 12) Run workflow graph
     # # ----------------------------------------------------
@@ -5407,6 +5436,7 @@ async def send_message(
                 config={"configurable": {"thread_id": f"ui:{thread_id}"}},
             ),
         )
+        _tmark("graph_done")
 
         if _shadow_on:
             try:
@@ -6262,6 +6292,7 @@ Ready to proceed with model training!"""
             ),
         )
 
+    _tmark("response_ready")
     # ----------------------------------------------------
     # 21) SSE streaming support
     # ----------------------------------------------------

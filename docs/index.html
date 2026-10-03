@@ -22,6 +22,8 @@
   a.card:hover{border-color:var(--accent)}
   a.card b{display:block;color:var(--accent);font-size:.98rem;margin-bottom:.2rem}
   a.card span{color:var(--muted);font-size:.86rem;line-height:1.45;display:block}
+  .map{margin:1rem 0 0;font-size:.95rem;color:var(--muted)}
+  .map a{color:var(--accent);font-weight:600}
   footer{margin-top:3.5rem;padding-top:1.25rem;border-top:1px solid var(--line);color:var(--muted);font-size:.87rem}
   footer a{color:var(--accent)}
   code{background:var(--card);border:1px solid var(--line);border-radius:4px;padding:.1em .35em;font-size:.88em}
@@ -30,15 +32,17 @@
 <header>
   <h1>Avaloka Documentation</h1>
   <p class="tag">A team of AI agents that does data science work end to end — ingestion, analysis, training, serving.</p>
+  <p class="map"><a href="DOCS_MAP.md">Documentation map</a> — every document on one page, what it is for, and who it is written for.</p>
 </header>
 
 <h2>Start here</h2>
 <p class="lead">Running it for the first time.</p>
 <div class="grid">
+  <a class="card" href="DOCS_MAP.md"><b>Documentation Map</b><span>The whole set on one page — what each document is for, who it is written for, and which ones describe proposals rather than shipped behaviour.</span></a>
   <a class="card" href="INSTALL.md"><b>Install Guide</b><span>Requirements, one-command install, Kubernetes vs. local processes, offline and air-gapped, and what goes wrong on a first run.</span></a>
-  <a class="card" href="USER_GUIDE.md"><b>User Guide</b><span>A hands-on walkthrough: sign in, upload, prompt, connect a database, train a model. <em>PDF also available.</em></span></a>
+  <a class="card" href="USER_GUIDE.md"><b>User Guide</b><span>A hands-on walkthrough: sign in, upload, prompt, connect a database, train a model. Also as <code>Avaloka-AI-1.0-User-Guide.pdf</code> in this directory.</span></a>
   <a class="card" href="../README_CLI.md"><b>CLI Guide</b><span>The <code>avaloka</code> command — analyse a file, train a model, chat about a dataset, from a terminal.</span></a>
-  <a class="card" href="TECHNICAL_USER_GUIDE.md"><b>Technical User Guide</b><span>Every capability, the prompts that invoke it, supported formats, endpoints and edition gates.</span></a>
+  <a class="card" href="TECHNICAL_USER_GUIDE.md"><b>Technical User Guide</b><span>Every capability, the prompts that invoke it, supported formats, endpoints and edition gates. Also as <code>Avaloka-AI-1.0-Technical-User-Guide.pdf</code> in this directory.</span></a>
 </div>
 
 <h2>Running it for real</h2>
@@ -47,6 +51,7 @@
   <a class="card" href="deployment.md"><b>Kubernetes Deployment</b><span><code>kind</code> and small self-managed clusters, Ray &amp; KubeRay, the Helm chart, storage classes, and how to verify a deployment.</span></a>
   <a class="card" href="operations.md"><b>Operations</b><span>Beyond a first try — MLflow tracking, artifact storage, inference, troubleshooting.</span></a>
   <a class="card" href="api.md"><b>HTTP API</b><span>The FastAPI surface: upload → chat → assets → models.</span></a>
+  <a class="card" href="cli.md"><b>Mission Planner &amp; MCP</b><span><code>python -m app.interfaces.cli.main</code> — prices and routes a workload without executing it. A different tool from the <code>avaloka</code> command above.</span></a>
   <a class="card" href="model-routing-cost.md"><b>Model Routing &amp; Cost</b><span>What each agent costs per turn, which model to spend on, and the measurement behind it.</span></a>
   <a class="card" href="versions.md"><b>Version Matrix</b><span>The single source of truth for pinned versions — Python, Ray, Daft, images.</span></a>
 </div>
@@ -65,7 +70,7 @@
 <div class="grid">
   <a class="card" href="benchmarks.md"><b>Benchmarks</b><span>The scorecard you can reproduce with one command — and an honest account of what it does not measure.</span></a>
   <a class="card" href="test-reports/1.6-reliability-measurements.md"><b>Reliability Measurements</b><span>Routing accuracy across models, conversational fixes, and the ingest results, each produced by running the thing measured.</span></a>
-  <a class="card" href="testing.md"><b>Testing</b><span>Test tiers, markers, and how to run each — including which suites need a live service.</span></a>
+  <a class="card" href="testing.md"><b>Testing</b><span>Test tiers, markers, and how to run each — the hermetic pull-request gate, and the scheduled live tier that calls real providers.</span></a>
   <a class="card" href="test-reports/"><b>Test Reports</b><span>Per-case evidence behind the claims made in the README.</span></a>
 </div>
 

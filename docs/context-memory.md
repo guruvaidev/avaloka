@@ -1,5 +1,13 @@
 # Avaloka Context Memory Implementation Summary
 
+> **What this document is.** An implementation summary of the context-memory
+> layer: which modules exist, what each is responsible for, and which
+> environment variables they read. It is a developer's map of the subsystem, not
+> a user guide — for what memory does *for you* as a user, read
+> [USER_GUIDE.md](USER_GUIDE.md) §8 and
+> [TECHNICAL_USER_GUIDE.md](TECHNICAL_USER_GUIDE.md) §6.2. The code it describes
+> is merged; file paths and defaults below were re-verified against the tree.
+
 ## Purpose
 
 This document summarizes the context-memory work implemented for Avaloka. The goal was to add an agentic memory layer that gives the Planner and Coder agents access to dataset context, user-specific usage patterns, team artifacts, and historical analysis results without relying only on prompt history.
@@ -109,7 +117,8 @@ Implemented the central memory orchestrator.
 Responsibilities:
 
 - Coordinates all four memory layers.
-- Enforces a 3-second circuit breaker.
+- Enforces a hard retrieval timeout, **20 seconds by default**
+  (`MEMORY_CIRCUIT_BREAKER_TIMEOUT`, `app/services/memory_plane.py:49`).
 - Returns safe fallback payloads when memory is unavailable.
 - Maintains top-3 planner hint contract.
 - Supports in-process fallback memory for local/dev and missing infrastructure.
@@ -122,6 +131,16 @@ Returned fields include:
 - `session_logic_signature`
 - `prior_artifact_found`
 - `memory_context_unavailable`
+
+> **The timeout was 3.0s and that was a bug.** A successful retrieval measures
+> 4.4s warm and 5.8s cold against a healthy deployment, so a 3-second breaker
+> fired on *every* call and the memory plane never returned anything. The only
+> symptom was `memory_hints=None`, which is indistinguishable from "nothing has
+> been learned yet" — which is why it survived so long. The default is now 20s,
+> leaving headroom for a cold embedding load without letting a hung backend
+> stall a turn. The reasoning is recorded at
+> `app/services/memory_plane.py:39-49`. If you lower it, pre-warm the embedding
+> model in the image first.
 
 ### app/services/db/redis_client.py
 
@@ -156,7 +175,19 @@ Responsibilities:
 - Checks whether a prior artifact exists.
 - Retrieves artifact metadata for reuse.
 - Uses Postgres when `POSTGRES_URL` is configured.
-- Falls back to local SQLite when Postgres is not configured.
+- Falls back to local SQLite (`artifacts/layer3_artifacts.db`) when Postgres is
+  not configured. `strict_memory_infra_enabled()` turns that fallback into an
+  error, because SQLite here is dev-only
+  (`app/services/db/postgres_client.py:33`).
+
+> **Which Postgres driver `POSTGRES_URL` selects is version-dependent.** The URL
+> goes straight into `create_engine` (`app/services/db/postgres_client.py:50`),
+> and SQLAlchemy 2.1 changed which DBAPI a bare `postgresql://` URL picks —
+> `psycopg2` on 2.0.x, `psycopg` (v3) on 2.1.x. `requirements.txt` installs both
+> (`psycopg2-binary>=2.9.0` and `psycopg[binary]>=3.1`) precisely so the URL
+> resolves either way, and `sqlalchemy>=2.0` is deliberately uncapped. If you
+> want to stop depending on the version, name the driver:
+> `postgresql+psycopg://…` or `postgresql+psycopg2://…`.
 
 ### app/services/db/milvus_client.py
 
@@ -219,60 +250,48 @@ Purpose:
 
 ### requirements.txt
 
-Added memory-related dependencies:
+Added memory-related dependencies. The spellings and pins as they stand:
 
-- `chromadb`
-- `pymilvus`
-- `langchain-openai`
-- `sentence-transformers`
-- `sqlalchemy`
+| Requirement | Line |
+| --- | --- |
+| `chromadb` (unpinned) | `requirements.txt:145` |
+| `pymilvus>=2.3.0` | `requirements.txt:169` |
+| `langchain-openai>=0.3,<1.0` | `requirements.txt:174` |
+| `sentence_transformers>=3.2.1` — note the underscore | `requirements.txt:140` |
+| `sqlalchemy>=2.0`, uncapped on purpose | `requirements.txt:150` |
 
-## Pipeline Update
+## CI
 
-Updated `bitbucket-pipelines.yml` with a branch-specific test path for:
+`bitbucket-pipelines.yml:52` still carries the branch-specific step for
+`feature/context-memory`, which runs only the two memory test files so the
+feature branch is not gated on unrelated infra/e2e tests. Other branches take
+the normal path.
 
-```text
-feature/context-memory
-```
+That step is **historical** — the work is merged, so nothing is pushed to that
+branch any more. The repository also has GitHub Actions workflows
+(`.github/workflows/ci.yml`, `.github/workflows/images.yml`, and the live tiers
+`.github/workflows/live-provider-weekly.yml` and `.github/workflows/live-local-model-nightly.yml`); the memory tests
+run there as part of the normal suite rather than as a special case.
 
-This branch now runs:
+## Tests
 
 ```bash
 pytest tests/test_memory_semantics.py tests/test_memory_integration.py -q
 ```
 
-The goal is to validate context-memory code without forcing unrelated full-repo infra/e2e tests in this feature branch.
+Re-run during this documentation refresh: **42 passed, 5 skipped**
+(`tests/test_memory_semantics.py` 24 passed; `tests/test_memory_integration.py` 18 passed,
+5 skipped). The five skips are the cases that need live Redis, Chroma or Milvus.
 
-The normal pipeline behavior remains for other feature branches.
-
-## Testing Completed
-
-Local memory test results:
-
-```text
-pytest tests/test_memory_semantics.py -q
-15 passed
-```
-
-```text
-pytest tests/test_memory_integration.py -q
-18 passed, 5 skipped
-```
-
-```text
-pytest tests/test_memory_semantics.py tests/test_memory_integration.py -q
-33 passed, 5 skipped
-```
-
-Syntax checks also passed for memory-related files.
+Earlier revisions of this page recorded `15 passed` / `33 passed` as fixed
+figures; the suites have grown since. Pass counts in prose go stale the next
+time anyone adds a test — run the command rather than trusting a number here.
 
 ## Local Prompt Evaluation
 
-The memory layer was tested with a YouTube analytics prompt sequence using:
-
-```text
-C:\Users\narla\Downloads\Global YouTube Statistics (1).csv
-```
+The memory layer was exercised with a YouTube analytics prompt sequence over a
+Global YouTube Statistics dataset. The equivalent file is in the repository at
+`app/sample_data/Global_YouTube_Statistics.csv`.
 
 Observed behavior:
 
@@ -336,14 +355,35 @@ SENTENCE_TRANSFORMER_MODEL
 EMBEDDING_TARGET_DIM
 MEMORY_CIRCUIT_BREAKER_TIMEOUT
 MEMORY_DEFAULT_STYLE_HINT
+MEMORY_MCP_FALLBACK_URL
+MEMORY_PREFERENCES_TTL_SECONDS
+MEMORY_STRICT_INFRA
+MEMORY_ALLOW_MEMORY_FALLBACKS
 ```
+
+Defaults worth knowing, all from `app/services/memory_plane.py:38-61`:
+
+| Variable | Default |
+| --- | --- |
+| `MEMORY_CIRCUIT_BREAKER_TIMEOUT` | `20.0` seconds |
+| `MEMORY_DEFAULT_STYLE_HINT` | `"Prefer clean pandas code."` |
+| `MEMORY_MCP_FALLBACK_URL` | `http://localhost:8080/sse` — used only when `MCP_SERVER_URL` is unset |
+| `MEMORY_PREFERENCES_TTL_SECONDS` | `604800` (7 days), matching the session lifetime so a remembered preference outlives the session it was stated in |
+| `REDIS_SCHEMA_TTL` | `86400` |
+| `MILVUS_TOP_K` | `5` |
+
+`MCP_SERVER_URL` is the canonical name; `MCP_URL` is read as a fallback in
+`app/api/workflow.py:1034-1037`, and `MEMORY_MCP_FALLBACK_URL` is the
+memory-plane-specific override.
 
 ## Open Questions For Production
 
-These are the main items to confirm before calling the implementation production-ready:
+These were recorded when the layer was built and have not been closed out in
+this document. Treat them as an unresolved checklist, not as known gaps that
+someone is actively tracking:
 
 1. Which defaults are acceptable only for local/dev, and which configs must be explicit in staging/production?
-2. Should fallback behavior be enabled in production by default, or controlled by environment flags?
+2. ~~Should fallback behavior be enabled in production by default, or controlled by environment flags?~~ **Answered in code.** `strict_memory_infra_enabled()` (`app/services/memory_runtime.py:41`) rejects the dev-only fallbacks whenever the environment is a production one, unless `MEMORY_ALLOW_MEMORY_FALLBACKS=true` is set deliberately; `MEMORY_STRICT_INFRA=true` forces strict mode anywhere. So: off by default in production, opt-in.
 3. What failure modes must be guaranteed for Redis, Chroma, Postgres, and Milvus?
 4. Which Layer 1 and Layer 4 paths should move from best-effort behavior to mandatory infrastructure behavior?
 5. What logs, metrics, traces, or alerts are required around writes, retrievals, fallbacks, and cache misses?
@@ -351,16 +391,6 @@ These are the main items to confirm before calling the implementation production
 7. What additional tests are required: integration, chaos/failure, load, migration, or end-to-end workflow tests?
 8. What deployment checklist is required: env validation, startup checks, health checks, migrations, backup strategy, and rollback plan?
 9. What security controls are needed for tenant isolation, sensitive data handling, memory access, and audit logs?
-
-## Current Branch
-
-The implementation is on:
-
-```text
-feature/context-memory
-```
-
-The cleaned branch tip contains one context-memory commit authored by Pramodd.
 
 ## Summary
 

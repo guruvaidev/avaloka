@@ -151,8 +151,51 @@ def _metric_columns(state: Optional[ETLState]) -> List[str]:
     return list(dict.fromkeys(str(col).strip() for col in columns if str(col).strip()))
 
 
+# English function words. These are grammar, not data: they appear inside column
+# names as connectors ("..._for_the_last_30_days") but are never what a user
+# measures. Language-level, so it holds for every dataset.
+_METRIC_FUNCTION_WORDS = frozenset({
+    "a", "an", "the", "and", "or", "nor", "but", "of", "for", "to", "in", "on", "at",
+    "by", "per", "with", "without", "from", "into", "onto", "over", "under", "across",
+    "between", "within", "via", "vs", "versus", "than", "as", "is", "are", "was", "were",
+    "be", "been", "this", "that", "these", "those", "each", "every", "all", "any", "both",
+    "some", "my", "our", "your", "their", "its", "which", "what", "how", "who", "whose",
+    "me", "us", "it", "them", "do", "does", "did", "has", "have", "had", "not", "no",
+    "last", "first", "next", "previous", "top", "bottom",
+})
+# Words that make the following noun the thing being MEASURED ("average X",
+# "total X", "distribution of X"). A word that is only grouped or filtered on
+# ("per X", "for each X", "by X") is a dimension and is never ambiguous here.
+_METRIC_AGG_RE = (
+    r"(?:average|avg|mean|median|total|sum|max|maximum|min|minimum|highest|lowest|"
+    r"largest|smallest|biggest|std|variance|distribution)"
+)
+# A measure phrase stops at a preposition: in "average subscribers per channel"
+# the measure is "subscribers", not "channel".
+_METRIC_PHRASE_BREAK = r"(?:per|by|for|in|of|across|over|each|and|or|vs|versus|with|from|to)"
+
+
+def _measure_is_aggregated(measure: str, prompt: str) -> bool:
+    """True when the user aggregates `measure` ("average earnings", "total of the revenue")."""
+    return bool(re.search(
+        rf"\b{_METRIC_AGG_RE}\s+(?:of\s+)?(?:the\s+)?"
+        rf"(?:(?!{_METRIC_PHRASE_BREAK}\b)[a-z0-9_]+\s+){{0,2}}"
+        rf"{re.escape(measure)}\b",
+        prompt,
+        re.IGNORECASE,
+    ))
+
+
 def _detect_metric_ambiguity(prompt: str, state: Optional[ETLState]) -> Optional[dict]:
-    """Find underspecified column groups from the active schema, not query verbs."""
+    """Ask "which X?" only when the user aggregates a word that two or more NUMERIC
+    columns share and nothing in the prompt already picks one.
+
+    This is a deterministic gate that runs before the LLM, so it must be high
+    precision: every false positive blocks an answerable question. When in doubt
+    it stays silent; the coder and validator still handle the request.
+    """
+    if os.getenv("AVALOKA_METRIC_CLARIFICATION", "1").strip().lower() in {"0", "false", "off", "no"}:
+        return None
     columns = _metric_columns(state)
     if len(columns) < 2 or _TRAINING_INTENT_RE.search(prompt):
         return None
@@ -161,24 +204,41 @@ def _detect_metric_ambiguity(prompt: str, state: Optional[ETLState]) -> Optional
     }:
         return None
 
+    schema = state.get("schema") if isinstance(state, dict) else None
+    if isinstance(schema, str):
+        try:
+            schema = json.loads(schema)
+        except (TypeError, ValueError):
+            schema = None
+
     words = set(_column_tokens(prompt))
     candidates = [(column, set(_column_tokens(column))) for column in columns]
+    seen: set = set()
     for measure in _column_tokens(prompt):
-        # Only tokens shared by at least two qualified schema columns can be
-        # ambiguous. The length floor avoids grammar fragments such as "is".
-        if len(measure) < 3:
+        if measure in seen:
+            continue
+        seen.add(measure)
+        # 1. Grammar and numbers are never measures.
+        if len(measure) < 3 or measure.isdigit() or measure in _METRIC_FUNCTION_WORDS:
+            continue
+        # 2. Only a word the user aggregates can be an ambiguous measure.
+        if not _measure_is_aggregated(measure, prompt):
             continue
         if re.search(rf"\b(?:all|each|every|both)\s+{re.escape(measure)}\b", prompt, re.IGNORECASE):
             continue
         if re.search(rf"\b{re.escape(measure)}\s+(?:columns|fields|metrics)\b", prompt, re.IGNORECASE):
             continue
-        options = [column for column, tokens in candidates
-                   if measure in tokens and len(tokens) > 1]
-        if len(options) < 2:
-            continue
-        # An exact column or an explicitly named qualifier resolves the choice.
+        # An exact column with that name resolves it.
         if any(_column_tokens(column) == (measure,) for column in columns):
             continue
+        # 3. Only numeric columns can be averaged/summed, so text columns sharing
+        #    the word (channel_type, country_rank labels) are not real options.
+        options = [column for column, tokens in candidates
+                   if measure in tokens and len(tokens) > 1]
+        options = [c for c in options if not _column_is_non_numeric(c, schema, state)]
+        if len(options) < 2:
+            continue
+        # 4. A qualifier the user already named ("math score", "revenue 2024") resolves it.
         if any(set(_column_tokens(column)).issubset(words) for column in options):
             continue
         qualified = [set(_column_tokens(column)) - {measure} for column in options]
@@ -186,6 +246,7 @@ def _detect_metric_ambiguity(prompt: str, state: Optional[ETLState]) -> Optional
             continue
         labels = [" ".join(_column_tokens(column)) for column in options]
         choices = ", ".join(labels[:-1]) + f" or {labels[-1]}"
+        logger.info("Metric clarification: measure=%r options=%s", measure, options)
         return {
             "message": f"Which {measure} measure do you mean: {choices}?",
             "pending_clarification": {
@@ -296,6 +357,10 @@ def _resolve_pending_clarification(pending: Optional[dict], reply: str) -> Optio
         # A new question about a different subject is not an answer to the
         # outstanding choice, even if it happens to reuse one qualifier.
         if "?" in value and len(reply_words) > 2 and measure not in reply_words:
+            return None
+        # A full analytical request ("average X by Y ...") is a new question,
+        # not a pick, even when it reuses words from the options.
+        if len(reply_words) > 6 and re.search(rf"\b{_METRIC_AGG_RE}\b", value, re.IGNORECASE):
             return None
         chosen = []
         for column in options:
@@ -4470,6 +4535,67 @@ def _handle_initiate_transfer(state: ETLState, params: InitiateTransferParams) -
     )
 
 
+
+
+_PLANNER_MAX_ATTEMPTS = 3
+
+
+def _invoke_planner_with_recovery(msgs, tool_choice, invoke_kwargs):
+    """Call the planner LLM, applying every known recovery on EVERY attempt.
+
+    The recoveries used to run only on the first call's exception, so an error
+    raised by a retry skipped them and ended the turn with "I ran into a
+    temporary problem" even when it was recoverable.
+    """
+    attempt_msgs = list(msgs)
+    kwargs = dict(invoke_kwargs)
+    trimmed = False
+    for attempt in range(1, _PLANNER_MAX_ATTEMPTS + 1):
+        try:
+            return llm.invoke(attempt_msgs, tools=tools, tool_choice=tool_choice, **kwargs)
+        except Exception as exc:
+            # Tool picked correctly but arguments unparseable: for a
+            # no-parameter tool the name is the whole call, so recover it.
+            salvaged = _salvage_noparam_tool_call(exc)
+            if salvaged:
+                logger.warning(
+                    "Planner attempt %d: provider rejected unparseable arguments for the "
+                    "no-parameter tool '%s'; recovered the tool name.", attempt, salvaged,
+                )
+                return AIMessage(
+                    content="",
+                    tool_calls=[{"name": salvaged, "args": {}, "id": "salvaged_tool_call"}],
+                )
+            if attempt >= _PLANNER_MAX_ATTEMPTS:
+                raise
+            # Model returned nothing: ask again. At high effort the model can
+            # spend its budget thinking, so step down to medium for the retry.
+            if _is_empty_tool_call(exc):
+                if PLANNER_SUPPORTS_REASONING and kwargs.get("reasoning_effort") == "high":
+                    kwargs["reasoning_effort"] = "medium"
+                logger.warning(
+                    "Planner attempt %d returned no tool call; retrying (reasoning_effort=%s).",
+                    attempt, kwargs.get("reasoning_effort"),
+                )
+                continue
+            # Prompt too long: retry once with system + last AI + last human turn.
+            if _is_context_length_error(exc) and not trimmed:
+                logger.warning(
+                    "Planner attempt %d hit the context limit; retrying with a trimmed prompt.",
+                    attempt,
+                )
+                tail = attempt_msgs[1:]
+                last_human = [m for m in tail if isinstance(m, HumanMessage)][-1:]
+                last_ai = [m for m in tail if isinstance(m, AIMessage)][-1:]
+                attempt_msgs = [attempt_msgs[0]] + last_ai + last_human
+                trimmed = True
+                continue
+            # Anything else (incl. a respond_to_user answer wrapped wrongly) goes
+            # to the outer except, which already recovers that text.
+            raise
+    raise RuntimeError("planner retry loop exited without a result")
+
+
 def plan_etl_job(state: ETLState) -> ETLState:
     """
     Key change (RAY PATCH):
@@ -4650,7 +4776,13 @@ def plan_etl_job(state: ETLState) -> ETLState:
             "?" not in _prompt_to_check
             and not _TRAINING_INTENT_RE.search(_prompt_to_check)
             and not re.search(r"\b(cancel|never\s?mind|forget it)\b", _prompt_to_check, re.IGNORECASE)
-            and (len(reply_tokens) <= 2 or bool(reply_tokens & option_tokens))
+            # A short reply is an attempt at the choice. A longer message is a
+            # new request and replaces the pending question, so the user can
+            # never be stuck answering "Please choose one" forever.
+            and (
+                len(reply_tokens) <= 2
+                or (len(reply_tokens) <= 6 and bool(reply_tokens & option_tokens))
+            )
         )
         if still_choosing:
             options = [" ".join(_column_tokens(col)) for col in pending.get("columns") or []]
@@ -5558,13 +5690,27 @@ def plan_etl_job(state: ETLState) -> ETLState:
     try:
         # Adaptive reasoning effort (ours) applied to both the primary call
         # and the context-length retry fallback (develop-1.5).
+        # _invoke_kwargs = {}
+        # if PLANNER_SUPPORTS_REASONING:
+        #     _effort = select_reasoning_effort(user_input)
+        #     _invoke_kwargs["reasoning_effort"] = _effort
+        #     logger.info(f"planner reasoning_effort={_effort}")
         _invoke_kwargs = {}
         if PLANNER_SUPPORTS_REASONING:
             _effort = select_reasoning_effort(user_input)
+            # Picking a tool is classification, not analysis. At "high" effort the
+            # model spent ~7s per call here and still returned empty or truncated
+            # tool calls on long prompts. The plan text is written by a separate
+            # call afterwards, so capping this one costs no plan quality.
+            _cap = os.getenv("AVALOKA_PLANNER_TOOL_EFFORT_CAP", "medium")
+            _order = {"low": 0, "medium": 1, "high": 2}
+            if _order.get(_effort, 1) > _order.get(_cap, 1):
+                _effort = _cap
             _invoke_kwargs["reasoning_effort"] = _effort
             logger.info(f"planner reasoning_effort={_effort}")
         try:
-            response = llm.invoke(msgs, tools=tools, tool_choice=_tool_choice, **_invoke_kwargs)
+            #response = llm.invoke(msgs, tools=tools, tool_choice=_tool_choice, **_invoke_kwargs)
+            response = _invoke_planner_with_recovery(msgs, _tool_choice, _invoke_kwargs)
         except Exception as invoke_exc:
             _salvaged_tool = _salvage_noparam_tool_call(invoke_exc)
             if _salvaged_tool:

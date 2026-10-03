@@ -101,7 +101,7 @@ export function DataSourceGrid({ onSelect, disabled = false }: { onSelect?: (id:
               <img
                 src={s.darkLogoUrl}
                 alt={s.name}
-                className="hidden max-w-[100%] object-contain dark:block"
+                className="hidden ml-4 max-w-[80%] object-contain dark:block"
               />
             </>
           ) : (

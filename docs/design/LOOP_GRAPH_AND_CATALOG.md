@@ -6,13 +6,24 @@
 
 ## 1. The idea in one paragraph
 
-WikiSkill compiles agent experience into **skills** — better procedures, injected into a system prompt. Avaloka can compile the same experience into two further artifacts it already knows how to *verify*: the **shape of its retry loops** and the **structure of its agent graph**. That is a genuine extension of the paper rather than an application of it, and the reason Avaloka can attempt it is that `benchmarks/smoke/loops.py` and `benchmarks/smoke/graph.py` already exist to say whether a proposed change made those artifacts better or worse.
+WikiSkill compiles agent experience into **skills** — better procedures, injected into a system prompt. Avaloka can compile the same experience into two further artifacts it already knows how to *verify*: the **shape of its retry loops** and the **structure of its agent graph**. That is a genuine extension of the paper rather than an application of it, and the reason Avaloka can attempt it is that a static loop checker and a static graph checker exist to say whether a proposed change made those artifacts better or worse.
+
+> **Where that checker lives.** `benchmarks/smoke/loops.py` and
+> `benchmarks/smoke/graph.py` are **not on `develop-1.6`** — there is no
+> `benchmarks/` directory on this branch at all. They are part of the 1.7
+> benchmark line: the harness is on `origin/benchmarks-develop-1.7` and the
+> pre-split smoke modules named here are on
+> `origin/backup/harness-loop-graph-pre-split`. This design therefore depends on
+> the 1.7 harness landing; it is not buildable on 1.6 as written.
 
 ---
 
 ## 2. Loop and graph as compiled artifacts
 
-### 2.1 What Avaloka already treats as engineering objects
+### 2.1 What the 1.7 harness already treats as engineering objects
+
+(Paths in this subsection are on the 1.7 benchmark line, not on `develop-1.6` —
+see the note in §1.)
 
 `benchmarks/smoke/loops.py` checks the coder/validator cycle for two failures a functional test will not catch:
 

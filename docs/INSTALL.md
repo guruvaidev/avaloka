@@ -23,10 +23,28 @@ Verify at any time:
 
 | | Minimum | Notes |
 | --- | --- | --- |
-| Python | **3.11 – 3.12** | 3.11 is what CI and the shipped image use. 3.10 is NOT supported: session writes use `asyncio.timeout`, added in 3.11 |
+| Python | **3.11 – 3.12** | `pyproject.toml` declares `requires-python = ">=3.11,<3.13"`; CI runs 3.11 and 3.12 |
+| Graphviz | any recent | **required** — a system package, not a pip one; see below |
 | OS | Linux, macOS | Windows via WSL2 |
 | Memory | 8 GB | 16 GB+ for local Ray |
 | Disk | 5 GB | plus your data |
+
+> **Graphviz is a system package and the installer does not install it.** The
+> `graphviz` entry in `requirements.txt` is only a Python binding to the `dot`
+> binary. Without `dot` on your PATH the planner-graph path returns
+> `error: Graphviz system executables not found`
+> (`app/agents/planner_graph_agent.py:186`) instead of a rendered plan, and the
+> planner-graph tests skip themselves rather than failing — so a green test run
+> does not prove it is present. CI installs it explicitly
+> (`.github/workflows/ci.yml`, "System packages"). Install it yourself:
+>
+> ```bash
+> brew install graphviz           # macOS
+> sudo apt-get install -y graphviz  # Debian/Ubuntu
+> dot -V                          # confirm
+> ```
+>
+> `scripts/doctor.py` does **not** check for it. Run `dot -V` yourself.
 
 > **macOS: check which Python you have.** `python` still resolves to the system
 > Python 2.7 on many Macs, and the resulting failures are confusing. The
@@ -37,16 +55,26 @@ Verify at any time:
 > PYTHON=/opt/homebrew/bin/python3.11 ./scripts/install.sh
 > ```
 
-> **3.13 and newer are untested.** `pyproject.toml` declares `>=3.11,<3.13` with
-> upper bound, so pip will install on a newer interpreter and then fail later
-> on a dependency with no matching wheel — a confusing failure a long way from
-> its cause. `scripts/install.sh` looks for 3.12 then 3.11;
-> let it choose unless you have a reason not to.
+> **3.13 and newer are not supported.** `pyproject.toml` caps the interpreter
+> at `<3.13`, and `scripts/install.sh` refuses anything below 3.11
+> (`MIN_PY_MINOR=11`, `scripts/install.sh:52`). The floor is a real
+> requirement, not caution: `app/services/session_service.py:170` uses
+> `asyncio.timeout`, which is 3.11+. The installer searches for `python3.12`,
+> `python3.11`, then `python3` in that order; let it choose unless you have a
+> reason not to.
+>
+> Note that the installer checks only the lower bound — it will proceed on a
+> 3.13 interpreter if that is what `python3` resolves to, and the failure then
+> arrives later as a dependency with no matching wheel. Pass `PYTHON=` to pin
+> the interpreter if your `python3` is newer than 3.12.
 
 Optional, depending on what you run:
 
 - **Docker** — Postgres, Redis, MinIO and Milvus, each in its own compose file
-  (see [Running it](#running-it); the default `docker-compose.yml` is Milvus)
+  (see [Running it](#running-it); the default `docker-compose.yml` is Milvus).
+  The MinIO images in both the compose file and the chart are currently
+  **unpullable** — see [Object storage is broken right
+  now](#object-storage-is-broken-right-now).
 - **kind** or **minikube** — a local Kubernetes cluster
 - **An LLM API key** — you bring your own; see [Configuration](#configuration)
 
@@ -67,7 +95,17 @@ Options:
 | `--venv PATH` | `.venv` | virtualenv location |
 | `--no-venv` | off | install into the active environment |
 | `--check` | — | verify an existing install and exit |
+| `--edition` | `oss` | `oss`, `professional` or `enterprise` |
+| `--license-key` | `$AVALOKA_LICENSE_KEY` | licence token for a commercial edition |
+| `--index-url` | `https://pypi.avaloka.ai/simple` | private index for the commercial package |
 | `PYTHON=...` | autodetect | choose the interpreter |
+
+That is the complete set the argument parser accepts
+(`scripts/install.sh:60-71`). `--help` additionally advertises `--doctor` and
+`--with-build-tools`, but neither is implemented — the parser rejects both with
+`unknown option`. Use `python scripts/doctor.py` for the environment check; see
+[You do not need a compiler](#you-do-not-need-a-compiler) for the toolchain
+question.
 
 ### What you get, and what you owe
 
@@ -124,7 +162,7 @@ because anything that quietly depends on the network shows up immediately.
 | --- | --- |
 | Language model | A local model server (Ollama or vLLM) — `INFERENCE_PROVIDER=local` |
 | Embedding model | **Baked into the API image at build time** (`all-MiniLM-L6-v2`, ~88 MB, under `HF_HOME=/opt/hf`) |
-| Object storage | MinIO, deployed by the chart |
+| Object storage | MinIO, deployed by the chart — **but its images cannot currently be pulled**; see [Object storage is broken right now](#object-storage-is-broken-right-now) |
 | Vector / memory tiers | Redis, Chroma and Milvus, all deployed by the chart |
 | Auth | Self-hosted Supabase, deployed by the chart |
 | Licence check (commercial) | Offline Ed25519 signature against an embedded public key |
@@ -138,6 +176,13 @@ helm upgrade --install avaloka deploy/helm/avaloka \
   --set milvus.enabled=true \
   --set minio.enabled=true
 ```
+
+`minio.enabled=true` is already the chart default
+(`deploy/helm/avaloka/values.yaml:198`), and on a host that cannot reach
+quay.io that pod will not start regardless — mirror the MinIO images into a
+registry you control and override `minio.image` and `minio.mcImage`, or point
+the stack at an object store you already run. An air-gapped install has to do
+this anyway.
 
 Then bring up a local model server — `deploy/inference/ollama-cpu.yaml` needs no
 GPU and is the path to start with; `deploy/inference/vllm-gpu.yaml` is the GPU
@@ -225,22 +270,23 @@ with a compiler error many screens from its cause. Installing with
 `--prefer-binary` picks the newest version that actually ships a wheel, so no
 toolchain is involved. `scripts/install.sh` always passes it.
 
-If you *want* a toolchain — to build something from source deliberately:
-
-```bash
-./scripts/install.sh --with-build-tools     # installs rust via rustup first
-```
+If you *want* a toolchain — to build something from source deliberately —
+install Rust yourself from [rustup.rs](https://rustup.rs) before running the
+installer. `scripts/install.sh` contains a `--with-build-tools` branch that
+would do this for you, but no flag reaches it: the option is absent from the
+argument parser, so passing it exits with `unknown option`.
 
 ### Check the environment any time
 
 ```bash
-./scripts/install.sh --doctor      # or: python scripts/doctor.py
+python scripts/doctor.py
 ```
 
-It reports the Python version, whether the core packages import, whether
-`cryptography` came from a wheel, and whether **numpy and torch agree on their
-ABI** — a mismatch that announces itself only as a warning and then breaks
-something unrelated later:
+It reports the Python version, the CPU architecture, whether the core packages
+import, whether the `avaloka` command resolves, whether anything would need a
+source build, and whether **numpy and torch agree on their ABI** — a mismatch
+that announces itself only as a warning and then breaks something unrelated
+later. Illustrative output:
 
 ```
 Avaloka environment check
@@ -254,7 +300,8 @@ Avaloka environment check
 Everything checks out.
 ```
 
-Every problem it reports comes with the command that fixes it.
+Every problem it reports comes with the command that fixes it. It does not
+check for Graphviz — run `dot -V` separately.
 
 ### Run the tests yourself
 
@@ -311,40 +358,52 @@ dependency — Postgres, Redis, MinIO, Chroma, Supabase and the LangGraph server
 ```bash
 kind create cluster --name avaloka          # or use an existing cluster
 
-# All four images are published and public, checked 2026-10-03.
-# Each is multi-arch (linux/amd64 + linux/arm64) and pullable with no login:
-#   ghcr.io/guruvaidev/avaloka-api:main
-#   ghcr.io/guruvaidev/avaloka-ray:main
-#   ghcr.io/guruvaidev/avaloka-functions:main
-#   ghcr.io/guruvaidev/avaloka-ui:main
-#
-# So nothing below needs building. `pullPolicy: IfNotPresent` means a
-# side-loaded image wins over the registry, which is what you want if you
-# are iterating locally; to build and load everything yourself instead:
+# The chart's image defaults are already registry paths that exist:
+#   ghcr.io/guruvaidev/avaloka-api:main      (values.yaml:59,64)
+#   ghcr.io/guruvaidev/avaloka-ui:main       (values.yaml:457-458)
+#   ghcr.io/guruvaidev/avaloka-ray:main      (values.yaml:498-499)
+#   ghcr.io/guruvaidev/avaloka-functions:main (values.yaml:425)
+# All four `:main` tags are present on GHCR and pull anonymously — verified
+# against the registry. So no --set is needed for images, and no build is
+# needed. If you are offline or on a commit whose content tag is not
+# published, build and side-load instead:
 #   make -C deploy images-status               # what would need building?
 #   make -C deploy images-pull PROVIDER=local  # pull + kind-load what exists
-#   make -C deploy images PROVIDER=local       # build + kind-load the rest
+#   make -C deploy images PROVIDER=local       # build + kind-load all four
 
-# Only use the set-string after secrets.groqApiKey if you built locally
-# the default is to use the images pulled from ghcr
 helm upgrade --install avaloka deploy/helm/avaloka \
-  --set minio.enabled=true \
-  --set-string secrets.groqApiKey="$GROQ_API_KEY" \
-  --set-string image.repository="avaloka-api" \
-  --set-string image.tag="latest" \
-  --set-string webui.image.repository="avaloka-ui" \
-  --set-string webui.image.tag="latest" \
-  --set-string supabase.functions.image="avaloka-functions:latest"
+  --set-string secrets.groqPlanningKey="$GROQ_API_KEY_PLANNING_AGENT" \
+  --set-string secrets.groqCodingKey="$GROQ_API_KEY_CODING_AGENT"
 
 kubectl port-forward svc/avaloka 9000:9000
 curl localhost:9000/health
 ```
 
+Two things about that command worth knowing before you run it.
+
+**The chart pins the provider to Groq.** `inference.provider` defaults to
+`"groq"` (`deploy/helm/avaloka/values.yaml`) and the ConfigMap always emits
+`INFERENCE_PROVIDER` (`deploy/helm/avaloka/templates/configmap.yaml:31`), so a
+Helm deployment needs Groq keys. This is
+*different* from a local install, where `INFERENCE_PROVIDER` is unset and
+`app/core/inference.py` resolves the default to OpenRouter. To use OpenRouter
+in-cluster, set both:
+
+```bash
+  --set inference.provider=openrouter \
+  --set-string secrets.openrouterKey="$OPENROUTER_API_KEY"
+```
+
+**MinIO will not start.** `minio.enabled` is `true` by default and its images
+cannot be pulled from any registry today — see [Object storage is broken right
+now](#object-storage-is-broken-right-now). Expect that one pod to sit in
+`ImagePullBackOff`; the API still comes up, but uploads fail.
+
 If the `avaloka`, `avaloka-webui` or `avaloka-supabase-functions` pods sit in
-`ImagePullBackOff`, the image for this checkout is not in the registry — run
-`make -C deploy images-status` to see which, then build it as above. The API
-image is ~4 GB (CPU-only torch plus the baked embedding model) and takes a
-while to build cold; the others are small.
+`ImagePullBackOff`, run `make -C deploy images-status` to see which image is
+missing, then build it as above. The API image is ~4 GB (CPU-only torch plus
+the baked embedding model) and takes a while to build cold; the others are
+small.
 
 `/health` reports `graph_ready`, `redis_connected` and whether the LangGraph
 server upstream is reachable — check it before anything else.
@@ -352,33 +411,10 @@ server upstream is reachable — check it before anything else.
 > **Configure model keys through Helm values, never `kubectl patch`.** The
 > secret is re-rendered from chart values on every `helm upgrade`, so a patched
 > key is silently wiped and the agent quietly falls back to canned replies.
-> Use `--set-string secrets.groqApiKey=…` (see `values.yaml`).
-
-### A-minus. Just the API container
-
-If you only want the API — no cluster, no chart — the published image runs on
-its own:
-
-```bash
-docker run --rm -p 9000:9000 \
-  -e AVALOKA_ALLOW_INSECURE_AUTH=1 \
-  ghcr.io/guruvaidev/avaloka-api:main
-
-curl localhost:9000/health
-```
-
-`AVALOKA_ALLOW_INSECURE_AUTH=1` is not optional here, and the reason is worth
-knowing: the server refuses to start when `SUPABASE_JWT_SECRET` is unset,
-because HS256 verification against an empty secret accepts forged tokens. It
-fails loudly rather than starting with authentication quietly disabled. Set
-that flag for local work; set a real `SUPABASE_JWT_SECRET` for anything else.
-
-The CLI is in the same image, as a module rather than on `PATH`:
-
-```bash
-docker run --rm -v "$PWD:/data" ghcr.io/guruvaidev/avaloka-api:main \
-  python -m avaloka analyze /data/sales.csv --goal "why did revenue drop?"
-```
+> Use `--set-string secrets.groqPlanningKey=…` / `secrets.groqCodingKey=…` for
+> the planner and coder; `secrets.groqApiKey` is a separate, third key read
+> only by `app/agents/visualization_agent.py`. All are listed in `values.yaml`
+> under `secrets:`.
 
 ### B. Local processes
 
@@ -387,8 +423,8 @@ file** — the default `docker-compose.yml` is the Milvus stack (etcd, MinIO,
 Milvus, Attu), *not* Postgres and Redis:
 
 ```bash
-docker compose -f docker-compose.postgres.yml up -d   # Postgres
-docker compose -f docker-compose.redis.yml up -d      # Redis
+docker compose -f deploy/compose/docker-compose.postgres.yml up -d   # Postgres
+docker compose -f deploy/compose/docker-compose.redis.yml up -d      # Redis
 docker compose up -d                                  # Milvus stack (optional;
                                                       #   needed for episodic memory)
 
@@ -402,6 +438,13 @@ cd ui && npm install && npm run dev                   # UI on :5173
 without `--port` gives you a different port from every other path — pass
 `--port 9000` and everything lines up.
 
+> One exception, and it catches people: under **kind** the NodePort route lands
+> on host port **9010**, not 9000, because `deploy/clusters/kind-cluster.yaml:15-16`
+> maps containerPort 30085 to hostPort 9010. `kubectl port-forward svc/avaloka
+> 9000:9000` still gives you 9000. Both are correct — they are different routes
+> to the same Service. See
+> [deployment.md](deployment.md#2-quick-start-local-kind).
+
 Kubernetes, Ray and cloud targets: see [deployment.md](deployment.md).
 
 ---
@@ -413,9 +456,12 @@ shortest route from a fresh install to a real answer, and it needs no server,
 no cluster and no browser:
 
 ```bash
-avaloka analyze sales.csv --goal "why did revenue drop in Q3?"
-avaloka train   sales.csv --target churned
-avaloka chat    sales.csv          # work it out conversationally
+# These three run against datasets that ship in the repo, so they work on a
+# fresh clone with no file of your own.
+avaloka analyze app/sample_data/Global_YouTube_Statistics.csv \
+        --goal "what separates the channels that grow from the ones that stall?"
+avaloka train   app/sample_data/healthcare_dataset.csv --target "Test Results"
+avaloka chat    app/sample_data/salaries.csv   # work it out conversationally
 ```
 
 `avaloka chat` reads the file, says what it notices, and offers numbered next
@@ -439,7 +485,7 @@ are listed because each one is silent — the symptom never names the cause.
 ### Upload a file, ask a question
 
 ```bash
-curl -F "file=@sales.csv" -H "Authorization: Bearer $TOKEN" \
+curl -F "file=@app/sample_data/salaries.csv" -H "Authorization: Bearer $TOKEN" \
      localhost:9000/api/upload
 ```
 
@@ -457,14 +503,21 @@ which is correct behaviour and not a bug.
 The agent falls back to deterministic replies when it cannot build a model.
 That fallback is intentional — an install with no key still profiles data and
 answers schema questions — but it also fires when a key IS set for the *wrong*
-provider:
+provider, which is easiest to hit by pinning one explicitly:
 
 ```
 INFERENCE_PROVIDER=groq   GROQ_API_KEY=""   OPENROUTER_API_KEY=sk-or-…
 ```
 
-Avaloka now names this explicitly rather than degrading quietly. If replies look
-generic, check the API logs for `no usable reply model`.
+Leaving `INFERENCE_PROVIDER` unset avoids this: `app/core/inference.py` then
+picks a provider that actually has a key, preferring OpenRouter and falling back
+to Groq, and warns when it has to choose. Pinning the variable disables that
+resolution. Note the chart does pin it — see
+[A. Kubernetes](#a-kubernetes-recommended-and-what-is-actually-tested).
+
+Avaloka names this explicitly rather than degrading quietly. If replies look
+generic, check the API logs for `no usable reply model`
+(`app/agents/avaloka_agent/agent.py:111`).
 
 ### "Memory never remembers anything"
 
@@ -479,12 +532,38 @@ With it off, runs report `memory_context_unavailable: true` rather than
 pretending they recalled nothing. Chroma keeps a persistent volume, so tier-2
 context survives pod restarts.
 
-### "The MinIO pod will not start"
+### Object storage is broken right now
 
-MinIO is pulled from **quay.io**, not Docker Hub, which no longer serves it
-anonymously. If you have pinned your own registry, check both `minio.image` and
-`minio.mcImage` — the second runs the bucket-creation hook, so a healthy MinIO
-with the wrong `mc` image still has nowhere to put an upload.
+**The MinIO pod will not start, and there is no setting that fixes it.** The
+chart points at `quay.io/minio/minio` and `quay.io/minio/mc`
+(`deploy/helm/avaloka/values.yaml:205,214`) after Docker Hub stopped serving
+them anonymously. As of this writing quay.io does not serve them either:
+anonymous manifest requests to both repositories return `401 UNAUTHORIZED` at
+every tag tried, including the pinned releases and `:latest`. Docker Hub
+returns `401` as well. A control request to `quay.io/coreos/etcd:v3.5.16` —
+another image this chart uses — returns `200`, so this is specific to the MinIO
+repositories, not a broken registry or a bad probe.
+
+`docker-compose.yml:23` has the same problem independently: it still names
+`minio/minio:RELEASE.2023-03-20T20-16-18Z` on Docker Hub.
+
+Because `minio.enabled` defaults to `true` (`values.yaml:198`), a default
+`helm install` ends with one pod in `ImagePullBackOff`. The API itself comes up;
+what breaks is uploading, which fails with HTTP 500 `Failed to upload to
+storage`.
+
+What you can do today:
+
+- **Mirror the images** into a registry you can authenticate to, then override
+  `minio.image.repository` / `.tag` and `minio.mcImage.repository` / `.tag`.
+  Override both — `mc` runs the bucket-creation hook, so a healthy MinIO with a
+  missing `mc` image still has nowhere to put an upload.
+- **Point at object storage you already run** and set `minio.enabled=false`.
+- **Accept it** if you only need analysis and not artefact persistence.
+
+A migration replacing MinIO with SeaweedFS exists on the branch
+`feat/seaweedfs-object-storage` and is **not merged** — nothing in this tree
+references SeaweedFS. Do not plan against it yet.
 
 ### Air-gapped
 

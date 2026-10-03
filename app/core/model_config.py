@@ -16,11 +16,14 @@ Three things this fixes:
    message that says what to do, instead of a 404 from the provider halfway
    through an analysis.
 
-Point 3 matters right now. Every agent builds a ``ChatGroq`` directly, so
-**only Groq-hosted models work today**. Configuring an OpenAI model such as
-``gpt-5`` is not a small change — it needs the provider-routing work in the
-custom inference stack. Until that lands, :func:`check_model_supported` turns
-that mistake into a clear error at startup rather than a cryptic failure later.
+Point 3 matters right now. Most agents build a ``ChatGroq`` directly, so for
+them **only Groq-hosted models work today**. The exception is any agent in
+``_ROUTABLE_AGENTS`` (currently ``visualization``): set
+``AVALOKA_<AGENT>_BACKEND`` to ``openrouter`` or ``local`` to route it through
+an OpenAI-compatible client instead. Moving every agent onto a non-Groq
+provider still needs the provider-routing work in the custom inference stack.
+Until that lands, :func:`check_model_supported` turns a Groq-only agent
+configured with a foreign model into a clear error at startup.
 """
 
 from __future__ import annotations
@@ -72,6 +75,18 @@ _FOREIGN_MODEL_PROVIDERS: Dict[str, str] = {
 }
 
 
+# --------------------------------------------------------------------------- #
+# Backends
+# --------------------------------------------------------------------------- #
+
+SUPPORTED_BACKENDS: Tuple[str, ...] = ("groq", "openrouter", "local")
+
+#: Agents whose construction actually honours a non-Groq backend. Every other
+#: agent still builds ChatGroq directly, so letting them "pass" a backend check
+#: would be a lie: the request would silently go to Groq anyway.
+_ROUTABLE_AGENTS = {"visualization"}
+
+
 @dataclass(frozen=True)
 class ModelChoice:
     """The model an agent will use, and where it came from."""
@@ -106,12 +121,9 @@ DEFAULT_MODELS: Dict[str, str] = {
     # capability matters more than latency.
     "coder":       "openai/gpt-oss-120b",
 
-    # Validation. Compound is an agentic system rather than a bare model, which
-    # suits a gate that has to reason about whether code matches an intent.
-    # This replaces llama-3.1-8b-instant, which no longer exists on this Groq
-    # account at all (verified: HTTP 404). Even when it did, an 8B model
-    # deciding whether generated code is correct was a false-confidence risk,
-    # and this gate is the last thing between a bad plan and an executed query.
+    # Validation. The gate between a bad plan and an executed query, so it gets
+    # the full 120b. Replaces llama-3.1-8b-instant (now 404 on this account); an
+    # 8B model judging generated code was a false-confidence risk.
     "validator":   "openai/gpt-oss-120b",
 
     # Plan -> JSON contract. Every downstream agent trusts this output, so a
@@ -120,7 +132,12 @@ DEFAULT_MODELS: Dict[str, str] = {
     "summarizer":  "openai/gpt-oss-20b",
 
     "profiling":     "openai/gpt-oss-120b",
-    "visualization": "openai/gpt-oss-20b",
+
+    # Auto Insights + the voice explainer: the most user-visible output in
+    # Avaloka, so it gets the strongest model on the account, not the smallest.
+    # Routable: AVALOKA_VISUALIZATION_BACKEND=openrouter|local to test others.
+    "visualization": "openai/gpt-oss-120b",
+
     "dta_coder":     "openai/gpt-oss-120b",
     "dta_validator": "openai/gpt-oss-120b",
     "mta":           "openai/gpt-oss-120b",
@@ -186,26 +203,47 @@ def check_model_supported(agent: str, model: str, *, backend: str = "groq") -> N
     provider = provider_for_model(model)
     if provider is None:
         return
+    hint = (
+        f" Or set AVALOKA_{agent.upper()}_BACKEND=openrouter (or local) — "
+        f"{agent} supports non-Groq routing."
+        if agent.lower() in _ROUTABLE_AGENTS else ""
+    )
     raise UnsupportedModelError(
-        f"{agent}: model {model!r} is served by {provider!r}, not Groq, and every "
-        f"agent currently builds a ChatGroq client directly.\n"
+        f"{agent}: model {model!r} is served by {provider!r}, not Groq, and this "
+        f"agent builds a ChatGroq client directly.\n"
         f"Routing an agent to a non-Groq provider needs the provider-agnostic "
         f"inference stack (app/core/inference.build_chat_model). Until that is "
         f"merged, set {env_var_for(agent)} to a Groq-hosted model — see "
-        f"GROQ_SERVEABLE_PREFIXES in app/core/model_config.py."
+        f"GROQ_SERVEABLE_PREFIXES in app/core/model_config.py.{hint}"
     )
 
 
-def resolve(agent: str, *, backend: str = "groq") -> str:
+def backend_for(agent: str) -> str:
+    """Provider for *agent*: env AVALOKA_<AGENT>_BACKEND, default groq."""
+    key = agent.lower()
+    var = f"AVALOKA_{key.upper()}_BACKEND"
+    value = (os.getenv(var) or "groq").strip().lower()
+    if value not in SUPPORTED_BACKENDS:
+        raise UnsupportedModelError(
+            f"{agent}: {var}={value!r} is not one of {SUPPORTED_BACKENDS}."
+        )
+    if value != "groq" and key not in _ROUTABLE_AGENTS:
+        logger.warning("[models] %s=%s ignored: %s can only run on Groq today.", var, value, key)
+        return "groq"
+    return value
+
+
+def resolve(agent: str, *, backend: Optional[str] = None) -> str:
     """Resolve and validate an agent's model. Returns the model id."""
+    backend = backend or backend_for(agent)
     choice = model_for(agent)
     check_model_supported(agent, choice.model, backend=backend)
-    logger.info("[models] %s", choice)
+    logger.info("[models] %s backend=%s", choice, backend)
     return choice.model
 
 
-def describe_all(*, backend: str = "groq") -> Dict[str, Dict[str, object]]:
-    """Every agent's resolved model and whether the backend can serve it.
+def describe_all(*, backend: Optional[str] = None) -> Dict[str, Dict[str, object]]:
+    """Every agent's resolved model and backend, and whether it can be served.
 
     Useful for a diagnostics endpoint and for support requests: one call
     answers "what is actually running where".
@@ -213,11 +251,13 @@ def describe_all(*, backend: str = "groq") -> Dict[str, Dict[str, object]]:
     out: Dict[str, Dict[str, object]] = {}
     for agent in sorted(DEFAULT_MODELS):
         choice = model_for(agent)
+        be = backend or backend_for(agent)
         needs = provider_for_model(choice.model)
         out[agent] = {
             "model": choice.model,
+            "backend": be,
             "source": "default" if choice.is_default else choice.env_var,
-            "serveable_by_backend": needs is None or backend != "groq",
+            "serveable_by_backend": needs is None or be != "groq",
             "requires_provider": needs,
         }
     return out

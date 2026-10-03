@@ -23,9 +23,11 @@ avaloka chat customers.csv         # ...starting from a dataset
 
 ## Start here — five minutes
 
+Python 3.11 or 3.12 (`pyproject.toml` pins `>=3.11,<3.13`):
+
 ```bash
 pip install -e .                                  # from this repo
-avaloka analyze sales.csv --goal "why did revenue drop in Q3?"
+avaloka analyze app/sample_data/salaries.csv --goal "what drives salary here?"
 ```
 
 That is the whole loop. Avaloka sizes the file, profiles it, runs a supported
@@ -42,7 +44,9 @@ Three commands cover most work:
 | `avaloka chat <file>` | work it out conversationally, one turn at a time |
 
 Reads **CSV, TSV, Parquet and Excel** (`.xlsx`/`.xlsm`/`.xls`), including
-spreadsheets whose header sits below a title block.
+spreadsheets whose header sits below a title block (`avaloka/io/loader.py`).
+A dataset may also be named by URI rather than a path — see
+[Sources](#sources--where-the-data-may-live).
 
 ---
 
@@ -178,8 +182,15 @@ optional — install the extra and set `ANTHROPIC_API_KEY` to enable it:
 
 ```bash
 pip install -e ".[llm]"
-export ANTHROPIC_API_KEY=...   # only used in --managed / --execution byoc modes
+export ANTHROPIC_API_KEY=...   # enables --llm phrasing
 ```
+
+The extra installs `anthropic` (see `[project.optional-dependencies]` in
+`pyproject.toml`), and this is the **CLI's** optional narrator — separate
+from the server's
+inference provider, which defaults to OpenRouter and is configured with
+`INFERENCE_PROVIDER` (see the main [README](README.md)). Nothing in the CLI
+requires either.
 
 ## The swarm — Avaloka's self-clones
 
@@ -330,9 +341,39 @@ model to production:
 The Validator caps the level a package may claim; Level 4 additionally requires
 `--approve`.
 
+## `avaloka coordinate` — a fleet of Avalokas over one dataset
+
+Where `batch` fans *partitions* across Ray, `coordinate` fans whole
+**sub-Avalokas** across the dataset: each runs its own swarm on a shard, and the
+main Avaloka converges one answer from their partial profiles.
+
+```bash
+avaloka coordinate customers.csv --goal "Profile the book of business" --workers 4
+avaloka coordinate 'sqlite:///./app.db#customers' --goal "..." --kind train --target churned
+```
+
+The source may be any URI from [Sources](#sources--where-the-data-may-live), so
+the fleet can run against a database table or object storage without a manual
+export first.
+
+## `avaloka benchmark` — the regression suite, against this CLI
+
+```bash
+avaloka benchmark                                  # the synthetic suite
+avaloka benchmark --family data_science            # one family
+avaloka benchmark --kaggle --json scorecard.json   # + Kaggle tasks, machine-readable
+```
+
+The same suite as `python -m avaloka.benchmark run`: deterministic tasks with
+known ground truth, no LLM involved, so it measures Avaloka's own Python rather
+than a model. What it does and does not cover is in
+[docs/benchmarks.md](docs/benchmarks.md).
+
 ## Economics
 
-Every mission closes with a defensible economic summary:
+Every mission closes with an economic summary. The figures below are an
+**example of the shape**, not a measurement of your run — and `--local`
+missions report no Avaloka invoice, because local execution is free:
 
 ```
 Mission duration               1.3 seconds
@@ -359,15 +400,36 @@ workflows rather than invented by an LLM.
 Invoices separate orchestration/validation from compute/serving so the software
 price is never confused with an inflated cloud bill.
 
-## Supported (initial market)
+## Sources — where the data may live
 
-- **Data:** CSV, Parquet (PostgreSQL / object storage are the next connectors).
+A dataset argument may be a path or a source URI. `avaloka/io/sources.py`
+resolves each one to a locally materialised CSV/Parquet file and records the
+provenance, so the rest of the stack is identical whatever the source was:
+
+| URI | Source |
+| --- | --- |
+| `/path/data.csv`, `file:///path/data.csv` | a local file |
+| `sqlite:///abs/app.db#table` | a SQLite table, or `#query=SELECT …` |
+| `postgresql://user:pw@host/db#table` | any SQLAlchemy-supported database |
+| `s3://bucket/key.parquet` | object storage via fsspec (needs `s3fs`) |
+| `gs://bucket/key.csv` | Google Cloud Storage (needs `gcsfs`) |
+| `az://container/key.csv` | Azure Blob (needs `adlfs`) |
+
+The fsspec-backed schemes need their own filesystem package installed; the
+local and database schemes do not.
+
+## Supported
+
 - **Problems:** profiling, EDA, binary/multiclass classification, regression.
 - **Deployment:** local REST, Docker, Kubernetes, Ray Serve.
 
 ## Develop / test
 
 ```bash
-pip install -e ".[dev]"
+pip install -e ".[dev]"      # adds pytest
 pytest tests/avaloka -q
 ```
+
+That covers the CLI package only. The repository-wide gate, and the markers that
+separate the cluster and cloud tiers, are in
+[docs/testing.md](docs/testing.md).

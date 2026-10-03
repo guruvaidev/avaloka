@@ -1,7 +1,7 @@
 # This Dockerfile builds BOTH DTA runtime images:
 #   - avaloka-dta-local:latest                       (the local Docker runner on the VM)
 #   - gcr.io/.../avaloka-dta-ray-cluster             (the dedicated ray-gke-dta cluster)
-# The running ray-gke-dta cluster is pinned by DIGEST (raycluster-image-patch.json) and
+# The running ray-gke-dta cluster is pinned by DIGEST (deploy/k8s/raycluster-image-patch.json) and
 # still runs ray 2.10 + daft 0.7.14 — rebuilding/redeploying it from this file moves it
 # to ray 2.53, which requires a KubeRay-operator compat check and a planned restart
 # (see the teammate's cluster-change doc: do it at a quiet time). Rebuilding the LOCAL

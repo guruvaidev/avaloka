@@ -5,6 +5,12 @@ learning loop and the knowledge graph decide enterprise outcomes. This file
 records **how well the 1.6 Master Test Plan actually tests that claim**, having
 executed all 126 cases against a live deployment.
 
+The plan is [../TEST_PLAN-1.6.md](../TEST_PLAN-1.6.md) — 126 cases over nine
+sheets, dated 2026-08-30. The case ids below (`DQ-*`, `CV-*`, `AG-*`) are its
+ids. The spreadsheet form of the plan,
+`docs/Avaloka-1.6-Master-Test-Plan.xlsx`, is withheld from the public tree by
+`oss/manifest.yaml`, so in a public clone the markdown plan is the only copy.
+
 Short answer: **the harness is well covered and largely proven, the knowledge
 graph is real but thinly covered, and the learning loop now runs and persists —
 deliberately scoped as foundation rather than as a measured improvement.**
@@ -40,9 +46,9 @@ mistaken for a bad analysis.
 ### Knowledge graph — real, thin
 
 `AG-22` ancestry recorded across derivations, `AG-23` PII found *through*
-lineage. Both pass. `app/core/lineage.py` provides `NodeKind`, `EdgeKind`,
-`Node`, `Edge` and a SQLite-backed `LineageStore`, so this is a graph rather
-than a log.
+lineage. Both pass. `app/core/lineage.py` provides `NodeKind` (line 52),
+`EdgeKind` (60), `Node` (72), `Edge` (84) and a SQLite-backed `LineageStore`
+(118, `sqlite3` imported at line 35), so this is a graph rather than a log.
 
 Two cases is not coverage of a pillar. Nothing tests multi-hop traversal, graph
 correctness after a failed transform, cross-dataset joins, or what the graph
@@ -53,9 +59,12 @@ says when a derivation is deleted.
 One plan case, `CV-11` *"stated preference persists"*, was BLOCKED when the
 plan was executed because no vector backend was deployed. That is now fixed.
 
-`app/services/memory_plane.py` is substantial — 19 functions, episodic memory
-with similarity search (`MILVUS_TOP_K`), preference and style-hint storage per
-session, a circuit breaker with a hard retrieval timeout. The code is real.
+`app/services/memory_plane.py` is substantial — 20 `def`s (6 module-level, the
+rest methods), episodic memory with similarity search (`MILVUS_TOP_K`, default
+5 at line 57), preference and style-hint storage per session, and a circuit
+breaker with a hard retrieval timeout (`MEMORY_CIRCUIT_BREAKER_TIMEOUT`,
+default 20.0 s at line 49, wired from the chart's
+`memory.circuitBreakerTimeout`). The code is real.
 
 Measured against the running deployment **after** the chart added Milvus, gave
 Chroma a PVC, and the retrieval circuit breaker was raised above the time a

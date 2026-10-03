@@ -62,13 +62,9 @@ jobs:
             key: ray
             dockerfile: deploy/docker/Dockerfile.ray
           - name: avaloka-ui
-            # ui/Dockerfile's first instruction is `COPY package*.json ./`, and
-            # there is no package.json at the repository root -- so with the
-            # default context this image has never built: `npm ci` fails with
-            # "can only install with an existing package-lock.json". Verified by
-            # building both ways: context=. exits 1, context=ui succeeds.
-            # That is why avaloka-ui is the only one of the four images that has
-            # never been published to GHCR.
+            # ui/Dockerfile starts with `COPY package*.json ./` and there is no
+            # package.json at the repo root, so the default context fails
+            # `npm ci`. Verified: context=. exits 1, context=ui succeeds.
             context: ui
             key: ui
             dockerfile: ui/Dockerfile

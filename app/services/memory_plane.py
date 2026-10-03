@@ -3,9 +3,14 @@
 # Environment variables consumed here:
 #   MEMORY_DEFAULT_STYLE_HINT        – Fallback style hint when LLM/DB unavailable
 #                                      (default: "Prefer clean pandas code.")
-#   MEMORY_CIRCUIT_BREAKER_TIMEOUT   – Hard timeout (s) for the retrieval thread
-#                                      (default: 20.0 -- a successful retrieval
-#                                      measures 4-6s; 3.0 aborted every call)
+#   MEMORY_CIRCUIT_BREAKER_TIMEOUT   – Overall ceiling (s) for one retrieval (default: 8.0)
+#   MEMORY_STAGE_TIMEOUT             – Per-store timeout (s); a slow store is skipped,
+#                                      the others are kept (default: 3.0)
+#   MEMORY_EMBED_TIMEOUT             – Timeout (s) for embedding the query (default: 4.0)
+#   MEMORY_CONNECT_TIMEOUT           – Timeout (s) for opening the four connections (default: 5.0)
+#   MEMORY_MCP_SCHEMA_TIMEOUT        – Timeout (s) for the MCP schema hot-load (default: 3.0)
+#   MEMORY_WARMUP                    – "0" disables connect + embedding warm-up at import
+#                                      (set it in tests; default: on)
 #   MEMORY_MCP_FALLBACK_URL          – MCP server URL when active_mcp_servers is empty
 #                                      Reads MCP_SERVER_URL first, then this var
 #                                      (default: http://localhost:8080/sse)
@@ -14,12 +19,28 @@
 #                                      (default: 86400)
 #   MILVUS_TOP_K                     – Episodic memory top-k for similarity search
 #                                      (default: 5)
+#
+# Latency design (why a turn used to take 20s here):
+#   * All four stores were re-connected on every request -> now once per process.
+#   * Every stage shared one 20s breaker, so one hung store discarded everything
+#     and the log never said which -> now each stage has its own timeout and is
+#     skipped on its own; "[memory] retrieval Xs stages={...}" logs every turn.
+#   * LLM extraction + Milvus/Chroma writes ran inside the request although they
+#     only feed FUTURE turns -> now a background thread.
+#   * The query was embedded twice -> once.
+#   * MCP schema hot-load ran for CSV uploads (dataset_id = file name, which the
+#     MCP server does not know) -> database sources only.
+
+
+
+
 
 import os
 import json
 import logging
 import threading
-from typing import Dict, List, Any, Optional
+import time
+from typing import Callable, Dict, List, Any, Optional, Tuple
 from dotenv import load_dotenv
 from cachetools import TTLCache
 
@@ -28,7 +49,7 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from app.graph.etl_state import ETLState
 from app.services.memory_runtime import validate_memory_runtime_config
 from app.core.model_config import resolve as resolve_model
-from app.core.model_fallback import attach_fallback
+from app.core.model_fallback import attach_fallback  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -36,25 +57,23 @@ project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(_
 load_dotenv(os.path.join(project_root, ".env"))
 
 # --- Module-level tuneable constants (all overridable via env) ---
-_DEFAULT_STYLE_HINT       = os.environ.get("MEMORY_DEFAULT_STYLE_HINT",       "Prefer clean pandas code.")
-# 3.0s was shorter than a successful retrieval takes, so the breaker fired on
-# EVERY call and the memory plane never returned anything. Measured against a
-# healthy deployment (Chroma + Milvus both connected, embedding model warm):
-# 5.8s cold, 4.4s warm. The loop was not broken -- it was being killed by its
-# own timeout, and the only symptom was memory_hints=None, which looks
-# identical to "nothing has been learned yet".
-#
-# 20s leaves headroom for a cold embedding load without letting a genuinely
-# hung backend stall a turn. Lower it once the model is pre-warmed in the image.
-_CIRCUIT_BREAKER_TIMEOUT  = float(os.environ.get("MEMORY_CIRCUIT_BREAKER_TIMEOUT", "20.0"))
+_DEFAULT_STYLE_HINT       = os.environ.get("MEMORY_DEFAULT_STYLE_HINT", "Prefer clean pandas code.")
+# Overall ceiling for one retrieval. Each stage also has its own timeout, so a
+# slow store is skipped instead of discarding everything. With connections held
+# open and the embedding model warmed at startup, a normal retrieval is < 1s.
+_CIRCUIT_BREAKER_TIMEOUT  = float(os.environ.get("MEMORY_CIRCUIT_BREAKER_TIMEOUT", "8.0"))
+_STAGE_TIMEOUT            = float(os.environ.get("MEMORY_STAGE_TIMEOUT", "3.0"))
+_EMBED_TIMEOUT            = float(os.environ.get("MEMORY_EMBED_TIMEOUT", "4.0"))
+_CONNECT_TIMEOUT          = float(os.environ.get("MEMORY_CONNECT_TIMEOUT", "5.0"))
+_MCP_SCHEMA_TIMEOUT       = float(os.environ.get("MEMORY_MCP_SCHEMA_TIMEOUT", "3.0"))
 # MCP_SERVER_URL is the canonical .env name; MEMORY_MCP_FALLBACK_URL is the override
 _MCP_FALLBACK_URL         = (
     os.environ.get("MCP_SERVER_URL")
     or os.environ.get("MEMORY_MCP_FALLBACK_URL")
     or "http://localhost:8080/sse"
 )
-_REDIS_SCHEMA_TTL         = int(os.environ.get("REDIS_SCHEMA_TTL",            "86400"))
-_MILVUS_TOP_K             = int(os.environ.get("MILVUS_TOP_K",                "5"))
+_REDIS_SCHEMA_TTL         = int(os.environ.get("REDIS_SCHEMA_TTL", "86400"))
+_MILVUS_TOP_K             = int(os.environ.get("MILVUS_TOP_K", "5"))
 # Durable context-memory TTL (Redis write-through of session hints/preferences).
 # Defaults to the session lifetime (7 days) so a remembered preference lives at
 # least as long as the session it belongs to.
@@ -91,16 +110,59 @@ def _ensure_sse_url(url: str) -> str:
 
     MCP_SERVER_URL is the canonical BASE form elsewhere (server.py/settings.py
     append `/call_tool`), but the SSE transport used here needs the `/sse`
-    endpoint. Appending it when missing lets operators set the canonical base
-    form without memory-plane connecting to the wrong path. Idempotent for URLs
-    that already end in `/sse`.
+    endpoint. Idempotent for URLs that already end in `/sse`.
     """
     if not url:
         return url
     trimmed = url.rstrip("/")
     return trimmed if trimmed.endswith("/sse") else trimmed + "/sse"
 
-_api_key = os.environ.get("GROQ_API_KEY_PLANNING_AGENT") or os.environ.get("GROQ_API_KEY_CODING_AGENT") or os.environ.get("GROQ_API_KEY")
+
+def _call_with_timeout(fn: Callable[[], Any], timeout: float) -> Tuple[bool, Any, Optional[BaseException]]:
+    """Run fn() in a daemon thread. Returns (ok, value, error).
+
+    ok=False with error=None means it timed out; the thread is abandoned
+    (daemon, so it never blocks the request or process exit).
+    """
+    box: Dict[str, Any] = {}
+    done = threading.Event()
+
+    def _worker() -> None:
+        try:
+            box["value"] = fn()
+        except Exception as exc:  # noqa: BLE001
+            box["error"] = exc
+        finally:
+            done.set()
+
+    threading.Thread(target=_worker, name="memory-stage", daemon=True).start()
+    if not done.wait(timeout):
+        return False, None, None
+    if "error" in box:
+        return False, None, box["error"]
+    return True, box.get("value"), None
+
+
+_DB_SOURCE_TYPES = {"database", "db", "sql", "postgres", "postgresql", "mysql",
+                    "bigquery", "snowflake", "redshift", "mcp"}
+
+
+def _is_db_source(state: Dict) -> bool:
+    """Only database sources have a schema the MCP server can hot-load.
+
+    For a CSV upload, dataset_id is the file name, which the MCP server does
+    not know; the call just waits on the SSE connection.
+    """
+    if state.get("active_db_customer_id") or state.get("active_db_source_table"):
+        return True
+    return str(state.get("input_data_type") or "").lower() in _DB_SOURCE_TYPES
+
+
+_api_key = (
+    os.environ.get("GROQ_API_KEY_PLANNING_AGENT")
+    or os.environ.get("GROQ_API_KEY_CODING_AGENT")
+    or os.environ.get("GROQ_API_KEY")
+)
 
 memory_llm = build_chat_model(
     role="planning",
@@ -112,6 +174,7 @@ memory_llm = build_chat_model(
 )
 if memory_llm is None:
     logger.warning("Memory LLM disabled; missing API key.")
+
 
 class MemoryOrchestrator:
     """
@@ -128,8 +191,14 @@ class MemoryOrchestrator:
     # them — ordinary hint churn must never evict an explicit preference.
     _session_preferences_store: TTLCache = TTLCache(maxsize=10000, ttl=86400)
     # Guards the in-process stores: the planner thread writes preferences while
-    # retrieve_memory's worker thread reads/appends hints.
+    # retrieval and background-learning threads read/append hints.
     _store_lock = threading.Lock()
+
+    # Sessions whose last durable read FAILED (as opposed to finding nothing).
+    # While a session is in this set, _persist_session_memory refuses to
+    # overwrite Redis until a read succeeds — a transient blip at restart
+    # must never let an empty in-process view erase stored preferences.
+    _hydration_failed: set = set()
 
     def __init__(self, llm_client=None):
         self._explicit_llm = llm_client
@@ -146,11 +215,92 @@ class MemoryOrchestrator:
         self.postgres = postgres_client
         self.milvus = milvus_client
 
+        # Connect once per process, not once per request -- and each store on
+        # its own. One store that hangs on connect (Milvus collection.load())
+        # must not block the other three: before, warm-up held a single lock
+        # while Milvus hung, so every request's "connect" stage waited 5s and
+        # Redis/Chroma/Postgres were treated as down too.
+        self._store_ready: Dict[str, bool] = {n: False for n in self._STORES}
+        self._store_locks: Dict[str, threading.Lock] = {n: threading.Lock() for n in self._STORES}
+
+    # ------------------------------------------------------------------
+    # Connections and warm-up
+    # ------------------------------------------------------------------
+
+    _STORES = ("postgres", "redis", "chroma", "milvus")
+    # Which store each retrieval stage reads, so a failing stage marks only
+    # that store for reconnect.
+    _STAGE_STORE = {"hydrate": "redis", "artifact": "postgres", "schema_cache": "redis",
+                    "mcp_schema": "redis", "signature": "chroma", "milvus": "milvus"}
+
+    def _connect_store(self, name: str) -> bool:
+        """Connect one store if needed. Never waits on another thread that is
+        already connecting it (e.g. a slow warm-up): returns False instead."""
+        if self._store_ready.get(name):
+            return True
+        lock = self._store_locks[name]
+        if not lock.acquire(blocking=False):
+            return False
+        try:
+            if self._store_ready.get(name):
+                return True
+            start = time.monotonic()
+            getattr(self, name).connect()
+            self._store_ready[name] = True
+            logger.info("[memory] connected %s in %.2fs", name, time.monotonic() - start)
+            return True
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[memory] connecting %s failed: %s", name, exc)
+            return False
+        finally:
+            lock.release()
+
+    def _connect_all(self, timeout: float) -> Dict[str, bool]:
+        """Connect every store in parallel, each bounded by `timeout`.
+        A store still connecting when the time is up is simply not ready yet."""
+        pending = [n for n in self._STORES if not self._store_ready.get(n)]
+        threads = []
+        for name in pending:
+            t = threading.Thread(target=self._connect_store, args=(name,),
+                                 name=f"memory-connect-{name}", daemon=True)
+            t.start()
+            threads.append(t)
+        deadline = time.monotonic() + timeout
+        for t in threads:
+            t.join(max(0.0, deadline - time.monotonic()))
+        return dict(self._store_ready)
+
+    def _warm_embedding(self) -> None:
+        start = time.monotonic()
+        try:
+            self._embed("warm up")
+            logger.info("[memory] embedding model ready in %.2fs", time.monotonic() - start)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[memory] embedding warm-up failed: %s", exc)
+
+    def warm_up(self) -> None:
+        """At startup: load the embedding model and open all four connections,
+        each in its own thread, so the first request pays for neither and one
+        slow store cannot hold up the rest. Never raises."""
+        start = time.monotonic()
+        emb = threading.Thread(target=self._warm_embedding, name="memory-warm-embed", daemon=True)
+        emb.start()
+        ready = self._connect_all(timeout=60.0)
+        slow = [n for n, ok in ready.items() if not ok]
+        if slow:
+            logger.warning(
+                "[memory] warm-up: %s not connected after %.0fs; retrieval will skip "
+                "it until it connects", ", ".join(slow), time.monotonic() - start,
+            )
+        emb.join(60.0)
+        logger.info("[memory] warm-up done in %.2fs (ready=%s)", time.monotonic() - start,
+                    {n: ok for n, ok in self._store_ready.items()})
+
     @property
     def llm(self):
         """Dynamically resolve LLM to support Pytest module patching"""
         if self._explicit_llm is not None:
-             return self._explicit_llm
+            return self._explicit_llm
         import app.services.memory_plane as mp
         return mp.memory_llm
 
@@ -170,9 +320,12 @@ class MemoryOrchestrator:
         from app.services.db.chroma_client import chroma_client
         from app.services.db.postgres_client import postgres_client
 
-        if hasattr(redis_client,    "_fallback_store"):       redis_client._fallback_store.clear()
-        if hasattr(chroma_client,   "_fallback_namespaces"): chroma_client._fallback_namespaces.clear()
-        if hasattr(postgres_client, "_mock_table"):          postgres_client._mock_table.clear()
+        if hasattr(redis_client, "_fallback_store"):
+            redis_client._fallback_store.clear()
+        if hasattr(chroma_client, "_fallback_namespaces"):
+            chroma_client._fallback_namespaces.clear()
+        if hasattr(postgres_client, "_mock_table"):
+            postgres_client._mock_table.clear()
         cls._past_queries_store.clear()
         cls._session_hints_store.clear()
         cls._session_preferences_store.clear()
@@ -183,6 +336,10 @@ class MemoryOrchestrator:
             redis_client.delete_prefix("ctxmem:")
         except Exception:
             pass
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
 
     def _embed(self, text: str) -> Optional[List[float]]:
         """
@@ -215,7 +372,7 @@ If the query is too simple to extract anything meaningful, return {"new_hints": 
         try:
             response = self.llm.invoke([
                 SystemMessage(content=system_prompt),
-                HumanMessage(content=human_prompt)
+                HumanMessage(content=human_prompt),
             ])
 
             content = response.content.strip()
@@ -223,17 +380,117 @@ If the query is too simple to extract anything meaningful, return {"new_hints": 
             end_idx = content.rfind('}')
 
             if start_idx != -1 and end_idx != -1 and end_idx >= start_idx:
-                json_str = content[start_idx:end_idx+1]
-                return json.loads(json_str)
+                return json.loads(content[start_idx:end_idx + 1])
             return {}
 
         except Exception as e:
             logger.error(f"Failed to dynamically extract memory context: {e}")
             return {}
 
-    def _retrieve_memory_internal(self, query: str, session_id: str = "default", dataset_id: str = "unknown", state: Dict = None) -> Dict:
+    def _artifact_hint(self, query: str, user_id: str) -> Tuple[bool, Optional[str]]:
+        """Layer 3: (prior_artifact_found, hint). Surfaces metadata from prior
+        runs so the planner can reuse chart URLs / metrics / outputs."""
+        if not self.postgres.check_artifact_exists(query, user_id):
+            return False, None
+        prior_meta = self.postgres.get_artifact(query, user_id)
+        if not prior_meta:
+            return True, None
+        hint_parts = []
+        if prior_meta.get("status"):
+            hint_parts.append(f"status={prior_meta['status']}")
+        # Chart / visualisation URLs — reuse instead of regenerating
+        for url_field in ("chart_url", "chart_urls", "plot_url",
+                          "visualization_url", "dashboard_url"):
+            val = prior_meta.get(url_field)
+            if val:
+                hint_parts.append(f"chart_urls={val[:3]}" if isinstance(val, list) else f"chart_url={val}")
+                break
+        # Model / evaluation metrics — skip retraining if acceptable
+        for metric_field in ("model_metrics", "metrics", "eval_metrics",
+                             "accuracy", "f1_score", "rmse", "mape"):
+            val = prior_meta.get(metric_field)
+            if val:
+                hint_parts.append(f"metrics={val}")
+                break
+        # Output artifact path — reuse directly
+        for path_field in ("output_path", "output_file", "artifact_path",
+                           "file_data", "model_path"):
+            val = prior_meta.get(path_field)
+            if val:
+                hint_parts.append(f"output={val}")
+                break
+        if prior_meta.get("session"):
+            hint_parts.append(f"session={prior_meta['session']}")
+        if hint_parts:
+            return True, ("[L3] Prior artifact — reuse to skip redundant work: "
+                          + ", ".join(hint_parts))
+        return True, (f"[L3] Prior artifact detected for this query "
+                      f"({len(prior_meta)} metadata fields stored).")
+
+    def _hot_load_schema(self, user_id: str, dataset_id: str, state: Dict) -> Optional[str]:
+        """Layer 1 cache miss: fetch the schema from MCP (database sources only)."""
+        from app.services.mcp_cache_loader import fetch_schema_sync
+        active_servers = state.get("active_mcp_servers", [])
+        mcp_url = _ensure_sse_url(
+            active_servers[0] if active_servers else (
+                os.environ.get("MCP_SERVER_URL") or os.environ.get("MCP_URL") or _MCP_FALLBACK_URL
+            )
+        )
+        # Prefer the tenant's own MCP key — the MCP maps key -> customer, so a
+        # single global key would return one customer's schema for every tenant.
+        api_key = state.get("mcp_api_key") or os.environ.get("MCP_API_KEY", "")
+        logger.info(f"Triggering MCP extraction for dataset: {dataset_id} via server: {mcp_url}")
+        schema_payload = fetch_schema_sync(mcp_url, api_key, dataset_id)
+        if schema_payload and "error" not in schema_payload:
+            self.redis.set_schema(user_id, dataset_id, schema_payload, ttl_seconds=_REDIS_SCHEMA_TTL)
+            return f"Domain insight (hot-loaded via MCP): {json.dumps(schema_payload)}"
+        return None
+
+    def _learn_in_background(self, query: str, past_queries: List[str],
+                             session_id: str, memory_scope: str) -> None:
+        """LLM extraction + Milvus/Chroma/Redis writes. These only store memory
+        for FUTURE turns, so they run off the request path. Never raises."""
+        start = time.monotonic()
+        try:
+            extracted = self._extract_context_with_llm(query, past_queries) or {}
+            new_hints = [h for h in (extracted.get("new_hints") or [])
+                         if isinstance(h, str) and h.strip()]
+            added = False
+            for hint in new_hints:
+                with self._store_lock:
+                    hints = self._session_hints_store.setdefault(session_id, [])
+                    if hint not in hints:
+                        hints.append(hint)
+                        added = True
+                if not self._store_ready.get("milvus"):
+                    continue  # Milvus not connected: keep the hint in session memory only
+                try:
+                    self.milvus.insert_insight(memory_scope, hint, "memory_llm", vector=self._embed(hint))
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("[memory] Milvus insert failed: %s", exc)
+            new_sig = extracted.get("logic_signature")
+            if new_sig and self._store_ready.get("chroma"):
+                try:
+                    self.chroma.update_user_signature(memory_scope, new_sig)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("[memory] signature update failed: %s", exc)
+            if added:
+                self._persist_session_memory(session_id)
+            logger.info("[memory] background learning %.2fs: %d new hints",
+                        time.monotonic() - start, len(new_hints))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[memory] background learning failed: %s", exc)
+
+    # ------------------------------------------------------------------
+    # Retrieval (read path)
+    # ------------------------------------------------------------------
+
+    def _retrieve_memory_internal(self, query: str, session_id: str = "default",
+                                  dataset_id: str = "unknown", state: Dict = None) -> Dict:
         """
-        Internal implementation of Tiered Memory bounds for a session.
+        Read path only. Each stage has its own timeout: a slow or failing store
+        is skipped and logged, and the hints from the other stores are kept.
+        Learning (LLM extraction + writes) happens in a background thread.
         """
         if state is None:
             state = {}
@@ -241,213 +498,130 @@ If the query is too simple to extract anything meaningful, return {"new_hints": 
         # Cross-session tiers (Chroma L2, Milvus L4) key off this rather than the
         # session, so a returning user reaches what an earlier session learned.
         memory_scope = _memory_scope(user_id, session_id)
+        timings: Dict[str, float] = {}
+        t_start = time.monotonic()
 
-        circuit_breaker_triggered = False
+        def run(name: str, fn: Callable[[], Any], timeout: float = _STAGE_TIMEOUT,
+                default: Any = None) -> Any:
+            stage_start = time.monotonic()
+            ok, value, err = _call_with_timeout(fn, timeout)
+            timings[name] = round(time.monotonic() - stage_start, 2)
+            if ok:
+                return value
+            if err is None:
+                logger.warning("[memory] stage %s timed out after %.1fs; skipped", name, timeout)
+            else:
+                logger.warning("[memory] stage %s failed (%s); skipped", name, err)
+            # Next request reconnects that store, in case its connection is the problem.
+            store = self._STAGE_STORE.get(name)
+            if store and err is not None:
+                self._store_ready[store] = False
+            return default
 
-        # Restore durable session memory (hints/preferences) after a process
-        # restart so remembered context survives redeploys.
-        self._hydrate_session_memory(session_id)
+        # Restore durable session memory (hints/preferences) after a restart.
+        if self._store_ready.get("redis"):
+            run("hydrate", lambda: self._hydrate_session_memory(session_id))
 
-        if session_id not in self._past_queries_store:
-            self._past_queries_store[session_id] = []
+        with self._store_lock:
+            past_queries = list(self._past_queries_store.get(session_id, []))
+            self._past_queries_store[session_id] = past_queries + [query]
 
-        past_queries = self._past_queries_store[session_id].copy()
-        self._past_queries_store[session_id].append(query)
-
-        new_hints_this_context = []
-        accumulated_hints = self._session_hints_store.get(session_id, []).copy()
-        # Provenance buckets for the top-3 contract: every source except "llm"
-        # is query-filtered at its origin, so the tier a hint came from is a
-        # reliable relevance signal (see _compose_top_hints).
+        accumulated_hints = list(self._session_hints_store.get(session_id, []))
+        # Provenance buckets for the top-3 contract (see _compose_top_hints).
         tiered_hints: Dict[str, List[str]] = {"session": list(accumulated_hints)}
 
-        def _add_hint(tier: str, hint: str) -> bool:
-            if hint in accumulated_hints:
-                return False
-            accumulated_hints.append(hint)
-            tiered_hints.setdefault(tier, []).append(hint)
-            return True
+        def _add_hint(tier: str, hint: Optional[str]) -> None:
+            if hint and hint not in accumulated_hints:
+                accumulated_hints.append(hint)
+                tiered_hints.setdefault(tier, []).append(hint)
 
         logic_sig = _DEFAULT_STYLE_HINT
-        prior_artifact_found = False
 
-        try:
-            self.postgres.connect()
-            self.redis.connect()
-            self.chroma.connect()
-            self.milvus.connect()
+        ready = run("connect", lambda: self._connect_all(_CONNECT_TIMEOUT),
+                    timeout=_CONNECT_TIMEOUT + 0.5, default={}) or {}
 
-            # Layer 3: Artifact Context
-            # Surfaces rich metadata from prior runs so the Planner can
-            # actively reuse chart URLs / model metrics and skip redundant work.
-            if self.postgres.check_artifact_exists(query, user_id):
-                prior_artifact_found = True
-                prior_meta = self.postgres.get_artifact(query, user_id)
-                if prior_meta:
-                    hint_parts = []
+        def ok(store: str) -> bool:
+            if ready.get(store):
+                return True
+            timings.setdefault(f"skip_{store}", 0.0)
+            return False
 
-                    if prior_meta.get("status"):
-                        hint_parts.append(f"status={prior_meta['status']}")
+        # Layer 3: prior artifacts for this exact query.
+        found, artifact_hint = (run("artifact", lambda: self._artifact_hint(query, user_id),
+                                    default=(False, None))
+                                if ok("postgres") else (False, None))
+        prior_artifact_found = bool(found)
+        _add_hint("artifact", artifact_hint)
 
-                    # Chart / visualisation URLs — reuse instead of regenerating
-                    for url_field in ("chart_url", "chart_urls", "plot_url",
-                                      "visualization_url", "dashboard_url"):
-                        val = prior_meta.get(url_field)
-                        if val:
-                            if isinstance(val, list):
-                                hint_parts.append(f"chart_urls={val[:3]}")
-                            else:
-                                hint_parts.append(f"chart_url={val}")
-                            break
+        # Layer 1: semantic schema cache; MCP hot-load only for database sources.
+        schema_info = (run("schema_cache", lambda: self.redis.search_schema_semantically(user_id, query))
+                       if ok("redis") else None)
+        if schema_info:
+            _add_hint("domain", f"Domain insight: {schema_info}")
+        elif (dataset_id and dataset_id not in ("unknown", "unknown_dataset")
+              and _is_db_source(state) and ok("redis")):
+            _add_hint("domain", run("mcp_schema",
+                                    lambda: self._hot_load_schema(user_id, dataset_id, state),
+                                    timeout=_MCP_SCHEMA_TIMEOUT))
 
-                    # Model / evaluation metrics — skip retraining if acceptable
-                    for metric_field in ("model_metrics", "metrics", "eval_metrics",
-                                        "accuracy", "f1_score", "rmse", "mape"):
-                        val = prior_meta.get(metric_field)
-                        if val:
-                            hint_parts.append(f"metrics={val}")
-                            break
+        # Layer 2: style signature. User-scoped first, legacy session-scoped
+        # second, so signatures written before user scoping are not stranded.
+        def _signature():
+            sig = self.chroma.get_user_signature(memory_scope)
+            if not sig and memory_scope != session_id:
+                sig = self.chroma.get_user_signature(session_id)
+            return sig
 
-                    # Output artifact path — reuse directly
-                    for path_field in ("output_path", "output_file", "artifact_path",
-                                       "file_data", "model_path"):
-                        val = prior_meta.get(path_field)
-                        if val:
-                            hint_parts.append(f"output={val}")
-                            break
+        user_sig = run("signature", _signature) if ok("chroma") else None
+        if user_sig:
+            logic_sig = user_sig
 
-                    # Session reference for traceability
-                    if prior_meta.get("session"):
-                        hint_parts.append(f"session={prior_meta['session']}")
+        # Layer 4: similar past insights. Embed the query ONCE. Legacy rows are
+        # keyed by session, hence the second read.
+        query_vec = (run("embed", lambda: self._embed(query), timeout=_EMBED_TIMEOUT)
+                     if ok("milvus") else None)
 
-                    if hint_parts:
-                        _add_hint(
-                            "artifact",
-                            "[L3] Prior artifact — reuse to skip redundant work: "
-                            + ", ".join(hint_parts)
-                        )
-                    else:
-                        # Metadata exists but has no field we recognise — surface raw summary
-                        _add_hint(
-                            "artifact",
-                            f"[L3] Prior artifact detected for this query "
-                            f"({len(prior_meta)} metadata fields stored)."
-                        )
+        def _similar():
+            rows = self.milvus.search_similar_insights(
+                memory_scope, query_vector=query_vec, top_k=_MILVUS_TOP_K)
+            if not rows and memory_scope != session_id:
+                rows = self.milvus.search_similar_insights(
+                    session_id, query_vector=query_vec, top_k=_MILVUS_TOP_K)
+            return rows
 
-            # Layer 1: Domain Context — semantic schema cache lookup
-            # Uses search_schema_semantically so the query text drives cache hit selection
-            schema_info = self.redis.search_schema_semantically(user_id, query)
-            if schema_info:
-                _add_hint("domain", f"Domain insight: {schema_info}")
-            elif dataset_id and dataset_id not in ("unknown", "unknown_dataset"):
-                # Cache miss — attempt dynamic MCP hot-load. Isolated in its
-                # own try/except: a missing `mcp` package or an unreachable
-                # MCP server must degrade to "no schema insight", NOT trip
-                # the outer circuit breaker and discard every other memory
-                # layer's hints (stored user preferences included).
-                try:
-                    from app.services.mcp_cache_loader import fetch_schema_sync
-                    active_servers = state.get("active_mcp_servers", [])
-                    mcp_url = _ensure_sse_url(
-                        active_servers[0]
-                        if active_servers
-                        else (
-                            os.environ.get("MCP_SERVER_URL")
-                            or os.environ.get("MCP_URL")
-                            or _MCP_FALLBACK_URL
-                        )
-                    )
+        similar_rows = run("milvus", _similar, default=[]) if ok("milvus") else []
+        for record in similar_rows or []:
+            if isinstance(record, dict):
+                _add_hint("similar", record.get("content"))
 
-                    # Prefer the tenant's own MCP key from state — the MCP maps
-                    # key->customer, so using a single global MCP_API_KEY would
-                    # return that one customer's schema for every tenant. Fall
-                    # back to the global env key only for single-tenant setups.
-                    api_key = state.get("mcp_api_key") or os.environ.get("MCP_API_KEY", "")
+        # Top-3 contract: explicit preferences hold reserved slots; leftover
+        # slots fill by relevance tier (artifact > domain > similar > session).
+        top_3_hints = self._compose_top_hints(session_id, tiered_hints)
 
-                    logger.info(f"Triggering MCP extraction for dataset: {dataset_id} via server: {mcp_url}")
-                    schema_payload = fetch_schema_sync(mcp_url, api_key, dataset_id)
+        # Learning for future turns runs after we return.
+        if self.llm:
+            threading.Thread(
+                target=self._learn_in_background,
+                args=(query, past_queries, session_id, memory_scope),
+                name="memory-learn", daemon=True,
+            ).start()
 
-                    if schema_payload and "error" not in schema_payload:
-                        # Persist into Layer 1 Redis for subsequent requests
-                        self.redis.set_schema(user_id, dataset_id, schema_payload, ttl_seconds=_REDIS_SCHEMA_TTL)
-                        _add_hint("domain", f"Domain insight (hot-loaded via MCP): {json.dumps(schema_payload)}")
-                except Exception as mcp_exc:
-                    logger.warning(f"MCP schema hot-load skipped (non-fatal): {mcp_exc}")
-
-            # chroma_client.get_user_signature takes a user_id -- its docstring
-            # says "for a user within the retention window" -- and was being
-            # handed a session_id, so the signature reset on every new login and
-            # never accumulated into anything worth the name.
-            #
-            # Dual-read during the transition: prefer the user-scoped signature,
-            # fall back to the one filed under this session so signatures written
-            # before this change are not stranded.
-            user_sig = self.chroma.get_user_signature(memory_scope)
-            if not user_sig and memory_scope != session_id:
-                user_sig = self.chroma.get_user_signature(session_id)
-            if user_sig:
-                logic_sig = user_sig
-
-            # The schema field is named session_id and cannot be renamed without
-            # recreating the collection, but it is only a retrieval scope. It
-            # now holds the memory scope, so insights written in an earlier
-            # session are reachable after a new login. Legacy rows keep their
-            # session key, hence the second read.
-            recent_insights = self.milvus.search_similar_insights(
-                memory_scope, query_vector=self._embed(query), top_k=_MILVUS_TOP_K
-            )
-            if not recent_insights and memory_scope != session_id:
-                recent_insights = self.milvus.search_similar_insights(
-                    session_id, query_vector=self._embed(query), top_k=_MILVUS_TOP_K
-                )
-            for record in recent_insights:
-                _add_hint("similar", record["content"])
-
-            # LLM Dynamic Extraction (Populates DBs for future queries)
-            if self.llm:
-                extracted_memory = self._extract_context_with_llm(query, past_queries)
-
-                raw_new_hints = extracted_memory.get("new_hints", [])
-                for hint in raw_new_hints:
-                    new_hints_this_context.append(hint)
-                    # Insert new episodic memory into Layer 4 (Milvus)
-                    self.milvus.insert_insight(memory_scope, hint, "memory_llm", vector=self._embed(hint))
-                    if _add_hint("llm", hint):
-                        self._session_hints_store.setdefault(session_id, []).append(hint)
-
-                new_logic_sig = extracted_memory.get("logic_signature")
-                if new_logic_sig:
-                    logic_sig = new_logic_sig
-                    self.chroma.update_user_signature(memory_scope, logic_sig)
-
-                if new_hints_this_context:
-                    self._persist_session_memory(session_id)
-
-            # --- Top-3 Summary Contract ---
-            # Ensures the Planner does not receive token overflow.
-            # Explicit user preferences hold reserved slots so ordinary hint
-            # churn can never evict them; leftover slots fill by relevance
-            # tier (artifact > domain > similar > llm > recent session hints).
-            top_3_hints = self._compose_top_hints(session_id, tiered_hints)
-
-        except Exception as e:
-            logger.error(f"Memory Circuit Breaker Triggered: {e}")
-            circuit_breaker_triggered = True
-            top_3_hints = []
-            accumulated_hints = []
-            logic_sig = _DEFAULT_STYLE_HINT
-
-        final_unavailable = True if not self.llm or circuit_breaker_triggered else False
+        logger.info("[memory] retrieval %.2fs stages=%s",
+                    time.monotonic() - t_start, timings)
 
         return {
-            "new_hints_this_context": new_hints_this_context,
+            # Hints learned from THIS query arrive next turn (background learning).
+            "new_hints_this_context": [],
             "accumulated_memory_hints": accumulated_hints,
-            "memory_hints": top_3_hints, # Enforcing Top-3 Contract for Planner Agent
+            "memory_hints": top_3_hints,  # Top-3 contract for the planner
             "prior_artifact_found": prior_artifact_found,
             "session_logic_signature": logic_sig,
-            "memory_context_unavailable": final_unavailable
+            "memory_context_unavailable": not self.llm,
         }
 
+    # ------------------------------------------------------------------
+    # Explicit preferences (write path)
+    # ------------------------------------------------------------------
 
     def store_user_preference(self, preference: str, session_id: str = "default",
                               scope_id: Optional[str] = None) -> bool:
@@ -455,10 +629,9 @@ If the query is too simple to extract anything meaningful, return {"new_hints": 
         Persist an explicitly stated user preference (e.g. "The user's favorite
         column is 'reordered'") so future retrievals surface it as a hint.
 
-        This is the direct write path behind the planner's `store_user_preference`
-        tool — unlike `_extract_context_with_llm`, it requires no LLM and never
-        raises. The preference goes into the session stores that retrieval
-        serves from (with reserved top-3 slots, see `_compose_top_hints`); the
+        Direct write path behind the planner's `store_user_preference` tool —
+        requires no LLM and never raises. The preference goes into the session
+        stores that retrieval serves from (with reserved top-3 slots); the
         Layer 4 Milvus write is best-effort in a background thread so a slow or
         down Milvus can never block the planner turn. Returns True when the
         session-store write succeeded — the tier retrieval actually reads.
@@ -505,29 +678,24 @@ If the query is too simple to extract anything meaningful, return {"new_hints": 
     def _persist_preference_to_milvus(self, scope_id: str, preference: str) -> None:
         """Best-effort durable write for an explicit preference. Never raises.
 
-        scope_id is the memory scope (user where known, session otherwise), not
-        a session id. An explicit preference -- "always exclude refunds" -- is
-        the clearest case of something a user expects to still hold next time
-        they log in, so filing it under a session was the wrong lifetime.
+        scope_id is the memory scope (user where known, session otherwise): an
+        explicit preference is something a user expects to still hold next
+        time they log in.
         """
         try:
             self.milvus.insert_insight(scope_id, preference, "user_explicit", vector=self._embed(preference))
         except Exception as e:
             logger.error(f"Failed to persist user preference to Milvus: {e}")
 
-    # Sessions whose last durable read FAILED (as opposed to finding nothing).
-    # While a session is in this set, _persist_session_memory refuses to
-    # overwrite Redis until a read succeeds — a transient blip at restart
-    # must never let an empty in-process view erase stored preferences.
-    _hydration_failed: set = set()
+    # ------------------------------------------------------------------
+    # Durable session memory (Redis write-through)
+    # ------------------------------------------------------------------
 
     def _hydrate_session_memory(self, session_id: str) -> None:
         """
         Restore a session's hints/preferences from Redis into the in-process
-        stores after a process restart. Each store is hydrated independently
-        (their TTLCache entries expire at different times, so one may be
-        present while the other is missing). In-process entries stay
-        authoritative while they exist. Never raises.
+        stores after a process restart. Each store is hydrated independently.
+        In-process entries stay authoritative while they exist. Never raises.
         """
         need_hints = session_id not in self._session_hints_store
         need_prefs = session_id not in self._session_preferences_store
@@ -558,10 +726,9 @@ If the query is too simple to extract anything meaningful, return {"new_hints": 
         Write-through the session's hints/preferences to Redis. Never raises.
 
         Snapshot and writes happen under _store_lock so a concurrent
-        store_user_preference can't interleave a newer preference between our
-        snapshot and our write (last-writer-wins would drop it). If the last
-        durable read for this session failed, retry it first — and skip the
-        write entirely while Redis still can't be read.
+        store_user_preference can't interleave between snapshot and write.
+        If the last durable read for this session failed, retry it first — and
+        skip the write entirely while Redis still can't be read.
         """
         try:
             if session_id in self._hydration_failed:
@@ -594,8 +761,7 @@ If the query is too simple to extract anything meaningful, return {"new_hints": 
 
         `hints` is either a provenance dict ({tier: [hint, ...]}) — slots fill
         in `_HINT_TIER_ORDER`, leftover slots taking the most recent "session"
-        hints — or a flat list, which is treated entirely as session history
-        and degrades to the original `accumulated_hints[-limit:]` behavior.
+        hints — or a flat list, treated entirely as session history.
         """
         tiered = hints if isinstance(hints, dict) else {"session": list(hints)}
         prefs = list(self._session_preferences_store.get(session_id, []))[-limit:]
@@ -615,27 +781,27 @@ If the query is too simple to extract anything meaningful, return {"new_hints": 
             fill.extend(session_pool[-remaining:])
         return fill + prefs
 
-    def retrieve_memory(self, query: str, session_id: str = "default", dataset_id: str = "unknown", state: Dict = None) -> Dict:
+    # ------------------------------------------------------------------
+    # Public entry with the overall circuit breaker
+    # ------------------------------------------------------------------
+
+    def retrieve_memory(self, query: str, session_id: str = "default",
+                        dataset_id: str = "unknown", state: Dict = None) -> Dict:
         """
-        Wrap _retrieve_memory_internal in a hard timeout (MEMORY_CIRCUIT_BREAKER_TIMEOUT seconds).
+        Wrap _retrieve_memory_internal in a hard timeout (MEMORY_CIRCUIT_BREAKER_TIMEOUT).
         Returns a safe empty payload if exceeded so LangGraph nodes are never blocked.
         """
         _empty = {
-            "new_hints_this_context":  [],
+            "new_hints_this_context": [],
             "accumulated_memory_hints": [],
-            "memory_hints":            [],
-            "prior_artifact_found":    False,
+            "memory_hints": [],
+            "prior_artifact_found": False,
             "session_logic_signature": _DEFAULT_STYLE_HINT,
             "memory_context_unavailable": True,
         }
-        # NOTE: a daemon thread + Event, deliberately NOT a ThreadPoolExecutor.
-        # A `with ThreadPoolExecutor(...)` block calls shutdown(wait=True) on
-        # exit, which JOINS the worker — a hung lookup kept blocking the caller
-        # for its full duration even after TimeoutError fired. And even with
-        # shutdown(wait=False), executor threads are non-daemon and are joined
-        # at interpreter exit, so one hung lookup made the whole process hang
-        # on shutdown. A daemon thread is simply abandoned in both cases: the
-        # caller is released at the timeout and process exit stays clean.
+        # A daemon thread + Event, deliberately NOT a ThreadPoolExecutor: an
+        # executor joins its worker on shutdown, so a hung lookup kept blocking
+        # the caller (and process exit). A daemon thread is simply abandoned.
         result_box: Dict[str, Any] = {}
         done = threading.Event()
 
@@ -652,7 +818,8 @@ If the query is too simple to extract anything meaningful, return {"new_hints": 
         if not done.wait(timeout=_CIRCUIT_BREAKER_TIMEOUT):
             logger.error(
                 f"Memory Circuit Breaker: retrieval exceeded {_CIRCUIT_BREAKER_TIMEOUT}s. "
-                "Returning empty payload. Tune MEMORY_CIRCUIT_BREAKER_TIMEOUT if needed."
+                "Returning empty payload. The '[memory] stage ...' warnings above show "
+                "which store was slow."
             )
             return _empty
 
@@ -677,6 +844,13 @@ If the query is too simple to extract anything meaningful, return {"new_hints": 
 # Global orchestrator instance for Phase 3 backward compatibility in LangGraph
 _orchestrator = MemoryOrchestrator(llm_client=None)
 
+# Open connections and load the embedding model in the background at import,
+# so the first user request doesn't pay for them. MEMORY_WARMUP=0 disables
+# this (e.g. in tests).
+if os.environ.get("MEMORY_WARMUP", "1") != "0":
+    threading.Thread(target=_orchestrator.warm_up, name="memory-warmup", daemon=True).start()
+
+
 def retrieve_memory(query: str, state: ETLState) -> Dict:
     """
     Phase 3 entry point: Delegates to the Tiered MemoryOrchestrator.
@@ -700,4 +874,3 @@ def store_user_preference(preference: str, state: ETLState) -> bool:
     return _orchestrator.store_user_preference(
         preference, session_id, scope_id=_memory_scope(user_id, session_id)
     )
-

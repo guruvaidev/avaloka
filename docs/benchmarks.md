@@ -5,13 +5,25 @@ and it is not a marketing number — it is the regression harness the project
 uses to know whether a change broke the data-science paths.
 
 ```bash
-python -m avaloka.benchmark run                 # print the scorecard
-python -m avaloka.benchmark run --json out.json # machine-readable
+python -m avaloka.benchmark run                      # print the scorecard
+python -m avaloka.benchmark run --json out.json      # machine-readable
+python -m avaloka.benchmark run --family data_science
+python -m avaloka.benchmark run --kaggle             # + downloaded Kaggle datasets
+avaloka benchmark                                    # the same suite via the CLI
 ```
+
+The flags are declared in `avaloka/benchmark/__main__.py`; `--out` sets the
+artifacts directory (a temp dir by default) and `--quiet` suppresses per-task
+progress. The process **exits 1 if any non-skip run failed**, so CI can gate on
+it directly. `avaloka/benchmark/README.md` documents what each task proves.
 
 ## Current scorecard
 
-**17/17 passed — overall 1.00**
+**17/17 passed — overall 1.00**, measured on `develop-1.6` with no API keys set.
+The 12 tasks in `avaloka/benchmark/suite.py` expand to 17 runs because several
+are run once per source scheme. Scores are reproducible; the **times are not** —
+they come from one run on one machine and are included only to show the order of
+magnitude.
 
 | Family | Score |
 | --- | ---: |
@@ -40,6 +52,9 @@ python -m avaloka.benchmark run --json out.json # machine-readable
 | `ds_analysis_gating_and_swarm` | analyze | file | 1.00 | 0.0s |
 | `ds_analysis_gating_and_swarm` | analyze+coordinate | fleet | 1.00 | 0.2s |
 
+Every task name above is a `name=` literal in `avaloka/benchmark/suite.py`, and
+the source column is that task's `source_schemes`.
+
 ## What the tasks check
 
 The **data-engineering** tasks read the same dataset through every supported
@@ -65,7 +80,10 @@ Stated plainly, because a perfect score invites the wrong reading.
 **It does not compare language models.** The suite scores 17/17 with every API
 key unset — it never calls an LLM. It exercises Avaloka's own Python: the
 ingestion paths, the split logic, the leakage checks. Running it against a
-different model would produce identical scores and tell you nothing.
+different model would produce identical scores and tell you nothing. The
+key-unset run is reproduced verbatim in
+[test-reports/1.6-reliability-measurements.md](test-reports/1.6-reliability-measurements.md),
+which is also where the reason not to publish a model matrix over it is set out.
 
 **A saturated score is a floor, not a ceiling.** Every task passing means
 nothing regressed, not that the system is finished. Tasks are added when a

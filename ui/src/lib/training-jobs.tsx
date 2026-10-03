@@ -239,11 +239,6 @@ export function TrainingJobsProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const onComplete = ({ job, result }: CompleteEvent) => {
       if (job.status === "done") {
-        toast.success("Model training finished", {
-          description: job.label,
-          duration: 10_000,
-          action: { label: "View results", onClick: () => goToThread(job) },
-        });
         try {
           if (typeof Notification !== "undefined" && Notification.permission === "granted") {
             const n = new Notification("Model training finished", {

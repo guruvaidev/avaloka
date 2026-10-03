@@ -8,7 +8,7 @@ This directory hosts two complementary deployment paths:
 2. **Kubernetes + Ray/KubeRay** — the newer, multi-cloud provider abstraction that
    can connect to an existing Ray cluster or provision a fresh one (local `kind`,
    GKE, or EKS), install KubeRay, deploy avaloka, and stand up Ray Serve for
-   inference-as-a-service. See [Part B](#part-b--deploying-avaloka-on-kubernetes-rraykuberay).
+   inference-as-a-service. See [Part B](#part-b--deploying-avaloka-on-kubernetes-raykuberay).
 
 ---
 

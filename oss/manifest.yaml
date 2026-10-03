@@ -81,7 +81,7 @@ assert_present:
   # pyarrow==16.1.0 ships cp38-cp312 wheels only. An uncapped floor sends a
   # 3.13+ interpreter into an Arrow C++ source build.
   pyproject.toml:
-    - ">=3.10,<3.13"
+    - ">=3.11,<3.13"
 assert_absent:
   README.md:
     - "SUPABASE_JWT_SECRET"

@@ -45,15 +45,22 @@ Confusing the two is the main way this could be implemented badly.
 
 ## 3. What Avaloka already has
 
+**Branch note.** Two rows below cite paths that are **not on `develop-1.6`**:
+`deploy/openclaw/skills/` is on `origin/develop-1.7`, and `benchmarks/run.py`
+is on `origin/benchmarks-develop-1.7` (there is no `benchmarks/` directory on
+this branch). Checked with `git ls-tree -r --name-only <ref>`. Read "Avaloka
+today" as "somewhere in the active line of development", not "in the tree you
+are reading".
+
 | WikiSkill component | Avaloka today | Gap |
 | --- | --- | --- |
 | Raw execution experience | Telemetry JSONL (companion design); Ledger records | Traces are not retained locally in a structured form |
 | Persistent wiki | — | **Missing. This is the build.** |
-| Executable skills | `deploy/openclaw/skills/avaloka-discovery/SKILL.md` — already YAML-front-mattered with `name`, `description`, `agent.model`, `tools` | Only one skill; no `PURPOSE.md`; nothing writes them |
-| Validation gate | `benchmarks/run.py`, five tracks, deterministic scoring, cost accounting | Ready as-is |
-| Named skill targets | 11 fireflies: `data_scout`, `sampling_specialist`, `data_engineer`, `analysis_planner`, `ml_engineer`, `model_scientist`, `validator`, `finops`, `reporter`, … | Each is a natural skill boundary |
+| Executable skills | `deploy/openclaw/skills/avaloka-discovery/SKILL.md` (on `develop-1.7`) — already YAML-front-mattered with `name`, `description`, `agent.model`, `tools` | Only one skill; no `PURPOSE.md`; nothing writes them |
+| Validation gate | `benchmarks/run.py` (on `benchmarks-develop-1.7`) — three tracks there today (`adaptive_sampling`, `reliability`, `swarm_ablation`), deterministic scoring, cost accounting | Ready as-is on that branch; absent on 1.6 |
+| Named skill targets | **9** fireflies — `data_scout`, `sampling_specialist`, `data_engineer`, `analysis_planner`, `model_scientist`, `validator`, `finops`, `ml_engineer`, `reporter` (one module each under `avaloka/fireflies/`, and the same nine keys in `CLONE` at `avaloka/swarm.py:20-29`) | Each is a natural skill boundary |
 
-The `SKILL.md` format is already the artifact WikiSkill compiles to. That is an unusual amount of alignment for a paper published this month, and it means the work is mostly plumbing rather than invention.
+The `SKILL.md` format is already the artifact WikiSkill compiles to, which means the work is mostly plumbing rather than invention — once the 1.7 branches that carry both prerequisites are merged.
 
 The *Design Doc for Stats Agent* also already proposed the correct acceptance rule — no prompt change merges unless the DAB suite strictly improves. That rule is WikiSkill's validation step, written before we read the paper.
 

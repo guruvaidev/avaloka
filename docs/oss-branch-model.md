@@ -7,6 +7,12 @@ editing it directly is not supported — the next generation overwrites it.
 develop-1.6  ──(scripts/generate-oss.sh)──▶  oss/1.6  ──▶  github.com/guruvaidev/avaloka
 ```
 
+The two remotes this involves are `origin`
+(`git@bitbucket.org:kamaliincteam/avaloka-dev.git`, internal) and `github`
+(`git@github.com:guruvaidev/avaloka.git`, public) — `git remote -v` in a
+checkout of this branch shows both. `SRC_BRANCH` defaults to `develop-1.6`
+(`scripts/generate-oss.sh:12`).
+
 ## Why this changed
 
 `oss/1.6` had been maintained by hand, merging from `develop-1.6` when someone
@@ -41,8 +47,8 @@ onto `oss/1.6` silently reverts that, along with the scale-boundary language
 (`support@avaloka.ai`, "at your own risk", "Not tested on"). That has happened.
 
 So the README is spliced, not copied: `oss/overlay/README.quickstart.md`
-replaces the `## Quickstart` section, and five invariants are asserted after
-every generation. A violation aborts before anything is written.
+replaces the `## Quickstart` section, and five README invariants are asserted
+after every generation. A violation aborts before anything is written.
 
 ```
 == invariants ==
@@ -52,6 +58,35 @@ every generation. A violation aborts before anything is written.
    ok   README.md absent: SUPABASE_JWT_SECRET
    ok   README.md absent: redis-server
 ```
+
+Those five are the README's. The manifest asserts four more kinds besides, and
+the script fails the run on any of them:
+
+| Manifest key | What it checks |
+| --- | --- |
+| `assert_present` / `assert_absent` | Literal substrings in named files — the README five, plus the `factory.py` commercial gate, the `.gitignore` rules that guard the withheld paths, and the `pyproject.toml` Python range |
+| `assert_no_paths` | Globs that must match nothing in the generated tree: `**/*.sty`, `**/*.bst`, `artifacts/**`, `**/.lovable/**`, `docs/research/**/*.tex`, `avaloka/arena/**`, `tests/arena/**` |
+| `assert_no_secrets` | Credential prefixes (`sk-or-v1-`, `gsk_`, `sk-ant-`, `ghp_`) with at least 20 trailing credential-ish characters, plus PEM private-key headers built at runtime so the manifest does not itself trip the scanner |
+| `assert_unreachable` | `.env` and `.env.bak.pre-docker-switch` must not be reachable from the ref about to be pushed — a tree check is not enough, see below |
+
+### A literal assertion goes stale when the file it names changes
+
+`assert_present.pyproject.toml` currently asserts the substring
+`">=3.10,<3.13"`. `pyproject.toml:16` now reads `requires-python = ">=3.11,<3.13"`
+— the floor was raised because `app/services/session_service.py:170` uses
+`asyncio.timeout`, which is 3.11+. The substring no longer occurs:
+
+```bash
+$ grep -c '>=3.10,<3.13' pyproject.toml
+0
+```
+
+So the invariant **fails and generation refuses to write** until the manifest is
+updated to `">=3.11,<3.13"`. This is the mechanism working — the assertion
+exists because `pyarrow==16.1.0` ships cp38–cp312 wheels only and an uncapped
+floor sends a 3.13+ interpreter into an Arrow C++ source build — but it is also
+the mechanism's cost: a substring assertion has to be maintained alongside the
+file it guards. Fix the manifest, do not delete the assertion.
 
 ## Why exclusion works here
 
@@ -75,7 +110,38 @@ there is a reason:
 | Product code | full | full |
 | Enterprise features | yes | withheld |
 | Research paper | full conference bundle, buildable | compiled PDFs only |
-| Internal planning notes | yes | withheld |
+| Internal planning notes | yes | **partly** — see below |
+
+"Internal planning notes are withheld" is true of exactly one path:
+`ui/.lovable/`. It is **not** a general guarantee about `docs/`. The manifest's
+`exclude:` list withholds `artifacts/`, `ui/.lovable/`, `avaloka/arena/`,
+`tests/arena/`, the stray `2.2.0` file,
+`docs/Avaloka-1.6-Master-Test-Plan.xlsx`, `research_paper/` and the sources
+under `docs/research/` — and nothing else. Every other file under `docs/` is
+published, so **a document that should not be public has to be deleted from
+`develop-1.6` or added to `exclude:`; there is no third state.**
+
+Four documents were published that way until the 1.6 documentation refresh, and
+they were retired from `develop-1.6` rather than added to `exclude:`, because
+each was stale on *both* branches rather than merely internal:
+
+| Retired | Why |
+| --- | --- |
+| `docs/OSS_LAUNCH_READINESS.md` | A launch plan for a date that has passed, naming the internal GCP project id, the hosted Supabase project URL and twelve internal PR numbers, with its go/no-go boxes still unticked — so a reader could not tell whether the credential rotation it describes ever happened |
+| `docs/TEST_PLAN-1.5.2.md`, `docs/TEST_REPORT-1.5.2.md` | 58 KB of QA material for `feature/k8s-deploy-1.5.2`, a branch two releases gone. Three of its four Day-0 blockers are now false — the chart has `celery.yaml`, `mlflow.yaml` and `mcp.yaml` — and its defect register of P0 findings carried no way to tell which entries were still open |
+| `docs/TASK-conversational-friendliness.md` | An internal ticket (`Owner: TBD`), whose two headline findings were measured against a `track6` harness that is not on this branch |
+
+Git history keeps all four. The durable lessons were folded into the documents
+that are maintained: [`testing.md`](testing.md) for the test tiers,
+[`test-reports/three-pillar-coverage.md`](test-reports/three-pillar-coverage.md)
+for the conversational probes, and [`DOCS_MAP.md`](DOCS_MAP.md) for what each
+surviving document is for.
+
+> **Retiring a QA document does not close the defects it recorded.** Two items
+> from the 1.5.2 register were re-verified during the refresh and are still
+> live in code; they were handed to the release lead rather than left in a
+> stale register. Check the issue tracker, not this directory, for defect
+> status — `docs/` has never been the right place for it.
 
 The research split is the clearest case. `develop-1.6` keeps the whole ICLR
 bundle — `.tex`, `.bib`, and the templates — so the paper can actually be

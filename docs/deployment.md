@@ -7,8 +7,11 @@ bootstrap path works across all of them, thanks to the provider abstraction in
 
 The open-source edition **provisions** a local `kind` cluster and **connects**
 to anything else. Provisioning a managed cloud cluster (GKE, EKS, AKS) is a
-commercial capability and is refused in an open-source build — see
-[Cloud clusters, load balancing and scale](#4-a-cluster-you-already-run).
+commercial capability; provider modules for all three exist
+(`app/infra/providers/{gcp_gke,aws_eks,azure_aks}.py`) and the open-source
+overlay refuses them at `get_provider()` — see
+[Cloud clusters, load balancing and scale](#4-a-cluster-you-already-run) for
+exactly where that gate lives and where it does not.
 
 Ray, the Ray images, and the KubeRay operator are aligned on a single Ray
 version — see the [version matrix](versions.md).
@@ -28,7 +31,7 @@ version — see the [version matrix](versions.md).
 | Local | `kind` (`brew install kind`) |
 | GCP (GKE) | `gcloud` authenticated, `GCP_PROJECT_ID` set |
 | AWS (EKS) | `aws` authenticated, `AWS_REGION` / `AWS_EKS_CLUSTER_ROLE_ARN` / `AWS_SUBNET_IDS` / `AWS_SECURITY_GROUP_IDS` set |
-| Azure (AKS) | `az` authenticated *(provider is on the roadmap)* |
+| Azure (AKS) | `az` authenticated, `AZURE_RESOURCE_GROUP` set |
 
 Export the agent LLM keys before deploying — they are injected into the avaloka
 Secret at install time:
@@ -39,12 +42,21 @@ export GROQ_API_KEY_CODING_AGENT=...
 export OPENROUTER_API_KEY=...        # optional backup provider
 ```
 
-`OPENROUTER_API_KEY` is optional. Groq's token-per-minute limit is enforced per
-organisation, so both Groq keys share one budget; when the planner exhausts it
-the provider returns 429. Setting this key lets the planner retry such failures
-— plus 404 and 5xx — on OpenRouter. It reaches the pod through
-`secrets.openrouterKey` in the chart, and the Secret key is only emitted when a
-value is supplied.
+Those two Groq keys are what a chart deployment needs, because the chart pins
+the provider: `inference.provider` defaults to `"groq"` and
+`deploy/helm/avaloka/templates/configmap.yaml:31` always emits
+`INFERENCE_PROVIDER`. A *local*
+install behaves differently — with `INFERENCE_PROVIDER` unset,
+`app/core/inference.py` resolves the default to OpenRouter, preferring whichever
+provider actually has a key. To get that behaviour in-cluster, set
+`--set inference.provider=openrouter` alongside the key.
+
+`OPENROUTER_API_KEY` is otherwise optional and does a second, narrower job.
+Groq's token-per-minute limit is enforced per organisation, so both Groq keys
+share one budget; when the planner exhausts it the provider returns 429. Setting
+this key lets the planner retry such failures — plus 404 and 5xx — on
+OpenRouter. It reaches the pod through `secrets.openrouterKey`, and the Secret
+key is only emitted when a value is supplied.
 
 ## 2. Quick start (local kind)
 
@@ -56,8 +68,10 @@ make up PROVIDER=local
 This one command:
 
 1. Preflights your tools.
-2. Builds the `avaloka:latest` and `avaloka-ray:latest` images and side-loads
-   them into the kind nodes.
+2. Builds four images — `avaloka-api:latest`, `avaloka-ray:latest`,
+   `avaloka-ui:latest` and `avaloka-functions:latest`
+   (`app/infra/deploy_stack.py:35-39`) — and side-loads them into the kind
+   nodes.
 3. Creates the kind cluster from `deploy/clusters/kind-cluster.yaml` (control
    plane + one worker, with NodePort mappings to the host).
 4. Installs the **KubeRay operator**.
@@ -69,16 +83,35 @@ When it finishes:
 
 | Surface | Access |
 | ------- | ------ |
-| Avaloka API | <http://localhost:9000> (kind NodePort 30085); docs at `/docs`, health at `/health` |
-| Avaloka Web UI (opt-in) | enable with `ui.enabled=true`; NodePort 30086 → <http://localhost:8501> |
+| Avaloka API | <http://localhost:9010> — kind maps NodePort 30085 to host port **9010**, not 9000 (`deploy/clusters/kind-cluster.yaml:15-16`); docs at `/docs`, health at `/health` |
+| Avaloka Web UI (React/SSR) | <http://localhost:30090> — `webui.enabled`, **on by default**, NodePort 30090 |
+| Streamlit UI (opt-in) | `--set ui.enabled=true`; NodePort 30086 → port 8501. Off by default. A different thing from the React UI above. |
+| Local Supabase gateway | <http://localhost:30091> (kong) |
+| MinIO console | <http://localhost:30092> — *if* the pod starts; see below |
 | Ray dashboard | <http://localhost:8265> (kind NodePort 30265) |
 | Inference | `kubectl port-forward svc/avaloka-inference-serve-svc 8000:8000` |
 
+> **Port 9000 vs 9010.** The container and the Service both use 9000, so
+> `kubectl port-forward svc/avaloka 9000:9000` gives you 9000. The kind
+> *NodePort* path is the one that lands on 9010. Both are correct; they are
+> different routes.
+
+> **MinIO will not start.** `minio.enabled` is `true` by default
+> (`values.yaml:198`) and its images are not pullable from any registry right
+> now — anonymous requests to `quay.io/minio/minio`, `quay.io/minio/mc` and the
+> Docker Hub equivalents all return `401`, while a control request to
+> `quay.io/coreos/etcd:v3.5.16` returns `200`. Expect that pod in
+> `ImagePullBackOff` after `make up`. Uploads fail with HTTP 500 until you
+> mirror the images and override `minio.image` / `minio.mcImage`, or set
+> `minio.enabled=false` and point at object storage you run. The SeaweedFS
+> replacement is on `feat/seaweedfs-object-storage` and is **not merged**.
+
 The chart deploys the **avaloka API** (FastAPI/uvicorn on `:9000`) as the primary
-workload, along with a small in-cluster Redis it depends on. The web UI (the
-React app in `ui/`) is opt-in (`--set ui.enabled=true`). The primary web UI is a
-React.js app (built with Lovable) served from `ui/` with a local Supabase
-database — see the root README.
+workload, along with a small in-cluster Redis it depends on. The React app in
+`ui/` ships as the `webui` component — a Node SSR server on container port 3000,
+`webui.enabled: true` by default — with a local Supabase database; see the root
+README. The separate `ui` block is an **optional Streamlit** surface on 8501 and
+is off by default, so `ui.enabled=true` does not turn on the React UI.
 
 Tear down:
 
@@ -99,7 +132,11 @@ make connect RAY_ADDRESS=ray://<head-host>:10001
 ## Images: pull, or build
 
 Avaloka's own images are published to **GHCR** by
-`.github/workflows/images.yml` on every tag and on `main`:
+`.github/workflows/images.yml`, which runs on pushes to `main`, `develop-1.6`
+and `oss/**`, and on `v*` tags — but only when something that actually goes
+into an image changes (`app/`, `ui/`, `requirements.txt`, `pyproject.toml`,
+`deploy/docker/**`). All four images are currently published and pull
+anonymously:
 
 | Image | What it runs |
 | --- | --- |
@@ -112,8 +149,20 @@ Built for `linux/amd64` and `linux/arm64`, so Apple Silicon works without
 emulation, and published with build provenance you can verify:
 
 ```bash
-gh attestation verify oci://ghcr.io/guruvaidev/avaloka-api:1.0.0 \
+gh attestation verify oci://ghcr.io/guruvaidev/avaloka-api:main \
   --owner guruvaidev
+```
+
+**Which tags exist.** Verified against the registry: every one of the four
+repositories serves `main` and `latest`, plus the content tags described below
+and a `sha-<short>` tag per build. There are **no semver tags** —
+`images.yml` would publish them on a `v*` git tag, but no such tag has been
+pushed, so `:1.0.0` and `:1.6.0` do not resolve. There is also no
+`develop-1.6` tag today, despite that branch being a build trigger. Use `main`,
+or a content tag, and check before you pin:
+
+```bash
+docker manifest inspect ghcr.io/guruvaidev/avaloka-api:main
 ```
 
 The chart defaults to these, so `helm install` needs no Docker and no build.
@@ -166,12 +215,38 @@ branches, and a local `docker build` can use it too — so `develop-1.6` reuses
 
 ### Which tag does the chart use?
 
-| Branch | Chart default | Why |
-| --- | --- | --- |
-| `oss/1.6` (release) | `1.0.0` | a released version, pinned |
-| `develop-1.6` | `develop-1.6` | the branch tag, rebuilt when the image changes |
+`main`, for every image, on every branch:
 
-For a reproducible deployment, pin the content tag instead:
+| Chart value | Default | Exists on GHCR? |
+| --- | --- | --- |
+| `image.repository` / `.tag` (api) | `ghcr.io/guruvaidev/avaloka-api` / `main` | yes |
+| `webui.image.repository` / `.tag` | `ghcr.io/guruvaidev/avaloka-ui` / `main` | yes |
+| `ui.image.repository` / `.tag` (Streamlit) | `ghcr.io/guruvaidev/avaloka-ray` / `main` | yes |
+| `supabase.functions.image` | `ghcr.io/guruvaidev/avaloka-functions:main` | yes |
+
+> **The Ray cluster image is not one of these.** There is no `ray.image` value
+> — `ray:` in `values.yaml` carries only `connectExisting`, `address` and
+> `inClusterAddress`. The RayCluster and RayService CRs hard-code the bare name
+> `avaloka-ray:latest`
+> (`deploy/helm/ray/raycluster.yaml:32,80`, `deploy/helm/ray/rayservice.yaml:42,73`),
+> which resolves to Docker Hub, where it does not exist. That is invisible on
+> `kind`, because `make up` side-loads the image and `IfNotPresent` then never
+> pulls — and it is `ImagePullBackOff` on any cluster that cannot side-load.
+> **Edit those two manifests to a registry path before deploying Ray anywhere
+> else.** This is the same defect class the warning above describes, still
+> present in the Ray manifests.
+
+> **This is where a release broke before.** The chart once pinned
+> `develop-1.6`, a tag that has never existed on GHCR, so `helm install` hit
+> `ImagePullBackOff` on every service. Before changing an image tag in
+> `values.yaml`, resolve it against the registry — a tag that reads plausibly
+> and 404s costs every user of that chart a debugging session.
+> `tests/contract/test_c2_chart_invariants.py` guards the related failure (a
+> bare image name resolving to Docker Hub) but it cannot tell you whether a
+> registry tag exists.
+
+`main` is a mutable tag: the same reference means different bits over time. For
+a reproducible deployment, pin the content tag instead:
 
 ```bash
 helm upgrade --install avaloka deploy/helm/avaloka \
@@ -205,17 +280,32 @@ make up PROVIDER=local          # provisions kind
 # or point kubectl at your own cluster and install the chart directly
 ```
 
-**`PROVIDER=gcp|aws|azure` is a commercial capability and an open-source build
-refuses it** — `get_provider()` raises rather than creating a billable managed
-cluster. What open source *does* support is deploying into a cluster you
-provisioned yourself, wherever it runs: the chart, Ray/KubeRay, distributed
-execution and the scheduler all work against any cluster your `kubeconfig`
-reaches.
+**`PROVIDER=gcp|aws|azure` is a commercial capability and the open-source
+distribution refuses it.** `get_provider()` raises
+`CommercialCapabilityRequired` for `gcp`, `aws` and `azure` unless
+`resolve_capabilities(...)` reports `cloud_provisioning`.
 
-On a cluster with a cloud load-balancer controller the avaloka `Service`
-defaults to `LoadBalancer`. Image delivery is environment-specific: push
-`avaloka:latest` and `avaloka-ray:latest` to your registry and set the chart
-`image.repository` and the RayCluster image accordingly.
+Be precise about where that gate lives: it is in
+`oss/overlay/app/infra/providers/factory.py`, the overlay
+`scripts/generate-oss.sh` applies when it builds the public tree from
+`develop-1.6` per `oss/manifest.yaml`. The copy of `factory.py` on
+`develop-1.6` has **no** such check — it resolves all four providers
+unconditionally. So the refusal is real in the open-source release you
+installed, and absent in an internal development checkout. If you are working
+from `develop-1.6` directly, nothing stops `make up PROVIDER=gcp` from creating
+a billable cluster; check your `PROVIDER` rather than relying on the gate.
+
+What open source *does* support is deploying into a cluster you provisioned
+yourself, wherever it runs: the chart, Ray/KubeRay, distributed execution and
+the scheduler all work against any cluster your `kubeconfig` reaches.
+
+On a cluster with a cloud load-balancer controller, set
+`--set service.type=LoadBalancer`; the chart default is `NodePort`
+(`values.yaml`, `service.type`), which suits kind. For images, the chart
+defaults already point at GHCR and need no change. What *does* need changing is
+the RayCluster/RayService image: push `avaloka-ray` to a registry your cluster
+can reach and edit `deploy/helm/ray/raycluster.yaml` and
+`deploy/helm/ray/rayservice.yaml`, which currently name it bare.
 
 > **Scope.** The open-source edition is sized for a laptop or a small
 > self-managed cluster, and that is what is tested. Provisioned and autoscaled
@@ -263,20 +353,26 @@ Useful flags: `--service-type ClusterIP|NodePort|LoadBalancer`, `--skip-serve`,
 | Value | Meaning |
 | ----- | ------- |
 | `image.repository` / `image.tag` / `image.pullPolicy` | The API image (`avaloka-api`). `IfNotPresent` for side-loaded kind images; `Always` + a registry path for cloud. |
-| `service.type` / `port` / `nodePort` | API on `:9000`; `NodePort` 30085 locally, `LoadBalancer` on cloud. |
+| `service.type` / `port` / `nodePort` | API on `:9000`; default `NodePort` 30085 (reached on host port 9010 under kind). Set `LoadBalancer` explicitly for cloud. |
 | `redis.enabled` / `redis.externalUrl` | Ship a small in-cluster Redis (default) or point at an external one — the API needs Redis for sessions/uploads/inference. |
-| `ui.enabled` | Opt-in web UI as a second Deployment/Service on `:8501` (NodePort 30086). Off by default. |
+| `webui.enabled` | The React/SSR web UI (`avaloka-ui`), Node on container port 3000, NodePort 30090. **On by default.** |
+| `ui.enabled` | Opt-in **Streamlit** UI as a second Deployment/Service on `:8501` (NodePort 30086). Off by default. Not the React UI. |
+| `minio.enabled` | In-cluster object store. On by default, but its images cannot be pulled — see §2. |
 | `config.inferenceBackend` / `config.rayServeUrl` | `rayserve` (default) posts predictions to the in-cluster Ray Serve service; `gateway` uses the MTA v2 managed path. |
 | `ray.connectExisting` / `ray.address` | Attach to an external Ray cluster vs. use the in-cluster one. |
 | `ray.inClusterAddress` | `ray://avaloka-raycluster-head-svc:10001`. |
-| `secrets.groqPlanningKey` / `groqCodingKey` / `jwtSecret` / `existingSecret` | LLM keys + JWT secret, injected at install; or reference a pre-created Secret. |
+| `secrets.groqPlanningKey` / `groqCodingKey` / `jwtSecret` / `existingSecret` | Planner and coder LLM keys + JWT secret, injected at install; or reference a pre-created Secret. `secrets.groqApiKey` is a third, separate key read only by `app/agents/visualization_agent.py`. |
+| `inference.provider` | `groq` by default; `local`, `openai`, `openrouter`, `bedrock`, `vertex` or `azure`. Always emitted as `INFERENCE_PROVIDER`, so it overrides the key-aware default in `app/core/inference.py`. |
 | `secrets.openrouterKey` | Optional OpenRouter key arming the planner's backup provider on 429/404/5xx. Omitted from the Secret when empty. |
 | `rbac.create` / `serviceAccount` | In-cluster RBAC so the app can submit Ray jobs and patch RayServices. |
 | `resources`, `nodeSelector`/`tolerations`/`affinity` | Standard scheduling/scaling controls. |
 
-Per-cloud overlays live in `deploy/avaloka/values/` (`values-gke.yaml`,
-`values-eks.yaml`, `values-aks.yaml`, `values-minikube.yaml`,
-`values-onprem.yaml`).
+Per-cloud overlays live beside the chart in `deploy/helm/avaloka/values/`
+(`values-gke.yaml`, `values-gke-app.yaml`, `values-eks.yaml`,
+`values-aks.yaml`, `values-minikube.yaml`, `values-onprem.yaml`) — that is the
+directory `tests/contract/test_c2_chart_invariants.py` asserts against. A
+second, older copy of five of them also exists under `deploy/avaloka/values/`;
+prefer the chart-adjacent set.
 
 Validate a chart change without a cluster:
 
@@ -293,8 +389,8 @@ helm template deploy/helm/avaloka
 - **RayService** (`deploy/helm/ray/rayservice.yaml`): `avaloka-inference`,
   Serve import path `app.serve.inference:app`, service
   `avaloka-inference-serve-svc:8000`.
-- **Operator version** is set by `KUBERAY_OPERATOR_VERSION` in
-  `app/infra/ray_manager.py`.
+- **Operator version** is `1.4.2`, the default of `KUBERAY_OPERATOR_VERSION` in
+  `app/infra/ray_manager.py:34`; override it with that environment variable.
 
 Because the app and the Ray cluster communicate over the Ray Client protocol
 (`ray://…:10001`), **the Ray version must match on both ends** — the app image
@@ -374,7 +470,7 @@ own `persistence.storageClass`.
 | `postgres.persistence.size` | 20Gi | layer-3 artifact store, keyed by user |
 | `redis.persistence.size` | 8Gi | layer-1 schema cache, session hints and preferences |
 | `chroma.persistence.size` | see values.yaml | layer-2 user signature |
-| `minio.persistence.size` | 20Gi | uploaded datasets and trained models |
+| `minio.persistence.size` | 20Gi | uploaded datasets and trained models — note the MinIO pod cannot start at all right now (§2) |
 
 ### Redis durability
 
@@ -413,7 +509,11 @@ MinIO and MCP keep their existing claims and are untouched by the upgrade.
 ```bash
 make status                      # pods, services, RayClusters, RayServices
 
-# API health (chart primary workload, NodePort 30085 -> localhost:9000)
+# API health. Two routes, two ports:
+#   kind NodePort 30085 is mapped to host 9010 by deploy/clusters/kind-cluster.yaml
+curl http://localhost:9010/health
+#   or forward the Service explicitly
+kubectl port-forward svc/avaloka 9000:9000 &
 curl http://localhost:9000/health
 
 # Ray dashboard / version (should match the version matrix)
@@ -426,6 +526,9 @@ curl http://localhost:8000/                 # readiness
 curl -XPOST http://localhost:8000/ -d '{"features":{"a":1}}'
 ```
 
+`/health` returns `graph_ready`, `redis_connected` and `langgraph_url`
+(`app/api/server.py:1198-1203`) — check it before anything else.
+
 The [testing guide](testing.md) formalizes this into tiers (deploy-logic →
 cluster deployment → KubeRay execution → agent workloads → multi-cloud matrix).
 Use it as the source of truth for what "a working deployment" must prove.
@@ -437,6 +540,8 @@ Use it as the source of truth for what "a working deployment" must prove.
   `kubectl delete` against a non-`kind`/`minikube` context without an explicit
   opt-in (`AVALOKA_TEST_ALLOW_CLOUD=1`). Check your current context with
   `kubectl config current-context` before running `make down`.
-- **Keep secrets out of git.** Provide `GROQ_*`, cloud credentials, and
-  `JWT_SECRET` via environment/Secrets, never in committed values files.
+- **Keep secrets out of git.** Provide model-provider keys, cloud credentials,
+  and `SUPABASE_JWT_SECRET` via environment/Secrets, never in committed values
+  files. The variable is `SUPABASE_JWT_SECRET`; `JWT_SECRET` is only the Python
+  name it is bound to (`app/api/server.py:322`) and setting it does nothing.
 - **Don't expose the Ray dashboard publicly** — it has no authentication.
