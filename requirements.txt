@@ -63,7 +63,7 @@ deltalake>=0.17.2        # used by Delta connector (DeltaTable)
 pyiceberg>=0.5.1         # used by Iceberg connector
 
 # --- UI / app ---
-pyarrow==16.1.0
+pyarrow==25.0.1
 kaggle
 
 
