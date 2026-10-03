@@ -311,23 +311,16 @@ dependency — Postgres, Redis, MinIO, Chroma, Supabase and the LangGraph server
 ```bash
 kind create cluster --name avaloka          # or use an existing cluster
 
-# Which images are actually published, checked 2026-10-02:
-#   ghcr.io/guruvaidev/avaloka-api:main        published, amd64 + arm64
-#   ghcr.io/guruvaidev/avaloka-ray:main        published, amd64 + arm64
-#   ghcr.io/guruvaidev/avaloka-functions:main  published, amd64 + arm64
-#   ghcr.io/guruvaidev/avaloka-ui              NOT PUBLISHED -- build it locally
+# All four images are published and public, checked 2026-10-03.
+# Each is multi-arch (linux/amd64 + linux/arm64) and pullable with no login:
+#   ghcr.io/guruvaidev/avaloka-api:main
+#   ghcr.io/guruvaidev/avaloka-ray:main
+#   ghcr.io/guruvaidev/avaloka-functions:main
+#   ghcr.io/guruvaidev/avaloka-ui:main
 #
-# avaloka-ui has never been pushed: the images workflow built it with the
-# repository root as the Docker context, where ui/Dockerfile's first
-# instruction (`COPY package*.json ./`) matches nothing and `npm ci` fails.
-# Fixed in .github/workflows/images.yml, but no successful run has published
-# it yet, so `webui.enabled` (on by default) needs a local build:
-#
-#   docker build -t avaloka-ui:latest -f ui/Dockerfile ui   # context is ui, not .
-#   kind load docker-image avaloka-ui:latest --name avaloka
-#
-# `pullPolicy: IfNotPresent` means a side-loaded image is used and the registry
-# is never consulted. To build and load everything instead:
+# So nothing below needs building. `pullPolicy: IfNotPresent` means a
+# side-loaded image wins over the registry, which is what you want if you
+# are iterating locally; to build and load everything yourself instead:
 #   make -C deploy images-status               # what would need building?
 #   make -C deploy images-pull PROVIDER=local  # pull + kind-load what exists
 #   make -C deploy images PROVIDER=local       # build + kind-load the rest
@@ -355,6 +348,32 @@ while to build cold; the others are small.
 
 `/health` reports `graph_ready`, `redis_connected` and whether the LangGraph
 server upstream is reachable — check it before anything else.
+
+### A-minus. Just the API container
+
+If you only want the API — no cluster, no chart — the published image runs on
+its own:
+
+```bash
+docker run --rm -p 9000:9000 \
+  -e AVALOKA_ALLOW_INSECURE_AUTH=1 \
+  ghcr.io/guruvaidev/avaloka-api:main
+
+curl localhost:9000/health
+```
+
+`AVALOKA_ALLOW_INSECURE_AUTH=1` is not optional here, and the reason is worth
+knowing: the server refuses to start when `SUPABASE_JWT_SECRET` is unset,
+because HS256 verification against an empty secret accepts forged tokens. It
+fails loudly rather than starting with authentication quietly disabled. Set
+that flag for local work; set a real `SUPABASE_JWT_SECRET` for anything else.
+
+The CLI is in the same image, as a module rather than on `PATH`:
+
+```bash
+docker run --rm -v "$PWD:/data" ghcr.io/guruvaidev/avaloka-api:main \
+  python -m avaloka analyze /data/sales.csv --goal "why did revenue drop?"
+```
 
 > **Configure model keys through Helm values, never `kubectl patch`.** The
 > secret is re-rendered from chart values on every `helm upgrade`, so a patched
