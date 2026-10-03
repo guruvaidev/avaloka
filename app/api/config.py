@@ -30,7 +30,10 @@ SESSION_TTL_SECONDS = 7 * 24 * 3600
 MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", settings.mcp_server_url)
 MCP_TIMEOUT = float(os.getenv("MCP_TIMEOUT", str(settings.mcp_timeout)))
 
-LANGGRAPH_API_URL = os.getenv("LANGGRAPH_API_URL", "http://34.174.185.105:2024")
+# Default to a local LangGraph dev server. Deployments set this explicitly
+# (helm: avaloka.langgraphUrl; compose: docker.env), so the default only
+# ever applies to someone running the API straight from a checkout.
+LANGGRAPH_API_URL = os.getenv("LANGGRAPH_API_URL", "http://127.0.0.1:2024")
 UPSTREAM_TIMEOUT = float(os.getenv("UPSTREAM_TIMEOUT", "15.0"))
 
 MAX_CONTEXT_TURNS = int(os.getenv("MAX_CONTEXT_TURNS", "12"))
