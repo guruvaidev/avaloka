@@ -123,7 +123,14 @@ if blk:
         if not m:
             continue
         g = m.group(1).strip('"').strip("'")
-        hits = [str(p.relative_to(work)) for p in work.glob(g) if p.is_file()]
+        # A trailing "**" matches directories only before Python 3.13, so
+        # filtering to is_file() left these invariants counting zero and
+        # reporting ok on 3.11 and 3.12 -- our whole supported range. They
+        # appeared to work only on an interpreter newer than we support.
+        # Glob the "/*" form as well so the check is version-independent.
+        pats = [g] + ([g.rstrip("/") + "/*"] if g.rstrip("/").endswith("**") else [])
+        hits = sorted({str(p.relative_to(work))
+                       for pat in pats for p in work.glob(pat) if p.is_file()})
         print(f"   {'FAIL' if hits else 'ok  '} no path matches {g}"
               + (f"  ({len(hits)}: {', '.join(hits[:3])}{'...' if len(hits)>3 else ''})" if hits else ""))
         bad += bool(hits)

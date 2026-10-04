@@ -29,6 +29,27 @@ exclude:
   - path: research_paper/
     reason: >-
       Pre-move copy of the paper; docs/research/ is the live one.
+  - path: docs/research/iclr2026/
+    reason: >-
+      The conference submission bundle. keep_globs on docs/research/ below is
+      recursive, so without this entry iclr2026/Avaloka.pdf shipped to the
+      public tree -- a build from before the paper was corrected, still titled
+      "Optimizer-Aware" -- alongside the current Evidence-Gated paper. A public
+      reader got two papers making opposite claims about the same system. The
+      bundle is also where the third-party .sty/.bst templates live.
+  - path: docs/research/fig/Avaloka.png
+    reason: >-
+      Superseded architecture figure. The paper includes
+      fig/avaloka-architecture.pdf (avaloka-paper.tex:108); this one predates
+      the correction and still draws validation as a gate before execution.
+  - path: docs/evaluations/
+    reason: >-
+      Internal engineering assessments of infrastructure options, written for
+      the team deciding between them and not reviewed for publication. Withheld
+      before the directory reaches develop-1.6 rather than after: generation
+      publishes whatever the source branch carries, so the first sync after it
+      lands would otherwise ship it. This file is itself published, so the
+      reason stays general on purpose.
   - path: docs/research/
     keep_globs: ["*.pdf", "README.md", "*.png"]
     reason: >-
@@ -117,7 +138,14 @@ assert_no_paths:
   - "artifacts/**"      # committed test output
   - "**/.lovable/**"    # internal planning notes
   - "docs/research/**/*.tex"   # paper sources live on develop-1.6
+  # The stale conference build actually shipped: iclr2026/Avaloka.pdf, titled
+  # "Optimizer-Aware", went public beside the corrected Evidence-Gated paper.
+  - "docs/research/iclr2026/**"
+  - "docs/research/fig/Avaloka.png"   # superseded by avaloka-architecture.*
   - "docs/research/**/*.bib"
+  # Not in the source tree yet. The guard is here first so that the day the
+  # directory lands, a dropped or mistyped exclude entry fails the generation.
+  - "docs/evaluations/**/*"   # internal assessments, withheld above
   - "avaloka/arena/**"         # asserted by tests/test_oss_readiness.py
   - "tests/arena/**"
 

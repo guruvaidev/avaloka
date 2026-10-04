@@ -423,8 +423,29 @@ EGRESS_CHANNELS: Dict[str, Tuple[re.Pattern, str, Set[str]]] = {
             "app/core/inference.py",
         },
     ),
+    # The OpenAI-compatible CHAT path, which is not the embedding path below.
+    # langchain_openai carries both: ChatOpenAI for chat completions and
+    # OpenAIEmbeddings for vectors. Matching one regex on the package name
+    # conflated them, so a chart-generation LLM call landed in a channel
+    # described as embedding memory/RAG text. Where the prompt actually goes
+    # depends on configuration: AVALOKA_VISUALIZATION_BACKEND=openrouter sends
+    # it to a third party, =local sends it to a server the operator runs, and
+    # =groq does not use this client at all (see groq_llm_prompts above).
+    "openai_compatible_llm_prompts": (
+        re.compile(r"^[ \t]*(?:from[ \t]+langchain_openai|import[ \t]+langchain_openai)", re.M),
+        "chart and insight prompts, which embed column names and sampled values from the "
+        "result table (profile_columns, visualization_agent.py:255-283), go to OpenRouter "
+        "when the backend is openrouter -- a third party -- or to a local server when it is "
+        "local, which does not leave the operator's control",
+        {
+            "app/agents/visualization_agent.py",
+            "app/core/inference.py",
+            "app/core/model_fallback.py",
+            "app/services/embedding_utils.py",
+        },
+    ),
     "embedding_provider": (
-        re.compile(r"langchain_openai|OpenAIEmbeddings|OPENAI_API_KEY"),
+        re.compile(r"OpenAIEmbeddings|OPENAI_API_KEY"),
         "memory/RAG text is embedded by OpenAI when OPENAI_API_KEY is set, otherwise by "
         "local sentence-transformers, otherwise a zero-vector -- only the first leaves the cluster",
         {
@@ -432,7 +453,9 @@ EGRESS_CHANNELS: Dict[str, Tuple[re.Pattern, str, Set[str]]] = {
             # hosted model is available before it routes a turn.
             "app/agents/avaloka_agent/agent.py",
             "app/core/inference.py",
-            "app/core/model_fallback.py",
+            # model_fallback.py is NOT listed here any more: its only match was
+            # the langchain_openai package name, which is the chat client, not
+            # OpenAIEmbeddings. It is declared under openai_compatible_llm_prompts.
             "app/services/embedding_utils.py",
             "app/services/memory_runtime.py",
             # milvus_recorder.py is NOT listed: its only OPENAI_API_KEY mentions are

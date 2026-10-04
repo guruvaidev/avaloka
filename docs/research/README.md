@@ -361,31 +361,37 @@ than it is has been misled by this page.
 
 ## 7. How to read the PDF against this code
 
-[`../Avaloka-Research-Paper.pdf`](../Avaloka-Research-Paper.pdf) is the 7-page
-ICLR 2026 *Agents in the Wild* workshop submission ("Submitted to ICLR 2026
-Workshop on Agents in the Wild. Do not distribute."). It is byte-identical to
-`iclr2026/Avaloka.pdf`. It is an artifact of record and it predates the 1.6
-code. Where it and this repository disagree, **the repository is right** — these
-are the differences that matter:
+[`../Avaloka-Research-Paper.pdf`](../Avaloka-Research-Paper.pdf) is the ICLR
+2026 *Agents in the Wild* workshop paper, **rebuilt against the 1.6 code**. The
+version originally submitted described a system that had drifted from the
+implementation, and this build corrects it rather than reprinting it.
 
-| The PDF says | The code says |
+The table below is the audit that produced those corrections. It is kept
+because the corrections are the interesting part: each row is a claim that was
+checked against the tree, and the right-hand column is what the code actually
+does. Rows marked **corrected** no longer appear in the PDF you can download
+here; rows marked **open** are still true of it.
+
+| The submitted version said | What the code does |
 | --- | --- |
-| "Optimizer-aware" — in the title, abstract, first contribution, and a whole section | There is no database query optimizer anywhere in Avaloka: no EXPLAIN generation, no plan parsing, no cardinality or cost estimates. The nearest thing is `validate_join_safety` (`app/agents/validator.py:148-167`), which blocks cross joins from DataFrame row-count metadata and blocks outright when counts are unknown (`:157-159`). What occupies that slot is 2,562 lines of schema-grounded Python AST static analysis over pandas/sklearn, plus the machine-checkable result contract of §2.1. |
-| Validation gates run before execution | Two of four validators run after `execute_code` (`workflow.py:483-498`); the contract validator reads `execution_output_data` (`validator.py:2297`); the LLM layer cannot block by default (`validator.py:2270-2276`). The accurate description is *execute on a 100-row sample, then check the contract*. |
-| "Spark-on-Kubernetes / Ray" | pyspark is removed — schema and DDL inference use PyArrow, no JVM (`requirements.txt:17-18`, `app/agents/sampling_agent.py:28`). Real dependencies are `ray[air,serve]==2.49.2` (`requirements.txt:99`) and Daft (`:100,141`). |
-| All execution runs inside Kubernetes, "exclusively on Kubernetes" | Three execution substrates, local among them as a routed destination (§3, §4). |
-| Cloud-agnostic deployment | Multi-cloud in the provisioner, single-cloud in the serving path: `app/agents/mta_v2/` reads `GCP_PROJECT_ID` directly (`docs/architecture.md:336-344`). Treat AWS/Azure inference as manual configuration. |
-| The Scheduler deploys jobs as Kubernetes workloads | Celery + RedBeat on Redis (`app/agents/scheduler.py:10,16,24`). The state-replay claim beside it is correct. |
-| MCP yields "schemas, statistics, provenance" and runs `EXPLAIN` | Three tools — `query`, `list_tables`, `describe_table`. Schemas yes; statistics, provenance and EXPLAIN are not exposed. And the outbound direction — Avaloka as an MCP server — is missing from the PDF entirely. |
-| Sampling chosen to satisfy a latency or error target, BlinkDB-style | No answer-level approximation and no error bounds in the sampling path (§4). |
-| An eight-agent roster | Seventeen registered graph nodes (§4). |
-| An evaluation section, written in the future tense | The study it proposes was never run. Sections 5 and 6 above are the real state. |
+| **corrected.** "Optimizer-aware" — in the title, abstract, first contribution, and a whole section | There is no database query optimizer anywhere in Avaloka: no EXPLAIN generation, no plan parsing, no cardinality or cost estimates. The nearest thing is `validate_join_safety` (`app/agents/validator.py:148-167`), which blocks cross joins from DataFrame row-count metadata and blocks outright when counts are unknown (`:157-159`). What occupies that slot is 2,562 lines of schema-grounded Python AST static analysis over pandas/sklearn, plus the machine-checkable result contract of §2.1. |
+| **corrected.** Validation gates run before execution | Two of four validators run after `execute_code` (`workflow.py:483-498`); the contract validator reads `execution_output_data` (`validator.py:2297`); the LLM layer cannot block by default (`validator.py:2270-2276`). The accurate description is *execute on a 100-row sample, then check the contract*. |
+| **corrected.** "Spark-on-Kubernetes / Ray" | pyspark is removed — schema and DDL inference use PyArrow, no JVM (`requirements.txt:17-18`, `app/agents/sampling_agent.py:28`). Real dependencies are `ray[air,serve]==2.49.2` (`requirements.txt:99`) and Daft (`:100,141`). |
+| **corrected.** All execution runs inside Kubernetes, "exclusively on Kubernetes" | Three execution substrates, local among them as a routed destination (§3, §4). |
+| **corrected.** Cloud-agnostic deployment | Multi-cloud in the provisioner, single-cloud in the serving path: `app/agents/mta_v2/` reads `GCP_PROJECT_ID` directly (`docs/architecture.md:336-344`). Treat AWS/Azure inference as manual configuration. |
+| **corrected.** The Scheduler deploys jobs as Kubernetes workloads | Celery + RedBeat on Redis (`app/agents/scheduler.py:10,16,24`). The state-replay claim beside it is correct. |
+| **open.** MCP yields "schemas, statistics, provenance" and runs `EXPLAIN` | Three tools — `query`, `list_tables`, `describe_table`. Schemas yes; statistics, provenance and EXPLAIN are not exposed. And the outbound direction — Avaloka as an MCP server — is missing from the PDF entirely. |
+| **open.** Sampling chosen to satisfy a latency or error target, BlinkDB-style | No answer-level approximation and no error bounds in the sampling path (§4). |
+| **corrected.** An eight-agent roster | Seventeen registered graph nodes (§4). |
+| **open.** An evaluation section, written in the future tense | The study it proposes was never run. Sections 5 and 6 above are the real state. |
 
-The architecture figure (`fig/Avaloka.png`) is also out of date and is being
-redrawn: it shows one validator box for four nodes, validation strictly before
-execution, no model-routing layer, no local execution path, sampling downstream
-of execution rather than grounding the planner before it, and Azure AKS as the
-Ray control plane — which contradicts the GCP-bound serving path above.
+The architecture figure was redrawn for the same reason. The original showed
+one validator box for four nodes, validation strictly before execution, no
+model-routing layer, no local execution path, sampling downstream of execution
+rather than grounding the planner before it, and Azure AKS as the Ray control
+plane — contradicting the GCP-bound serving path above. The current figure
+(`fig/avaloka-architecture.png`) draws the real order, with execution sitting
+*between* the validators.
 
 ---
 
@@ -420,9 +426,9 @@ Ray control plane — which contradicts the GCP-bound serving path above.
 
 | Path | What it is |
 | --- | --- |
-| [`../Avaloka-Research-Paper.pdf`](../Avaloka-Research-Paper.pdf) | The paper, as submitted to the ICLR 2026 *Agents in the Wild* workshop |
-| `iclr2026/` | The frozen submission bundle's compiled PDFs, kept as submitted |
-| `fig/Avaloka.png` | The architecture figure embedded in the paper |
+| [`../Avaloka-Research-Paper.pdf`](../Avaloka-Research-Paper.pdf) | The ICLR 2026 *Agents in the Wild* workshop paper, rebuilt against the 1.6 code |
+| `avaloka-paper.pdf` | The same paper, alongside this page |
+| `fig/avaloka-architecture.png` | The architecture figure embedded in the paper |
 
 **Why there are no LaTeX sources.** The paper builds against the ICLR 2026
 template, and `iclr2026_conference.sty`, `iclr2026_conference.bst`,
