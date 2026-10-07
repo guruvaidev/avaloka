@@ -82,7 +82,31 @@ stage() {
 # 5. benchmark        ground-truth tasks, scoring the on-disk deliverables
 # END STAGES
 
+summary() {
+  printf '\n%s%s%s\n' "$BOLD" "──────── summary ────────" "$OFF"
+  for line in "${RESULTS[@]}"; do printf '  %s\n' "$line"; done
+}
+
 stage "environment"    "$PY" scripts/doctor.py
+# A failed doctor ends the run here. It used to be recorded and walked past, so
+# pytest started on an install the doctor had just said could not work -- under
+# Rosetta that is a daft import which dies in native code and has to be killed
+# at the stage timeout. The later stages are reported as not run, not as failed:
+# nothing is known about them.
+if [[ "$FAILED" -ne 0 ]]; then
+  for name in "hermetic tests" "data science" "cli robustness"; do
+    RESULTS+=("${DIM}SKIP${OFF}  $name (environment failed)")
+  done
+  if [[ "$FAST" -eq 0 ]]; then
+    RESULTS+=("${DIM}SKIP${OFF}  benchmark (environment failed)")
+  else
+    RESULTS+=("${DIM}SKIP${OFF}  benchmark (--fast)")
+  fi
+  summary
+  printf '\n%sThe environment doctor failed, so the gate was NOT run.%s\n' "$RED$BOLD" "$OFF"
+  printf 'No tests were started. Fix what the doctor reported above, then run this again.\n'
+  exit "$FAILED"
+fi
 # --fast also drops `slow` and `kaggle`, which is what makes it fast: those
 # markers exist for multi-minute and download-dependent tests, and the default
 # selection did not exclude them.
@@ -116,8 +140,7 @@ else
   RESULTS+=("${DIM}SKIP${OFF}  benchmark (--fast)")
 fi
 
-printf '\n%s%s%s\n' "$BOLD" "──────── summary ────────" "$OFF"
-for line in "${RESULTS[@]}"; do printf '  %s\n' "$line"; done
+summary
 
 if [[ "$FAILED" -eq 0 ]]; then
   printf '\n%sAll stages passed.%s\n' "$GREEN$BOLD" "$OFF"

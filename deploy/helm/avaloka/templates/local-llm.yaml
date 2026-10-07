@@ -157,8 +157,6 @@ spec:
   resources:
     requests:
       storage: {{ .Values.localLLM.persistence.size | quote }}
-  {{- with .Values.localLLM.persistence.storageClass }}
-  storageClassName: {{ . | quote }}
-  {{- end }}
+  {{- include "avaloka.storageClass" (dict "ctx" . "component" .Values.localLLM) | nindent 2 }}
 {{- end }}
 {{- end }}

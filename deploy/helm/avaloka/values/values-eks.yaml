@@ -56,5 +56,32 @@ serviceAccount:
   annotations:
     eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT:role/avaloka
 
+# No in-cluster object store on a managed cloud: EKS uses a real S3 bucket.
+# Both gates must be off -- seaweedfs defaults to enabled.
+seaweedfs:
+  enabled: false
+minio:
+  enabled: false
+
 config:
   storageBackend: "s3"
+  # REQUIRED, and not merely cosmetic. storageBackend: "s3" with no bucket of its
+  # own is exactly the condition avaloka.objectStoreIsStorageBackend treats as
+  # "the local-S3 case", so leaving this empty made the chart adopt the
+  # in-cluster store and route datasets into it -- S3_ENDPOINT_URL rendered as
+  # http://avaloka-minio:9000 and S3_BUCKET as "avaloka" on a cloud cluster.
+  # Replace with the real bucket the IRSA role above can write.
+  s3Bucket: "avaloka-user-filestore"
+
+# Disabling the in-cluster object store removes the artifact root MLflow was
+# silently inheriting from it, and mlflow.yaml fails the render rather than
+# starting a tracking server with nowhere to put artifacts. Point it at the same
+# real bucket; the IRSA role annotated on the KSA above is what authorises it, so
+# no static AWS credentials are rendered for this path.
+mlflow:
+  artifactsDestination: "s3://avaloka-user-filestore/mlflow-artifacts"
+  # NOT setting defaultArtifactRoot here, deliberately: it is a direct-client
+  # override that bypasses the tracking server's artifact proxy, and whether you
+  # want that is a separate decision from fixing the routing above. If you run
+  # distributed Ray training on this cluster you probably do want it -- see
+  # values-gke.yaml, which sets it to the same URI and says why.

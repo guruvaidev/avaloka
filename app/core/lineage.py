@@ -185,6 +185,50 @@ class LineageStore:
         row = conn.execute("SELECT name FROM name_vault WHERE id=?", (column_id,)).fetchone()
         return row[0] if row else None
 
+    def get_node(self, node_id: str) -> Optional[Node]:
+        """Read a node by id without exposing any column-vault contents."""
+        conn = self.connect()
+        if conn is None:
+            return None
+        try:
+            row = conn.execute(
+                "SELECT id, kind, label, attrs FROM node WHERE id=?", (node_id,)
+            ).fetchone()
+            if row is None:
+                return None
+            return Node(row[0], NodeKind(row[1]), row[2], json.loads(row[3]))
+        except Exception:  # noqa: BLE001
+            logger.warning("[lineage] node lookup failed for %s", node_id, exc_info=True)
+            return None
+
+    def dataset_lineage(self, dataset_id: str) -> Optional[Dict[str, Any]]:
+        """Return a dataset, its direct parents, and its transitive ancestry."""
+        dataset = self.get_node(dataset_id)
+        if dataset is None or dataset.kind is not NodeKind.DATASET:
+            return None
+
+        conn = self.connect()
+        if conn is None:
+            return {"dataset": dataset, "parents": [], "ancestors": []}
+        try:
+            parent_ids = [row[0] for row in conn.execute(
+                "SELECT dst FROM edge WHERE src=? AND kind=? ORDER BY dst",
+                (dataset_id, EdgeKind.DERIVED_FROM.value),
+            ).fetchall()]
+        except Exception:  # noqa: BLE001
+            logger.warning("[lineage] parent lookup failed for %s", dataset_id, exc_info=True)
+            parent_ids = []
+
+        def nodes(ids: Iterable[str]) -> List[Node]:
+            found = [node for item_id in ids if (node := self.get_node(item_id)) is not None]
+            return sorted(found, key=lambda node: (node.label.casefold(), node.id))
+
+        return {
+            "dataset": dataset,
+            "parents": nodes(parent_ids),
+            "ancestors": nodes(self.ancestors(dataset_id)),
+        }
+
     # -- writes ------------------------------------------------------------
     def add_node(self, node: Node, *, plaintext_name: Optional[str] = None) -> None:
         conn = self.connect()

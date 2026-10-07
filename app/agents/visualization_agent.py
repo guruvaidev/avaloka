@@ -1120,11 +1120,19 @@ def _ground_categories(
     if not values:
         return None
 
+    # A share is a part of a whole, and a whole needs every part >= 0. With a
+    # signed measure (profit, net change) "share of total" is not a quantity:
+    # it read "East (2,000, 200.0%) ... West (-1,200, -120.0%)".
+    signed = any(v < 0 for v in values.values())
+    if is_pie and signed:
+        # A pie IS shares; there is no honest way to draw a negative slice.
+        return None
+
     ordered = sorted(values.items(), key=lambda kv: kv[1], reverse=True)
     top_k = max(2, int(top_k or 15))
     shown = ordered[:top_k]
     rest = ordered[top_k:]
-    additive = yf is None or agg in ("count", "sum")
+    additive = (yf is None or agg in ("count", "sum")) and not signed
     points = [{"x": k, "y": round(v, 2)} for k, v in shown]
     if is_pie and rest and additive:
         # Slices must add up to the whole, or the shares in the text won't match.
@@ -1366,6 +1374,12 @@ def _ground_chart(
             x_key, y_key = xf, (yf or "count")
             if ctype == "pie" and yf is None:
                 enc["theta"] = {"field": "count", "type": "quantitative", "aggregate": "sum"}
+                chart["encodings"] = enc
+            elif yf is None and (measure.get("field") or measure.get("aggregate")):
+                # Bar/line: the y field was discarded above and rows are counted.
+                # Say so, or the encoding still names a sum of a column that
+                # was never summed and every reader of it reports that.
+                enc["y"] = {"aggregate": "count", "type": "quantitative"}
                 chart["encodings"] = enc
             is_date = (profiles.get(xf) or {}).get("dtype") == "datetime"
             if ctype == "line" and is_date:

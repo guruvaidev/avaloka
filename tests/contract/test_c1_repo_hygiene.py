@@ -409,6 +409,36 @@ EGRESS_INVENTORY_UPDATE_INSTRUCTION = (
 )
 
 EGRESS_CHANNELS: Dict[str, Tuple[re.Pattern, str, Set[str]]] = {
+    "product_analytics_export": (
+        # Anchored on the endpoint variable and its one accessor, NOT on an import
+        # like the entries around it. The sender uses stdlib urllib, so there is
+        # no third-party package to anchor on, and matching urllib itself would
+        # claim unrelated modules. Any module that starts reading the export
+        # endpoint shows up here as a new egress module.
+        # Deliberately does not mention PR #329's host or its endpoint variable,
+        # so this entry and that PR's `telemetry_usage_stats` entry cannot claim
+        # each other's modules when both are on one branch.
+        re.compile(r"AVALOKA_ANALYTICS_EXPORT_ENDPOINT|export_endpoint\("),
+        "product analytics events are forwarded to an Avaloka-operated ingest (not a "
+        "third party, but outside the customer's cluster) when an operator sets BOTH "
+        "AVALOKA_ANALYTICS_EXPORT=on and an https endpoint. There is no default host and "
+        "nothing schedules the export on develop-1.6, so by default this channel carries "
+        "nothing. When enabled it carries behavioural events only -- event types, "
+        "timings, outcomes, error class names, route templates, chart types -- plus a "
+        "per-analyst pseudonym re-keyed every 28 days with a secret that stays in the "
+        "deployment. It carries NO question text in any form: the analyst's question, "
+        "which contains column and table names, is stored only in the deployment's own "
+        "database and is never read by the export; the one prompt-derived value sent is "
+        "which of six length bands the question fell in. "
+        "LIMIT OF THIS ENTRY: an env-var anchor detects that code can be configured to "
+        "send, an import anchor detects that a package is present, and neither proves a "
+        "route is live or dead. This entry would not notice a module that posted to a "
+        "hard-coded host without calling export_endpoint()",
+        {
+            "app/analytics/config.py",
+            "app/analytics/export.py",
+        },
+    ),
     "groq_llm_prompts": (
         re.compile(r"^[ \t]*(?:from[ \t]+langchain_groq|import[ \t]+langchain_groq)", re.M),
         "agent prompts, which embed sampled rows, schemas and DDL, go to Groq's hosted API",

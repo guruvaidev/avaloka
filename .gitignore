@@ -200,3 +200,8 @@ test_plan.md
 
 # Internal product-planning notes from the UI builder; not documentation.
 ui/.lovable/
+
+# Local agent tooling configuration; not part of the product. Untracked by
+# design. If the team decides to version it, remove this line and keep the
+# oss/manifest.yaml exclusion in place, which is what stops it being published.
+.claude/

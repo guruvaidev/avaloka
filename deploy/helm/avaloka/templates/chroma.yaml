@@ -2,8 +2,15 @@
 # In-cluster Chroma vector store (layer-2 usage context).
 #
 # A StatefulSet with a volumeClaimTemplate: the claim is now owned by the
-# workload rather than standing beside it, so the volume follows the pod when it
-# is rescheduled and is not left behind on a node that went away.
+# workload rather than standing beside it, so the claim is not orphaned when the
+# workload is removed.
+#
+# What that does NOT buy is node-loss survival, which this comment used to claim.
+# A volumeClaimTemplate changes who owns the claim, not where the data lives: on
+# the default StorageClass the PV is a node-local hostPath pinned by
+# nodeAffinity, so if that node goes away the pod cannot be scheduled anywhere
+# else and stays Pending. Surviving node loss requires a replicating
+# StorageClass -- see storage.className in values.yaml.
 #
 # replicas stays 1. Open-source Chroma is single-node; a second replica would
 # serve a different, empty collection.

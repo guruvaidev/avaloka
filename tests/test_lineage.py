@@ -2,8 +2,10 @@
 
 import sqlite3
 import pytest
+import pandas as pd
 
 from app.core.lineage import (Edge, EdgeKind, LineageStore, Node, NodeKind)
+from app.agents import lineage_hooks
 
 
 @pytest.fixture
@@ -80,6 +82,22 @@ def test_ids_are_stable_within_an_install(store):
 
 def test_where_did_this_come_from(chain):
     assert set(chain.ancestors("ds:features")) == {"ds:cleaned", "ds:raw"}
+
+
+def test_dataset_lineage_resolves_labels_without_column_names(store):
+    store.record_dataset("ds:raw", label="source.csv", columns=[("private_col", "str")])
+    store.record_dataset("ds:clean", label="cleaned.csv", derived_from="ds:raw")
+
+    result = store.dataset_lineage("ds:clean")
+
+    assert result["dataset"].label == "cleaned.csv"
+    assert [(node.id, node.label) for node in result["parents"]] == [
+        ("ds:raw", "source.csv")
+    ]
+    assert [(node.id, node.label) for node in result["ancestors"]] == [
+        ("ds:raw", "source.csv")
+    ]
+    assert "private_col" not in str(result)
 
 
 def test_what_depends_on_this(chain):
@@ -175,3 +193,57 @@ def test_pii_is_found_through_lineage_not_just_the_training_frame(chain):
     assert hits[0]["pii_kinds"] == ["email"]
     # ds:features itself has no PII column — it was found upstream.
     assert set(hits[0]["via"]) == {"ds:raw", "ds:cleaned"}
+
+
+def test_agent_capture_preserves_multi_hop_pii_ancestry(tmp_path, monkeypatch):
+    db_path = tmp_path / "agent-lineage.db"
+    monkeypatch.setattr(lineage_hooks, "LineageStore", lambda: LineageStore(db_path))
+    state = {
+        "active_dataset_id": "ds:raw",
+        "active_dataset_ids": ["ds:raw", "ds:lookup"],
+        "datasets_context": [
+            {"dataset_id": "ds:raw", "filename": "source.csv"},
+            {"dataset_id": "ds:lookup", "filename": "lookup.csv"},
+        ],
+        "pii_report": {"findings": [{"column": "email", "kind": "email"}]},
+        "output_location": "cleaned.csv",
+    }
+    clean_id = lineage_hooks.record_analysis_lineage(
+        state, pd.DataFrame({"amount": [12.0]})
+    )
+    assert clean_id
+
+    next_state = {
+        **state,
+        "latest_output_dataset_id": clean_id,
+        "latest_output_location": "cleaned.csv",
+        "data_source_location": "cleaned.csv",
+        "output_location": "features.csv",
+    }
+    features_id = lineage_hooks.record_analysis_lineage(
+        next_state, pd.DataFrame({"amount_log": [2.48]})
+    )
+    assert features_id
+
+    model_id = lineage_hooks.record_model_lineage(
+        {
+            **next_state,
+            "latest_output_dataset_id": features_id,
+            "latest_output_location": "features.csv",
+            "training_plan": {"data_config": {"feature_columns": ["amount_log"]}},
+        },
+        {"mlflow_run_id": "run-1", "model_name": "churn"},
+    )
+
+    store = LineageStore(db_path)
+    try:
+        assert set(store.ancestors(features_id)) == {clean_id, "ds:raw", "ds:lookup"}
+        assert model_id == "model:run-1"
+        assert store.models_touching_pii() == [
+            {"model": model_id, "pii_kinds": ["email"], "via": ["ds:raw"]}
+        ]
+        reply = lineage_hooks.format_lineage_reply({"latest_output_dataset_id": features_id})
+        assert "features.csv" in reply
+        assert "source.csv" in reply
+    finally:
+        store.close()

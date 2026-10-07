@@ -16,7 +16,7 @@ service:
 # For a real datacenter, point persistence.storageClass at your fast local-disk
 # class and give MinIO dedicated disks; scaling to distributed erasure coding is
 # a replica/drive change, not a different system.
-minio:
+seaweedfs:
   enabled: true
   service:
     type: ClusterIP

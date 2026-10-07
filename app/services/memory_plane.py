@@ -3,7 +3,10 @@
 # Environment variables consumed here:
 #   MEMORY_DEFAULT_STYLE_HINT        – Fallback style hint when LLM/DB unavailable
 #                                      (default: "Prefer clean pandas code.")
-#   MEMORY_CIRCUIT_BREAKER_TIMEOUT   – Overall ceiling (s) for one retrieval (default: 8.0)
+#   MEMORY_CIRCUIT_BREAKER_TIMEOUT   – Overall ceiling (s) for one retrieval (default: 20.0,
+#                                      the value deploy/helm/avaloka/values.yaml ships).
+#                                      The stages share 90% of it as a budget, so they
+#                                      finish and return what they have before it fires.
 #   MEMORY_STAGE_TIMEOUT             – Per-store timeout (s); a slow store is skipped,
 #                                      the others are kept (default: 3.0)
 #   MEMORY_EMBED_TIMEOUT             – Timeout (s) for embedding the query (default: 4.0)
@@ -25,8 +28,11 @@
 #   * Every stage shared one 20s breaker, so one hung store discarded everything
 #     and the log never said which -> now each stage has its own timeout and is
 #     skipped on its own; "[memory] retrieval Xs stages={...}" logs every turn.
-#   * LLM extraction + Milvus/Chroma writes ran inside the request although they
-#     only feed FUTURE turns -> now a background thread.
+#   * LLM extraction + Milvus/Chroma writes ran inside the request -> now a
+#     background thread. This is a contract, not only a speed-up: what the LLM
+#     learns from a query reaches the planner on the NEXT turn of that session
+#     (as session history), never the turn that produced it. The planner
+#     already has the query those hints are derived from.
 #   * The query was embedded twice -> once.
 #   * MCP schema hot-load ran for CSV uploads (dataset_id = file name, which the
 #     MCP server does not know) -> database sources only.
@@ -59,9 +65,22 @@ load_dotenv(os.path.join(project_root, ".env"))
 # --- Module-level tuneable constants (all overridable via env) ---
 _DEFAULT_STYLE_HINT       = os.environ.get("MEMORY_DEFAULT_STYLE_HINT", "Prefer clean pandas code.")
 # Overall ceiling for one retrieval. Each stage also has its own timeout, so a
-# slow store is skipped instead of discarding everything. With connections held
-# open and the embedding model warmed at startup, a normal retrieval is < 1s.
-_CIRCUIT_BREAKER_TIMEOUT  = float(os.environ.get("MEMORY_CIRCUIT_BREAKER_TIMEOUT", "8.0"))
+# slow store is skipped instead of discarding everything.
+#
+# The stage timeouts add up to more than any ceiling worth having (connect 5.5
+# + five store stages at 3.0 + embedding 4.0 + MCP 3.0 = 27.5s), so the stages
+# draw on a shared budget -- this ceiling less _BREAKER_HEADROOM -- and a stage
+# that would overrun it is cut short or skipped. Retrieval therefore returns
+# what it has BEFORE the breaker fires, however many stores hang; the breaker
+# is left as the backstop for code that is stuck outside a stage.
+#
+# 20.0 is the last value backed by a measurement (4.4-5.8s per retrieval on a
+# healthy deployment, taken before learning moved off the request path) and is
+# what the Helm chart sets. Nobody has measured a retrieval on a real
+# deployment since; lower it when someone has.
+_CIRCUIT_BREAKER_TIMEOUT  = float(os.environ.get("MEMORY_CIRCUIT_BREAKER_TIMEOUT", "20.0"))
+# Share of the ceiling kept back for composing the payload and waking the caller.
+_BREAKER_HEADROOM         = 0.1
 _STAGE_TIMEOUT            = float(os.environ.get("MEMORY_STAGE_TIMEOUT", "3.0"))
 _EMBED_TIMEOUT            = float(os.environ.get("MEMORY_EMBED_TIMEOUT", "4.0"))
 _CONNECT_TIMEOUT          = float(os.environ.get("MEMORY_CONNECT_TIMEOUT", "5.0"))
@@ -118,11 +137,14 @@ def _ensure_sse_url(url: str) -> str:
     return trimmed if trimmed.endswith("/sse") else trimmed + "/sse"
 
 
-def _call_with_timeout(fn: Callable[[], Any], timeout: float) -> Tuple[bool, Any, Optional[BaseException]]:
-    """Run fn() in a daemon thread. Returns (ok, value, error).
+def _call_with_timeout(
+    fn: Callable[[], Any], timeout: float,
+) -> Tuple[bool, Any, Optional[BaseException], threading.Thread]:
+    """Run fn() in a daemon thread. Returns (ok, value, error, thread).
 
     ok=False with error=None means it timed out; the thread is abandoned
-    (daemon, so it never blocks the request or process exit).
+    (daemon, so it never blocks the request or process exit) and returned so
+    the caller can tell when it has finally let go of the store.
     """
     box: Dict[str, Any] = {}
     done = threading.Event()
@@ -135,12 +157,13 @@ def _call_with_timeout(fn: Callable[[], Any], timeout: float) -> Tuple[bool, Any
         finally:
             done.set()
 
-    threading.Thread(target=_worker, name="memory-stage", daemon=True).start()
+    thread = threading.Thread(target=_worker, name="memory-stage", daemon=True)
+    thread.start()
     if not done.wait(timeout):
-        return False, None, None
+        return False, None, None, thread
     if "error" in box:
-        return False, None, box["error"]
-    return True, box.get("value"), None
+        return False, None, box["error"], thread
+    return True, box.get("value"), None, thread
 
 
 _DB_SOURCE_TYPES = {"database", "db", "sql", "postgres", "postgresql", "mysql",
@@ -190,9 +213,26 @@ class MemoryOrchestrator:
     # tool). Kept separately so the top-3 hint contract can reserve slots for
     # them — ordinary hint churn must never evict an explicit preference.
     _session_preferences_store: TTLCache = TTLCache(maxsize=10000, ttl=86400)
-    # Guards the in-process stores: the planner thread writes preferences while
-    # retrieval and background-learning threads read/append hints.
+    # Two locks, two different things to protect.
+    #
+    # _store_lock guards the in-process stores above: the planner thread writes
+    # preferences while retrieval and background-learning threads read/append
+    # hints. Every retrieval of every session takes it, so it is held for
+    # memory operations only -- never across a network call.
     _store_lock = threading.Lock()
+    # _persist_locks guard the DURABLE copy: one session's read-merge-write
+    # against Redis must not interleave with another writer's for that session.
+    # They are held across Redis round trips (3s socket timeout each), which is
+    # exactly why they are not _store_lock: when the writes ran under that
+    # lock, one slow write-through blocked every other session's retrieval for
+    # as long as it took (measured: 5.9s behind two 3s writes; 0.03s now).
+    # Striped by session so one session's slow write does not queue another's.
+    _persist_locks: Tuple[threading.Lock, ...] = tuple(threading.Lock() for _ in range(16))
+
+    # Background-learning threads still running. Learning is off the request
+    # path, so "has what that turn taught us landed yet?" needs an answer that
+    # is not a guess: see wait_for_learning.
+    _learning: set = set()
 
     # Sessions whose last durable read FAILED (as opposed to finding nothing).
     # While a session is in this set, _persist_session_memory refuses to
@@ -215,6 +255,15 @@ class MemoryOrchestrator:
         self.postgres = postgres_client
         self.milvus = milvus_client
 
+        self._init_runtime_state()
+
+    def _init_runtime_state(self) -> None:
+        """All per-instance connection state, and nothing else.
+
+        The one place it is created. Tests that build an orchestrator with
+        ``__new__`` (to avoid constructing the four real clients) call this
+        rather than copying the fields, so adding one here cannot strand them.
+        """
         # Connect once per process, not once per request -- and each store on
         # its own. One store that hangs on connect (Milvus collection.load())
         # must not block the other three: before, warm-up held a single lock
@@ -222,6 +271,10 @@ class MemoryOrchestrator:
         # Redis/Chroma/Postgres were treated as down too.
         self._store_ready: Dict[str, bool] = {n: False for n in self._STORES}
         self._store_locks: Dict[str, threading.Lock] = {n: threading.Lock() for n in self._STORES}
+        # Stage name -> the thread a timed-out stage was abandoned in. While it
+        # is still alive the stage is skipped, so a hung store holds one thread
+        # rather than one more per request, and costs one timeout, not one each.
+        self._stage_abandoned: Dict[str, threading.Thread] = {}
 
     # ------------------------------------------------------------------
     # Connections and warm-up
@@ -229,9 +282,10 @@ class MemoryOrchestrator:
 
     _STORES = ("postgres", "redis", "chroma", "milvus")
     # Which store each retrieval stage reads, so a failing stage marks only
-    # that store for reconnect.
+    # that store for reconnect. "mcp_schema" is deliberately absent: the MCP
+    # server failing says nothing about Redis.
     _STAGE_STORE = {"hydrate": "redis", "artifact": "postgres", "schema_cache": "redis",
-                    "mcp_schema": "redis", "signature": "chroma", "milvus": "milvus"}
+                    "signature": "chroma", "milvus": "milvus"}
 
     def _connect_store(self, name: str) -> bool:
         """Connect one store if needed. Never waits on another thread that is
@@ -305,6 +359,27 @@ class MemoryOrchestrator:
         return mp.memory_llm
 
     @classmethod
+    def wait_for_learning(cls, timeout: Optional[float] = None) -> bool:
+        """Block until every background-learning thread started so far has
+        finished. Returns False only if `timeout` (seconds, overall) ran out.
+
+        Joins the threads themselves, so it returns the moment they are done:
+        there is no polling interval and nothing to tune. Anything that must
+        observe what a turn learned -- a test, a shutdown that wants the last
+        hints written -- waits here instead of sleeping and hoping.
+        """
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while True:
+            with cls._store_lock:
+                pending = [t for t in cls._learning if t is not threading.current_thread()]
+            if not pending:
+                return True
+            for thread in pending:
+                thread.join(None if deadline is None else max(0.0, deadline - time.monotonic()))
+                if thread.is_alive():
+                    return False
+
+    @classmethod
     def clear_all_sessions(cls):
         """
         TEST-ONLY helper: reset all in-process stores AND the durable
@@ -330,6 +405,7 @@ class MemoryOrchestrator:
         cls._session_hints_store.clear()
         cls._session_preferences_store.clear()
         cls._hydration_failed.clear()
+        # _learning is not cleared: a thread still running is still running.
         # Also drop the durable write-through copies, otherwise hydration
         # would resurrect cleared sessions on the next retrieval.
         try:
@@ -447,9 +523,19 @@ If the query is too simple to extract anything meaningful, return {"new_hints": 
         return None
 
     def _learn_in_background(self, query: str, past_queries: List[str],
-                             session_id: str, memory_scope: str) -> None:
-        """LLM extraction + Milvus/Chroma/Redis writes. These only store memory
-        for FUTURE turns, so they run off the request path. Never raises."""
+                             session_id: str, memory_scope: str,
+                             already_surfaced: Tuple[str, ...] = ()) -> None:
+        """LLM extraction + Milvus/Chroma/Redis writes. Never raises.
+
+        Runs off the request path: what is learned here is served from the
+        NEXT turn of this session, as session history.
+
+        `already_surfaced` is what this turn's retrieval returned. A hint the
+        LLM merely repeats from it is not added to session history: there it
+        would shadow the ranked copy next turn (session history is read first,
+        and a duplicate is dropped from its own tier), demoting a
+        similarity-ranked insight to the leftover slots.
+        """
         start = time.monotonic()
         try:
             extracted = self._extract_context_with_llm(query, past_queries) or {}
@@ -459,7 +545,7 @@ If the query is too simple to extract anything meaningful, return {"new_hints": 
             for hint in new_hints:
                 with self._store_lock:
                     hints = self._session_hints_store.setdefault(session_id, [])
-                    if hint not in hints:
+                    if hint not in hints and hint not in already_surfaced:
                         hints.append(hint)
                         added = True
                 if not self._store_ready.get("milvus"):
@@ -480,6 +566,9 @@ If the query is too simple to extract anything meaningful, return {"new_hints": 
                         time.monotonic() - start, len(new_hints))
         except Exception as exc:  # noqa: BLE001
             logger.warning("[memory] background learning failed: %s", exc)
+        finally:
+            with self._store_lock:
+                self._learning.discard(threading.current_thread())
 
     # ------------------------------------------------------------------
     # Retrieval (read path)
@@ -500,26 +589,68 @@ If the query is too simple to extract anything meaningful, return {"new_hints": 
         memory_scope = _memory_scope(user_id, session_id)
         timings: Dict[str, float] = {}
         t_start = time.monotonic()
+        # The stages share one budget that ends before the breaker does, so
+        # this returns what it has instead of being discarded by the breaker.
+        deadline = t_start + _CIRCUIT_BREAKER_TIMEOUT * (1.0 - _BREAKER_HEADROOM)
+        # Stores that answered at least one stage this turn.
+        answered: set = set()
 
         def run(name: str, fn: Callable[[], Any], timeout: float = _STAGE_TIMEOUT,
                 default: Any = None) -> Any:
+            abandoned = self._stage_abandoned.get(name)
+            if abandoned is not None:
+                if abandoned.is_alive():
+                    logger.warning("[memory] stage %s still hung from an earlier request; skipped", name)
+                    timings[f"skip_{name}"] = 0.0
+                    return default
+                self._stage_abandoned.pop(name, None)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                logger.warning("[memory] stage %s skipped: retrieval budget spent", name)
+                timings[f"skip_{name}"] = 0.0
+                return default
             stage_start = time.monotonic()
-            ok, value, err = _call_with_timeout(fn, timeout)
+            allowed = min(timeout, remaining)
+            done, value, err, thread = _call_with_timeout(fn, allowed)
             timings[name] = round(time.monotonic() - stage_start, 2)
-            if ok:
+            store = self._STAGE_STORE.get(name)
+            if done:
+                if store:
+                    answered.add(store)
                 return value
             if err is None:
-                logger.warning("[memory] stage %s timed out after %.1fs; skipped", name, timeout)
+                logger.warning("[memory] stage %s timed out after %.1fs; skipped", name, allowed)
+                # Not marked for reconnect: a slow answer is not a broken
+                # connection, and reconnecting Milvus reloads its collection.
+                # "connect" bounds itself (it joins with a timeout), so it is
+                # never left running long enough to be worth remembering.
+                if name != "connect":
+                    self._stage_abandoned[name] = thread
             else:
                 logger.warning("[memory] stage %s failed (%s); skipped", name, err)
-            # Next request reconnects that store, in case its connection is the problem.
-            store = self._STAGE_STORE.get(name)
-            if store and err is not None:
-                self._store_ready[store] = False
+                # Next request reconnects that store, in case its connection is the problem.
+                if store:
+                    self._store_ready[store] = False
             return default
 
+        # A connect stage that could not finish says nothing about the stores
+        # connected by an earlier request, so fall back to what is known.
+        ready = run("connect", lambda: self._connect_all(_CONNECT_TIMEOUT),
+                    timeout=_CONNECT_TIMEOUT + 0.5)
+        if not isinstance(ready, dict):
+            ready = dict(self._store_ready)
+
+        def ok(store: str) -> bool:
+            if ready.get(store):
+                return True
+            timings.setdefault(f"skip_{store}", 0.0)
+            return False
+
         # Restore durable session memory (hints/preferences) after a restart.
-        if self._store_ready.get("redis"):
+        # After "connect", not before it: on the first request of a fresh
+        # process nothing is connected yet, and a readiness check made up here
+        # skipped the read on exactly the request that needed it.
+        if ok("redis"):
             run("hydrate", lambda: self._hydrate_session_memory(session_id))
 
         with self._store_lock:
@@ -536,15 +667,6 @@ If the query is too simple to extract anything meaningful, return {"new_hints": 
                 tiered_hints.setdefault(tier, []).append(hint)
 
         logic_sig = _DEFAULT_STYLE_HINT
-
-        ready = run("connect", lambda: self._connect_all(_CONNECT_TIMEOUT),
-                    timeout=_CONNECT_TIMEOUT + 0.5, default={}) or {}
-
-        def ok(store: str) -> bool:
-            if ready.get(store):
-                return True
-            timings.setdefault(f"skip_{store}", 0.0)
-            return False
 
         # Layer 3: prior artifacts for this exact query.
         found, artifact_hint = (run("artifact", lambda: self._artifact_hint(query, user_id),
@@ -598,25 +720,34 @@ If the query is too simple to extract anything meaningful, return {"new_hints": 
         # slots fill by relevance tier (artifact > domain > similar > session).
         top_3_hints = self._compose_top_hints(session_id, tiered_hints)
 
-        # Learning for future turns runs after we return.
+        # Learning runs after we return; its hints are served from next turn.
         if self.llm:
-            threading.Thread(
+            learner = threading.Thread(
                 target=self._learn_in_background,
-                args=(query, past_queries, session_id, memory_scope),
+                args=(query, past_queries, session_id, memory_scope,
+                      tuple(accumulated_hints)),
                 name="memory-learn", daemon=True,
-            ).start()
+            )
+            # Registered before it starts, so a caller that waits straight
+            # after this returns cannot miss it.
+            with self._store_lock:
+                self._learning.add(learner)
+            learner.start()
 
         logger.info("[memory] retrieval %.2fs stages=%s",
                     time.monotonic() - t_start, timings)
 
         return {
-            # Hints learned from THIS query arrive next turn (background learning).
+            # Always empty: hints learned from THIS query are served next turn
+            # (see _learn_in_background). Kept so the payload shape is stable.
             "new_hints_this_context": [],
             "accumulated_memory_hints": accumulated_hints,
             "memory_hints": top_3_hints,  # Top-3 contract for the planner
             "prior_artifact_found": prior_artifact_found,
             "session_logic_signature": logic_sig,
-            "memory_context_unavailable": not self.llm,
+            # LL-06: False must mean "memory ran", not "memory was skipped".
+            # With no store answering, an empty result is not a finding.
+            "memory_context_unavailable": not self.llm or not answered,
         }
 
     # ------------------------------------------------------------------
@@ -721,26 +852,54 @@ If the query is too simple to extract anything meaningful, return {"new_hints": 
         if restored:
             logger.info(f"🧠 AVALOKA CONTEXT MEMORY RESTORED from Redis (session={session_id})")
 
+    @staticmethod
+    def _merge_durable(durable: Any, current: List[str]) -> List[str]:
+        """Durable entries this process does not hold, then its own in order
+        (so the newest preference stays last and keeps its reserved slot)."""
+        kept = [d for d in durable if isinstance(d, str) and d not in current] \
+            if isinstance(durable, list) else []
+        return kept + list(current)
+
     def _persist_session_memory(self, session_id: str) -> None:
         """
         Write-through the session's hints/preferences to Redis. Never raises.
 
-        Snapshot and writes happen under _store_lock so a concurrent
-        store_user_preference can't interleave between snapshot and write.
-        If the last durable read for this session failed, retry it first — and
-        skip the write entirely while Redis still can't be read.
+        The durable copy is read first and merged in, so this can only ever
+        add to it. The in-process lists are not proof of what Redis holds:
+        hydration may have failed, or never run at all (Redis not connected
+        when the request arrived, a hydrate stage that timed out), and
+        background learning creates its own list either way. If the durable
+        copy cannot be read, the write is skipped.
+
+        Read, merge and write happen under this session's persist lock, so two
+        writers in this process (the planner storing a preference, background
+        learning) cannot both read the old copy and then write over each
+        other. _store_lock is held only for the in-memory merge: holding it
+        across Redis would stall every retrieval behind one slow write.
+        Writers in OTHER processes are not excluded -- that needs an atomic
+        operation on the Redis side.
         """
         try:
-            if session_id in self._hydration_failed:
-                self._hydrate_session_memory(session_id)
-                if session_id in self._hydration_failed:
+            with self._persist_locks[hash(session_id) % len(self._persist_locks)]:
+                try:
+                    durable_hints = self.redis.get_json(_k_ctxmem_hints(session_id), strict=True)
+                    durable_prefs = self.redis.get_json(_k_ctxmem_prefs(session_id), strict=True)
+                except Exception as e:
+                    with self._store_lock:
+                        self._hydration_failed.add(session_id)
                     logger.warning(
-                        f"Skipping context-memory write-through for session {session_id}: durable copy unreadable"
+                        f"Skipping context-memory write-through for session {session_id}: durable copy unreadable ({e})"
                     )
                     return
-            with self._store_lock:
-                hints = list(self._session_hints_store.get(session_id, []))
-                prefs = list(self._session_preferences_store.get(session_id, []))
+                with self._store_lock:
+                    self._hydration_failed.discard(session_id)
+                    hints = self._merge_durable(durable_hints, self._session_hints_store.get(session_id, []))
+                    prefs = self._merge_durable(durable_prefs, self._session_preferences_store.get(session_id, []))
+                    # What was merged in is served from now on, not just kept.
+                    if hints:
+                        self._session_hints_store[session_id] = hints
+                    if prefs:
+                        self._session_preferences_store[session_id] = prefs
                 self.redis.set_json(_k_ctxmem_hints(session_id), hints, ttl_seconds=_CTX_MEMORY_TTL)
                 self.redis.set_json(_k_ctxmem_prefs(session_id), prefs, ttl_seconds=_CTX_MEMORY_TTL)
         except Exception as e:
@@ -748,10 +907,12 @@ If the query is too simple to extract anything meaningful, return {"new_hints": 
 
     # Relevance order for the non-preference top-3 slots. "artifact" (L3 hit
     # for this exact query), "domain" (semantic schema match) and "similar"
-    # (vector-ranked Milvus results) are query-filtered at their origin;
-    # "llm" extractions are unranked and must never evict them. Session
-    # history fills last, newest first.
-    _HINT_TIER_ORDER = ("artifact", "domain", "similar", "llm")
+    # (vector-ranked Milvus results) are query-filtered at their origin.
+    # Session history fills last, newest first -- and that is where LLM
+    # extractions live: they are learned in the background and appended to the
+    # session, so they are unranked and can never evict a tier above. There is
+    # no "llm" tier because nothing is extracted on the turn being served.
+    _HINT_TIER_ORDER = ("artifact", "domain", "similar")
 
     def _compose_top_hints(self, session_id: str, hints: Any, limit: int = 3) -> List[str]:
         """
@@ -789,16 +950,35 @@ If the query is too simple to extract anything meaningful, return {"new_hints": 
                         dataset_id: str = "unknown", state: Dict = None) -> Dict:
         """
         Wrap _retrieve_memory_internal in a hard timeout (MEMORY_CIRCUIT_BREAKER_TIMEOUT).
-        Returns a safe empty payload if exceeded so LangGraph nodes are never blocked.
+        If it is exceeded, returns a payload flagged unavailable that carries only
+        what this process already holds, so LangGraph nodes are never blocked.
         """
-        _empty = {
-            "new_hints_this_context": [],
-            "accumulated_memory_hints": [],
-            "memory_hints": [],
-            "prior_artifact_found": False,
-            "session_logic_signature": _DEFAULT_STYLE_HINT,
-            "memory_context_unavailable": True,
-        }
+        def _fallback() -> Dict:
+            """The stores could not be consulted. What this process already
+            holds for the session -- explicit preferences above all -- needs no
+            store, so it is still served."""
+            held: List[str] = []
+            top: List[str] = []
+            # Bounded wait: whatever stalled retrieval may be holding this
+            # lock, and the breaker must not then stall on it too.
+            if self._store_lock.acquire(timeout=0.5):
+                try:
+                    held = list(self._session_hints_store.get(session_id, []))
+                    top = self._compose_top_hints(session_id, held)
+                except Exception as exc:  # noqa: BLE001 - breaker must never raise
+                    logger.warning("[memory] could not read in-process memory: %s", exc)
+                    held, top = [], []
+                finally:
+                    self._store_lock.release()
+            return {
+                "new_hints_this_context": [],
+                "accumulated_memory_hints": held,
+                "memory_hints": top,
+                "prior_artifact_found": False,
+                "session_logic_signature": _DEFAULT_STYLE_HINT,
+                "memory_context_unavailable": True,
+            }
+
         # A daemon thread + Event, deliberately NOT a ThreadPoolExecutor: an
         # executor joins its worker on shutdown, so a hung lookup kept blocking
         # the caller (and process exit). A daemon thread is simply abandoned.
@@ -818,14 +998,14 @@ If the query is too simple to extract anything meaningful, return {"new_hints": 
         if not done.wait(timeout=_CIRCUIT_BREAKER_TIMEOUT):
             logger.error(
                 f"Memory Circuit Breaker: retrieval exceeded {_CIRCUIT_BREAKER_TIMEOUT}s. "
-                "Returning empty payload. The '[memory] stage ...' warnings above show "
-                "which store was slow."
+                "Returning in-process memory only. The '[memory] stage ...' warnings "
+                "above show which store was slow."
             )
-            return _empty
+            return _fallback()
 
         if "error" in result_box:
             logger.error(f"Memory Circuit Breaker (execution error): {result_box['error']}")
-            return _empty
+            return _fallback()
 
         result = result_box["result"]
 

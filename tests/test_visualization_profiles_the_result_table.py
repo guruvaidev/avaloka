@@ -115,12 +115,23 @@ def _charted_fields(state_out) -> set:
     return fields
 
 
-def test_a_single_row_result_is_charted_from_the_result_not_the_upload():
-    """The reported case: one row, one column, correct answer, wrong chart."""
+def test_a_single_row_result_is_profiled_from_the_result_not_the_upload():
+    """The reported case: one row, one column, correct answer, wrong chart.
+
+    A lone value has nothing to chart: select_charts only draws a counts bar
+    for values that repeat (a rule PR #420 introduced on purpose), so the chart
+    list may be empty. What must hold is that the config describes the result
+    table -- its profiled columns are the result's -- and that no chart names
+    an uploaded column.
+    """
     out = visualization_agent_node(_state("num_countries\n49\n"))
 
+    config = out.get("visualization_config") or {}
+    assert out.get("visualization_status") == "ready"
+    assert {c["name"] for c in config.get("columns") or []} == {"num_countries"}, (
+        "the config profiles a table other than the result"
+    )
     charted = _charted_fields(out)
-    assert charted, f"no chart fields at all: {out.get('visualization_status')!r}"
     assert charted <= {"num_countries"}, (
         f"charts reference columns that are not in the result table: "
         f"{sorted(charted - {'num_countries'})}"

@@ -87,6 +87,23 @@ def test_retrieve_historical_analysis_falls_back_to_state_hints(monkeypatch):
     assert "Cleaned nulls in the orders dataset" in _last_ai_content(result)
 
 
+def test_where_did_this_come_from_routes_to_lineage_lookup(monkeypatch):
+    monkeypatch.setattr(
+        planner_mod,
+        "format_lineage_reply",
+        lambda state: f"Lineage for {state['active_dataset_id']}: source.csv",
+    )
+    result = _run_tool_turn(
+        monkeypatch,
+        "where_did_this_come_from",
+        {},
+        state_extra={"active_dataset_id": "ds:clean"},
+    )
+    assert "Lineage for ds:clean: source.csv" in _last_ai_content(result)
+    assert not result.get("ready_to_code")
+    assert not result.get("enable_training")
+
+
 # -------------------------
 # LLM failures must not fabricate a plan and route to code generation
 # -------------------------

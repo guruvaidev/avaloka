@@ -49,9 +49,19 @@ def _normalize_version(raw: str) -> str:
 
 
 def _changelog_newest_version() -> str:
-    headings = _CHANGELOG_HEADING_RE.findall(_read("CHANGELOG.md"))
+    """The newest *released* version heading in CHANGELOG.md.
+
+    An ``## [Unreleased]`` section above the current release is the normal
+    Keep a Changelog layout, not a version, so it is skipped. Only that exact
+    label is skipped: the first heading that is anything else is returned as it
+    stands, so a newer release heading, or a mislabelled one, still disagrees
+    with VERSION and fails the comparison.
+    """
+    headings = [h.strip() for h in _CHANGELOG_HEADING_RE.findall(_read("CHANGELOG.md"))]
     assert headings, "CHANGELOG.md has no '## [version]' heading at all"
-    return headings[0].strip()
+    versioned = [h for h in headings if h.lower() != "unreleased"]
+    assert versioned, f"CHANGELOG.md has no released version heading, only: {headings}"
+    return versioned[0]
 
 
 def _chart() -> Dict[str, object]:
@@ -98,8 +108,50 @@ def _roadmap_section() -> str:
     return rest[: nxt.start()] if nxt else rest
 
 
+_PIPELINES_FILE = "bitbucket-pipelines.yml"
+
+# The generated public tree is the only one that carries these at its root:
+# oss/manifest.yaml overlays them, and develop-1.6 keeps them under oss/overlay/.
+_PUBLIC_TREE_MARKERS = ("DCO", "GOVERNANCE.md", "MAINTAINERS.md")
+
+# The same line shape scripts/generate-oss.sh reads, so the two cannot disagree
+# about what is withheld.
+_MANIFEST_EXCLUDE_BLOCK_RE = re.compile(r"^exclude:\n((?:(?![a-z_]+:).*\n)*)", re.M)
+_MANIFEST_EXCLUDE_PATH_RE = re.compile(r"^  - path: *(.*)$", re.M)
+
+
+def _withheld_from_public_tree(rel: str) -> bool:
+    """True only on the generated public tree, and only for a path the manifest withholds.
+
+    Absence alone decides nothing. On develop-1.6 a missing pipeline file means
+    mainline is ungated, which is what the E14.07 cases exist to catch, so both
+    halves must hold: this is the public tree (every overlay marker is at the
+    root) and oss/manifest.yaml lists the path under ``exclude``.
+
+    The detection rests on one invariant: DCO, GOVERNANCE.md and MAINTAINERS.md
+    must never exist at the root of develop-1.6; only the overlay adds them. If
+    they ever appear there, this skip can fire on mainline and the pipeline
+    contract goes ungated without any test failing.
+    """
+    if not all((REPO_ROOT / marker).is_file() for marker in _PUBLIC_TREE_MARKERS):
+        return False
+    manifest = REPO_ROOT / "oss" / "manifest.yaml"
+    if not manifest.is_file():
+        return False
+    block = _MANIFEST_EXCLUDE_BLOCK_RE.search(manifest.read_text(encoding="utf-8"))
+    if not block:
+        return False
+    excluded = {p.strip().strip('"') for p in _MANIFEST_EXCLUDE_PATH_RE.findall(block.group(1))}
+    return rel in excluded
+
+
 def _pipelines_text() -> str:
-    return _read("bitbucket-pipelines.yml")
+    if not (REPO_ROOT / _PIPELINES_FILE).exists() and _withheld_from_public_tree(_PIPELINES_FILE):
+        pytest.skip(
+            f"{_PIPELINES_FILE} is withheld from the public tree by oss/manifest.yaml; "
+            "this case runs on develop-1.6, where the file is the CI definition"
+        )
+    return _read(_PIPELINES_FILE)
 
 
 def _pipelines_yaml() -> Dict[str, object]:
@@ -316,28 +368,20 @@ def test_e14_02_roadmap_does_not_list_implemented_features(phrase: str, implemen
 # ---------------------------------------------------------------------------
 
 
-def test_e14_07_pins_ci_triggers_are_branch_pushes_only() -> None:
-    """bitbucket-pipelines.yml currently defines branch-push pipelines only, with no PR/nightly/weekly tiers."""
+def test_e14_07_pins_ci_triggers_cover_mainline_and_pull_requests() -> None:
+    """Mainline and every pull request are gated; branch patterns alone left feat/, fix/, chore/ ungated."""
     pipelines = _pipelines_yaml()["pipelines"]
-    assert set(pipelines) == {"branches"}, f"unexpected pipeline tiers: {sorted(pipelines)}"
-    assert set(pipelines["branches"]) == {
-        "feature/context-memory",
-        "feature/*",
-        "bugfix/*",
-        "hotfix/*",
-        "release/*",
-    }
+    branches = set(pipelines["branches"])
+    assert "develop-1.6" in branches, (
+        "no develop-1.6 pipeline: no merge to mainline would be tested. "
+        f"branch tiers present: {sorted(branches)}"
+    )
+    # Branch globs are literal: feat/* is NOT feature/*, so a pull-request tier
+    # is what actually covers every branch name.
+    assert "pull-requests" in pipelines, f"no pull-requests tier: {sorted(pipelines)}"
+    assert set(pipelines["pull-requests"]) == {"**"}
 
 
-@pytest.mark.defect
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEFECT E14.07 (P0): the CI test step is 'pytest --continue-on-collection-errors tests/ || true' "
-        "(bitbucket-pipelines.yml, step &test) - the trailing '|| true' makes a fully red suite report green, "
-        "so CI enforces nothing. Remove this xfail when fixed."
-    ),
-)
 def test_e14_07_ci_test_step_does_not_swallow_failures() -> None:
     """No CI script line runs pytest with its exit status discarded."""
     swallowed = [
@@ -348,15 +392,6 @@ def test_e14_07_ci_test_step_does_not_swallow_failures() -> None:
     assert not swallowed, f"CI discards pytest failures: {swallowed}"
 
 
-@pytest.mark.defect
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEFECT E14.07 (P0): bitbucket-pipelines.yml has no 'pull-requests' pipeline and no step that runs "
-        "the hermetic marker filter -m 'not cluster and not cloud and not integration', so nothing gates a "
-        "merge. Remove this xfail when fixed."
-    ),
-)
 def test_e14_07_ci_has_pull_request_pipeline_with_hermetic_marker_filter() -> None:
     """A pull-requests pipeline runs pytest deselecting the cluster/cloud/integration markers."""
     pipelines = _pipelines_yaml()["pipelines"]
@@ -365,14 +400,91 @@ def test_e14_07_ci_has_pull_request_pipeline_with_hermetic_marker_filter() -> No
     filtered = [
         line
         for line in lines
-        if "pytest" in line and "-m" in line and "not cluster" in line and "not cloud" in line
+        if "pytest" in line
+        and "-m" in line
+        and "not cluster" in line
+        and "not cloud" in line
+        # "not integration" was absent from this check while the docstring claimed
+        # it. Dropping that one marker puts ~150 environmental failures back into
+        # every run, so the test has to see it.
+        and "not integration" in line
     ]
     assert filtered, f"pull-requests pipeline runs no hermetic marker filter; scripts: {lines}"
+
+
+def test_e14_07_ci_test_step_runs_without_provider_credentials() -> None:
+    """The hermetic step clears provider variables Bitbucket injects into every step."""
+    must_clear = {
+        "GROQ_API_KEY",
+        "GROQ_API_KEY_CODING_AGENT",
+        "GROQ_API_KEY_PLANNING_AGENT",
+        "OPENROUTER_API_KEY",
+        "OPENAI_API_KEY",
+        "INFERENCE_PROVIDER",
+    }
+    hermetic = [
+        line
+        for line in _all_pipeline_script_lines()
+        if "pytest" in line and "not cluster" in line
+    ]
+    assert hermetic, "no hermetic pytest invocation found in any pipeline script"
+    for line in hermetic:
+        missing = sorted(var for var in must_clear if f"-u {var}" not in line)
+        assert not missing, (
+            f"hermetic step does not clear {missing}. Repository variables reach every "
+            "step, so a stored provider key makes tests that would stub or skip call the "
+            "provider for real -- 29 extra failures on mainline when the stored Groq key "
+            "was rejected. scripts/ci.sh runs with no provider environment; this matches it."
+        )
+
+
+def test_e14_07_ci_marker_expression_matches_ci_sh() -> None:
+    """The pipeline's marker expression and scripts/ci.sh's must not drift apart."""
+    ci_sh = (REPO_ROOT / "scripts" / "ci.sh").read_text(encoding="utf-8")
+    match = re.search(r'HERMETIC_MARKERS="([^"]+)"', ci_sh)
+    assert match, "scripts/ci.sh no longer defines HERMETIC_MARKERS"
+    expected = match.group(1)
+    lines = _all_pipeline_script_lines()
+    assert any(
+        expected in line for line in lines if "pytest" in line or "-m" in line
+    ), (
+        f"pipeline does not run ci.sh's marker expression {expected!r}. "
+        "Both files carry a comment saying they must stay in step; this is what enforces it."
+    )
+
+
+def test_e14_07_each_gating_tier_runs_ci_sh_marker_expression() -> None:
+    """Mainline and pull requests each run the hermetic selection themselves.
+
+    The parity test above searches the whole document, so the expression sitting
+    in the ``&test`` definition satisfies it even if no pipeline references that
+    step. Anchors are resolved on load, so each tier is checked on what it runs.
+    """
+    ci_sh = (REPO_ROOT / "scripts" / "ci.sh").read_text(encoding="utf-8")
+    match = re.search(r'HERMETIC_MARKERS="([^"]+)"', ci_sh)
+    assert match, "scripts/ci.sh no longer defines HERMETIC_MARKERS"
+    expected = match.group(1)
+    pipelines = _pipelines_yaml()["pipelines"]
+    tiers = {
+        "branches: develop-1.6": pipelines.get("branches", {}).get("develop-1.6"),
+        "pull-requests: **": pipelines.get("pull-requests", {}).get("**"),
+    }
+    ungated = sorted(
+        name
+        for name, tier in tiers.items()
+        if not any("pytest" in line and expected in line for line in _script_lines(tier))
+    )
+    assert not ungated, (
+        f"these tiers run no pytest step with ci.sh's marker expression {expected!r}: {ungated}"
+    )
 
 
 @pytest.mark.defect
 @pytest.mark.xfail(
     strict=True,
+    # Only the stated defect is expected. Without this a missing pipeline file
+    # (FileNotFoundError) would be recorded as the expected failure too.
+    raises=AssertionError,
     reason=(
         "DEFECT E12.06 (P1): the plan marks the image-size budget 'AUTO (CI)', but bitbucket-pipelines.yml "
         "never builds an image and has no size gate at all. Remove this xfail when fixed."
@@ -502,7 +614,13 @@ def test_e6_05_top3_hint_relevance_regression_suite_is_merged() -> None:
     suite = _read("tests/test_memory_top3_relevance.py")
     assert len(_TEST_FUNC_RE.findall(suite)) >= 10
     plane = _read("app/services/memory_plane.py")
-    assert '_HINT_TIER_ORDER = ("artifact", "domain", "similar", "llm")' in plane
+    # The relevance ranking, in order. This used to pin a fourth tier, "llm",
+    # as part of the literal; since LLM extraction moved off the request path
+    # nothing fills it (learned hints arrive as session history), so it was
+    # removed rather than kept as a tier that reads like a guarantee.
+    assert re.search(
+        r'_HINT_TIER_ORDER = \("artifact", "domain", "similar"[,)]', plane
+    ), "the top-3 relevance order no longer starts artifact > domain > similar"
     assert "def _compose_top_hints(" in plane
 
 

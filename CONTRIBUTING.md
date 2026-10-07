@@ -442,7 +442,6 @@ avaloka-dev/
 ├── deploy/compose/docker-compose.scheduler.yml   # Celery/RedBeat + Redis stack
 ├── langgraph.json                 # LangGraph CLI config
 ├── deploy/k8s/kind-ray-local-multi.yaml          # Kind cluster config for local Ray
-├── bitbucket-pipelines.yml        # Legacy Bitbucket pipeline; CI runs on GitHub Actions
 └── CONTRIBUTING.md                # This file
 ```
 

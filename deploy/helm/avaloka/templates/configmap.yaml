@@ -121,7 +121,8 @@ data:
   # connection rows from here for /buckets/list.
   SUPABASE_URL: {{ . | quote }}
   {{- end }}
-  # s3 when the in-cluster MinIO is adopted (see avaloka.minioIsStorageBackend),
+  # s3 when the in-cluster object store is adopted (see
+  # avaloka.objectStoreIsStorageBackend),
   # otherwise exactly what config.storageBackend asks for.
   STORAGE_BACKEND: {{ include "avaloka.storageBackend" . | quote }}
   LOCAL_STORAGE_ROOT: {{ .Values.config.localStorageRoot | quote }}
@@ -141,15 +142,15 @@ data:
   # MLflow's S3 artifact repository reads its own endpoint variable.
   MLFLOW_S3_ENDPOINT_URL: {{ . | quote }}
   {{- end }}
-  # botocore sends CRC32 checksums by default, which MinIO/S3-compatible stores
+  # botocore sends CRC32 checksums by default, which S3-compatible stores
   # reject (XAmzContentSHA256Mismatch). Only send checksums when required.
   AWS_REQUEST_CHECKSUM_CALCULATION: "when_required"
   AWS_RESPONSE_CHECKSUM_VALIDATION: "when_required"
   {{- if .Values.config.awsRegion }}
   AWS_REGION: {{ .Values.config.awsRegion | quote }}
   AWS_DEFAULT_REGION: {{ .Values.config.awsRegion | quote }}
-  {{- else if include "avaloka.minioIsStorageBackend" . }}
-  # MinIO ignores the region but boto3/pyarrow refuse to sign without one.
+  {{- else if include "avaloka.objectStoreIsStorageBackend" . }}
+  # SeaweedFS/MinIO ignore the region but boto3/pyarrow refuse to sign without one.
   AWS_REGION: "us-east-1"
   AWS_DEFAULT_REGION: "us-east-1"
   {{- end }}

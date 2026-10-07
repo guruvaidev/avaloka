@@ -10,10 +10,16 @@ schema insight, and the Milvus similarity results — from the top-3 the
 planner receives.
 
 Fix: hints carry a provenance tier; slots fill in relevance order
-artifact > domain > similar > llm, leftover slots taking the most recent
+artifact > domain > similar, leftover slots taking the most recent
 session-history hints. Explicit user preferences keep their reserved slots,
 and a flat-list input keeps the legacy tail behavior (see
 test_store_user_preference.py::test_compose_top_hints_without_preferences_matches_legacy).
+
+LLM extraction runs in the background (PR #420), so what it learns from a query
+is session history from the NEXT turn on -- it never competes on the turn that
+produced it. The tests about LLM noise therefore take two turns and wait for
+learning in between; each asserts the noise really is in the session store
+first, so it cannot pass by the noise simply not having arrived.
 """
 
 import json
@@ -76,9 +82,11 @@ PREFERENCE = "The user's favorite column is 'reordered'"
 def _stubbed_orchestrator(with_artifact=True, with_schema=True,
                           milvus_hits=(MILVUS_HINT,), llm_hints=NOISE_HINTS):
     """MemoryOrchestrator with every DB layer mocked; __init__ skipped so no
-    real clients are constructed."""
+    real clients are constructed. The per-instance state __init__ would have
+    created comes from the same method __init__ uses, not from a copy of it."""
     mo = MemoryOrchestrator.__new__(MemoryOrchestrator)
     mo._explicit_llm = object() if llm_hints is not None else None
+    mo._init_runtime_state()
 
     mo.postgres = MagicMock()
     mo.postgres.check_artifact_exists.return_value = with_artifact
@@ -100,6 +108,7 @@ def _stubbed_orchestrator(with_artifact=True, with_schema=True,
     mo.milvus.search_similar_insights.return_value = [
         {"content": h} for h in milvus_hits
     ]
+    mo._embed = MagicMock(return_value=[0.0] * 8)  # no embedding provider in a unit test
 
     if llm_hints is not None:
         mo._extract_context_with_llm = lambda query, past_queries: {
@@ -109,10 +118,30 @@ def _stubbed_orchestrator(with_artifact=True, with_schema=True,
     return mo
 
 
+def _wait_for_learning() -> None:
+    """Block until background learning has landed.
+
+    A join on the learner threads themselves (MemoryOrchestrator
+    .wait_for_learning), not a poll: it returns the moment they finish, however
+    loaded the machine is. The ceiling is not a tuning knob -- it only turns a
+    learner that never returns into a failure instead of a hung suite.
+    """
+    assert MemoryOrchestrator.wait_for_learning(timeout=300), "background learning never finished"
+
+
+def _turn(mo, **kwargs):
+    """One retrieval, then let its background learning land."""
+    result = mo._retrieve_memory_internal(
+        QUERY, session_id=SESSION, dataset_id=kwargs.pop("dataset_id", "unknown_dataset"), **kwargs)
+    _wait_for_learning()
+    return result
+
+
 @pytest.fixture(autouse=True)
 def _memory_isolation():
     MemoryOrchestrator.clear_all_sessions()
     yield
+    _wait_for_learning()
     MemoryOrchestrator.clear_all_sessions()
 
 
@@ -121,7 +150,10 @@ def _memory_isolation():
 
 def test_llm_noise_does_not_evict_relevant_hints():
     mo = _stubbed_orchestrator()
-    result = mo._retrieve_memory_internal(QUERY, session_id=SESSION, dataset_id="unknown_dataset")
+    _turn(mo)
+    assert MemoryOrchestrator._session_hints_store[SESSION] == NOISE_HINTS, (
+        "precondition: turn 1's extractions must be in session history")
+    result = _turn(mo)
 
     top = result["memory_hints"]
     assert len(top) == 3
@@ -142,20 +174,36 @@ def test_relevance_order_is_artifact_then_domain_then_similar():
 
 
 def test_accumulated_hints_still_carry_everything():
-    """The full accumulated list is a separate contract — noise stays visible there."""
+    """The full accumulated list is a separate contract — noise stays visible
+    there, from the turn after it was learned."""
     mo = _stubbed_orchestrator()
-    result = mo._retrieve_memory_internal(QUERY, session_id=SESSION, dataset_id="unknown_dataset")
+    first = _turn(mo)
+    result = _turn(mo)
 
     for h in NOISE_HINTS:
+        assert h not in first["accumulated_memory_hints"], "learned in the background, not same-turn"
         assert h in result["accumulated_memory_hints"]
+
+
+def test_hints_learned_from_a_query_are_not_served_on_that_turn():
+    """The contract PR #420 introduced, stated outright: extraction is off the
+    request path, so this turn's payload carries none of it."""
+    mo = _stubbed_orchestrator(with_artifact=False, with_schema=False, milvus_hits=())
+    result = _turn(mo)
+
+    assert result["memory_hints"] == []
+    assert result["new_hints_this_context"] == []
+    assert _turn(mo)["memory_hints"] == NOISE_HINTS
 
 
 def test_stale_session_noise_does_not_outrank_fresh_relevant_hints():
     """Second turn: turn-1 noise sits in the session store; fresh query-matched
     hints must still win the top-3."""
     mo = _stubbed_orchestrator()
-    mo._retrieve_memory_internal(QUERY, session_id=SESSION, dataset_id="unknown_dataset")
-    result = mo._retrieve_memory_internal(QUERY, session_id=SESSION, dataset_id="unknown_dataset")
+    _turn(mo)
+    _turn(mo)
+    assert set(NOISE_HINTS) <= set(MemoryOrchestrator._session_hints_store[SESSION])
+    result = _turn(mo)
 
     top = result["memory_hints"]
     assert any(L3_MARKER in h for h in top)
@@ -215,10 +263,23 @@ def test_compose_top_hints_tiered_order_and_truncation():
         "artifact": ["art-1"],
         "domain": ["dom-1", "dom-2"],
         "similar": ["sim-1"],
-        "llm": ["llm-1"],
         "session": ["old-1", "old-2"],
     }
     assert mo._compose_top_hints("sess-tiered", tiered) == ["art-1", "dom-1", "dom-2"]
+
+
+def test_every_ranked_tier_is_filled_by_a_real_retrieval():
+    """A tier in the order that no stage writes to is dead weight that reads
+    like a guarantee -- which is what "llm" was once extraction moved to the
+    background. With every source answering, every ranked tier must fill."""
+    filled = set()
+    mo = _stubbed_orchestrator()
+    mo._compose_top_hints = lambda session_id, hints, limit=3: (
+        filled.update(t for t, v in hints.items() if v) or [])
+    _turn(mo)
+
+    unfilled = set(MemoryOrchestrator._HINT_TIER_ORDER) - filled
+    assert not unfilled, f"tiers nothing fills: {unfilled}"
 
 
 def test_compose_top_hints_session_fills_leftover_slots_newest_first():
@@ -229,23 +290,27 @@ def test_compose_top_hints_session_fills_leftover_slots_newest_first():
 
 def test_compose_top_hints_dedups_across_tiers():
     mo = _stubbed_orchestrator()
-    tiered = {"similar": ["dup", "sim-2"], "llm": ["dup", "llm-2"], "session": []}
-    assert mo._compose_top_hints("sess-dedup", tiered) == ["dup", "sim-2", "llm-2"]
+    tiered = {"domain": ["dup", "dom-2"], "similar": ["dup", "sim-2"], "session": []}
+    assert mo._compose_top_hints("sess-dedup", tiered) == ["dup", "dom-2", "sim-2"]
 
 
 # ── Edge cases: alternate hint sources, dedup semantics, failure paths ───────
 
 
 def test_mcp_hot_loaded_schema_ranks_as_domain_tier():
-    """Schema cache miss + real dataset_id → MCP hot-load; the result must
-    rank as a domain hint, not fall to the bottom of the list."""
+    """Schema cache miss + a DATABASE source → MCP hot-load; the result must
+    rank as a domain hint, not fall to the bottom of the list. (For a CSV
+    upload the dataset id is a file name the MCP server has never heard of, so
+    no hot-load is attempted: tests/test_memory_staged_retrieval.py.)"""
     payload = {"tables": {"orders": ["order_id", "region", "amount"]}}
     fake_loader = types.ModuleType("app.services.mcp_cache_loader")
     fake_loader.fetch_schema_sync = lambda url, key, ds: dict(payload)
 
     mo = _stubbed_orchestrator(with_schema=False)
     with patch.dict(sys.modules, {"app.services.mcp_cache_loader": fake_loader}):
-        result = mo._retrieve_memory_internal(QUERY, session_id=SESSION, dataset_id="nyc_taxi")
+        result = mo._retrieve_memory_internal(
+            QUERY, session_id=SESSION, dataset_id="nyc_taxi",
+            state={"input_data_type": "postgres"})
 
     assert f"Domain insight (hot-loaded via MCP): {json.dumps(payload)}" in result["memory_hints"]
     mo.redis.set_schema.assert_called_once()  # persisted to L1 for next request
@@ -261,27 +326,50 @@ def test_l3_metadata_without_known_fields_still_ranks_as_artifact():
 
 
 def test_duplicate_llm_hint_not_double_stored():
-    """LLM re-emitting a hint Milvus already surfaced: one copy in the
-    accumulated list, no duplicate persisted to the session store, and the
-    raw extraction report stays unfiltered."""
-    mo = _stubbed_orchestrator(llm_hints=[MILVUS_HINT, "genuinely new fact"])
-    result = mo._retrieve_memory_internal(QUERY, session_id=SESSION, dataset_id="unknown_dataset")
+    """LLM re-emitting a hint Milvus already surfaced: no duplicate persisted
+    to the session store, one copy in the accumulated list -- and the hint
+    keeps its similarity rank next turn instead of sinking into session
+    history, which is what a stored duplicate would do to it."""
+    mo = _stubbed_orchestrator(with_artifact=False, with_schema=False,
+                               llm_hints=[MILVUS_HINT, "genuinely new fact"])
+    _turn(mo)
 
-    assert result["accumulated_memory_hints"].count(MILVUS_HINT) == 1
     stored = MemoryOrchestrator._session_hints_store.get(SESSION, [])
     assert MILVUS_HINT not in stored, "only genuinely new hints persist to the session store"
     assert "genuinely new fact" in stored
-    assert result["new_hints_this_context"] == [MILVUS_HINT, "genuinely new fact"]
+
+    seen = {}
+    compose = mo._compose_top_hints
+    mo._compose_top_hints = lambda session_id, hints, limit=3: (
+        seen.update(hints) or compose(session_id, hints, limit))
+    result = _turn(mo)
+
+    assert result["accumulated_memory_hints"].count(MILVUS_HINT) == 1
+    assert seen["similar"] == [MILVUS_HINT], "the Milvus hit must stay in its ranked tier"
 
 
-def test_internal_failure_returns_safe_empty_payload():
-    """Any layer blowing up trips the breaker: empty hints, flagged unavailable."""
+def test_one_store_down_costs_only_its_own_hints():
+    """Was test_internal_failure_returns_safe_empty_payload: any layer failing
+    used to empty the whole payload. Stages are independent now, so Postgres
+    being down loses the artifact hint and nothing else, and memory still
+    reports itself available -- three stores answered."""
     mo = _stubbed_orchestrator()
     mo.postgres.connect.side_effect = RuntimeError("postgres down")
     result = mo._retrieve_memory_internal(QUERY, session_id=SESSION, dataset_id="unknown_dataset")
 
+    assert result["memory_hints"] == [DOMAIN_HINT, MILVUS_HINT]
+    assert result["prior_artifact_found"] is False
+    assert result["memory_context_unavailable"] is False
+
+
+def test_every_store_down_is_reported_as_unavailable():
+    """Nothing answered, so an empty result is not a finding (LL-06)."""
+    mo = _stubbed_orchestrator()
+    for name in MemoryOrchestrator._STORES:
+        getattr(mo, name).connect.side_effect = RuntimeError(f"{name} down")
+    result = mo._retrieve_memory_internal(QUERY, session_id=SESSION, dataset_id="unknown_dataset")
+
     assert result["memory_hints"] == []
-    assert result["accumulated_memory_hints"] == []
     assert result["memory_context_unavailable"] is True
 
 

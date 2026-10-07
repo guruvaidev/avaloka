@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence
 
 from app.agents.contract import AgentSpec, Stage, agent
+from app.agents.lineage_hooks import record_dataset_pii
 from app.agents.pii_agent import PIIReport, Sensitivity, apply_deidentification, scan_dataframe
 from app.agents.preparation_agent import (Objective, apply_preparation, fit_preparation,
                                           suggest_ratio_features)
@@ -141,6 +142,7 @@ def preparation_pipeline_node(state: Dict[str, Any]) -> Dict[str, Any]:
         ratio_features=state.get("ratio_features") or (),
         dataset_name=state.get("dataset_name"))
 
+    record_dataset_pii(state, df, proposal.pii)
     logger.info("[preparation] %s", proposal.headline)
     return {
         "preparation_proposal": proposal.as_dict(),

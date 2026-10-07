@@ -144,9 +144,16 @@ spec:
           env:
             - name: ETCD_ENDPOINTS
               value: {{ include "avaloka.fullname" . }}-etcd:2379
-            # Reuse the MinIO this chart already runs rather than a second store.
+            # Reuse the object store this chart already runs rather than a
+            # second one. The MINIO_* env NAMES below are Milvus's own names for
+            # its generic S3 driver and do NOT mean MinIO -- only the address
+            # moves when the backend does. Verified end-to-end against SeaweedFS:
+            # Milvus created its own bucket, inserted 20k vectors, flushed, built
+            # an IVF_FLAT index and searched correctly. (SeaweedFS is not a
+            # *named* supported store in Milvus's docs -- it falls under "other
+            # S3-compatible storage" -- so this is empirical, not vendor-backed.)
             - name: MINIO_ADDRESS
-              value: {{ include "avaloka.fullname" . }}-minio:{{ .Values.minio.port }}
+              value: {{ include "avaloka.objectStoreAddress" . }}
             # The secret stores these under the AWS_* names, which is what the
             # rest of the stack reads. Referencing MINIO_ROOT_* here (with
             # optional: true) left them UNSET, so Milvus fell back to

@@ -82,8 +82,8 @@ def provision(args) -> int:
         provider=args.provider,
         # Local/on-prem clusters have no cloud bucket to write to, and no
         # ReadWriteMany volume the Ray workers could share instead — so give them
-        # the in-cluster MinIO. Cloud providers keep their own object storage.
-        minio=args.provider not in ("gcp", "aws", "azure"),
+        # the in-cluster object store. Cloud providers keep their own.
+        object_store=args.provider not in ("gcp", "aws", "azure"),
         local_images=args.provider == "local",
     )))
     if _any_failed(results):
@@ -129,7 +129,7 @@ def connect(args) -> int:
         ray_address=ray_address or "",
         service_type=args.service_type,
         provider=args.provider,
-        minio=args.provider not in ("gcp", "aws", "azure"),
+        object_store=args.provider not in ("gcp", "aws", "azure"),
         supabase=args.provider == "local",
     )))
     return _finish(results)

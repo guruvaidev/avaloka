@@ -117,6 +117,13 @@ _DQ_LINE_RE = re.compile(
 
 _CONTEXT_SPLIT = re.compile(r"\n\s*\[(?:analysis context|context)\]", re.IGNORECASE)
 _EMPTY_CELLS = {"", "nan", "none", "null", "<na>", "nat"}
+# What _compact_rows leaves out of the prompt. Narrower than _EMPTY_CELLS:
+# "None" and "null" are real category labels (payment_method = "None"), and by
+# the time rows reach here every cell is a string, so a label cannot be told
+# from a stringified null. Dropping the label left the model a row it could not
+# name. "nan" / "nat" / "<na>" are still dropped: that is how pandas prints a
+# null, and a label literally spelled that way is the accepted loss.
+_OMITTED_CELLS = _EMPTY_CELLS - {"none", "null"}
 
 
 def _wants_data_quality(question: str, rows: List[Dict[str, Any]]) -> bool:
@@ -173,7 +180,7 @@ def _compact_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             continue
         out.append({
             k: v for k, v in row.items()
-            if v is not None and str(v).strip().lower() not in _EMPTY_CELLS
+            if v is not None and str(v).strip().lower() not in _OMITTED_CELLS
         })
     return out
 

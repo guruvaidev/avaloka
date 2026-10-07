@@ -29,14 +29,20 @@ function parseNumber(v: unknown): number | null {
   return null;
 }
 
+// Date.parse alone is far too lenient: V8 reads "sku-4", "Q-1", "item/7" and
+// "Store 12" as dates. Only strings shaped like a date are handed to it.
+const NUMERIC_DATE =
+  /^(?:\d{4}[-/.]\d{1,2}(?:[-/.]\d{1,2})?|\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4})(?:[T ]\d{1,2}:\d{2}.*)?$/;
+const MONTH_NAME =
+  /(?:^|[^a-z])(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:[^a-z]|$)/i;
+
 function looksLikeDate(v: unknown): boolean {
   if (v instanceof Date) return !Number.isNaN(v.getTime());
   if (typeof v !== "string") return false;
-  if (!/\d/.test(v)) return false;
-  // require a separator typical of dates to avoid matching plain numbers
-  if (!/[-/:T]/.test(v)) return false;
-  const t = Date.parse(v);
-  return Number.isFinite(t);
+  const s = v.trim();
+  if (!/\d/.test(s)) return false;
+  if (!NUMERIC_DATE.test(s) && !MONTH_NAME.test(s)) return false;
+  return Number.isFinite(Date.parse(s));
 }
 
 function classify(rows: Row[], key: string): ColStats {

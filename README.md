@@ -222,9 +222,10 @@ than ours, and none of it is hidden behind our abstraction — you can verify an
 number Avaloka reports by running the layer underneath it yourself.
 
 One caveat worth stating before you deploy: the chart's default object store is
-MinIO, and MinIO's images are not currently pullable from the registries the
-chart points at. Treat in-cluster object storage as the part of a Kubernetes
-install most likely to need your own attention, and read
+SeaweedFS, pulled from a single Docker Hub repository and pinned by digest. It
+replaced MinIO after MinIO's images stopped being pullable, and a digest does
+not protect against the same thing happening again. Mirror it into a registry
+you control for anything you depend on, and read
 [Deployment](docs/deployment.md) before assuming the default works.
 
 Full per-project attribution and licences are in [NOTICE](NOTICE). Our thanks

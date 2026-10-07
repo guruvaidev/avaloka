@@ -27,7 +27,12 @@ spec:
   backoffLimit: 1
   template:
     metadata:
-      labels: {{- include "avaloka.selectorLabels" . | nindent 8 }}
+      labels:
+        {{- include "avaloka.selectorLabels" . | nindent 8 }}
+        # Named so the object store's NetworkPolicy can admit this pod: it reads
+        # its seed archive from S3_ENDPOINT, and a pod with no component label
+        # cannot be listed as a client.
+        app.kubernetes.io/component: chroma-seed
     spec:
       restartPolicy: Never
       containers:
@@ -38,7 +43,7 @@ spec:
             - name: SOURCE_URI
               value: {{ .Values.chroma.seed.sourceUri | quote }}
             - name: S3_ENDPOINT
-              value: "http://{{ include "avaloka.fullname" . }}-minio:{{ .Values.minio.port }}"
+              value: {{ include "avaloka.objectStoreEndpoint" . | quote }}
             - name: AWS_ACCESS_KEY_ID
               valueFrom:
                 secretKeyRef:
@@ -70,10 +75,25 @@ spec:
               echo "chroma-seed: loading ${SOURCE_URI}"
               case "${SOURCE_URI}" in
                 s3://*)
-                  mc alias set seedsrc "${S3_ENDPOINT}" "${AWS_ACCESS_KEY_ID:-}" "${AWS_SECRET_ACCESS_KEY:-}" >/dev/null 2>&1 || {
-                    echo "chroma-seed: could not reach the object store; starting cold."; exit 0; }
-                  mc cp "seedsrc/${SOURCE_URI#s3://}" /tmp/seed.tar.gz || {
-                    echo "chroma-seed: archive not found at ${SOURCE_URI}; starting cold."; exit 0; }
+                  # Was `mc alias set` + `mc cp`. minio/mc is no longer pullable
+                  # from Docker Hub at all, so this branch could not even start:
+                  # the job fell through to "starting cold" and a configured seed
+                  # was silently ignored. rclone replaces it because one static
+                  # binary covers both this branch and the http one below, and
+                  # its image still carries the tar/wget this script needs
+                  # (amazon/aws-cli ships neither).
+                  #
+                  # Remote is configured by env so no config file is needed.
+                  # provider=Other is what makes rclone skip AWS-specific
+                  # behaviour against an S3-compatible endpoint.
+                  export RCLONE_CONFIG_SEEDSRC_TYPE=s3
+                  export RCLONE_CONFIG_SEEDSRC_PROVIDER=Other
+                  export RCLONE_CONFIG_SEEDSRC_ENDPOINT="${S3_ENDPOINT}"
+                  export RCLONE_CONFIG_SEEDSRC_REGION=us-east-1
+                  export RCLONE_CONFIG_SEEDSRC_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-}"
+                  export RCLONE_CONFIG_SEEDSRC_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-}"
+                  rclone copyto "seedsrc:${SOURCE_URI#s3://}" /tmp/seed.tar.gz || {
+                    echo "chroma-seed: archive not readable at ${SOURCE_URI}; starting cold."; exit 0; }
                   ;;
                 http://*|https://*)
                   wget -q -O /tmp/seed.tar.gz "${SOURCE_URI}" || {

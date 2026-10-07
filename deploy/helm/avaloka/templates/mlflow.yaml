@@ -3,7 +3,7 @@
 {{- fail "mlflow.enabled=true requires mlflow.backendStoreUri or a configured PostgreSQL backend" }}
 {{- end }}
 {{- if not (include "avaloka.mlflowArtifactsDestination" .) }}
-{{- fail "mlflow.enabled=true requires mlflow.artifactsDestination, an enabled MinIO store, or config.storageBackend=gcs with config.gcsBucket" }}
+{{- fail "mlflow.enabled=true requires mlflow.artifactsDestination, an enabled in-cluster object store (seaweedfs.enabled or minio.enabled), or config.storageBackend=gcs with config.gcsBucket" }}
 {{- end }}
 {{- $fullname := include "avaloka.fullname" . }}
 {{- $repository := default .Values.image.repository .Values.mlflow.image.repository }}
@@ -57,19 +57,29 @@ spec:
                   key: MLFLOW_BACKEND_STORE_URI
             - name: MLFLOW_ARTIFACTS_DESTINATION
               value: {{ $artifactsDestination | quote }}
-            {{- if and .Values.minio.enabled (hasPrefix "s3://" $artifactsDestination) }}
+            {{- if and (include "avaloka.objectStoreEnabled" .) (hasPrefix "s3://" $artifactsDestination) }}
+            # Gated on whichever in-cluster object store is running, not on MinIO
+            # specifically. This block carries MLflow's ONLY S3 endpoint and
+            # credentials, so when the gate was `.Values.minio.enabled` a
+            # values-only backend swap did not merely mis-point MLflow -- it
+            # removed its credentials entirely and MLflow fell back to writing
+            # artifacts onto its own pod filesystem, where they look fine until
+            # the pod is rescheduled.
             - name: MLFLOW_S3_ENDPOINT_URL
-              value: {{ include "avaloka.minioEndpoint" . | quote }}
+              value: {{ include "avaloka.objectStoreEndpoint" . | quote }}
+            # Key NAMES differ per backend (MinIO's server requires
+            # MINIO_ROOT_USER/_PASSWORD in its own Secret), so both the Secret
+            # name and the keys come from helpers.
             - name: AWS_ACCESS_KEY_ID
               valueFrom:
                 secretKeyRef:
-                  name: {{ $fullname }}-minio
-                  key: MINIO_ROOT_USER
+                  name: {{ include "avaloka.objectStoreSecretName" . }}
+                  key: {{ include "avaloka.objectStoreAccessKeyName" . }}
             - name: AWS_SECRET_ACCESS_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ $fullname }}-minio
-                  key: MINIO_ROOT_PASSWORD
+                  name: {{ include "avaloka.objectStoreSecretName" . }}
+                  key: {{ include "avaloka.objectStoreSecretKeyName" . }}
             - name: AWS_REGION
               value: "us-east-1"
             - name: AWS_DEFAULT_REGION

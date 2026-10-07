@@ -253,11 +253,26 @@ mock_memory_llm_empty_hints.content = json.dumps({
 
 # ── Fixtures ──────────────────────────────────────────────────
 
+def _wait_for_learning() -> None:
+    """Block until background learning has landed.
+
+    LLM extraction runs after retrieval returns, so what a query teaches the
+    memory plane is served on the NEXT turn. A test about learned hints has to
+    wait here between turns -- inside the test, while the LLM is still patched.
+
+    A join on the learner threads themselves, not a poll: it returns the
+    moment they finish, however loaded the machine is. The ceiling only turns
+    a learner that never returns into a failure instead of a hung suite.
+    """
+    assert MemoryOrchestrator.wait_for_learning(timeout=300), "background learning never finished"
+
+
 @pytest.fixture(autouse=True)
 def clear_session_memory():
     """Clear in-memory session storage before each test."""
     MemoryOrchestrator.clear_all_sessions()
     yield
+    _wait_for_learning()
     MemoryOrchestrator.clear_all_sessions()
 
 
@@ -384,8 +399,12 @@ class TestRetrieveMemoryDynamic:
     def test_extracts_hints_from_llm(self, mock_llm):
         mock_llm.invoke.return_value = mock_memory_llm_response_cricket
         state = {"session_id": "dynamic_test"}
+        first = retrieve_memory("Analyze Ball_by_Ball.csv", state)
+        _wait_for_learning()
         result = retrieve_memory("Analyze Ball_by_Ball.csv", state)
 
+        # Learned from turn 1, served from turn 2: extraction is off the request path.
+        assert first["memory_hints"] == []
         assert len(result["memory_hints"]) > 0
         assert any("cricket" in h.lower() for h in result["memory_hints"])
 
@@ -407,6 +426,7 @@ class TestRetrieveMemoryDynamic:
         mock_llm.invoke.return_value = mock_memory_llm_response_cricket
         result1 = retrieve_memory("Analyze Ball_by_Ball.csv", state)
         hints_after_q1 = len(result1["memory_hints"])
+        _wait_for_learning()  # otherwise this passes or fails on thread timing
 
         # Query 2: Finance data
         mock_llm.invoke.return_value = mock_memory_llm_response_finance
@@ -519,6 +539,12 @@ class TestMemoryInjectionNode:
     def test_node_extracts_query_from_messages(self, mock_llm, base_state):
         mock_llm.invoke.return_value = mock_memory_llm_response_cricket
         base_state["messages"] = [HumanMessage(content="Analyze cricket data")]
+        memory_injection_node(base_state)
+        _wait_for_learning()
+        # The LLM saw the query the node extracted from the messages...
+        sent = " ".join(str(m.content) for m in mock_llm.invoke.call_args[0][0])
+        assert "Analyze cricket data" in sent
+        # ...and what it learned from it is served on the next turn.
         result = memory_injection_node(base_state)
 
         assert len(result["memory_hints"]) > 0
@@ -603,7 +629,9 @@ class TestMemoryE2EGraphRouting:
         """Memory injection node returns state fields consumed by plan_etl."""
         mock_memory_llm.invoke.return_value = mock_memory_llm_response_cricket
 
-        result = memory_injection_node(base_state)
+        memory_injection_node(base_state)
+        _wait_for_learning()
+        result = memory_injection_node(base_state)  # the turn after the one that taught it
 
         assert "memory_hints" in result
         assert isinstance(result["memory_hints"], list)

@@ -9,7 +9,13 @@ import numpy as np
 import pandas as pd
 
 from .base_connector import BaseConnector, OutputData
-from .table_shape import extract_tables, reinfer_dtypes, reshape
+from .null_policy import blank_null_words, null_word_cells
+from .table_shape import (
+    extract_tables_with_positions,
+    keep_null_word_labels,
+    reinfer_dtypes,
+    reshape_with_positions,
+)
 from .utils import convert_type
 
 logger = logging.getLogger(__name__)
@@ -37,6 +43,28 @@ def _normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
                 pass
             df[col] = s
     return df
+
+
+def _read_sheet(source: Any, sheet: Any, header: Any = 0) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """One sheet, read so a cell that says ``None`` or ``N/A`` is not lost.
+
+    Returns ``(blanked, words)``. ``blanked`` is what ``pd.read_excel`` returned
+    before -- null-like words as missing values -- and is what header and table
+    detection must keep seeing, or a filler row of ``N/A`` stops being blank and
+    moves a table boundary. ``words`` has the same shape and remembers the word
+    each of those cells held, so keep_null_word_labels can put it back once the
+    table is found and its columns are typed. See file_handler/null_policy.py.
+    """
+    text = pd.read_excel(source, sheet_name=sheet, header=header,
+                         keep_default_na=False, na_values=[""])
+    return blank_null_words(text), null_word_cells(text)
+
+
+def _aligned_words(words: pd.DataFrame, rows: list, columns: list, like: pd.DataFrame) -> pd.DataFrame:
+    """The ``words`` cells for a table cut out of the sheet, labelled like it."""
+    picked = words.loc[rows, columns]
+    picked.index, picked.columns = like.index, like.columns
+    return picked
 
 
 class ExcelConnector(BaseConnector):
@@ -117,8 +145,9 @@ class ExcelConnector(BaseConnector):
         columns that do not exist.
         """
         if self._df is None:
-            raw = pd.read_excel(self.path, sheet_name=self.selected_sheet, header=None)
-            self._df, self._shape_report = reshape(raw)
+            raw, words = _read_sheet(self.path, self.selected_sheet, header=None)
+            frame, self._shape_report, rows, columns = reshape_with_positions(raw)
+            self._df = keep_null_word_labels(frame, _aligned_words(words, rows, columns, frame))
         return self._df
 
     def load_all_tables(self, normalize: bool = True) -> list[dict]:
@@ -140,11 +169,12 @@ class ExcelConnector(BaseConnector):
         out: list[dict] = []
         for sheet in self.list_sheets():
             try:
-                raw = pd.read_excel(self.path, sheet_name=sheet, header=None)
+                raw, words = _read_sheet(self.path, sheet, header=None)
             except Exception as exc:
                 logger.warning("Could not read sheet %r: %s", sheet, exc)
                 continue
-            for index, (frame, report) in enumerate(extract_tables(raw)):
+            for index, (frame, report, rows, columns) in enumerate(extract_tables_with_positions(raw)):
+                frame = keep_null_word_labels(frame, _aligned_words(words, rows, columns, frame))
                 if normalize:
                     frame = _normalize_dataframe(frame)
                 out.append({
@@ -274,10 +304,11 @@ def export_workbook_sheets_to_csv(
     xl = pd.ExcelFile(path)
     for i, sheet in enumerate(xl.sheet_names):
         try:
-            df = pd.read_excel(xl, sheet_name=sheet)
+            df, words = _read_sheet(xl, sheet)
         except Exception as e:
             notes.append(f"Sheet '{sheet}' could not be read and was skipped ({e}).")
             continue
+        df = keep_null_word_labels(df, words)
         if df.empty or len(df.columns) == 0:
             notes.append(f"Sheet '{sheet}' is empty and was skipped.")
             continue
