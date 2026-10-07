@@ -2,7 +2,7 @@
 langchain>=0.3.27,<0.4
 langchain-groq>=0.3.8,<0.4
 langgraph>=0.6.7,<0.7
-langgraph-cli>=0.4.2,<0.5 ; python_version < "3.11"
+langgraph-cli>=0.4.32,<0.5 ; python_version < "3.11"
 langgraph-cli[inmem]>=0.4.2,<0.5 ; python_version >= "3.11"
 
 # Data Processing and Analysis
