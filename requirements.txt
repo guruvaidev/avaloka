@@ -96,7 +96,7 @@ mlflow==3.14.0
 # air covers data + train + tune; serve covers the inference path. Together they
 # are what app/ and avaloka/ actually import: ray.data, ray.train.torch,
 # ray.job_submission, ray.util.
-ray[air,serve]==2.49.2
+ray[air,serve]==2.56.0
 getdaft>=0.5.0,<0.6
 onnx>=1.15.0
 onnxruntime>=1.16.0
