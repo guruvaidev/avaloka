@@ -8,6 +8,22 @@ metadata:
   labels:
     {{- include "avaloka.labels" . | nindent 4 }}
     app.kubernetes.io/component: minio
+  annotations:
+    # This claim renders OUTSIDE the minio.enabled gate below, which is
+    # deliberate and now load-bearing in a way it was not before. With MinIO
+    # defaulted off, every install renders a claim for a store it is not running
+    # -- a stray 20Gi on the cloud overlays, and a permanently Pending claim on
+    # kind. The reason not to simply move it inside the gate is that doing so in
+    # THIS release would make `helm upgrade` DELETE it: Helm reads
+    # resource-policy from the manifest of the release it is replacing, and an
+    # already-installed release carries no such annotation, so an existing MinIO
+    # install would lose its bucket the moment it upgraded.
+    #
+    # So this release only adds the annotation. Once installs carry it, a
+    # following release can move the claim inside the gate and drop the stray
+    # entirely. Until then, reclaim it by hand when the rollback window closes:
+    #   kubectl delete pvc {{ $fullname }}-minio
+    "helm.sh/resource-policy": keep
 spec:
   accessModes:
     - ReadWriteOnce
@@ -17,6 +33,16 @@ spec:
       storage: {{ .Values.minio.persistence.size | quote }}
 
 {{- if .Values.minio.enabled }}
+# RETAINED FOR ROLLBACK ONLY -- disabled by default since the SeaweedFS migration.
+# See templates/seaweedfs.yaml for the live store and the seaweedfs block in
+# values.yaml for why this one was replaced. Its workloads are left exactly as
+# they shipped -- including the `mc` bucket hook -- so the rollback path is the
+# thing that was known to work rather than a freshly edited approximation of
+# it. The only change is a resource-policy annotation on the PVC; see there.
+# Both images below are unpullable from every public registry as of
+# 2026-10-02, so this path only works where they remain cached on the nodes or
+# mirrored privately.
+#
 # In-cluster S3-compatible object store, so a local/on-prem install has a real
 # shared data plane instead of a per-pod filesystem.
 #

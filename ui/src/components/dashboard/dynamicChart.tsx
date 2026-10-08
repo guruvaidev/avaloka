@@ -18,6 +18,7 @@ import {
   Tooltip as RTooltip,
 } from "recharts";
 import { getLineRenderData, getPieRenderData } from "@/lib/chart-points";
+import { aggregateTitle, chartAxisTitles } from "@/lib/chart-axis-titles";
 
 export type ChartType = "line" | "area" | "bar" | "pie" | "donut" | "scatter";
 
@@ -37,10 +38,10 @@ export type Slide = {
   xField?: string | null;
   yField?: string | null;
   aggregate?: string | null;
+  /** Explicit axis titles (client-derived charts, encodings titles); otherwise inferred. */
+  xAxisTitle?: string;
+  yAxisTitle?: string;
   reason?: string | null;
-  /** Explicit axis labels (encodings titles / "Count"). */
-  xLabel?: string;
-  yLabel?: string;
   /** Chart couldn't be drawn; title + insights are still shown. */
   undrawable?: boolean;
 };
@@ -91,6 +92,8 @@ function pickType(raw: any): ChartType {
   return "line";
 }
 
+const SUPPORTED_AGGREGATES = ["", "count", "sum", "mean", "avg", "average", "median", "min", "max"];
+
 function buildFromEncodings(raw: any, samples: any[]): { data: any[]; xKey: string; series: Series[] } | null {
   const enc = raw?.encodings;
   if (!enc || !samples?.length) return null;
@@ -98,7 +101,17 @@ function buildFromEncodings(raw: any, samples: any[]): { data: any[]; xKey: stri
   if (!xFieldRaw) return null;
   const xField = resolveFieldKey(samples, String(xFieldRaw));
   if (!xField) return null;
-  const aggregate = String(enc.y?.aggregate ?? "").toLowerCase();
+  const aggregate = String(enc.y?.aggregate ?? "")
+    .trim()
+    .toLowerCase();
+  if (!SUPPORTED_AGGREGATES.includes(aggregate)) {
+    // Never fall through to the mean: the chart would carry wrong numbers.
+    console.warn("[AutoInsights] Unsupported aggregate; chart not drawn", {
+      id: raw?.id,
+      aggregate,
+    });
+    return null;
+  }
   const topK = raw?.config?.top_k as number | undefined;
   let yFieldRaw = enc.y?.field as string | undefined;
   let yField = yFieldRaw ? (resolveFieldKey(samples, yFieldRaw) ?? undefined) : undefined;
@@ -156,20 +169,40 @@ function buildFromEncodings(raw: any, samples: any[]): { data: any[]; xKey: stri
     }
     groups.set(key, g);
   }
-  let rows = Array.from(groups.entries()).map(([k, g]) => {
-    let v: number;
-    if (yField === countKey || aggregate === "count" || xField === yField) v = g.count;
-    else if (aggregate === "sum") v = g.sum;
-    else if (aggregate === "mean" || aggregate === "avg" || aggregate === "average")
-      v = g.vals.length ? g.sum / g.vals.length : 0;
-    else v = g.vals.length ? g.sum / g.vals.length : g.count;
-    return { [xField]: k, [yField!]: Number(v.toFixed(4)) };
-  });
+  const counting = aggregate === "count" || (!aggregate && xField === yField);
+  const valueKey = counting ? countKey : xField === yField ? "__aggregate__" : yField;
+  let rows = Array.from(groups.entries())
+    .filter(([, g]) => counting || g.vals.length > 0)
+    .map(([k, g]) => {
+      let v: number;
+      if (counting) v = g.count;
+      else if (aggregate === "sum") v = g.sum;
+      else if (aggregate === "median") {
+        const sorted = [...g.vals].sort((a, b) => a - b);
+        const middle = Math.floor(sorted.length / 2);
+        v = sorted.length
+          ? sorted.length % 2
+            ? sorted[middle]
+            : (sorted[middle - 1] + sorted[middle]) / 2
+          : 0;
+      } else if (aggregate === "min") v = g.vals.length ? Math.min(...g.vals) : 0;
+      else if (aggregate === "max") v = g.vals.length ? Math.max(...g.vals) : 0;
+      else if (aggregate === "mean" || aggregate === "avg" || aggregate === "average")
+        v = g.vals.length ? g.sum / g.vals.length : 0;
+      else v = g.vals.length ? g.sum / g.vals.length : g.count;
+      return { [xField]: k, [valueKey!]: Number(v.toFixed(4)) };
+    });
   if (topK && rows.length > topK) rows = rows.slice(0, topK);
   return {
     data: rows,
     xKey: xField,
-    series: [{ dataKey: yField!, name: yField === countKey ? "Count" : yField!, color: PALETTE[0] }],
+    series: [
+      {
+        dataKey: valueKey!,
+        name: counting ? "Count of records" : aggregateTitle(aggregate || "mean", yField),
+        color: PALETTE[0],
+      },
+    ],
   };
 }
 
@@ -207,13 +240,24 @@ export function normalizeChart(raw: any, samples?: any[]): Slide | null {
         ? "line"
         : slide.type;
   const str = (v: unknown) => (v == null || v === "" ? null : String(v));
+  const encoded = Boolean(enc.x?.field || enc.y?.field || enc.y?.aggregate || enc.theta?.aggregate);
   return {
     ...slide,
     id: raw?.id != null ? String(raw.id) : undefined,
     chartKind: kind,
-    xField: str(enc.x?.field ?? enc.color?.field),
-    yField: str(enc.y?.field ?? enc.theta?.field),
-    aggregate: str(enc.y?.aggregate ?? enc.theta?.aggregate),
+    xField: str(enc.x?.field ?? enc.color?.field ?? raw?.xField ?? raw?.x_field),
+    yField: str(enc.y?.field ?? enc.theta?.field ?? raw?.yField ?? raw?.y_field),
+    aggregate: str(enc.y?.aggregate ?? enc.theta?.aggregate ?? raw?.aggregate),
+    xAxisTitle:
+      slide.xAxisTitle ??
+      (encoded
+        ? undefined
+        : (str(raw?.xAxisTitle ?? raw?.x_axis_title ?? raw?.xLabel ?? raw?.x_label) ?? undefined)),
+    yAxisTitle:
+      slide.yAxisTitle ??
+      (encoded
+        ? undefined
+        : (str(raw?.yAxisTitle ?? raw?.y_axis_title ?? raw?.yLabel ?? raw?.y_label) ?? undefined)),
     reason: str(raw?.reason),
   };
 }
@@ -232,8 +276,16 @@ function categoryLabel(v: unknown): string {
  * Points always use fixed keys "category" and "value" so they can never collide.
  * Returns null when this builder doesn't apply, so legacy paths keep working.
  */
-function buildCategorical(raw: any, samples: any[] | undefined, type: ChartType): {
-  data: any[]; xKey: string; series: Series[]; xLabel: string; yLabel: string;
+function buildCategorical(
+  raw: any,
+  samples: any[] | undefined,
+  type: ChartType,
+): {
+  data: any[];
+  xKey: string;
+  series: Series[];
+  xAxisTitle?: string;
+  yAxisTitle?: string;
 } | null {
   const t = String(raw?.type ?? raw?.chart_type ?? raw?.kind ?? "").toLowerCase();
   const enc = raw?.encodings ?? {};
@@ -243,21 +295,33 @@ function buildCategorical(raw: any, samples: any[] | undefined, type: ChartType)
   const valEnc = isPie ? (enc.theta ?? enc.y) : enc.y;
   const valFieldRaw: string | undefined = valEnc?.field;
   const aggregate = String(valEnc?.aggregate ?? (isPie ? "count" : "")).toLowerCase();
-  const isCount = aggregate === "count" || !valFieldRaw || (!!catFieldRaw && valFieldRaw === catFieldRaw);
-  const xLabel = String(enc.x?.title ?? (isPie ? enc.color?.title : undefined) ?? catFieldRaw ?? "Category");
-  const yLabel = String(valEnc?.title ?? (isCount ? "Count" : (valFieldRaw ?? "Value")));
-  const series: Series[] = [{ dataKey: "value", name: yLabel, color: PALETTE[0] }];
-
-  // Rule 3: precomputed points win, in given order.
   const dd = raw?.derived_data;
-  if (dd && Array.isArray(dd.points) && dd.points.length) {
-    const cf = dd.category_field ?? catFieldRaw;
-    const vf = dd.value_field ?? valFieldRaw ?? "count";
+  const hasPoints = !!dd && Array.isArray(dd.points) && dd.points.length > 0;
+  // The backend counts rows (y_key "count") when the y field is the label column or
+  // not a real column, without rewriting encodings.y for bar/line charts.
+  const countedPoints = hasPoints && dd.y_key === "count" && valFieldRaw !== "count";
+  const isCount =
+    countedPoints ||
+    aggregate === "count" ||
+    !valFieldRaw ||
+    (!!catFieldRaw && valFieldRaw === catFieldRaw);
+  // Only titles the spec states outright; chartAxisTitles infers the rest from field + aggregate.
+  const explicit = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : undefined);
+  const xAxisTitle = explicit(enc.x?.title ?? (isPie ? enc.color?.title : undefined));
+  const yAxisTitle = explicit(valEnc?.title) ?? (isCount ? "Count of records" : undefined);
+  const yName = String(valEnc?.title ?? (isCount ? "Count" : (valFieldRaw ?? "Value")));
+  const series: Series[] = [{ dataKey: "value", name: yName, color: PALETTE[0] }];
+
+  // Rule 3: precomputed points win, in given order. Points are keyed by the
+  // x_key / y_key the backend declares; encoding field names are a fallback only.
+  if (hasPoints) {
+    const cf = dd.x_key ?? dd.category_field ?? catFieldRaw;
+    const vf = dd.y_key ?? dd.value_field ?? valFieldRaw ?? "count";
     const data = dd.points.map((p: any) => ({
       category: categoryLabel(p?.[cf]),
       value: Number(p?.[vf]) || 0,
     }));
-    return { data, xKey: "category", series, xLabel, yLabel };
+    return { data, xKey: "category", series, xAxisTitle, yAxisTitle };
   }
 
   if (!catFieldRaw || !samples?.length) return null;
@@ -294,7 +358,7 @@ function buildCategorical(raw: any, samples: any[] | undefined, type: ChartType)
     } else data = data.slice(0, topK);
   }
   if (!data.length) return null;
-  return { data, xKey: "category", series, xLabel, yLabel };
+  return { data, xKey: "category", series, xAxisTitle, yAxisTitle };
 }
 
 function normalizeChartInner(raw: any, samples?: any[]): Slide | null {
@@ -307,8 +371,15 @@ function normalizeChartInner(raw: any, samples?: any[]): Slide | null {
     const cat = buildCategorical(raw, samples, type);
     if (cat) {
       return {
-        title, subtitle, type, data: cat.data, xKey: cat.xKey, series: cat.series,
-        insights: pickInsights(raw), xLabel: cat.xLabel, yLabel: cat.yLabel,
+        title,
+        subtitle,
+        type,
+        data: cat.data,
+        xKey: cat.xKey,
+        series: cat.series,
+        insights: pickInsights(raw),
+        xAxisTitle: cat.xAxisTitle,
+        yAxisTitle: cat.yAxisTitle,
       };
     }
 
@@ -504,6 +575,7 @@ export function DynamicChart({
   chartKey?: string;
 }) {
   const uid = (chartKey ?? slide.title ?? "chart").replace(/[^a-zA-Z0-9_-]/g, "_");
+  const axisTitles = chartAxisTitles(slide);
   const categoryTooltip =
     slide.xKey === "category"
       ? {
@@ -580,7 +652,6 @@ export function DynamicChart({
   if (slide.type === "scatter") {
 
     const yKey = slide.series[0]?.dataKey ?? "y";
-    const yName = slide.series[0]?.name ?? yKey;
     return (
       <div className="w-full min-w-0" style={{ height, minHeight: height }}>
         <ResponsiveContainer width="100%" height="100%">
@@ -593,7 +664,7 @@ export function DynamicChart({
               tickLine={false}
               axisLine={false}
               height={compact ? 30 : 60}
-              label={compact ? undefined : { value: `X: ${slide.xLabel ?? slide.xKey}`, position: "insideBottom", offset: 0, fill: "#344054", fontSize: 12, fontWeight: 600 }}
+              label={compact ? undefined : { value: axisTitles.x, position: "insideBottom", offset: 0, fill: "#344054", fontSize: 12, fontWeight: 600 }}
             />
             <YAxis
               type="number"
@@ -603,7 +674,7 @@ export function DynamicChart({
               tickLine={false}
               axisLine={false}
               width={compact ? 40 : 72}
-              label={compact ? undefined : { value: `Y: ${yName}`, angle: -90, position: "insideLeft", offset: 10, fill: "#344054", fontSize: 12, fontWeight: 600, style: { textAnchor: "middle" } }}
+              label={compact ? undefined : { value: axisTitles.y, angle: -90, position: "insideLeft", offset: 10, fill: "#344054", fontSize: 12, fontWeight: 600, style: { textAnchor: "middle" } }}
             />
             <ZAxis range={[20, 20]} />
             <RTooltip cursor={{ strokeDasharray: "3 3" }} formatter={tooltipCompactFormatter} />
@@ -619,7 +690,6 @@ export function DynamicChart({
   if (slide.type === "bar") {
     const margin = compact ? { top: 4, right: 4, left: -16, bottom: 0 } : { top: 8, right: 16, left: 24, bottom: 56 };
     const tickSize = compact ? 9 : 10;
-    const yName = slide.yLabel ?? slide.series[0]?.name ?? slide.series[0]?.dataKey ?? "Value";
     return (
       <div className="w-full min-w-0" style={{ height, minHeight: height }}>
         <ResponsiveContainer width="100%" height="100%">
@@ -632,7 +702,7 @@ export function DynamicChart({
               axisLine={false}
               hide={compact}
               height={compact ? 30 : 60}
-              label={compact ? undefined : { value: `X: ${slide.xLabel ?? slide.xKey}`, position: "insideBottom", offset: 0, fill: "#344054", fontSize: 12, fontWeight: 600 }}
+              label={compact ? undefined : { value: axisTitles.x, position: "insideBottom", offset: 0, fill: "#344054", fontSize: 12, fontWeight: 600 }}
             />
             <YAxis
               tick={{ fill: "#667085", fontSize: tickSize }}
@@ -640,7 +710,7 @@ export function DynamicChart({
               tickLine={false}
               axisLine={false}
               width={compact ? 28 : 72}
-              label={compact ? undefined : { value: `Y: ${yName}`, angle: -90, position: "insideLeft", offset: 10, fill: "#344054", fontSize: 12, fontWeight: 600, style: { textAnchor: "middle" } }}
+              label={compact ? undefined : { value: axisTitles.y, angle: -90, position: "insideLeft", offset: 10, fill: "#344054", fontSize: 12, fontWeight: 600, style: { textAnchor: "middle" } }}
             />
             <RTooltip {...categoryTooltip} />
             {slide.series.map((s) => (
@@ -664,7 +734,6 @@ export function DynamicChart({
   const hasNegative = lineData.some((d) =>
     slide.series.some((s) => typeof d[s.dataKey] === "number" && d[s.dataKey] < 0),
   );
-  const yName = slide.yLabel ?? slide.series[0]?.name ?? slide.series[0]?.dataKey ?? "";
   return (
     <div className="w-full min-w-0" style={{ height, minHeight: height }}>
       <ResponsiveContainer width="100%" height="100%">
@@ -684,7 +753,7 @@ export function DynamicChart({
             tickLine={false}
             axisLine={false}
             height={compact ? 30 : 60}
-            label={compact ? undefined : { value: `X: ${slide.xLabel ?? slide.xKey}`, position: "insideBottom", offset: 0, fill: "#344054", fontSize: 12, fontWeight: 600 }}
+            label={compact ? undefined : { value: axisTitles.x, position: "insideBottom", offset: 0, fill: "#344054", fontSize: 12, fontWeight: 600 }}
           />
           <YAxis
             tick={{ fill: "#667085", fontSize: 10 }}
@@ -692,7 +761,7 @@ export function DynamicChart({
             tickLine={false}
             axisLine={false}
             width={compact ? 40 : 72}
-            label={compact ? undefined : { value: `Y: ${yName || "Value"}`, angle: -90, position: "insideLeft", offset: 10, fill: "#344054", fontSize: 12, fontWeight: 600, style: { textAnchor: "middle" } }}
+            label={compact ? undefined : { value: axisTitles.y, angle: -90, position: "insideLeft", offset: 10, fill: "#344054", fontSize: 12, fontWeight: 600, style: { textAnchor: "middle" } }}
           />
 
           {hasNegative && <ReferenceLine y={0} stroke="#1565ef" strokeWidth={1} />}

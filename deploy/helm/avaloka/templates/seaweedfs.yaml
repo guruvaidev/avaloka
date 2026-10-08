@@ -1,0 +1,421 @@
+{{- $fullname := include "avaloka.fullname" . }}
+
+{{- if .Values.seaweedfs.enabled }}
+# In-cluster S3-compatible object store, so a local/on-prem install has a real
+# shared data plane instead of a per-pod filesystem.
+#
+# Why object storage and not a shared POSIX volume: Ray schedules workers across
+# nodes, and they all have to read the dataset the API wrote. A ReadWriteMany PVC
+# would do it, but neither kind nor Docker Desktop ships an RWX storage class —
+# their default provisioner is node-local hostPath, so a second worker either
+# cannot mount the volume or mounts a different empty one. Every worker can reach
+# the same s3:// URI over the network regardless of where it lands.
+#
+# Why SeaweedFS and not MinIO: MinIO did not fail as software, it failed as a
+# supply chain. Its images stopped being pullable anonymously from every registry
+# that ever served them — quay.io (the pin this chart used) returns 401,
+# docker.io returns insufficient_scope, ghcr.io returns 403 — and the one
+# unauthenticated-write CVE that matters to us (CVE-2026-40344, CVSS 8.8) has no
+# community fix to pull even if the registry came back. SeaweedFS ships the same
+# S3 surface from a pullable Apache-2.0 image, and 19/19 of the S3 operations
+# this stack actually performs were exercised against it on Avaloka's exact
+# client pins, including MLflow's artifact store and a Milvus index build.
+#
+# Why NOT Ceph/Rook: every cluster Avaloka provisions has exactly one schedulable
+# node, so a replicated StorageClass has nowhere to put a second replica. Ceph
+# costs ~10x the memory for zero durability gain on this topology. The chart's
+# existing relationship to Ceph stays the right one — a *value* of
+# storage.className that a datacenter operator already runs.
+#
+# Why all-in-one (`weed server`) and not the upstream per-role chart: one process
+# runs master + volume + filer + S3 gateway at ~190 MiB idle. The split topology
+# buys replication this single-node target cannot use.
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $fullname }}-seaweedfs
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: seaweedfs
+  annotations:
+    # Losing this claim means losing uploaded datasets and MLflow artifacts, so
+    # Helm must never reap it -- not on uninstall, and not when seaweedfs.enabled
+    # flips to false to roll back to MinIO (the data still has to be there to
+    # sync back from). `keep` is what makes it safe for the claim to sit INSIDE
+    # the enabled gate: minio.yaml instead renders its PVC outside the guard,
+    # which is why every cloud overlay that sets minio.enabled=false still ships
+    # a stray 20Gi avaloka-minio claim. Reclaim this one deliberately:
+    #   kubectl delete pvc {{ $fullname }}-seaweedfs
+    "helm.sh/resource-policy": keep
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- include "avaloka.storageClass" (dict "ctx" . "component" .Values.seaweedfs) | nindent 2 }}
+  resources:
+    requests:
+      storage: {{ .Values.seaweedfs.persistence.size | quote }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $fullname }}-seaweedfs
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: seaweedfs
+type: Opaque
+stringData:
+  # These are also the AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY every S3 client
+  # in the stack authenticates with. The defaults are dev credentials for a
+  # cluster-internal Service; override them for anything reachable beyond the
+  # cluster.
+  #
+  # Unlike MinIO, which took its root credentials as two env vars, SeaweedFS
+  # wants a JSON identities file passed as -s3.config. That file lives in this
+  # Secret rather than a ConfigMap because it contains the secret key in
+  # cleartext; it is projected into the pod with an explicit `items` list so the
+  # AWS_* keys below do not also appear as files in /etc/seaweedfs.
+  AWS_ACCESS_KEY_ID: {{ .Values.seaweedfs.auth.accessKey | quote }}
+  AWS_SECRET_ACCESS_KEY: {{ .Values.seaweedfs.auth.secretKey | quote }}
+  s3.json: |
+    {
+      "identities": [
+        {
+          "name": {{ .Values.seaweedfs.auth.accessKey | quote }},
+          "credentials": [
+            {
+              "accessKey": {{ .Values.seaweedfs.auth.accessKey | quote }},
+              "secretKey": {{ .Values.seaweedfs.auth.secretKey | quote }}
+            }
+          ],
+          "actions": ["Admin", "Read", "Write", "List", "Tagging"]
+        }
+      ]
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-seaweedfs
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: seaweedfs
+spec:
+  replicas: 1
+  strategy:
+    # The PVC is ReadWriteOnce: a rolling update would leave the new pod Pending
+    # forever waiting for a volume the old pod still holds.
+    #
+    # For SeaweedFS this is load-bearing beyond scheduling. The filer's embedded
+    # LevelDB takes an *exclusive* lock on the data directory, so a replacement
+    # pod that overlaps the outgoing one does not wait — it exits 255 with
+    # "resource temporarily unavailable" and crash-loops until the old holder
+    # goes away, refusing S3 connections throughout. Observed live
+    # (restartCount: 2). Recreate is what makes Kubernetes terminate the old pod
+    # first; do not "improve" this to RollingUpdate.
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "avaloka.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: seaweedfs
+  template:
+    metadata:
+      annotations:
+        # s3.json is mounted from the Secret, so rotating the credentials has to
+        # restart the pod. Hashes the values, not this file: including this
+        # template from inside itself would recurse.
+        checksum/credentials: {{ printf "%s:%s" (include "avaloka.objectStoreAccessKey" .) (include "avaloka.objectStoreSecretKey" .) | sha256sum }}
+      labels:
+        {{- include "avaloka.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: seaweedfs
+    spec:
+      # Recreate covers the upgrade path, but not eviction, node pressure, or a
+      # direct `kubectl delete pod`. A longer grace period gives weed time to
+      # close LevelDB cleanly instead of being SIGKILLed mid-write at the 30s
+      # default -- an unclean close is what leaves the lock behind.
+      terminationGracePeriodSeconds: {{ .Values.seaweedfs.terminationGracePeriodSeconds }}
+      containers:
+        - name: seaweedfs
+          image: "{{ .Values.seaweedfs.image.repository }}:{{ .Values.seaweedfs.image.tag }}{{ with .Values.seaweedfs.image.digest }}@{{ . }}{{ end }}"
+          imagePullPolicy: {{ .Values.seaweedfs.image.pullPolicy }}
+          args:
+            # One process, all four roles (master, volume, filer, S3 gateway).
+            - server
+            - -dir=/data
+            - -s3
+            - -s3.port={{ .Values.seaweedfs.port }}
+            - -s3.config=/etc/seaweedfs/s3.json
+            - -master.volumeSizeLimitMB={{ .Values.seaweedfs.volumeSizeLimitMB }}
+            - -volume.max=0
+            - -metricsPort={{ .Values.seaweedfs.metricsPort }}
+          ports:
+            - name: s3
+              containerPort: {{ .Values.seaweedfs.port }}
+          # /status on the S3 port, so readiness tracks the only port anything in
+          # this chart talks to. MinIO's /minio/health/{ready,live} split has no
+          # SeaweedFS equivalent; weed is one process, so liveness and readiness
+          # necessarily probe the same thing.
+          readinessProbe:
+            httpGet:
+              path: /status
+              port: s3
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /status
+              port: s3
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          lifecycle:
+            preStop:
+              # Drain in-flight S3 requests before SIGTERM. This does NOT prevent
+              # the LevelDB-lock crash-loop above -- only Recreate + RWO does.
+              exec:
+                command: ["/bin/sh", "-c", "sleep 5"]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: s3-config
+              mountPath: /etc/seaweedfs
+              readOnly: true
+          resources:
+            {{- toYaml .Values.seaweedfs.resources | nindent 12 }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ $fullname }}-seaweedfs
+        - name: s3-config
+          secret:
+            secretName: {{ $fullname }}-seaweedfs
+            items:
+              - key: s3.json
+                path: s3.json
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-seaweedfs
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: seaweedfs
+spec:
+  type: {{ .Values.seaweedfs.service.type }}
+  selector:
+    {{- include "avaloka.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: seaweedfs
+  # Only the S3 port is published. The master/filer/volume ports are deliberately
+  # absent -- nothing in this chart speaks to them, and see the NetworkPolicy
+  # below for why omitting them here is not by itself a control.
+  ports:
+    - name: s3
+      port: {{ .Values.seaweedfs.port }}
+      targetPort: s3
+      protocol: TCP
+      {{- if and (eq .Values.seaweedfs.service.type "NodePort") .Values.seaweedfs.service.nodePort }}
+      nodePort: {{ .Values.seaweedfs.service.nodePort }}
+      {{- end }}
+---
+# MANDATORY, and deliberately not behind a values toggle.
+#
+# `weed server -s3` binds ELEVEN TCP ports on the pod IP -- 8080 (volume), 8181,
+# 8333 (s3), 8888 (filer), 9101, 9324 (metrics), 9333 (master) and the four gRPC
+# siblings at HTTP+10000 -- and exactly ONE of them, 8333, checks the S3
+# credentials. The filer on 8888 serves a browsable directory UI and accepts
+# writes with no credentials at all; a credential-less pod in the same namespace
+# was shown reading Avaloka's real object contents and writing a new object that
+# then appeared through the authenticated S3 API.
+#
+# That is functionally the capability of the MinIO CVE this migration exists to
+# escape. Without this policy the swap does not retire that exposure, it
+# reproduces it by configuration. So: ingress to this pod is restricted to the S3
+# port and nothing else.
+#
+# Trimming the Service (above) is NOT sufficient. Pod IPs are directly routable
+# inside the cluster: with only the S3 port in the Service, the filer, master and
+# volume ports still answered HTTP 200 on the pod IP. A Service is a load
+# balancer, not a firewall.
+#
+# Caveat a reviewer should hold onto: NetworkPolicy is enforced by the CNI, not by
+# the API server. kind's kindnet does enforce this (verified: 8888 and 9333 blocked,
+# 8333 reachable, full stack still working underneath). A cluster whose CNI ignores
+# NetworkPolicy silently gets no protection here and needs filer/volume JWT auth
+# via security.toml instead.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-seaweedfs-s3-only
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: seaweedfs
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "avaloka.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: seaweedfs
+  policyTypes:
+    - Ingress
+  ingress:
+    # WHO may reach the S3 port, not just which port. A rule with `ports` and no
+    # `from` admits every pod in every namespace, which left the one port that
+    # does check credentials reachable by anything that could guess them -- and
+    # the defaults are published dev credentials.
+    #
+    # The list is the workloads that are actually configured as S3 clients, read
+    # off the rendered chart rather than assumed:
+    #   api, langgraph, celery, celery-redbeat  envFrom avaloka-config/-secrets,
+    #                                           which carry S3_ENDPOINT_URL + keys
+    #   mlflow                                  MLFLOW_S3_ENDPOINT_URL
+    #   milvus                                  MINIO_ADDRESS (when milvus.enabled)
+    #   chroma-seed                             S3_ENDPOINT (when chroma.seed.enabled)
+    #   seaweedfs-bucket                        the bucket hook below; leave it out
+    #                                           and every install fails its hook
+    #   Ray head + workers                      read the same s3:// URIs as the API
+    #
+    # Ray pods are created by the KubeRay operator, not by this chart, so they
+    # carry none of this release's labels. `ray.io/node-type` is the label KubeRay
+    # stamps on every head and worker pod it creates, whichever RayCluster,
+    # RayService or RayJob they belong to.
+    #
+    # tests/contract/test_c6_object_storage.py derives the client list from the
+    # render and fails if a workload wired to this store is not admitted here, so
+    # adding a new S3 client without adding it to this list is caught, not shipped.
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "avaloka.selectorLabels" . | nindent 14 }}
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values:
+                  - api
+                  - langgraph
+                  - celery
+                  - celery-redbeat
+                  - mlflow
+                  - milvus
+                  - chroma-seed
+                  - seaweedfs-bucket
+        - podSelector:
+            matchExpressions:
+              - key: ray.io/node-type
+                operator: Exists
+        {{- $rayNamespace := .Values.config.mtaRayNamespace | default .Release.Namespace }}
+        {{- if ne $rayNamespace .Release.Namespace }}
+        # config.mtaRayNamespace moves the Ray cluster out of the release
+        # namespace; a bare podSelector only ever matches pods in this one.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $rayNamespace | quote }}
+          podSelector:
+            matchExpressions:
+              - key: ray.io/node-type
+                operator: Exists
+        {{- end }}
+        {{- with .Values.seaweedfs.extraIngressFrom }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      ports:
+        - port: {{ .Values.seaweedfs.port }}
+          protocol: TCP
+{{- if .Values.seaweedfs.createBucket }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $fullname }}-seaweedfs-mb
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: seaweedfs
+  annotations:
+    # Runs on install AND upgrade: the bucket must exist before the API's first
+    # write, and a reinstall against a fresh PVC would otherwise have none.
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 10
+  template:
+    metadata:
+      labels:
+        {{- include "avaloka.selectorLabels" . | nindent 8 }}
+        # NOT `seaweedfs`. With the store's own component label this pod matched
+        # the Service selector above and was listed as a backend for port 8333,
+        # where it listens on nothing -- and matched the NetworkPolicy's
+        # podSelector, so it could not be told apart from the store when naming
+        # who may connect to it.
+        app.kubernetes.io/component: seaweedfs-bucket
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        # `mc` is gone with the rest of the MinIO supply chain, so the hook uses
+        # the AWS CLI -- which is the honest tool anyway, since what it is
+        # talking to is a plain S3 endpoint.
+        - name: aws-cli
+          image: "{{ .Values.seaweedfs.awsCliImage.repository }}:{{ .Values.seaweedfs.awsCliImage.tag }}{{ with .Values.seaweedfs.awsCliImage.digest }}@{{ . }}{{ end }}"
+          imagePullPolicy: {{ .Values.seaweedfs.awsCliImage.pullPolicy }}
+          # Named keys rather than envFrom: the Secret also holds `s3.json`, which
+          # is not a valid environment variable name. A kubelet will skip it and
+          # (usually) log InvalidEnvironmentVariableNames, so envFrom here means
+          # a warning event on every hook run and a dependency on that skip
+          # behaviour staying lenient.
+          env:
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $fullname }}-seaweedfs
+                  key: AWS_ACCESS_KEY_ID
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $fullname }}-seaweedfs
+                  key: AWS_SECRET_ACCESS_KEY
+            # SeaweedFS ignores the region, but the AWS CLI refuses to sign
+            # without one.
+            - name: AWS_DEFAULT_REGION
+              value: "us-east-1"
+            # botocore sends CRC32 checksums by default, which S3-compatible
+            # stores reject with XAmzContentSHA256Mismatch.
+            - name: AWS_REQUEST_CHECKSUM_CALCULATION
+              value: "when_required"
+            - name: AWS_RESPONSE_CHECKSUM_VALIDATION
+              value: "when_required"
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -u
+              ENDPOINT="{{ include "avaloka.objectStoreEndpoint" . }}"
+              BUCKET="{{ .Values.seaweedfs.bucket }}"
+              # The Deployment may still be rolling when this hook fires.
+              until aws --endpoint-url "$ENDPOINT" s3api list-buckets >/dev/null 2>&1; do
+                echo "waiting for seaweedfs..."
+                sleep 3
+              done
+              # Idempotency across upgrades. MinIO's `mc mb --ignore-existing`
+              # has no aws-cli equivalent: re-creating an existing bucket on
+              # SeaweedFS raises BucketAlreadyOwnedByYou (HTTP 409) rather than
+              # returning 200, which is the AWS-standard behaviour everywhere
+              # except us-east-1. Treat it as success; treat anything else as a
+              # real failure so a broken endpoint still fails the hook.
+              if out=$(aws --endpoint-url "$ENDPOINT" s3api create-bucket --bucket "$BUCKET" 2>&1); then
+                echo "bucket $BUCKET created"
+              else
+                case "$out" in
+                  *BucketAlreadyOwnedByYou*|*BucketAlreadyExists*)
+                    echo "bucket $BUCKET already exists" ;;
+                  *)
+                    echo "$out" >&2
+                    exit 1 ;;
+                esac
+              fi
+              echo "bucket $BUCKET ready"
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+{{- end }}
+{{- end }}

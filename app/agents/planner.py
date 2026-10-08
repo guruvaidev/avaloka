@@ -36,6 +36,7 @@ from app.core.log_utils import describe_response, preview as log_preview
 from app.utils import convert_message_dicts_to_objects
 from app.agents.mta_v2.training_reply_classifier import classify_training_plan_reply
 from app.agents.preparation_agent import parse_numeric_token
+from app.agents.lineage_hooks import format_lineage_reply
 from app.core.inference import resolve_provider, tool_choice_for_provider
 
 
@@ -163,36 +164,92 @@ _METRIC_FUNCTION_WORDS = frozenset({
     "me", "us", "it", "them", "do", "does", "did", "has", "have", "had", "not", "no",
     "last", "first", "next", "previous", "top", "bottom",
 })
-# Words that make the following noun the thing being MEASURED ("average X",
-# "total X", "distribution of X"). A word that is only grouped or filtered on
-# ("per X", "for each X", "by X") is a dimension and is never ambiguous here.
+# Aggregation words. They no longer decide whether a measure is ambiguous (see
+# _detect_metric_ambiguity); they only mark a long reply as a new analytical
+# request rather than an answer to a pending "which X?" question.
 _METRIC_AGG_RE = (
     r"(?:average|avg|mean|median|total|sum|max|maximum|min|minimum|highest|lowest|"
     r"largest|smallest|biggest|std|variance|distribution)"
 )
-# A measure phrase stops at a preposition: in "average subscribers per channel"
-# the measure is "subscribers", not "channel".
-_METRIC_PHRASE_BREAK = r"(?:per|by|for|in|of|across|over|each|and|or|vs|versus|with|from|to)"
 
 
-def _measure_is_aggregated(measure: str, prompt: str) -> bool:
-    """True when the user aggregates `measure` ("average earnings", "total of the revenue")."""
-    return bool(re.search(
-        rf"\b{_METRIC_AGG_RE}\s+(?:of\s+)?(?:the\s+)?"
-        rf"(?:(?!{_METRIC_PHRASE_BREAK}\b)[a-z0-9_]+\s+){{0,2}}"
-        rf"{re.escape(measure)}\b",
-        prompt,
-        re.IGNORECASE,
-    ))
+def _metric_stem(token: str) -> str:
+    """Fold a regular English plural, so "revenues" and "revenue" are one stem."""
+    if len(token) > 4 and token.endswith("ies"):
+        return token[:-3] + "y"
+    if len(token) > 4 and token.endswith(("sses", "xes", "ches", "shes", "zes")):
+        return token[:-2]
+    if len(token) > 3 and token.endswith("s") and not token.endswith(("ss", "us", "is")):
+        return token[:-1]
+    return token
+
+
+def _column_stems(name: str) -> tuple[str, ...]:
+    return tuple(_metric_stem(token) for token in _column_tokens(name))
+
+
+def _is_grouped_on(stem: str, prompt_stems: tuple[str, ...], column_stems: set) -> bool:
+    """True when every use of `stem` is a grouping: "per X", "across X", or
+    "by X" once a column word has already been named.
+
+    "subscribers per channel" groups on channel; it does not measure it. A stem
+    that is also used elsewhere ("revenue per revenue band") is still measured.
+
+    "by" is the one preposition that also names the thing itself. In "revenue
+    by region" a measure came first, so region is the grouping; in "sort by
+    revenue" nothing did, so revenue is what the user is asking about.
+
+    "for each X" needs no entry here: the "each X" whole-group rule in
+    _detect_metric_ambiguity already skips it.
+    """
+    def grouped(i: int) -> bool:
+        if i < 1:
+            return False
+        if prompt_stems[i - 1] in ("per", "across"):
+            return True
+        return prompt_stems[i - 1] == "by" and any(
+            word in column_stems and len(word) >= 3 and not word.isdigit()
+            and word not in _METRIC_FUNCTION_WORDS
+            for word in prompt_stems[:i - 1]
+        )
+
+    uses = [i for i, word in enumerate(prompt_stems) if word == stem]
+    return bool(uses) and all(grouped(i) for i in uses)
 
 
 def _detect_metric_ambiguity(prompt: str, state: Optional[ETLState]) -> Optional[dict]:
-    """Ask "which X?" only when the user aggregates a word that two or more NUMERIC
-    columns share and nothing in the prompt already picks one.
+    """Ask "which X?" only when two or more NUMERIC columns collide on the stem X
+    and nothing in the prompt already picks one.
 
-    This is a deterministic gate that runs before the LLM, so it must be high
-    precision: every false positive blocks an answerable question. When in doubt
-    it stays silent; the coder and validator still handle the request.
+    The stem-collision rule:
+
+    * A name is split into tokens on case, underscores, punctuation and
+      camelCase humps, then each token is folded to its singular: ActualCost,
+      actual_cost and "Actual Costs" are all (actual, cost).
+    * Two columns collide on a stem when both contain it as a whole token and
+      each carries at least one other token (the qualifier), and the qualifiers
+      differ. Position does not matter: gross_revenue/net_revenue collide on a
+      suffix, revenue_2023/revenue_2024 on a prefix. Three or more colliding
+      columns are all offered.
+    * A column that IS the stem (revenue next to net_revenue) is what the user
+      named, so it resolves the choice instead of joining the collision.
+    * A stem is only looked for among the words the user typed. Whether the
+      word follows "average"/"total" is irrelevant: "What was revenue last
+      month?" is exactly as ambiguous as "total revenue last month".
+    * A stem that directly follows per / for each / across is what the user
+      groups on, not what they measure, and is skipped. So is one after "by",
+      but only once a column word has been named before it: "revenue by
+      region" groups on region, "sort by revenue" asks about revenue.
+      Otherwise the first colliding stem in prompt order is the one asked
+      about, so "which channel has the most subscribers" still asks about
+      channel when two numeric channel_* columns exist.
+    * The prompt resolves the choice itself when it names every token of one
+      option ("gross revenue", "revenue 2024") or a word only one option has
+      ("views" for video_views_for_the_last_30_days), or when it asks for the
+      whole group ("all revenue", "revenue columns").
+
+    This is a deterministic gate that runs before the LLM. A single matching
+    column never asks; the coder and validator still handle the request.
     """
     if os.getenv("AVALOKA_METRIC_CLARIFICATION", "1").strip().lower() in {"0", "false", "off", "no"}:
         return None
@@ -211,39 +268,54 @@ def _detect_metric_ambiguity(prompt: str, state: Optional[ETLState]) -> Optional
         except (TypeError, ValueError):
             schema = None
 
-    words = set(_column_tokens(prompt))
-    candidates = [(column, set(_column_tokens(column))) for column in columns]
+    prompt_stems = _column_stems(prompt)
+    words = set(prompt_stems)
+    candidates = [(column, set(_column_stems(column))) for column in columns]
+    column_stems = set().union(*(tokens for _, tokens in candidates))
     seen: set = set()
     for measure in _column_tokens(prompt):
-        if measure in seen:
+        stem = _metric_stem(measure)
+        if stem in seen:
             continue
-        seen.add(measure)
+        seen.add(stem)
         # 1. Grammar and numbers are never measures.
         if len(measure) < 3 or measure.isdigit() or measure in _METRIC_FUNCTION_WORDS:
             continue
-        # 2. Only a word the user aggregates can be an ambiguous measure.
-        if not _measure_is_aggregated(measure, prompt):
+        # 2. A word the user only groups on ("per X", "by X", "across X") is a
+        #    dimension. "for each X" is caught by the "each X" test in rule 3.
+        if _is_grouped_on(stem, prompt_stems, column_stems):
             continue
+        # 3. Asking for the whole group is not a choice between its members.
         if re.search(rf"\b(?:all|each|every|both)\s+{re.escape(measure)}\b", prompt, re.IGNORECASE):
             continue
         if re.search(rf"\b{re.escape(measure)}\s+(?:columns|fields|metrics)\b", prompt, re.IGNORECASE):
             continue
         # An exact column with that name resolves it.
-        if any(_column_tokens(column) == (measure,) for column in columns):
+        if any(tokens == {stem} for _, tokens in candidates):
             continue
-        # 3. Only numeric columns can be averaged/summed, so text columns sharing
-        #    the word (channel_type, country_rank labels) are not real options.
-        options = [column for column, tokens in candidates
-                   if measure in tokens and len(tokens) > 1]
-        options = [c for c in options if not _column_is_non_numeric(c, schema, state)]
+        # 4. Only numeric columns are measures, so text columns sharing the
+        #    stem (channel_type, country_rank labels) are not real options.
+        options = [(column, tokens) for column, tokens in candidates
+                   if stem in tokens and len(tokens) > 1]
+        options = [(column, tokens) for column, tokens in options
+                   if not _column_is_non_numeric(column, schema, state)]
         if len(options) < 2:
             continue
-        # 4. A qualifier the user already named ("math score", "revenue 2024") resolves it.
-        if any(set(_column_tokens(column)).issubset(words) for column in options):
+        # 5. A qualifier the user already named ("math score", "revenue 2024") resolves it.
+        if any(tokens.issubset(words) for _, tokens in options):
             continue
-        qualified = [set(_column_tokens(column)) - {measure} for column in options]
-        if len({tuple(sorted(parts)) for parts in qualified}) < 2:
+        named = False
+        for column, tokens in options:
+            others = set().union(*(other for name, other in options if name != column))
+            named = named or any(
+                token in words for token in tokens - others
+                if len(token) >= 3 and token.isalpha() and token not in _METRIC_FUNCTION_WORDS
+            )
+        if named:
             continue
+        if len({tuple(sorted(tokens - {stem})) for _, tokens in options}) < 2:
+            continue
+        options = [column for column, _ in options]
         labels = [" ".join(_column_tokens(column)) for column in options]
         choices = ", ".join(labels[:-1]) + f" or {labels[-1]}"
         logger.info("Metric clarification: measure=%r options=%s", measure, options)
@@ -767,7 +839,10 @@ def _extract_failed_respond_to_user_text(exc: Exception) -> Optional[str]:
 
 # Tools whose schema is NoParams: their arguments carry no information, so a
 # call is fully determined by the tool name alone.
-_NOPARAM_TOOL_NAMES = {"generate_code", "summarize_job", "list_tasks", "train_model"}
+_NOPARAM_TOOL_NAMES = {
+    "generate_code", "summarize_job", "list_tasks", "train_model",
+    "where_did_this_come_from",
+}
 
 
 def _salvage_noparam_tool_call(exc: Exception) -> Optional[str]:
@@ -1364,7 +1439,8 @@ class HistoricalAnalysisParams(BaseModel):
 class ToolCall(BaseModel):
     name: Literal["generate_code", "deploy_infrastructure", "summarize_job", "gather_information", "suggest_analysis",
     "respond_to_user", "store_user_preference", "schedule_task", "task_status", "cancel_task", "list_tasks", "task_info", "retrieve_result", "train_model",
-    "register_database", "list_databases", "list_cloud_datasets", "initiate_transfer", "retrieve_historical_analysis"]
+    "register_database", "list_databases", "list_cloud_datasets", "initiate_transfer", "retrieve_historical_analysis",
+    "where_did_this_come_from"]
 
     parameters: Union[NoParams, DeployInfrastructureParams, GatherInformationParams, SuggestAnalysisParams, NoParams,
     TextResponseParams, StoreUserPreferenceParams, ScheduleTaskParams, TaskOperationParams, TaskResultParams,
@@ -1720,6 +1796,18 @@ tools = [
             "name": "retrieve_historical_analysis",
             "parameters": HistoricalAnalysisParams.model_json_schema()
         }
+    },
+    {
+        "type": "function",
+        "description": (
+            "Trace the current or most recently produced dataset through Avaloka's recorded "
+            "transformations to its upstream source datasets. Use for provenance questions, "
+            "not for querying or calculating values from the dataset."
+        ),
+        "function": {
+            "name": "where_did_this_come_from",
+            "parameters": NoParams.model_json_schema()
+        }
     }
 ]
 
@@ -1746,6 +1834,7 @@ tool_name_to_param = {
     "list_cloud_datasets": ListCloudDatasetsParams,
     "initiate_transfer": InitiateTransferParams,
     "retrieve_historical_analysis": HistoricalAnalysisParams,
+    "where_did_this_come_from": NoParams,
 }
 
 
@@ -5655,6 +5744,7 @@ def plan_etl_job(state: ETLState) -> ETLState:
                     - Do NOT refuse these requests with respond_to_user — storing the user's own preferences is a supported feature.
                 15. `list_databases`: Call this when the user asks which databases / data sources / connections they have registered or available. This inventory is NOT in the dataframe — never answer it with generate_code.
                 16. `list_cloud_datasets`: Call this when the user asks about their registered cloud connections, cloud datasets, or cloud buckets ("what cloud connections do I have?"). Same rule: never generate_code for this.
+                17. `where_did_this_come_from`: Call for provenance questions about the current or most recent dataset ("where did this come from?", "what was this derived from?"). This is a graph lookup, never generate_code.
 
                 Always choose the most appropriate tool for the user's request.
                 If a tool is not a fit for the user's request, do not use it. If a parameter is not explicitly mentioned, omit it from your response.
@@ -6122,6 +6212,15 @@ def plan_etl_job(state: ETLState) -> ETLState:
                     msg = f"Here's what I found from previous analyses:\n{formatted}"
                 else:
                     msg = "I couldn't find any similar past analyses in memory for that query."
+                state.update({
+                    "messages": state["messages"] + [AIMessage(content=_dta_customer_text(msg))],
+                    "ready_to_code": False,
+                    "ready_to_summarize": False,
+                    "enable_training": False,
+                })
+
+            elif tool_call and tool_call.name == "where_did_this_come_from":
+                msg = format_lineage_reply(state)
                 state.update({
                     "messages": state["messages"] + [AIMessage(content=_dta_customer_text(msg))],
                     "ready_to_code": False,

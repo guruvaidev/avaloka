@@ -159,47 +159,149 @@ app.kubernetes.io/instance: {{ .Release.Name }}
      MinIO / S3-compatible object storage helpers.
      --------------------------------------------------------------------------- */}}
 
-{{/* True when the in-cluster MinIO should back the app's object storage.
+{{/* Which in-cluster object store this release runs: "seaweedfs", "minio", or "".
 
-     An explicit cloud backend always wins: a GKE/EKS/AKS overlay sets
-     config.storageBackend to gcs/s3/azure, and turning MinIO on alongside it (for
-     something else) must not silently redirect the app's datasets into it. So
-     MinIO is adopted only when the configured backend is local/empty — or when it
-     is "s3" with no bucket of its own, which is exactly the local-S3 case. */}}
-{{- define "avaloka.minioIsStorageBackend" -}}
-{{- $backend := .Values.config.storageBackend | default "" | lower -}}
-{{- if and .Values.minio.enabled (or (has $backend (list "" "local")) (and (eq $backend "s3") (not .Values.config.s3Bucket))) -}}
+     SeaweedFS is the default; minio.yaml is retained, values-gated, for one
+     release so an existing on-prem install can roll back. Enabling both is a
+     configuration error rather than a merge — they would claim the same role and
+     the app can only have one S3 endpoint — so it is refused loudly here instead
+     of silently resolving to whichever branch happens to be checked first. */}}
+{{- define "avaloka.objectStoreName" -}}
+{{- if and .Values.seaweedfs.enabled .Values.minio.enabled -}}
+{{- fail "seaweedfs.enabled and minio.enabled are both true; the chart runs exactly one in-cluster object store (minio is the rollback path for one release)" -}}
+{{- else if .Values.seaweedfs.enabled -}}
+{{- "seaweedfs" -}}
+{{- else if .Values.minio.enabled -}}
+{{- "minio" -}}
+{{- end -}}
+{{- end -}}
+
+{{/* True when this release runs an in-cluster object store at all. */}}
+{{- define "avaloka.objectStoreEnabled" -}}
+{{- if include "avaloka.objectStoreName" . -}}
 {{- "true" -}}
 {{- end -}}
 {{- end -}}
 
-{{/* Effective STORAGE_BACKEND: s3 when MinIO is adopted, else whatever is configured. */}}
+{{/* True when the in-cluster object store should back the app's object storage.
+
+     An explicit cloud backend always wins: a GKE/EKS/AKS overlay sets
+     config.storageBackend to gcs/s3/azure, and running an in-cluster store
+     alongside it (for something else) must not silently redirect the app's
+     datasets into it. So the in-cluster store is adopted only when the configured
+     backend is local/empty — or when it is "s3" with no bucket of its own, which
+     is exactly the local-S3 case.
+
+     Renamed from avaloka.minioIsStorageBackend: the guard never had anything to do
+     with MinIO specifically, and leaving the old name in place while it returned
+     true for a SeaweedFS install would have read as a bug at every call site. */}}
+{{- define "avaloka.objectStoreIsStorageBackend" -}}
+{{- $backend := .Values.config.storageBackend | default "" | lower -}}
+{{- if and (include "avaloka.objectStoreEnabled" .) (or (has $backend (list "" "local")) (and (eq $backend "s3") (not .Values.config.s3Bucket))) -}}
+{{- "true" -}}
+{{- end -}}
+{{- end -}}
+
+{{/* Effective STORAGE_BACKEND: s3 when the in-cluster store is adopted, else
+     whatever is configured. */}}
 {{- define "avaloka.storageBackend" -}}
-{{- if include "avaloka.minioIsStorageBackend" . -}}
+{{- if include "avaloka.objectStoreIsStorageBackend" . -}}
 {{- "s3" -}}
 {{- else -}}
 {{- .Values.config.storageBackend -}}
 {{- end -}}
 {{- end -}}
 
-{{/* In-cluster MinIO S3 endpoint. Pod-to-pod, so the ClusterIP Service DNS. */}}
-{{- define "avaloka.minioEndpoint" -}}
+{{/* In-cluster S3 endpoint. Pod-to-pod, so the ClusterIP Service DNS.
+
+     SeaweedFS serves S3 on 8333 (weed's default) where MinIO served 9000, and the
+     Service name carries the component suffix, so both the port and the host move
+     when the backend does. Everything downstream reads this helper rather than
+     rebuilding the hostname, which is why no application code changes. */}}
+{{- define "avaloka.objectStoreEndpoint" -}}
+{{- $name := include "avaloka.objectStoreName" . -}}
+{{- if eq $name "seaweedfs" -}}
+{{- printf "http://%s-seaweedfs:%v" (include "avaloka.fullname" .) .Values.seaweedfs.port -}}
+{{- else if eq $name "minio" -}}
 {{- printf "http://%s-minio:%v" (include "avaloka.fullname" .) .Values.minio.port -}}
 {{- end -}}
+{{- end -}}
 
-{{/* Effective S3 endpoint override: MinIO when adopted, else an explicit setting,
-     else empty (real AWS S3). */}}
+{{/* host:port form of the above, for consumers that want no scheme (Milvus). */}}
+{{- define "avaloka.objectStoreAddress" -}}
+{{- $name := include "avaloka.objectStoreName" . -}}
+{{- if eq $name "seaweedfs" -}}
+{{- printf "%s-seaweedfs:%v" (include "avaloka.fullname" .) .Values.seaweedfs.port -}}
+{{- else if eq $name "minio" -}}
+{{- printf "%s-minio:%v" (include "avaloka.fullname" .) .Values.minio.port -}}
+{{- end -}}
+{{- end -}}
+
+{{/* Name of the Secret holding the in-cluster store's credentials. */}}
+{{- define "avaloka.objectStoreSecretName" -}}
+{{- printf "%s-%s" (include "avaloka.fullname" .) (include "avaloka.objectStoreName" .) -}}
+{{- end -}}
+
+{{/* Keys inside that Secret. MinIO's server reads its root credentials from
+     MINIO_ROOT_USER/MINIO_ROOT_PASSWORD via envFrom, so its Secret is stuck with
+     those key names; the SeaweedFS Secret publishes the standard AWS names. A
+     consumer that needs a secretKeyRef asks for the key name rather than
+     hardcoding one backend's spelling. */}}
+{{- define "avaloka.objectStoreAccessKeyName" -}}
+{{- if eq (include "avaloka.objectStoreName" .) "minio" -}}
+{{- "MINIO_ROOT_USER" -}}
+{{- else -}}
+{{- "AWS_ACCESS_KEY_ID" -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "avaloka.objectStoreSecretKeyName" -}}
+{{- if eq (include "avaloka.objectStoreName" .) "minio" -}}
+{{- "MINIO_ROOT_PASSWORD" -}}
+{{- else -}}
+{{- "AWS_SECRET_ACCESS_KEY" -}}
+{{- end -}}
+{{- end -}}
+
+{{/* Credential values for the active in-cluster store. */}}
+{{- define "avaloka.objectStoreAccessKey" -}}
+{{- if eq (include "avaloka.objectStoreName" .) "minio" -}}
+{{- .Values.minio.auth.accessKey -}}
+{{- else -}}
+{{- .Values.seaweedfs.auth.accessKey -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "avaloka.objectStoreSecretKey" -}}
+{{- if eq (include "avaloka.objectStoreName" .) "minio" -}}
+{{- .Values.minio.auth.secretKey -}}
+{{- else -}}
+{{- .Values.seaweedfs.auth.secretKey -}}
+{{- end -}}
+{{- end -}}
+
+{{/* Bucket the active in-cluster store holds for the app. */}}
+{{- define "avaloka.objectStoreBucket" -}}
+{{- if eq (include "avaloka.objectStoreName" .) "minio" -}}
+{{- .Values.minio.bucket -}}
+{{- else -}}
+{{- .Values.seaweedfs.bucket -}}
+{{- end -}}
+{{- end -}}
+
+{{/* Effective S3 endpoint override: the in-cluster store when adopted, else an
+     explicit setting, else empty (real AWS S3). */}}
 {{- define "avaloka.s3EndpointUrl" -}}
-{{- if include "avaloka.minioIsStorageBackend" . -}}
-{{- include "avaloka.minioEndpoint" . -}}
+{{- if include "avaloka.objectStoreIsStorageBackend" . -}}
+{{- include "avaloka.objectStoreEndpoint" . -}}
 {{- else -}}
 {{- .Values.config.s3EndpointUrl -}}
 {{- end -}}
 {{- end -}}
 
 {{- define "avaloka.s3Bucket" -}}
-{{- if include "avaloka.minioIsStorageBackend" . -}}
-{{- .Values.minio.bucket -}}
+{{- if include "avaloka.objectStoreIsStorageBackend" . -}}
+{{- include "avaloka.objectStoreBucket" . -}}
 {{- else -}}
 {{- .Values.config.s3Bucket -}}
 {{- end -}}
@@ -235,8 +337,8 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- .Values.mlflow.artifactsDestination -}}
 {{- else if and (eq (include "avaloka.storageBackend" . | lower) "gcs") .Values.config.gcsBucket -}}
 {{- printf "gs://%s/mlflow-artifacts" .Values.config.gcsBucket -}}
-{{- else if .Values.minio.enabled -}}
-{{- printf "s3://%s/mlflow-artifacts" .Values.minio.bucket -}}
+{{- else if include "avaloka.objectStoreEnabled" . -}}
+{{- printf "s3://%s/mlflow-artifacts" (include "avaloka.objectStoreBucket" .) -}}
 {{- else -}}
 {{- "" -}}
 {{- end -}}
@@ -383,9 +485,16 @@ storageClassName: {{ $class | quote }}
 
 {{/*
 Access mode for a component's PVC. ReadWriteOnce is correct for every store in
-this chart: each is a single writer whose volume follows it to whichever node
-it lands on. Replicated *storage* (Longhorn, Ceph, Mayastor) keeps that volume
-available when a node dies; it does not need, and must not have, RWX.
+this chart: each is a single writer, so no volume here needs RWX.
+
+What RWO does NOT buy is node-loss survival, and this docstring used to imply it
+did ("the volume follows it to whichever node it lands on"). With the default
+StorageClass it does not follow anything: a `kind`/local-path PV is a hostPath
+carrying nodeAffinity pinned to the node that provisioned it, and a pod forced
+onto any other node stays Pending (FailedScheduling) indefinitely -- verified on
+a live cluster, not reasoned about. Replicated *storage* (Longhorn, Ceph,
+Mayastor) is what makes the volume available elsewhere when a node dies; see the
+storage.className commentary in values.yaml, which already states this correctly.
 */}}
 {{- define "avaloka.accessMode" -}}
 {{- $component := .component | default dict -}}

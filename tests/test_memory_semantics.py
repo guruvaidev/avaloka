@@ -431,20 +431,37 @@ class TestMemoryPlaneCircuitBreaker:
         return MemoryOrchestrator(llm_client=None)
 
     def test_default_timeout_matches_documented_contract(self):
-        """The module header documents a 20s default; the constant must agree.
+        """The default is written down in three places -- the code, the module
+        header, and the Helm chart -- and they must say the same thing.
 
-        The value has drifted from its documentation twice: once to 105s while
-        the header still said 3.0, and then the 3s contract itself proved wrong
-        (a successful retrieval measures 4-6s, so the breaker fired on every
-        call and the memory plane never returned anything). The header and
-        the constant were moved to 20s together; this pins that they stay
-        together.
+        It has drifted three times: to 105s while the header still said 3.0;
+        the 3s contract itself proved wrong (a successful retrieval measured
+        4-6s, so the breaker fired on every call and the memory plane never
+        returned anything); and then the code default dropped to 8.0 while the
+        chart went on setting 20.0, so the number a developer saw was not the
+        number a deployment ran. No number is asserted here on purpose: what
+        is pinned is that the three agree. Whether the number is big enough is
+        tests/test_memory_staged_retrieval.py's question.
         """
+        import re
+        from pathlib import Path
         import app.services.memory_plane as mp
-        expected = float(os.environ.get("MEMORY_CIRCUIT_BREAKER_TIMEOUT", "20.0"))
+
+        root = Path(mp.__file__).resolve().parents[2]
+        source = Path(mp.__file__).read_text()
+        in_code = re.search(
+            r'os\.environ\.get\("MEMORY_CIRCUIT_BREAKER_TIMEOUT",\s*"([0-9.]+)"\)', source)
+        in_header = re.search(
+            r"#\s+MEMORY_CIRCUIT_BREAKER_TIMEOUT\s.*\(default: ([0-9.]+)", source)
+        in_chart = re.search(
+            r"^\s*circuitBreakerTimeout:\s*([0-9.]+)\s*$",
+            (root / "deploy/helm/avaloka/values.yaml").read_text(), re.M)
+        assert in_code and in_header and in_chart, "a place the default is recorded has moved"
+
+        assert float(in_header.group(1)) == float(in_code.group(1)), "module header disagrees with the code"
+        assert float(in_chart.group(1)) == float(in_code.group(1)), "Helm chart disagrees with the code"
+        expected = float(os.environ.get("MEMORY_CIRCUIT_BREAKER_TIMEOUT", in_code.group(1)))
         assert mp._CIRCUIT_BREAKER_TIMEOUT == expected
-        if "MEMORY_CIRCUIT_BREAKER_TIMEOUT" not in os.environ:
-            assert mp._CIRCUIT_BREAKER_TIMEOUT == 20.0
 
     def test_timeout_triggers_empty_hints(self):
         """A retrieval that outlives the breaker window yields the safe

@@ -1,0 +1,708 @@
+{
+  "common": {
+    "optional": {
+      "route": {
+        "kind": "enum",
+        "values": [
+          "/",
+          "/analysis",
+          "/configurations",
+          "/dashboard",
+          "/database",
+          "/datasets",
+          "/db-tables",
+          "/logout",
+          "/proanalysis",
+          "/proanalysis/scheduled-analysis",
+          "/reports",
+          "/reports/$reportId",
+          "/reports/generated",
+          "/scheduled-analysis",
+          "/settings",
+          "/shared-report/$token",
+          "/shared/$token",
+          "/support",
+          "/support-queries",
+          "other"
+        ]
+      }
+    },
+    "required": {
+      "event_id": {
+        "kind": "id",
+        "pattern": "^[0-9a-fA-F][0-9a-fA-F-]{15,63}$"
+      },
+      "event_type": {
+        "kind": "enum",
+        "values": [
+          "auth.completed",
+          "dataset.connect_completed",
+          "dataset.connect_started",
+          "error.shown",
+          "feature.used",
+          "feedback.submitted",
+          "page.viewed",
+          "question.completed",
+          "question.submitted",
+          "result.interacted",
+          "session.ended",
+          "session.started"
+        ]
+      },
+      "seq": {
+        "kind": "int",
+        "max": 10000000,
+        "min": 0
+      },
+      "t_ms": {
+        "kind": "int",
+        "max": 604800000,
+        "min": 0
+      }
+    }
+  },
+  "envelope": {
+    "optional": {
+      "ui_version": {
+        "kind": "version",
+        "pattern": "^\\d{1,4}(?:\\.\\d{1,4}){0,3}(?:[-+][0-9A-Za-z.]{1,16})?$"
+      }
+    },
+    "required": {
+      "events": {
+        "kind": "list"
+      },
+      "schema_version": {
+        "kind": "version"
+      },
+      "session_id": {
+        "kind": "id",
+        "pattern": "^[0-9a-fA-F][0-9a-fA-F-]{15,63}$"
+      }
+    }
+  },
+  "events": {
+    "auth.completed": {
+      "optional": {},
+      "required": {
+        "method": {
+          "kind": "enum",
+          "values": [
+            "magic_link",
+            "oauth",
+            "password",
+            "sso"
+          ]
+        }
+      }
+    },
+    "dataset.connect_completed": {
+      "optional": {
+        "column_count_bucket": {
+          "kind": "enum",
+          "values": [
+            "0",
+            "1-10",
+            "10-50",
+            "1000+",
+            "200-1000",
+            "50-200"
+          ]
+        },
+        "duration_ms": {
+          "kind": "int",
+          "max": 86400000,
+          "min": 0
+        },
+        "error_class": {
+          "kind": "class",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_.]{0,63}$"
+        },
+        "file_format": {
+          "kind": "enum",
+          "values": [
+            "csv",
+            "json",
+            "other",
+            "parquet",
+            "tsv",
+            "xlsx"
+          ]
+        },
+        "row_count_bucket": {
+          "kind": "enum",
+          "values": [
+            "0",
+            "1-1e2",
+            "1e2-1e3",
+            "1e3-1e4",
+            "1e4-1e5",
+            "1e5-1e6",
+            "1e6-1e7",
+            "1e7-1e8",
+            "1e8+"
+          ]
+        }
+      },
+      "required": {
+        "outcome": {
+          "kind": "enum",
+          "values": [
+            "cancelled",
+            "failed",
+            "refused",
+            "success",
+            "timeout"
+          ]
+        },
+        "source_kind": {
+          "kind": "enum",
+          "values": [
+            "azure",
+            "database",
+            "gcs",
+            "other",
+            "s3",
+            "sample",
+            "upload"
+          ]
+        }
+      }
+    },
+    "dataset.connect_started": {
+      "optional": {},
+      "required": {
+        "source_kind": {
+          "kind": "enum",
+          "values": [
+            "azure",
+            "database",
+            "gcs",
+            "other",
+            "s3",
+            "sample",
+            "upload"
+          ]
+        }
+      }
+    },
+    "error.shown": {
+      "optional": {
+        "http_status": {
+          "kind": "int",
+          "max": 599,
+          "min": 100
+        },
+        "turn_id": {
+          "kind": "id",
+          "pattern": "^[0-9a-fA-F][0-9a-fA-F-]{15,63}$"
+        }
+      },
+      "required": {
+        "error_class": {
+          "kind": "class",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_.]{0,63}$"
+        },
+        "surface": {
+          "kind": "enum",
+          "values": [
+            "analysis",
+            "configurations",
+            "dashboard",
+            "database",
+            "datasets",
+            "other",
+            "proanalysis",
+            "reports",
+            "scheduled_analysis",
+            "settings",
+            "shared",
+            "support"
+          ]
+        }
+      }
+    },
+    "feature.used": {
+      "optional": {
+        "surface": {
+          "kind": "enum",
+          "values": [
+            "analysis",
+            "configurations",
+            "dashboard",
+            "database",
+            "datasets",
+            "other",
+            "proanalysis",
+            "reports",
+            "scheduled_analysis",
+            "settings",
+            "shared",
+            "support"
+          ]
+        }
+      },
+      "required": {
+        "feature": {
+          "kind": "enum",
+          "values": [
+            "auto_insights",
+            "code_view",
+            "conversation_new",
+            "conversation_resume",
+            "dataset_preview",
+            "db_table_browse",
+            "email_report",
+            "model_training",
+            "report_generate",
+            "report_view",
+            "scheduled_analysis",
+            "settings_change",
+            "share_link_create",
+            "suggestion_chip",
+            "support_query"
+          ]
+        }
+      }
+    },
+    "feedback.submitted": {
+      "optional": {
+        "has_comment": {
+          "kind": "bool"
+        }
+      },
+      "required": {
+        "feedback_type": {
+          "kind": "enum",
+          "values": [
+            "negative",
+            "positive"
+          ]
+        },
+        "turn_id": {
+          "kind": "id",
+          "pattern": "^[0-9a-fA-F][0-9a-fA-F-]{15,63}$"
+        }
+      }
+    },
+    "page.viewed": {
+      "optional": {
+        "from_route": {
+          "kind": "enum",
+          "values": [
+            "/",
+            "/analysis",
+            "/configurations",
+            "/dashboard",
+            "/database",
+            "/datasets",
+            "/db-tables",
+            "/logout",
+            "/proanalysis",
+            "/proanalysis/scheduled-analysis",
+            "/reports",
+            "/reports/$reportId",
+            "/reports/generated",
+            "/scheduled-analysis",
+            "/settings",
+            "/shared-report/$token",
+            "/shared/$token",
+            "/support",
+            "/support-queries",
+            "other"
+          ]
+        }
+      },
+      "required": {
+        "route": {
+          "kind": "enum",
+          "values": [
+            "/",
+            "/analysis",
+            "/configurations",
+            "/dashboard",
+            "/database",
+            "/datasets",
+            "/db-tables",
+            "/logout",
+            "/proanalysis",
+            "/proanalysis/scheduled-analysis",
+            "/reports",
+            "/reports/$reportId",
+            "/reports/generated",
+            "/scheduled-analysis",
+            "/settings",
+            "/shared-report/$token",
+            "/shared/$token",
+            "/support",
+            "/support-queries",
+            "other"
+          ]
+        }
+      }
+    },
+    "question.completed": {
+      "optional": {
+        "chart_type": {
+          "kind": "enum",
+          "values": [
+            "area",
+            "bar",
+            "box",
+            "heatmap",
+            "histogram",
+            "line",
+            "other",
+            "pie",
+            "scatter",
+            "table"
+          ]
+        },
+        "duration_ms": {
+          "kind": "int",
+          "max": 86400000,
+          "min": 0
+        },
+        "error_class": {
+          "kind": "class",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_.]{0,63}$"
+        },
+        "first_response_ms": {
+          "kind": "int",
+          "max": 86400000,
+          "min": 0
+        },
+        "result_kind": {
+          "kind": "enum",
+          "values": [
+            "chart",
+            "file",
+            "model",
+            "none",
+            "table",
+            "text"
+          ]
+        },
+        "retry_count": {
+          "kind": "int",
+          "max": 100,
+          "min": 0
+        }
+      },
+      "required": {
+        "outcome": {
+          "kind": "enum",
+          "values": [
+            "cancelled",
+            "failed",
+            "refused",
+            "success",
+            "timeout"
+          ]
+        },
+        "turn_id": {
+          "kind": "id",
+          "pattern": "^[0-9a-fA-F][0-9a-fA-F-]{15,63}$"
+        }
+      }
+    },
+    "question.submitted": {
+      "optional": {
+        "is_retry": {
+          "kind": "bool"
+        },
+        "prompt": {
+          "exported": false,
+          "kind": "text",
+          "max_chars": 500,
+          "redacted_by_collector": true,
+          "sensitive": true
+        },
+        "retry_of": {
+          "kind": "id",
+          "pattern": "^[0-9a-fA-F][0-9a-fA-F-]{15,63}$"
+        },
+        "turn_index": {
+          "kind": "int",
+          "max": 10000,
+          "min": 0
+        }
+      },
+      "required": {
+        "input_method": {
+          "kind": "enum",
+          "values": [
+            "edit_resubmit",
+            "rerun",
+            "suggestion",
+            "typed"
+          ]
+        },
+        "turn_id": {
+          "kind": "id",
+          "pattern": "^[0-9a-fA-F][0-9a-fA-F-]{15,63}$"
+        }
+      }
+    },
+    "result.interacted": {
+      "optional": {
+        "chart_type": {
+          "kind": "enum",
+          "values": [
+            "area",
+            "bar",
+            "box",
+            "heatmap",
+            "histogram",
+            "line",
+            "other",
+            "pie",
+            "scatter",
+            "table"
+          ]
+        },
+        "export_format": {
+          "kind": "enum",
+          "values": [
+            "csv",
+            "html",
+            "json",
+            "pdf",
+            "png",
+            "xlsx"
+          ]
+        }
+      },
+      "required": {
+        "action": {
+          "kind": "enum",
+          "values": [
+            "chart_type_changed",
+            "code_viewed",
+            "copied",
+            "expanded",
+            "exported",
+            "shared",
+            "table_paged",
+            "table_sorted"
+          ]
+        },
+        "turn_id": {
+          "kind": "id",
+          "pattern": "^[0-9a-fA-F][0-9a-fA-F-]{15,63}$"
+        }
+      }
+    },
+    "session.ended": {
+      "optional": {
+        "active_ms": {
+          "kind": "int",
+          "max": 604800000,
+          "min": 0
+        },
+        "reason": {
+          "kind": "enum",
+          "values": [
+            "idle_timeout",
+            "logout",
+            "pagehide"
+          ]
+        }
+      },
+      "required": {}
+    },
+    "session.started": {
+      "optional": {
+        "viewport": {
+          "kind": "enum",
+          "values": [
+            "lg",
+            "md",
+            "sm",
+            "xl",
+            "xs"
+          ]
+        }
+      },
+      "required": {
+        "entry": {
+          "kind": "enum",
+          "values": [
+            "direct",
+            "login",
+            "reload",
+            "shared_link"
+          ]
+        }
+      }
+    }
+  },
+  "limits": {
+    "max_batch_bytes": 131072,
+    "max_events_per_batch": 100,
+    "max_prompt_chars": 500
+  },
+  "never_accepted": [
+    "analysis_id",
+    "bucket",
+    "column_count",
+    "column_names",
+    "columns",
+    "comment",
+    "connection_string",
+    "conversation_id",
+    "data_source",
+    "email",
+    "error_message",
+    "file_name",
+    "file_path",
+    "generated_code",
+    "host",
+    "ip",
+    "locale",
+    "mission_id",
+    "name",
+    "org",
+    "output",
+    "owner_id",
+    "profile_id",
+    "referrer",
+    "report_id",
+    "result",
+    "row_count",
+    "rows",
+    "schema",
+    "stack_trace",
+    "table_name",
+    "tenant",
+    "thread_id",
+    "timezone",
+    "token",
+    "traceback",
+    "url",
+    "user_agent",
+    "user_id",
+    "username",
+    "values"
+  ],
+  "representations": {
+    "exported": {
+      "event_type_prefix": "analytics.",
+      "fields": [
+        "action",
+        "active_ms",
+        "actor_id",
+        "chart_type",
+        "column_count_bucket",
+        "duration_ms",
+        "entry",
+        "error_class",
+        "event_id",
+        "event_type",
+        "export_format",
+        "feature",
+        "feedback_type",
+        "file_format",
+        "first_response_ms",
+        "from_route",
+        "has_comment",
+        "http_status",
+        "input_method",
+        "install_id",
+        "is_retry",
+        "method",
+        "outcome",
+        "prompt_chars_bucket",
+        "reason",
+        "result_kind",
+        "retry_count",
+        "retry_of",
+        "route",
+        "row_count_bucket",
+        "schema_version",
+        "seq",
+        "session_id",
+        "source_kind",
+        "surface",
+        "t_ms",
+        "turn_id",
+        "turn_index",
+        "ui_version",
+        "viewport"
+      ],
+      "question_text": "never exported, in any form",
+      "where": "an Avaloka-operated ingest, only when an operator enables export"
+    },
+    "stored": {
+      "fields": [
+        "action",
+        "active_ms",
+        "actor_id",
+        "chart_type",
+        "column_count_bucket",
+        "duration_ms",
+        "entry",
+        "error_class",
+        "event_id",
+        "event_type",
+        "export_format",
+        "feature",
+        "feedback_type",
+        "file_format",
+        "first_response_ms",
+        "from_route",
+        "has_comment",
+        "http_status",
+        "input_method",
+        "is_retry",
+        "method",
+        "outcome",
+        "prompt",
+        "prompt_chars_bucket",
+        "prompt_export",
+        "prompt_names_common_word",
+        "prompt_names_exact",
+        "prompt_names_substring",
+        "prompt_redactions",
+        "reason",
+        "received_at",
+        "result_kind",
+        "retry_count",
+        "retry_of",
+        "route",
+        "row_count_bucket",
+        "schema_version",
+        "seq",
+        "session_id",
+        "source_kind",
+        "surface",
+        "t_ms",
+        "turn_id",
+        "turn_index",
+        "ui_version",
+        "viewport"
+      ],
+      "sensitive": [
+        "prompt"
+      ],
+      "where": "the deployment's own database; never leaves the cluster"
+    }
+  },
+  "schema_version": "1.1",
+  "server_fields": [
+    "actor_id",
+    "received_at",
+    "schema_version",
+    "session_id",
+    "ui_version",
+    "prompt_chars_bucket",
+    "prompt_redactions",
+    "prompt_export",
+    "prompt_names_exact",
+    "prompt_names_common_word",
+    "prompt_names_substring"
+  ],
+  "supported_majors": [
+    1
+  ]
+}

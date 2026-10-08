@@ -58,5 +58,29 @@ serviceAccount:
 podLabels:
   azure.workload.identity/use: "true"
 
+# No in-cluster object store on a managed cloud: AKS uses Azure Blob storage.
+# The azure backend already won over it for *datasets*, so unlike EKS nothing was
+# misrouted here -- but the chart still deployed a MinIO (now SeaweedFS)
+# Deployment, Service and 20Gi PVC that nothing ever read. Both gates must be off:
+# seaweedfs defaults to enabled.
+seaweedfs:
+  enabled: false
+minio:
+  enabled: false
+
 config:
   storageBackend: "azure"
+
+# Disabling the in-cluster object store removes the artifact root MLflow was
+# silently inheriting from it, and mlflow.yaml fails the render rather than
+# starting a tracking server with nowhere to put artifacts.
+#
+# Replace STORAGEACCOUNT/avaloka with the real account and container. Authorisation
+# comes from the Azure AD Workload Identity binding on the KSA above (the MLflow
+# pod runs under that ServiceAccount); the chart renders no static Azure
+# credential, so the app registration needs Storage Blob Data Contributor on the
+# container. NOT exercised live -- the previous behaviour here was that MLflow
+# wrote its artifacts into the stray in-cluster store instead.
+mlflow:
+  artifactsDestination: "wasbs://avaloka@STORAGEACCOUNT.blob.core.windows.net/mlflow-artifacts"
+  # See the note in values-eks.yaml on why defaultArtifactRoot is left unset.

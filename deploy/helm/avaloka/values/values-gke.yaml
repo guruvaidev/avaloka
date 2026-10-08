@@ -87,9 +87,14 @@ serviceAccount:
     iam.gke.io/gcp-service-account: avaloka@PROJECT_ID.iam.gserviceaccount.com
 
 # Cloud storage: GCS (bucket + Workload Identity SA above).
+# GKE uses the managed GCS bucket for both datasets and MLflow artifacts, so it
+# runs no in-cluster object store at all. BOTH gates have to be off: seaweedfs
+# defaults to enabled, so omitting it here would have shipped a SeaweedFS
+# Deployment, PVC and NetworkPolicy onto a cluster that already has GCS.
+seaweedfs:
+  enabled: false
 minio:
-  # GKE uses the managed GCS bucket for both datasets and MLflow artifacts.
-  # MinIO remains enabled by the local/minikube overlay only.
+  # Retained-for-rollback store, off everywhere by default.
   enabled: false
 
 config:

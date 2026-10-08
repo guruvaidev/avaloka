@@ -262,16 +262,16 @@ Added memory-related dependencies. The spellings and pins as they stand:
 
 ## CI
 
-`bitbucket-pipelines.yml:52` still carries the branch-specific step for
-`feature/context-memory`, which runs only the two memory test files so the
-feature branch is not gated on unrelated infra/e2e tests. Other branches take
-the normal path.
-
-That step is **historical** — the work is merged, so nothing is pushed to that
-branch any more. The repository also has GitHub Actions workflows
+The repository builds with GitHub Actions workflows
 (`.github/workflows/ci.yml`, `.github/workflows/images.yml`, and the live tiers
-`.github/workflows/live-provider-weekly.yml` and `.github/workflows/live-local-model-nightly.yml`); the memory tests
-run there as part of the normal suite rather than as a special case.
+`.github/workflows/live-provider-weekly.yml` and `.github/workflows/live-local-model-nightly.yml`). Most of the
+memory tests run there as part of the normal suite: `tests/test_memory_semantics.py`
+and the other `tests/test_memory_*.py` files.
+
+`tests/test_memory_integration.py` does **not** run in CI. Files named
+`*_integration.py` are marked `integration` automatically (`tests/conftest.py`),
+and the gate (`scripts/ci.sh`) deselects that marker. Run it locally with the
+command below.
 
 ## Tests
 
@@ -281,7 +281,9 @@ pytest tests/test_memory_semantics.py tests/test_memory_integration.py -q
 
 Re-run during this documentation refresh: **42 passed, 5 skipped**
 (`tests/test_memory_semantics.py` 24 passed; `tests/test_memory_integration.py` 18 passed,
-5 skipped). The five skips are the cases that need live Redis, Chroma or Milvus.
+5 skipped), with no services running and no provider keys set. The five skips
+are the cases that read sample CSV files from `~/Downloads` and skip when the
+files are not there.
 
 Earlier revisions of this page recorded `15 passed` / `33 passed` as fixed
 figures; the suites have grown since. Pass counts in prose go stale the next

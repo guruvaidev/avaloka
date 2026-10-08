@@ -70,11 +70,9 @@ Verify at any time:
 
 Optional, depending on what you run:
 
-- **Docker** — Postgres, Redis, MinIO and Milvus, each in its own compose file
-  (see [Running it](#running-it); the default `docker-compose.yml` is Milvus).
-  The MinIO images in both the compose file and the chart are currently
-  **unpullable** — see [Object storage is broken right
-  now](#object-storage-is-broken-right-now).
+- **Docker** — Postgres, Redis and Milvus, each in its own compose file
+  (see [Running it](#running-it); the default `docker-compose.yml` is Milvus,
+  with SeaweedFS as its object store).
 - **kind** or **minikube** — a local Kubernetes cluster
 - **An LLM API key** — you bring your own; see [Configuration](#configuration)
 
@@ -162,7 +160,7 @@ because anything that quietly depends on the network shows up immediately.
 | --- | --- |
 | Language model | A local model server (Ollama or vLLM) — `INFERENCE_PROVIDER=local` |
 | Embedding model | **Baked into the API image at build time** (`all-MiniLM-L6-v2`, ~88 MB, under `HF_HOME=/opt/hf`) |
-| Object storage | MinIO, deployed by the chart — **but its images cannot currently be pulled**; see [Object storage is broken right now](#object-storage-is-broken-right-now) |
+| Object storage | SeaweedFS, deployed by the chart; its images must be mirrored for a host with no registry access — see [Object storage](#object-storage) |
 | Vector / memory tiers | Redis, Chroma and Milvus, all deployed by the chart |
 | Auth | Self-hosted Supabase, deployed by the chart |
 | Licence check (commercial) | Offline Ed25519 signature against an embedded public key |
@@ -173,16 +171,16 @@ because anything that quietly depends on the network shows up immediately.
 helm upgrade --install avaloka deploy/helm/avaloka \
   --set inference.provider=local \
   --set memory.offlineEmbeddings=true \
-  --set milvus.enabled=true \
-  --set minio.enabled=true
+  --set milvus.enabled=true
 ```
 
-`minio.enabled=true` is already the chart default
-(`deploy/helm/avaloka/values.yaml:198`), and on a host that cannot reach
-quay.io that pod will not start regardless — mirror the MinIO images into a
-registry you control and override `minio.image` and `minio.mcImage`, or point
-the stack at an object store you already run. An air-gapped install has to do
-this anyway.
+The object store needs no flag: SeaweedFS is the chart default. Do **not** add
+`--set minio.enabled=true` — MinIO is now only a rollback path, and the chart
+refuses to render with both stores enabled. On a host that cannot reach Docker
+Hub, mirror `chrislusf/seaweedfs` and `amazon/aws-cli` into a registry you
+control and override `seaweedfs.image.repository` and
+`seaweedfs.awsCliImage.repository`, or point the stack at an object store you
+already run. An air-gapped install has to do this for every image anyway.
 
 Then bring up a local model server — `deploy/inference/ollama-cpu.yaml` needs no
 GPU and is the path to start with; `deploy/inference/vllm-gpu.yaml` is the GPU
@@ -352,7 +350,7 @@ common way to end up with an API that cannot reach its own database.
 ### A. Kubernetes (recommended, and what is actually tested)
 
 This is the path the test suite exercises and the one that brings up every
-dependency — Postgres, Redis, MinIO, Chroma, Supabase and the LangGraph server
+dependency — Postgres, Redis, SeaweedFS, Chroma, Supabase and the LangGraph server
 — in one command.
 
 ```bash
@@ -394,10 +392,8 @@ in-cluster, set both:
   --set-string secrets.openrouterKey="$OPENROUTER_API_KEY"
 ```
 
-**MinIO will not start.** `minio.enabled` is `true` by default and its images
-cannot be pulled from any registry today — see [Object storage is broken right
-now](#object-storage-is-broken-right-now). Expect that one pod to sit in
-`ImagePullBackOff`; the API still comes up, but uploads fail.
+The object store is SeaweedFS and is on by default; its two images are pulled
+from Docker Hub. See [Object storage](#object-storage).
 
 If the `avaloka`, `avaloka-webui` or `avaloka-supabase-functions` pods sit in
 `ImagePullBackOff`, run `make -C deploy images-status` to see which image is
@@ -419,7 +415,7 @@ server upstream is reachable — check it before anything else.
 ### B. Local processes
 
 Useful for iterating on the API itself. **Each dependency has its own compose
-file** — the default `docker-compose.yml` is the Milvus stack (etcd, MinIO,
+file** — the default `docker-compose.yml` is the Milvus stack (etcd, SeaweedFS,
 Milvus, Attu), *not* Postgres and Redis:
 
 ```bash
@@ -532,38 +528,48 @@ With it off, runs report `memory_context_unavailable: true` rather than
 pretending they recalled nothing. Chroma keeps a persistent volume, so tier-2
 context survives pod restarts.
 
-### Object storage is broken right now
+### Object storage
 
-**The MinIO pod will not start, and there is no setting that fixes it.** The
-chart points at `quay.io/minio/minio` and `quay.io/minio/mc`
-(`deploy/helm/avaloka/values.yaml:205,214`) after Docker Hub stopped serving
-them anonymously. As of this writing quay.io does not serve them either:
-anonymous manifest requests to both repositories return `401 UNAUTHORIZED` at
-every tag tried, including the pinned releases and `:latest`. Docker Hub
-returns `401` as well. A control request to `quay.io/coreos/etcd:v3.5.16` —
-another image this chart uses — returns `200`, so this is specific to the MinIO
-repositories, not a broken registry or a bad probe.
+**The in-cluster object store is SeaweedFS, on by default**
+(`seaweedfs.enabled: true`). It serves S3 on port 8333 as `avaloka-seaweedfs`,
+holds uploaded datasets and MLflow artifacts on a 20Gi volume, and gets its
+`avaloka` bucket from a post-install hook. Nothing in the application changes
+with the store: every client reads the endpoint and credentials the chart
+publishes.
 
-`docker-compose.yml:23` has the same problem independently: it still names
-`minio/minio:RELEASE.2023-03-20T20-16-18Z` on Docker Hub.
+It replaced MinIO because MinIO's images stopped being pullable: anonymous
+manifest requests to `quay.io/minio/minio` and `quay.io/minio/mc` return `401`,
+as do the Docker Hub equivalents. **MinIO is retained for one release as a
+rollback path only**, off by default. To use it you must turn SeaweedFS off in
+the same command — the chart refuses to render with both enabled — and supply
+images from a registry of your own:
 
-Because `minio.enabled` defaults to `true` (`values.yaml:198`), a default
-`helm install` ends with one pod in `ImagePullBackOff`. The API itself comes up;
-what breaks is uploading, which fails with HTTP 500 `Failed to upload to
-storage`.
+```bash
+--set seaweedfs.enabled=false --set minio.enabled=true
+```
 
-What you can do today:
+Data is not copied between the two stores.
 
-- **Mirror the images** into a registry you can authenticate to, then override
-  `minio.image.repository` / `.tag` and `minio.mcImage.repository` / `.tag`.
-  Override both — `mc` runs the bucket-creation hook, so a healthy MinIO with a
-  missing `mc` image still has nowhere to put an upload.
-- **Point at object storage you already run** and set `minio.enabled=false`.
-- **Accept it** if you only need analysis and not artefact persistence.
+Things to know before you rely on it:
 
-A migration replacing MinIO with SeaweedFS exists on the branch
-`feat/seaweedfs-object-storage` and is **not merged** — nothing in this tree
-references SeaweedFS. Do not plan against it yet.
+- **Both images come from Docker Hub**, pinned by digest:
+  `chrislusf/seaweedfs:4.48` and `amazon/aws-cli:2.32.6` (the bucket hook). A
+  digest protects against a retag, not against the repository going away, which
+  is what happened to MinIO. For anything you depend on, mirror both into a
+  registry you control and override `seaweedfs.image.repository` and
+  `seaweedfs.awsCliImage.repository`; keep the digests, they still verify.
+- **The default credentials are development values.** Override
+  `seaweedfs.auth.accessKey` / `seaweedfs.auth.secretKey` for anything beyond a
+  laptop.
+- **A NetworkPolicy restricts the store to its S3 port and to the workloads that
+  use it.** It only protects you on a cluster whose CNI enforces NetworkPolicy.
+  To let another workload in, add a peer under `seaweedfs.extraIngressFrom`.
+- **Or point at object storage you already run**: set `seaweedfs.enabled=false`,
+  `config.storageBackend` and `mlflow.artifactsDestination`, as the cloud
+  overlays in `deploy/helm/avaloka/values/` do.
+
+`docker-compose.yml` runs the same SeaweedFS image as the object store for the
+Milvus stack.
 
 ### Air-gapped
 

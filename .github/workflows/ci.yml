@@ -53,6 +53,82 @@ jobs:
         # gate including the benchmark runs on the release workflow.
         run: PYTHON=python ./scripts/ci.sh --fast
 
+  ui-unit:
+    # The UI's unit and component tests. Like the Python gate, this runs the
+    # command a contributor runs -- `npm run test:unit` -- not a parallel list
+    # of steps. Hermetic: jsdom, no browser, no backend, no network after install.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # The major ui/Dockerfile builds with.
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Install
+        # The lockfile install the image build uses, so a lockfile that has
+        # drifted from package.json fails here rather than in the image.
+        run: npm ci
+
+      - name: Unit and component tests
+        run: npm run test:unit
+
+  ui-e2e:
+    # One Playwright spec against an already-running deployment. It needs a UI,
+    # a backend and a signed-in session, none of which a pull request has, so
+    # it is started by hand only and never gates anything: continue-on-error
+    # keeps a failure here from turning the workflow red. With the variables
+    # unset the spec skips itself and prints why.
+    if: github.event_name == 'workflow_dispatch'
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ui
+    env:
+      E2E_BASE_URL: ${{ vars.E2E_BASE_URL }}
+      E2E_API_URL: ${{ vars.E2E_API_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - run: npm ci
+
+      - name: Browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Signed-in session
+        # Login is by emailed link, so the session is recorded once by hand
+        # (ui/tests/README.md) and stored as a secret. Absent, the spec skips.
+        env:
+          E2E_STORAGE_STATE_JSON: ${{ secrets.E2E_STORAGE_STATE_JSON }}
+        run: |
+          if [ -n "$E2E_STORAGE_STATE_JSON" ]; then
+            printf '%s' "$E2E_STORAGE_STATE_JSON" > "$RUNNER_TEMP/e2e-state.json"
+            echo "E2E_STORAGE_STATE=$RUNNER_TEMP/e2e-state.json" >> "$GITHUB_ENV"
+          fi
+
+      - name: End-to-end
+        run: npm run test:e2e
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report
+          path: ui/playwright-report
+          if-no-files-found: ignore
+
   benchmark:
     # The benchmark is the slow stage, so it runs once rather than per version.
     runs-on: ubuntu-latest

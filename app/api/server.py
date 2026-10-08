@@ -1137,6 +1137,12 @@ app.add_middleware(
     expose_headers=["Content-Disposition"],
 )
 
+# Product analytics collector (docs/analytics/DESIGN.md). Events are stored in
+# this deployment's own database; nothing leaves the cluster from these routes.
+from app.analytics.collector import build_router as _build_analytics_router
+
+app.include_router(_build_analytics_router(_resolve_user_id))
+
 
 # ---------- PNA preflight ----------
 @app.middleware("http")

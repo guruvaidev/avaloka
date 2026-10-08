@@ -19,6 +19,7 @@ import requests
 from langchain_core.messages import AIMessage
 from app.agents.infra_agent import infra_agent_node
 from app.agents.result_renderer import render_response
+from app.agents.lineage_hooks import record_analysis_lineage
 from pathlib import Path
 
 from app.graph.etl_state import ETLState
@@ -357,18 +358,6 @@ def _resolve_local_execution_input(state: Dict[str, Any], input_path: Optional[s
     return input_str
 
 
-# def _make_candidate_output_path(output_path: Optional[str]) -> Optional[str]:
-#     if not output_path:
-#         return None
-#     output_obj = Path(output_path)
-#     output_obj.parent.mkdir(parents=True, exist_ok=True)
-#     fd, candidate = tempfile.mkstemp(
-#         suffix=output_obj.suffix or ".csv",
-#         prefix=f".{output_obj.stem}_candidate_",
-#         dir=str(output_obj.parent),
-#     )
-#     os.close(fd)
-#     return candidate
 
 def _make_candidate_output_path(
     output_path: Optional[str],
@@ -626,6 +615,7 @@ def execution_agent_node(state: ETLState) -> ETLState:
     new_state = state.copy()
 
     file_data = None
+    output_data = None
     if execution_result.get("status") == "success" and execution_result.get("output"):
         try:
             output_data_str = execution_result["output"]
@@ -667,6 +657,10 @@ def execution_agent_node(state: ETLState) -> ETLState:
         "output_location": output_location,
         "output_file_data": file_data,
     })
+    if output_data is not None and execution_result.get("status") == "success":
+        lineage_dataset_id = record_analysis_lineage(new_state, output_data)
+        if lineage_dataset_id:
+            new_state["latest_output_dataset_id"] = lineage_dataset_id
 
     # Store result in Layer 4 memory if successful
     if file_data is not None or "successfully" in getattr(ai_response, "content", ""):
@@ -720,16 +714,6 @@ def execution_agent_node_local(state: ETLState) -> ETLState:
         })
         return new_state
 
-    # input_data_location = state.get("data_source_location")
-    # output_location = state.get("output_location")
-    # resolved_input_location = _resolve_local_execution_input(state, input_data_location, output_location)
-    # candidate_output_location = _make_candidate_output_path(output_location)
-
-    # execution_result = execute_code_on_local(
-    #     code=code,
-    #     input_data_location=resolved_input_location,
-    #     output_location=candidate_output_location,
-    # )
     input_data_location = state.get("data_source_location")
     output_location = state.get("output_location")
     resolved_input_location = _resolve_local_execution_input(state, input_data_location, output_location)
@@ -981,6 +965,11 @@ def execution_agent_node_local(state: ETLState) -> ETLState:
             "output_row_count": len(output_data),
         },
     })
+    if execution_status == "success":
+        lineage_dataset_id = record_analysis_lineage(new_state, output_data)
+        if lineage_dataset_id:
+            new_state["latest_output_dataset_id"] = lineage_dataset_id
+
     # Store result in Layer 4 memory if successful
     #if execution_status == "success" or execution_status == "completed":
     if execution_status == "success":
@@ -1199,11 +1188,6 @@ def _build_ray_wrapper(data_uri: str, output_artifact_uri: str, output_metrics_u
         "from ray.util import get_node_ip_address",
         "from pathlib import Path",
         "",
-        # "sa_json = os.getenv('GCP_SERVICE_ACCOUNT_JSON', '').strip()",
-        # "if sa_json and not os.getenv('GOOGLE_APPLICATION_CREDENTIALS'):",
-        # "    sa_path = '/tmp/gcp_sa.json'",
-        # "    Path(sa_path).write_text(sa_json, encoding='utf-8')",
-        # "    os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = sa_path",
         "sa_json = os.getenv('GCP_SERVICE_ACCOUNT_JSON', '').strip()",
         "if sa_json and not os.getenv('GOOGLE_APPLICATION_CREDENTIALS'):",
         "    sa_json = sa_json.replace('\\\\n', '\\n')",
@@ -1216,21 +1200,11 @@ def _build_ray_wrapper(data_uri: str, output_artifact_uri: str, output_metrics_u
         "",
         "ray.init(address='auto')",
         "",
-        # "DATA_SOURCE_URI = os.getenv('DATA_SOURCE_URI', '').strip()",
-        # "OUTPUT_ARTIFACT_URI = os.getenv('OUTPUT_ARTIFACT_URI', '').strip()",
-        # "OUTPUT_METRICS_URI = os.getenv('OUTPUT_METRICS_URI', '').strip()",
         f"DATA_SOURCE_URI = {repr(data_uri)}",
         f"OUTPUT_ARTIFACT_URI = {repr(output_artifact_uri)}",
         f"OUTPUT_METRICS_URI = {repr(output_metrics_uri)}",
         "print('DATA_SOURCE_URI =', repr(DATA_SOURCE_URI))",
         "",
-        # "def _gcs_token():",
-        # "    s = os.getenv('GCP_SERVICE_ACCOUNT_JSON', '').strip()",
-        # "    if not s: return None",
-        # "    s = s.replace('\\n', '\\\\n').replace('\\r', '\\\\r')",
-        # "    p = '/tmp/gcp_sa.json'",
-        # "    Path(p).write_text(s, encoding='utf-8')",
-        # "    return p",
         "def _gcs_token():",
         "    bundled = 'gcp_sa.json'",
         "    if os.path.exists(bundled): return os.path.abspath(bundled)",
@@ -1278,25 +1252,6 @@ def _build_ray_wrapper(data_uri: str, output_artifact_uri: str, output_metrics_u
         "def process_partition(uri, partition_id, total, row_offset, rows_per_partition):",
         "    import pandas as pd, fsspec, os, io, time",
         "    from pathlib import Path",
-        #"    opts = {}",
-        # "    sa = os.getenv('GCP_SERVICE_ACCOUNT_JSON', '').strip()",
-        # "    if sa and (uri.startswith('gs://') or uri.startswith('gcs://')):",
-        # #"        sa = sa.replace('\\n', '\\\\n').replace('\\r', '\\\\r')",
-        # "        sa = sa.replace('\\\\n', '\\n')",
-        # "        p = f'/tmp/gcp_sa_{partition_id}.json'",
-        # "        Path(p).write_text(sa, encoding='utf-8')",
-        # "        opts = {'token': p}",
-        # "    sa = os.getenv('GCP_SERVICE_ACCOUNT_JSON', '').strip()",
-        # "    if sa and (uri.startswith('gs://') or uri.startswith('gcs://')):",
-        # "        sa = sa.replace('\\\\n', '\\n')",
-        # "        try:",
-        # "            import json as _j2",
-        # "            sa = _j2.dumps(_j2.loads(sa))",
-        # "        except Exception:",
-        # "            pass",
-        # "        p = f'/tmp/gcp_sa_{partition_id}.json'",
-        # "        Path(p).write_text(sa, encoding='utf-8')",
-        # "        opts = {'token': p}",
         "    opts = {}",
         "    if uri.startswith('gs://') or uri.startswith('gcs://'):",
         "        bundled = 'gcp_sa.json'",
@@ -1756,13 +1711,6 @@ def execution_agent_node_ray(state: ETLState) -> ETLState:
         ns_["execution_result"] = {"mode": "k8s-ray", "status": "error", "message": msg}
         return ns_
 
-    # code = (state.get("coder_definition") or {}).get("code") or ""
-    # if not code.strip():
-    #     msg = "Missing coder_definition.code for k8s-ray execution"
-    #     ns_ = state.copy()
-    #     ns_["messages"] = state.get("messages", []) + [AIMessage(content=msg)]
-    #     ns_["execution_result"] = {"mode": "k8s-ray", "status": "error", "message": msg}
-    #     return ns_
 
     code = (state.get("coder_definition") or {}).get("code") or ""
     if not code.strip():
@@ -1928,14 +1876,6 @@ def execution_agent_node_ray(state: ETLState) -> ETLState:
         raw_provider = conn.get("provider") or conn.get("backend") or ""
         provider     = _normalize_secret_provider(raw_provider, str(data_uri))
 
-        # # 2) Create K8s secret
-        # secret_name = create_cloud_secret(
-        #     namespace=ns,
-        #     provider=provider,
-        #     creds=conn,
-        #     dataset_id=str(dataset_id),
-        # )
-
         # 2) Create K8s secret — skip in Direct mode (SA JSON already bundled as gcp_sa.json)
         _is_direct_mode = bool(os.getenv("RAY_DASHBOARD_URL"))
         if not _is_direct_mode:
@@ -2002,10 +1942,6 @@ def execution_agent_node_ray(state: ETLState) -> ETLState:
         ]
         return new_state
 
-    # finally:
-    #     if secret_name:
-    #         try:
-    #             kubectl_delete_secret(secret_name, ns)
     finally:
         if secret_name and not bool(os.getenv("RAY_DASHBOARD_URL")):
             # Only delete k8s secret in KubeRay mode — Direct mode never created one
@@ -2033,6 +1969,7 @@ def execution_agent_node_ray(state: ETLState) -> ETLState:
 
     # ── Fetch the output artifact from cloud storage ──────────────────
     output_file_data = None
+    output_df = None
     ai_message_content = f"RayJob {rayjob_name} finished with {outcome.status if outcome else 'ERROR'}"
 
     if artifact_uri and (outcome and outcome.status.upper() == "SUCCEEDED"):
@@ -2056,17 +1993,6 @@ def execution_agent_node_ray(state: ETLState) -> ETLState:
                         logger.info("[execution_agent_node_ray] Using S3 creds from conn for artifact fetch")
                     else:
                         logger.warning("[execution_agent_node_ray] conn present but no AWS keys found; trying default creds")
-
-            # elif uri_lower.startswith(("gs://", "gcs://")):
-            #     sa_json = (
-            #         (conn or {}).get("service_account_json")
-            #         or (conn or {}).get("gcp_service_account_json")
-            #         or os.getenv("GCP_SERVICE_ACCOUNT_JSON", "").strip()
-            #     )
-            #     if sa_json:
-            #         sa_path = "/tmp/_avaloka_sa_read.json"
-            #         Path(sa_path).write_text(sa_json, encoding="utf-8")
-            #         storage_opts = {"token": sa_path}
 
             elif uri_lower.startswith(("gs://", "gcs://")):
                 import json as _j
@@ -2123,6 +2049,10 @@ def execution_agent_node_ray(state: ETLState) -> ETLState:
     new_state["messages"] = state.get("messages", []) + [
         AIMessage(content=ai_message_content)
     ]
+    if output_df is not None and outcome and outcome.status.upper() == "SUCCEEDED":
+        lineage_dataset_id = record_analysis_lineage(new_state, output_df)
+        if lineage_dataset_id:
+            new_state["latest_output_dataset_id"] = lineage_dataset_id
 
     # Store result in Layer 4 memory if successful
     if outcome and outcome.status.upper() == "SUCCEEDED":

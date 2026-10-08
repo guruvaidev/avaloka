@@ -124,6 +124,7 @@ class ETLState(TypedDict):
     ray_config: Optional[dict]              # Ray Train distributed training configuration
     validation_params: Optional[dict]       # Cross-validation and evaluation parameters
     integrity_report: Optional[dict]        # Pre-training data-integrity evidence
+    pii_report: Optional[dict]              # Column classifications from the preparation scan
     integrity_safe_to_train: Optional[bool] # Whether integrity checks found blockers
     evaluation_report: Optional[dict]       # Model performance versus a trivial baseline
     evaluation_beats_baseline: Optional[bool]
@@ -196,6 +197,8 @@ class ETLState(TypedDict):
     data_source_was_modified: Optional[bool]
     latest_output_location: Optional[str]
     latest_output_location_local: Optional[str]
+    latest_output_dataset_id: Optional[str]
+    lineage_model_id: Optional[str]
     latest_output_columns: Optional[List[str]]
     latest_output_row_count: Optional[int]
     latest_output_created_at: Optional[str]

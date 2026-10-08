@@ -117,7 +117,7 @@ def deploy_avaloka(
     image_repository: Optional[str] = None,
     image_tag: Optional[str] = None,
     image_pull_policy: Optional[str] = None,
-    minio: Optional[bool] = None,
+    object_store: Optional[bool] = None,
     supabase: Optional[bool] = None,
     local_images: bool = False,
 ) -> dict:
@@ -132,11 +132,18 @@ def deploy_avaloka(
     of images and deploys another -- ImagePullBackOff when the registry has no
     image for this checkout, or silently a stale registry image when it does.
 
-    ``minio`` deploys the in-cluster S3-compatible object store and points the
-    app's storage backend at it. This is what gives a local/on-prem cluster a
-    shared data plane: Ray workers land on arbitrary nodes and must read what the
-    API wrote, and kind/Docker Desktop have no ReadWriteMany storage class to
-    share a volume with. None leaves the chart default (off).
+    ``object_store`` deploys the in-cluster S3-compatible object store (SeaweedFS)
+    and points the app's storage backend at it. This is what gives a local/on-prem
+    cluster a shared data plane: Ray workers land on arbitrary nodes and must read
+    what the API wrote, and kind/Docker Desktop have no ReadWriteMany storage
+    class to share a volume with. None leaves the chart defaults alone.
+
+    It was called ``minio`` and set ``minio.enabled``. The chart now refuses a
+    render with both stores on, so passing the old flag against the current chart
+    would have failed the deploy outright rather than quietly choosing one. This
+    also always pins ``minio.enabled=false``: MinIO is retained as a rollback path
+    for one release and must be selected deliberately in a values file, never
+    switched on by provisioning.
     """
     cmd = [
         "helm", "upgrade", "--install", "avaloka", AVALOKA_CHART,
@@ -184,8 +191,10 @@ def deploy_avaloka(
         cmd += ["--set-string", f"image.tag={image_tag}"]
     if image_pull_policy:
         cmd += ["--set", f"image.pullPolicy={image_pull_policy}"]
-    if minio is not None:
-        cmd += ["--set", f"minio.enabled={'true' if minio else 'false'}"]
+    if object_store is not None:
+        cmd += ["--set", f"seaweedfs.enabled={'true' if object_store else 'false'}"]
+        # Never auto-enable the rollback store; enabling both is a render error.
+        cmd += ["--set", "minio.enabled=false"]
     if supabase is not None:
         cmd += ["--set", f"supabase.enabled={'true' if supabase else 'false'}"]
     if supabase:

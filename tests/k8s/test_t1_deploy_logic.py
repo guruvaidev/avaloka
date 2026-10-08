@@ -129,7 +129,10 @@ def test_t1_4_gcp_bucket_configures_gcs_for_app_and_mlflow(monkeypatch):
     monkeypatch.setenv("GCP_PROJECT_ID", "dev-project")
     monkeypatch.setenv("GCS_BUCKET", "dev-artifacts")
 
-    joined = " ".join(_capture_deploy_argv(provider="gcp", minio=False))
+    joined = " ".join(_capture_deploy_argv(provider="gcp", object_store=False))
+    # Both gates are pinned off: a cloud provider gets neither the current
+    # in-cluster store nor the retained rollback one.
+    assert "seaweedfs.enabled=false" in joined
     assert "minio.enabled=false" in joined
     assert "config.gcsBucket=dev-artifacts" in joined
     assert "mlflow.artifactsDestination=gs://dev-artifacts/mlflow-artifacts" in joined
@@ -304,7 +307,7 @@ def test_t1_10_rbac_rayservices_and_ray_serve_url(rendered_chart):
 
 # --------------------------------------------------------------------------- T1.11
 @requires_helm
-def test_t1_11_local_chart_manages_mlflow_with_minio(rendered_chart):
+def test_t1_11_local_chart_manages_mlflow_with_the_object_store(rendered_chart):
     docs = [d for d in yaml.safe_load_all(rendered_chart) if d]
     mlflow = next(
         d for d in docs
@@ -320,8 +323,13 @@ def test_t1_11_local_chart_manages_mlflow_with_minio(rendered_chart):
     assert "--default-artifact-root" not in command
     env = {entry["name"]: entry for entry in container["env"]}
     assert env["MLFLOW_ARTIFACTS_DESTINATION"]["value"] == "s3://avaloka/mlflow-artifacts"
-    assert env["MLFLOW_S3_ENDPOINT_URL"]["value"] == "http://avaloka-minio:9000"
-    assert env["AWS_ACCESS_KEY_ID"]["valueFrom"]["secretKeyRef"]["name"] == "avaloka-minio"
+    # SeaweedFS serves S3 on 8333 where MinIO served 9000, and the credentials
+    # live in that store's own Secret under the standard AWS key names (MinIO's
+    # server required MINIO_ROOT_USER/_PASSWORD, so its Secret used those).
+    assert env["MLFLOW_S3_ENDPOINT_URL"]["value"] == "http://avaloka-seaweedfs:8333"
+    ref = env["AWS_ACCESS_KEY_ID"]["valueFrom"]["secretKeyRef"]
+    assert ref["name"] == "avaloka-seaweedfs"
+    assert ref["key"] == "AWS_ACCESS_KEY_ID"
 
     config = next(d for d in docs if d.get("kind") == "ConfigMap" and d["metadata"]["name"] == "avaloka-config")
     assert config["data"]["MLFLOW_TRACKING_URI"] == "http://avaloka-mlflow:5000"
@@ -343,9 +351,14 @@ def test_t1_11_gke_chart_manages_mlflow_with_gcs_and_no_minio():
     # later local re-enable does not discard persisted artifacts. GKE must not
     # deploy a MinIO workload or expose a MinIO service, but that dormant claim
     # is safe to render.
+    #
+    # The same now goes for SeaweedFS: it is on by default, so values-gke.yaml has
+    # to turn it off explicitly or GKE ships an in-cluster object store beside the
+    # GCS bucket it already has.
     assert not any(
         d.get("kind") in {"Deployment", "Service", "Job"}
-        and d.get("metadata", {}).get("labels", {}).get("app.kubernetes.io/component") == "minio"
+        and d.get("metadata", {}).get("labels", {}).get("app.kubernetes.io/component")
+        in {"minio", "seaweedfs"}
         for d in docs
     )
     mlflow = next(

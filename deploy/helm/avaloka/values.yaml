@@ -142,7 +142,11 @@ chroma:
   seed:
     enabled: false
     sourceUri: ""
-    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
+    # Was minio/mc, which is no longer pullable from Docker Hub at all, so this
+    # job silently "started cold" instead of restoring. rclone speaks both the
+    # s3:// and https:// source forms, and unlike amazon/aws-cli its image still
+    # carries the tar and wget the seed script needs. Mirror this one too.
+    image: rclone/rclone:1.71.1
   resources:
     requests:
       cpu: 100m
@@ -174,7 +178,137 @@ postgres:
       cpu: "1"
       memory: 1Gi
 
-# MinIO — in-cluster S3-compatible object store (layer-1 dataset/artifact plane).
+# SeaweedFS — in-cluster S3-compatible object store (layer-1 dataset/artifact plane).
+#
+# This is the local/on-prem answer to "where do datasets live". The alternative on
+# a single cluster is a shared filesystem, which does not work here: Ray spreads
+# workers across nodes and neither kind nor Docker Desktop offers a ReadWriteMany
+# storage class, so a second worker cannot mount the same volume. Object storage
+# sidesteps that — every worker reaches the same s3:// URI over the network.
+#
+# This replaced MinIO (still below, values-gated, as the rollback path for one
+# release). MinIO did not fail as software: its images stopped being pullable
+# anonymously from every registry that ever carried them, including by digest, and
+# its unauthenticated-write CVE has no community fix. Ceph/Rook was the other
+# candidate considered and is not the answer on a single-node cluster.
+#
+# Nothing in app/ changes between SeaweedFS, MinIO and real S3/GCS: the backend is
+# selected purely by endpoint URL (app/core/storage.py), and no MinIO-specific SDK
+# was ever imported.
+#
+# When enabled, the chart points STORAGE_BACKEND=s3 at this Service — for the API,
+# LangGraph, MCP and the Ray workers alike — unless config.storageBackend has been
+# set to a real cloud backend, which always wins.
+seaweedfs:
+  # MLflow uses this store for model artifacts in local/on-prem installations.
+  # Cloud overlays disable it and point mlflow.artifactsDestination at a managed
+  # object store such as GCS. Exactly one of seaweedfs/minio may be enabled; the
+  # chart fails the render if both are.
+  enabled: true
+  image:
+    # MIRROR THIS IMAGE. It is the whole lesson of the MinIO incident: one Docker
+    # Hub namespace owned by one person, and adopting it without a mirror in a
+    # registry Avaloka controls is the identical bet that just lost. Re-point
+    # `repository` at that mirror as soon as it exists; the digest below is what
+    # makes the mirrored copy verifiable as the same bytes.
+    repository: chrislusf/seaweedfs
+    # 4.48, NOT 3.97. 3.97 carries CVE-2026-72920 (CVSS 9.8, unauthenticated
+    # filer IAM gRPC -> S3 admin control) and CVE-2026-73080 (CVSS 9.3), plus
+    # advisories whose affected range is literally `<= 3.97` -- pinning it would
+    # have shipped a 9.8 critical while fleeing MinIO's 8.8. 4.48 has no known
+    # unpatched advisory.
+    tag: "4.48"
+    # Pinned by digest as well as tag: a tag is a mutable pointer, and the point
+    # of this exercise is that the registry is not a trusted dependency.
+    # Multi-arch (386/amd64/arm/v7/arm64), so amd64 and Apple-Silicon laptops
+    # both resolve from this one reference.
+    digest: "sha256:4e61d15fd35994cb1e43e1e553dff106794841fd9a99ade2fc8c8bfce4d7872d"
+    pullPolicy: IfNotPresent
+  # AWS CLI image used by the bucket-creation hook. MinIO's `mc` went down with
+  # the rest of that supply chain; what the hook talks to is a plain S3 endpoint,
+  # so the AWS CLI is the honest client for it. Mirror this one too.
+  awsCliImage:
+    repository: amazon/aws-cli
+    tag: "2.32.6"
+    digest: "sha256:79e492dfe333fe420d41990fa958c673671b44e30877d65a2aed3391033f37dd"
+    pullPolicy: IfNotPresent
+  # weed's default S3 port. MinIO served 9000; nothing hardcodes either -- every
+  # consumer reads avaloka.objectStoreEndpoint.
+  port: 8333
+  # Prometheus metrics. Not published on the Service and blocked by the
+  # NetworkPolicy; set up a scrape exception deliberately if you want it.
+  metricsPort: 9324
+  bucket: avaloka
+  createBucket: true
+  # Dev credentials for a ClusterIP Service. These become AWS_ACCESS_KEY_ID /
+  # AWS_SECRET_ACCESS_KEY for every S3 client in the stack — override them before
+  # exposing this outside the cluster.
+  #
+  # Deliberately the same literal values as minio.auth below, so flipping the
+  # rollback gate does not also rotate every client's credentials at the same
+  # time as changing the backend.
+  auth:
+    accessKey: avaloka
+    secretKey: avaloka-minio-dev
+  service:
+    type: ClusterIP
+    nodePort: ""
+  # Additional NetworkPolicy peers allowed to reach the S3 port, appended to the
+  # built-in list (the chart's own S3 clients and KubeRay pods; see
+  # templates/seaweedfs.yaml). Additive only -- there is deliberately no switch
+  # that removes the policy. Each entry is a standard NetworkPolicyPeer, e.g. a
+  # Ray cluster or a notebook in another namespace:
+  #   extraIngressFrom:
+  #     - namespaceSelector:
+  #         matchLabels: { kubernetes.io/metadata.name: analytics }
+  #       podSelector:
+  #         matchLabels: { app: notebook }
+  # A NodePort Service does not get around this: traffic arriving through a
+  # NodePort is still subject to the policy, so reaching the store from outside
+  # the cluster means `kubectl port-forward` or an ipBlock entry here.
+  extraIngressFrom: []
+  # Unlike the rest of the in-cluster data plane, this one is durable: losing it
+  # means losing uploaded datasets and trained model artifacts, not just a cache.
+  # The claim carries helm.sh/resource-policy: keep, so it survives both
+  # `helm uninstall` and seaweedfs.enabled=false; reclaim it deliberately.
+  persistence:
+    size: 20Gi
+    storageClass: ""
+  # Measured, not guessed: ~190 MiB idle, ~300 MiB working, and a transient peak
+  # proportional to upload size (809 MiB observed on a 200 MB multipart upload).
+  # The 2Gi limit is carried over from MinIO unchanged and has headroom, but the
+  # measurement was taken against a lab pod declaring a 1Gi limit -- worth
+  # re-measuring under this block before raising upload sizes much further.
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+  # The filer's embedded LevelDB holds an exclusive lock on the data dir and an
+  # unclean close leaves it behind, so weed gets longer than the 30s default to
+  # shut down before SIGKILL.
+  terminationGracePeriodSeconds: 60
+  # Max size of a single volume file before weed starts another. 1 GiB keeps
+  # individual files small enough to be manageable on a laptop-sized PVC.
+  volumeSizeLimitMB: 1024
+
+# MinIO — RETAINED FOR ROLLBACK, DISABLED BY DEFAULT.
+#
+# Kept in-tree and values-gated for one release so an existing on-prem install
+# that cannot take a maintenance window yet can set `minio.enabled: true` (and
+# `seaweedfs.enabled: false`) and get its previous data plane back. The images
+# below are unpullable from every public registry as of 2026-10-02, so this path
+# only works where they are still cached on the nodes or mirrored privately.
+#
+# Data does NOT migrate between the two stores. Rolling back after writing to
+# SeaweedFS needs a one-time `aws s3 sync` / `rclone` in both directions.
+#
+# Note the asymmetry with seaweedfs above: minio.yaml renders its PVC OUTSIDE the
+# enabled gate, so a 20Gi avaloka-minio claim exists even on clusters that have
+# never run MinIO. Left as-is rather than fixed here, because moving the claim is
+# a change to the rollback path itself.
 #
 # This is the local/on-prem answer to "where do datasets live". The alternative on
 # a single cluster is a shared filesystem, which does not work here: Ray spreads
@@ -192,10 +326,9 @@ postgres:
 # LangGraph, MCP and the Ray workers alike — unless config.storageBackend has been
 # set to a real cloud backend, which always wins.
 minio:
-  # MLflow uses this store for model artifacts in local/on-prem installations.
-  # Cloud overlays may disable MinIO and point mlflow.artifactsDestination at a
-  # managed object store such as GCS.
-  enabled: true
+  # OFF by default since the SeaweedFS migration. Set this true AND
+  # seaweedfs.enabled false to roll back; enabling both is refused at render.
+  enabled: false
   image:
     # quay.io, not Docker Hub: minio/minio on Hub is no longer pullable
     # anonymously — even :latest returns "pull access denied, repository does

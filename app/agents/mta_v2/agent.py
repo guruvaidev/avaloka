@@ -12,6 +12,7 @@ from langchain_groq import ChatGroq
 from langchain_core.messages import BaseMessage, AIMessage, HumanMessage, SystemMessage
 
 from app.core.agent_llm import build_agent_llm
+from app.agents.lineage_hooks import record_model_lineage
 from app.graph.etl_state import ETLState
 from app.agents.mta_v2.ray_trainer import RayTrainer
 from app.agents.mta_v2.local_trainer import LocalTrainer
@@ -2927,6 +2928,10 @@ class ModelTrainingAgent:
         new_state["messages"].append(AIMessage(content=report_content))
         new_state["training_scheduled"] = False
         new_state["training_completed"] = not training_failed
+        if not training_failed and isinstance(training_result, dict):
+            lineage_model_id = record_model_lineage(new_state, training_result)
+            if lineage_model_id:
+                new_state["lineage_model_id"] = lineage_model_id
         return new_state
 
     def _configure_inference_service(self, state: ETLState) -> ETLState:

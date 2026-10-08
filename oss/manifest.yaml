@@ -50,6 +50,17 @@ exclude:
       publishes whatever the source branch carries, so the first sync after it
       lands would otherwise ship it. This file is itself published, so the
       reason stays general on purpose.
+  - path: .claude/
+    reason: >-
+      Local agent tooling configuration; not part of the product. Untracked
+      today, so this entry is belt-and-braces: if anything ever tracks the
+      directory it must still not reach the public tree. This file is itself
+      published, so the reason stays general on purpose.
+  - path: bitbucket-pipelines.yml
+    reason: >-
+      Configuration for the internal CI service. The public repository builds
+      with GitHub Actions (.github/workflows), so this file would execute
+      nothing there.
   - path: docs/research/
     keep_globs: ["*.pdf", "README.md", "*.png"]
     reason: >-
@@ -146,6 +157,8 @@ assert_no_paths:
   # Not in the source tree yet. The guard is here first so that the day the
   # directory lands, a dropped or mistyped exclude entry fails the generation.
   - "docs/evaluations/**/*"   # internal assessments, withheld above
+  - ".claude/**/*"            # agent definitions and skills, withheld above
+  - "**/bitbucket-pipelines.yml"   # internal CI configuration, withheld above
   - "avaloka/arena/**"         # asserted by tests/test_oss_readiness.py
   - "tests/arena/**"
 

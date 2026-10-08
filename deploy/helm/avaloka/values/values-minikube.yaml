@@ -14,12 +14,16 @@ service:
 # would write to its own pod filesystem and Ray workers on other nodes could not
 # read it back (neither kind nor Docker Desktop has a ReadWriteMany storage
 # class). The chart points STORAGE_BACKEND=s3 at this Service automatically.
-minio:
+#
+# No console NodePort: SeaweedFS has no MinIO-console equivalent. That is a real
+# UX regression for "browse the bucket from the laptop" -- use
+# `kubectl port-forward svc/avaloka-seaweedfs 8333:8333` plus `aws --endpoint-url`
+# instead. (MinIO's community console was itself gutted in 2025, so the thing
+# being lost was already a shell of what the port mapping was added for.)
+seaweedfs:
   enabled: true
   service:
     type: NodePort
-    # Console on http://localhost:30092 — mapped in deploy/clusters/kind-cluster.yaml.
-    consoleNodePort: 30092
   # Laptop-sized; raise for real datasets.
   persistence:
     size: 10Gi

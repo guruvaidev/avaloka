@@ -12,6 +12,21 @@ This design proposes the smallest thing that answers it: **an append-only JSON L
 
 It is **on by default, disclosed at install, and switchable off in one click or one environment variable.** It never transmits customer data, column names, file names, or free text — only a fixed allowlist of counts, durations, versions and outcomes.
 
+> **Scope of that sentence — corrected.** It describes the process-telemetry
+> lane specified in this document and nothing else. It is **not** a statement
+> about what Avaloka records. Product analytics (`docs/analytics/DESIGN.md`)
+> records the analyst's question text, and it does so in two tiers:
+>
+> - **Stored, in the deployment's own database:** the question as typed, after
+>   pattern redaction. It contains the column and table names the analyst
+>   typed. It is customer-identifying and it is not anonymous. It does not
+>   leave the cluster.
+> - **Exported, only if an operator switches export on:** behavioural events
+>   and a rotating pseudonym. No question text in any form.
+>
+> Every other "never sent" statement in this document, including §5.2, has the
+> same scope: process telemetry only.
+
 ---
 
 ## 2. Review of the existing proposal

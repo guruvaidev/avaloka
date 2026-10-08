@@ -48,9 +48,19 @@ INGRESS_CHART_COMPONENTS = frozenset({"gateway"})
 # MCP server) and `supabase-functions` (edge runtime). Recorded here so the
 # inventory check is meaningful again rather than permanently red.
 UNPINNED_LEGACY_COMPONENTS = frozenset({"mcp", "supabase-functions"})
-# Shared model/data plane: local installs use MinIO while cloud overlays may use
-# managed object storage; MLflow provides the tracking and model-registry API.
-STORAGE_CHART_COMPONENTS = frozenset({"minio", "mlflow"})
+# Shared model/data plane: local installs run an in-cluster S3 (SeaweedFS; the
+# MinIO it replaced is retained values-gated for one release as the rollback
+# path) while cloud overlays use managed object storage; MLflow provides the
+# tracking and model-registry API. Both stores are listed because both templates
+# are in the tree -- see test_c6_01 for which one is on by default.
+#
+# `seaweedfs-bucket` and `chroma-seed` are hook Jobs, not long-running workloads.
+# They carry their own component labels so the object store's NetworkPolicy can
+# name them as S3 clients (and so the bucket hook is not a backend of the store's
+# Service, which it was while it shared the store's label).
+STORAGE_CHART_COMPONENTS = frozenset(
+    {"seaweedfs", "seaweedfs-bucket", "chroma-seed", "minio", "mlflow"}
+)
 # Background execution. E6.08 was the defect that none of this shipped; celery.yaml
 # now runs a worker and a beat/RedBeat scheduler, so these are expected workloads.
 EXECUTOR_CHART_COMPONENTS = frozenset({"celery", "celery-redbeat"})
@@ -97,9 +107,14 @@ def _grep_deploy(pattern: str) -> list[str]:
 
 def _template_for_component(component: str) -> Optional[pathlib.Path]:
     """Chart file carrying `app.kubernetes.io/component: <component>` on a workload."""
-    needle = f"app.kubernetes.io/component: {component}"
+    # Whole-value match. A substring needle resolved `chroma` to whichever file
+    # sorted first among chroma.yaml and chroma-seed.yaml once the seed Job gained
+    # its own `chroma-seed` label, and pointed the durability tests at a Job.
+    rx = re.compile(
+        rf"^\s*app\.kubernetes\.io/component:\s*{re.escape(component)}\s*$", re.MULTILINE
+    )
     for path in _chart_files():
-        if needle in _read(path):
+        if rx.search(_read(path)):
             return path
     return None
 
@@ -281,15 +296,25 @@ def test_e6_08_celery_broker_is_configured() -> None:
 
 # --------------------------------------------------------------------------- E6.09
 #: Stores whose data must outlive the pod that wrote it. Each is a StatefulSet
-#: with a volumeClaimTemplate, so the volume follows the pod when it is
-#: rescheduled instead of being left on a node that went away.
+#: with a volumeClaimTemplate, so the claim is owned by the workload rather than
+#: standing beside it and is not orphaned when the workload is removed.
+#:
+#: This comment used to say the volume "follows the pod when it is rescheduled
+#: instead of being left on a node that went away". That is not what a
+#: volumeClaimTemplate does, and on the StorageClass these clusters actually run
+#: it is false: a local-path PV is a node-local hostPath pinned by nodeAffinity,
+#: so a pod that cannot be placed back on the original node stays Pending
+#: forever. Surviving node loss needs a replicating StorageClass -- values.yaml's
+#: storage.className commentary states this correctly.
 DURABLE_STATEFULSETS = {"redis", "chroma", "postgres"}
 
 #: Stores that keep a standalone PVC rather than a volumeClaimTemplate. These
 #: hold data a user would notice losing -- uploaded datasets, trained models,
 #: the DTA connection registry -- and moving them to a volumeClaimTemplate
 #: would orphan the existing claim on upgrade. The claim is durable either way.
-DURABLE_STANDALONE_PVCS = {"templates/mcp.yaml", "templates/minio.yaml"}
+DURABLE_STANDALONE_PVCS = {
+    "templates/mcp.yaml", "templates/seaweedfs.yaml", "templates/minio.yaml",
+}
 
 
 @pytest.mark.parametrize("component", sorted(DURABLE_STATEFULSETS))
@@ -374,8 +399,13 @@ def test_e6_09_pins_which_templates_claim_durable_storage() -> None:
     """The set of standalone PVCs is fixed; new ones are a decision, not a drift.
 
     redis/chroma/postgres moved to volumeClaimTemplates and no longer appear
-    here. mcp and minio keep standalone claims on purpose -- see
+    here. mcp, seaweedfs and minio keep standalone claims on purpose -- see
     DURABLE_STANDALONE_PVCS. milvus is off by default and brings its own.
+
+    seaweedfs is the in-cluster object store; minio is the same store it replaced,
+    retained values-gated for one release so an on-prem install can roll back.
+    Both claims carry helm.sh/resource-policy: keep, because losing either means
+    losing uploaded datasets and MLflow artifacts rather than a cache.
     """
     with_pvc = {
         str(p.relative_to(CHART_ROOT)).replace("\\", "/")
@@ -419,10 +449,14 @@ def test_e7_09_mlflow_backend_is_chart_managed() -> None:
 @pytest.mark.xfail(
     strict=True,
     reason=(
-        "DEFECT E11.10 (P0): the chart ships zero NetworkPolicy manifests (none anywhere under "
-        "deploy/), so Ray workers executing LLM-generated user code have unrestricted network "
-        "access to redis (no auth), postgres, chroma, supabase-db and the internet - a data-plane "
-        "bypass that route-level auth never sees. Remove this xfail when fixed."
+        "DEFECT E11.10 (P0): the chart ships no DEFAULT-DENY NetworkPolicy, so Ray workers "
+        "executing LLM-generated user code have unrestricted network access to redis (no auth), "
+        "postgres, chroma, supabase-db and the internet - a data-plane bypass that route-level "
+        "auth never sees. Narrowed by the SeaweedFS migration, which added the chart's FIRST "
+        "NetworkPolicy (templates/seaweedfs.yaml, ingress restricted to the S3 port) - so the "
+        "'zero NetworkPolicy manifests' half of this defect is fixed and the first assertion "
+        "below now passes. What remains is the default-deny baseline, which that component "
+        "policy does not and should not provide. Remove this xfail when fixed."
     ),
 )
 def test_e11_10_chart_ships_default_deny_networkpolicy() -> None:

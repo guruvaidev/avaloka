@@ -87,7 +87,7 @@ When it finishes:
 | Avaloka Web UI (React/SSR) | <http://localhost:30090> — `webui.enabled`, **on by default**, NodePort 30090 |
 | Streamlit UI (opt-in) | `--set ui.enabled=true`; NodePort 30086 → port 8501. Off by default. A different thing from the React UI above. |
 | Local Supabase gateway | <http://localhost:30091> (kong) |
-| MinIO console | <http://localhost:30092> — *if* the pod starts; see below |
+| Object store (S3 API) | `kubectl port-forward svc/avaloka-seaweedfs 8333:8333` — SeaweedFS has no console and no host port is mapped |
 | Ray dashboard | <http://localhost:8265> (kind NodePort 30265) |
 | Inference | `kubectl port-forward svc/avaloka-inference-serve-svc 8000:8000` |
 
@@ -96,15 +96,15 @@ When it finishes:
 > *NodePort* path is the one that lands on 9010. Both are correct; they are
 > different routes.
 
-> **MinIO will not start.** `minio.enabled` is `true` by default
-> (`values.yaml:198`) and its images are not pullable from any registry right
-> now — anonymous requests to `quay.io/minio/minio`, `quay.io/minio/mc` and the
-> Docker Hub equivalents all return `401`, while a control request to
-> `quay.io/coreos/etcd:v3.5.16` returns `200`. Expect that pod in
-> `ImagePullBackOff` after `make up`. Uploads fail with HTTP 500 until you
-> mirror the images and override `minio.image` / `minio.mcImage`, or set
-> `minio.enabled=false` and point at object storage you run. The SeaweedFS
-> replacement is on `feat/seaweedfs-object-storage` and is **not merged**.
+> **Object storage is SeaweedFS.** `seaweedfs.enabled` is `true` by default; it
+> serves S3 inside the cluster as `avaloka-seaweedfs:8333` and holds uploads and
+> MLflow artifacts. It replaced MinIO, whose images are no longer pullable —
+> anonymous requests to `quay.io/minio/minio`, `quay.io/minio/mc` and the Docker
+> Hub equivalents all return `401`. `minio.enabled` is now `false` and exists
+> for one release as a rollback path; the chart refuses to render with both
+> stores on. SeaweedFS and its bucket hook are pulled from Docker Hub by digest
+> (`chrislusf/seaweedfs`, `amazon/aws-cli`) — mirror them for anything you
+> depend on.
 
 The chart deploys the **avaloka API** (FastAPI/uvicorn on `:9000`) as the primary
 workload, along with a small in-cluster Redis it depends on. The React app in
@@ -357,7 +357,8 @@ Useful flags: `--service-type ClusterIP|NodePort|LoadBalancer`, `--skip-serve`,
 | `redis.enabled` / `redis.externalUrl` | Ship a small in-cluster Redis (default) or point at an external one — the API needs Redis for sessions/uploads/inference. |
 | `webui.enabled` | The React/SSR web UI (`avaloka-ui`), Node on container port 3000, NodePort 30090. **On by default.** |
 | `ui.enabled` | Opt-in **Streamlit** UI as a second Deployment/Service on `:8501` (NodePort 30086). Off by default. Not the React UI. |
-| `minio.enabled` | In-cluster object store. On by default, but its images cannot be pulled — see §2. |
+| `seaweedfs.enabled` | In-cluster S3 object store (SeaweedFS). **On by default.** |
+| `minio.enabled` | The store SeaweedFS replaced, kept for one release as a rollback path. Off by default; the chart refuses to render with both enabled. |
 | `config.inferenceBackend` / `config.rayServeUrl` | `rayserve` (default) posts predictions to the in-cluster Ray Serve service; `gateway` uses the MTA v2 managed path. |
 | `ray.connectExisting` / `ray.address` | Attach to an external Ray cluster vs. use the in-cluster one. |
 | `ray.inClusterAddress` | `ray://avaloka-raycluster-head-svc:10001`. |
@@ -414,7 +415,7 @@ Values live in `app/infra/manifests/helm-values/<component>-values.yaml`.
 Every store that holds state Avaloka is expected to remember is a **StatefulSet
 with a `volumeClaimTemplate`** — Redis, Chroma and Postgres. The claim belongs to
 the workload, so the volume follows the pod when Kubernetes reschedules it
-rather than being stranded on a node that went away. MinIO and the MCP registry
+rather than being stranded on a node that went away. SeaweedFS and the MCP registry
 keep standalone PVCs (moving them would orphan existing data); they are durable
 either way.
 
@@ -450,7 +451,7 @@ storage:
 helm upgrade --install avaloka deploy/helm/avaloka --set storage.className=longhorn
 ```
 
-Every claim in the chart — Redis, Postgres, Chroma, MinIO, MCP, Milvus, Supabase
+Every claim in the chart — Redis, Postgres, Chroma, SeaweedFS, MCP, Milvus, Supabase
 — resolves through that one value. Any component can still override it with its
 own `persistence.storageClass`.
 
@@ -470,7 +471,7 @@ own `persistence.storageClass`.
 | `postgres.persistence.size` | 20Gi | layer-3 artifact store, keyed by user |
 | `redis.persistence.size` | 8Gi | layer-1 schema cache, session hints and preferences |
 | `chroma.persistence.size` | see values.yaml | layer-2 user signature |
-| `minio.persistence.size` | 20Gi | uploaded datasets and trained models — note the MinIO pod cannot start at all right now (§2) |
+| `seaweedfs.persistence.size` | 20Gi | uploaded datasets and trained models |
 
 ### Redis durability
 
@@ -500,7 +501,9 @@ kubectl delete deployment avaloka-redis avaloka-postgres avaloka-chroma --ignore
 helm upgrade --install avaloka deploy/helm/avaloka --set storage.className=longhorn
 ```
 
-MinIO and MCP keep their existing claims and are untouched by the upgrade.
+The object store and MCP keep their existing claims and are untouched by the
+upgrade. An `avaloka-minio` claim from an earlier install is kept too, but its
+contents are not copied into SeaweedFS.
 
 ---
 

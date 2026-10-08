@@ -342,15 +342,25 @@ without them. Set both before treating the deployment as production-ready.
 
 ## Object storage and MLflow
 
-The chart deploys **MinIO** and an internal **MLflow tracking server** by default.
-MLflow stores run/model metadata in PostgreSQL and proxies model artifacts to
-`s3://avaloka/mlflow-artifacts` in MinIO. API and Ray clients use the internal
-`http://avaloka-mlflow:5000` endpoint rather than a raw PostgreSQL URI.
+The chart deploys **SeaweedFS** and an internal **MLflow tracking server** by
+default. MLflow stores run/model metadata in PostgreSQL and proxies model
+artifacts to `s3://avaloka/mlflow-artifacts` in SeaweedFS. API and Ray clients
+use the internal `http://avaloka-mlflow:5000` endpoint rather than a raw
+PostgreSQL URI.
 
-Cloud overlays may continue to use GCS/S3/Azure for application datasets; that
-backend wins for dataset storage while MinIO remains MLflow's artifact store.
-Set `mlflow.backendStoreUri` to managed PostgreSQL for production. When
-`existingSecret` is used, that Secret must contain `MLFLOW_BACKEND_STORE_URI`.
+The cloud overlays (`values-gke.yaml`, `values-eks.yaml`, `values-aks.yaml`)
+turn the in-cluster store off and set `mlflow.artifactsDestination` to managed
+object storage; the chart refuses to render MLflow with nowhere to put
+artifacts. Set `mlflow.backendStoreUri` to managed PostgreSQL for production.
+When `existingSecret` is used, that Secret must contain
+`MLFLOW_BACKEND_STORE_URI`.
+
+**MinIO is a rollback path, not the store.** SeaweedFS replaced it because
+MinIO's images stopped being pullable from every public registry. `minio.yaml`
+stays in the chart for one release, off by default, for an install that still
+has those images cached or mirrored: set `seaweedfs.enabled=false` and
+`minio.enabled=true` together. The chart refuses to render with both enabled,
+and data is not copied between the two.
 
 ### Why object storage rather than a shared volume
 
@@ -362,37 +372,32 @@ mount the volume or mounts a different, empty one. Object storage sidesteps the
 problem entirely: every worker reaches the same `s3://` URI over the network, no
 matter which node it lands on.
 
-### Why MinIO rather than Ceph
+### Why SeaweedFS rather than Ceph
 
-| | MinIO | Ceph (via Rook) |
+| | SeaweedFS (all-in-one) | Ceph (via Rook) |
 |---|---|---|
 | Ray / PyArrow / fsspec | Native — they already speak S3 | Needs RGW, Ceph's S3 gateway |
-| Laptop (kind, Docker Desktop) | One container | Needs 3+ nodes, raw block devices, GBs for mon/mgr/osd |
-| Scale-out | Add replicas + disks, same API | Scales further, far more to operate |
-| Cost to adopt | `minio.enabled: true` | A second distributed system to run |
+| Laptop (kind, Docker Desktop) | One container, ~190 MiB idle | Needs 3+ nodes, raw block devices, GBs for mon/mgr/osd |
+| Durability on one node | None beyond the volume | None either — a second replica has nowhere to go |
+| Cost to adopt | On by default | A second distributed system to run |
 
-Ray, PyArrow and fsspec all talk S3 already, and Ceph's own S3 story *is* RGW —
-so choosing Ceph means paying Ceph's operational cost for MinIO's interface. The
-deciding factor is the laptop: Rook-Ceph cannot run on kind, which would leave
-local and datacenter installs with different storage shapes and different bugs.
-MinIO is the same manifest in both, from one container on a laptop to distributed
-erasure coding across a datacenter rack.
-
-Ceph is the better answer if you need RWX POSIX semantics or block storage for
-other workloads. This chart intentionally requires MinIO while its managed
-MLflow deployment is enabled.
+Every cluster this project provisions has one schedulable node, so a replicated
+store buys no durability there and costs several times the memory. Ceph is the
+better answer if you already run it: use it as the `storage.className` behind
+these volumes, or point the chart at its S3 gateway as external object storage.
 
 ### How it is wired
 
-Enabling MinIO makes the chart set `STORAGE_BACKEND=s3` and publish the endpoint
-and credentials to everything that reads `s3://` — the API, LangGraph, and the
-Ray head and workers (via `envFrom` on `deploy/helm/ray/raycluster.yaml`):
+With SeaweedFS enabled and no cloud backend configured, the chart sets
+`STORAGE_BACKEND=s3` and publishes the endpoint and credentials to everything
+that reads `s3://` — the API, LangGraph, the Celery workers, and the Ray head and
+workers (via `envFrom` on `deploy/helm/ray/raycluster.yaml`):
 
 | Variable | Value |
 |----------|-------|
-| `S3_ENDPOINT_URL` / `AWS_ENDPOINT_URL` | `http://avaloka-minio:9000` |
+| `S3_ENDPOINT_URL` / `AWS_ENDPOINT_URL` | `http://avaloka-seaweedfs:8333` |
 | `S3_BUCKET` | `avaloka` (created by a post-install hook) |
-| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | MinIO's root credentials |
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | `seaweedfs.auth.accessKey` / `.secretKey` |
 
 Both endpoint names are set on purpose: the app reads `S3_ENDPOINT_URL`, botocore
 understands `AWS_ENDPOINT_URL` natively, and PyArrow reads neither — it needs
@@ -400,30 +405,44 @@ understands `AWS_ENDPOINT_URL` natively, and PyArrow reads neither — it needs
 that a Ray worker resolves the bucket against real AWS and fails with
 `NoSuchBucket`, which looks like a missing dataset rather than a misconfiguration.
 
-**A configured cloud backend always wins.** Enabling MinIO on a GKE/EKS/AKS
+**A configured cloud backend always wins.** Enabling SeaweedFS on a GKE/EKS/AKS
 install deploys it but does not redirect the app's storage — `config.storageBackend`
 of `gcs`/`s3`/`azure` takes precedence.
 
+**A NetworkPolicy limits who can reach it.** SeaweedFS listens on eleven ports and
+only the S3 port checks credentials, so the chart always ships a policy that
+allows ingress on that port alone, and only from the workloads above plus the
+bucket hook. It is enforced by the cluster's CNI; on a CNI that ignores
+NetworkPolicy it protects nothing. Add other clients with
+`seaweedfs.extraIngressFrom`.
+
 ### Using it
 
-The console is on <http://localhost:30092> for kind (`avaloka` / the password in
-`minio.auth.secretKey`). To reach the S3 API from your laptop:
+SeaweedFS has no console. To reach the S3 API from your laptop:
 
 ```bash
-kubectl port-forward svc/avaloka-minio 9000:9000
+kubectl port-forward svc/avaloka-seaweedfs 8333:8333
 ```
 
 ```bash
-mc alias set local http://localhost:9000 avaloka avaloka-minio-dev && mc ls local/avaloka
+AWS_ACCESS_KEY_ID=avaloka AWS_SECRET_ACCESS_KEY=avaloka-minio-dev \
+  aws --endpoint-url http://localhost:8333 s3 ls s3://avaloka/
 ```
 
-The default credentials are dev values for a cluster-internal Service. Override
-`minio.auth.accessKey` / `minio.auth.secretKey` for anything beyond a laptop —
-the on-prem overlay ships `CHANGE_ME` to force the decision.
+The default credentials are dev values for a cluster-internal Service (the
+secret key keeps its old `-minio-dev` name so a rollback does not also rotate
+credentials). Override `seaweedfs.auth.accessKey` / `seaweedfs.auth.secretKey`
+for anything beyond a laptop — the on-prem overlay ships `CHANGE_ME` to force
+the decision.
 
-MinIO's volume is the one piece of in-cluster state that is deliberately durable
-(a PVC, not `emptyDir`): losing it means losing uploaded datasets and trained
-models, not just a cache.
+Both images are pulled from Docker Hub, pinned by digest. Mirror
+`chrislusf/seaweedfs` and `amazon/aws-cli` into a registry you control and
+override `seaweedfs.image.repository` and `seaweedfs.awsCliImage.repository`
+for anything you depend on.
+
+SeaweedFS's volume is the one piece of in-cluster state that is deliberately
+durable (a PVC, not `emptyDir`, and kept on `helm uninstall`): losing it means
+losing uploaded datasets and trained models, not just a cache.
 
 ## Optional data stack
 

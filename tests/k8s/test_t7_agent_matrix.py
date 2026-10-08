@@ -354,7 +354,7 @@ def test_t7b_chart_renders_agent_env(rendered_chart, key, owner):
 @requires_helm
 @pytest.mark.parametrize("workload", [
     "avaloka-webui", "avaloka-mcp", "avaloka-langgraph", "avaloka-redis",
-    "avaloka-postgres", "avaloka-chroma", "avaloka-minio", "avaloka-mlflow",
+    "avaloka-postgres", "avaloka-chroma", "avaloka-seaweedfs", "avaloka-mlflow",
     "avaloka-supabase-db", "avaloka-supabase-auth", "avaloka-supabase-rest",
     "avaloka-supabase-kong",
 ])
@@ -800,7 +800,7 @@ AGENT_DEPENDENCY_PODS = [
     ("redis", "session + cache for every agent"),
     ("postgres", "layer-3 artifact store"),
     ("chroma", "layer-2 memory plane"),
-    ("minio", "dataset + artifact object store"),
+    ("seaweedfs", "dataset + artifact object store"),
     ("mlflow", "model training agent registry"),
     ("supabase-db", "auth database"),
     ("supabase-auth", "gotrue"),
@@ -1063,19 +1063,38 @@ def test_t7h_storage_backend_renders(backend, expect):
 
 
 @requires_helm
-def test_t7h_minio_adopted_when_backend_local():
+def test_t7h_object_store_adopted_when_backend_local():
     out = helm("template", "avaloka", str(CHART_DIR),
-               "--set", "minio.enabled=true", "--set", "config.storageBackend=local").stdout
-    assert 'STORAGE_BACKEND: "s3"' in out, "MinIO should adopt the storage backend locally"
+               "--set", "seaweedfs.enabled=true", "--set", "config.storageBackend=local").stdout
+    assert 'STORAGE_BACKEND: "s3"' in out, (
+        "the in-cluster store should adopt the storage backend locally"
+    )
 
 
 @requires_helm
-def test_t7h_explicit_cloud_backend_beats_minio():
+def test_t7h_explicit_cloud_backend_beats_the_object_store():
     out = helm("template", "avaloka", str(CHART_DIR),
-               "--set", "minio.enabled=true",
+               "--set", "seaweedfs.enabled=true",
                "--set", "config.storageBackend=gcs",
                "--set", "config.gcsBucket=some-bucket").stdout
-    assert 'STORAGE_BACKEND: "gcs"' in out, "an explicit cloud backend must win over MinIO"
+    assert 'STORAGE_BACKEND: "gcs"' in out, (
+        "an explicit cloud backend must win over the in-cluster store"
+    )
+
+
+@requires_helm
+def test_t7h_both_object_stores_at_once_is_refused():
+    """Exactly one in-cluster store may run; both on is a configuration error.
+
+    They would claim the same role and the app can only have one S3 endpoint, so
+    the chart fails the render rather than silently resolving to whichever branch
+    is evaluated first. MinIO is retained only as a rollback path.
+    """
+    r = helm("template", "avaloka", str(CHART_DIR),
+             "--set", "seaweedfs.enabled=true", "--set", "minio.enabled=true",
+             check=False)
+    assert r.returncode != 0, "both stores enabled should be refused at render"
+    assert "both true" in r.stderr, r.stderr[:300]
 
 
 @requires_helm
@@ -1083,7 +1102,7 @@ def test_t7h_explicit_cloud_backend_beats_minio():
     ("redis.enabled", "avaloka-redis"),
     ("chroma.enabled", "avaloka-chroma"),
     ("postgres.enabled", "avaloka-postgres"),
-    ("minio.enabled", "avaloka-minio"),
+    ("seaweedfs.enabled", "avaloka-seaweedfs"),
     ("mlflow.enabled", "avaloka-mlflow"),
     ("mcp.enabled", "avaloka-mcp"),
     ("webui.enabled", "avaloka-webui"),
@@ -1093,12 +1112,12 @@ def test_t7h_explicit_cloud_backend_beats_minio():
 def test_t7h_component_can_be_disabled(toggle, workload):
     """Every optional component must actually disappear when turned off.
 
-    MinIO and Postgres are MLflow's artifact and backend stores, so those two are
-    turned off together with MLflow -- the chart refuses the half-configured state
-    on purpose (see test_t7h_mlflow_requires_its_stores).
+The object store and Postgres are MLflow's artifact and backend stores, so those
+    two are turned off together with MLflow -- the chart refuses the
+    half-configured state on purpose (see test_t7h_mlflow_requires_its_stores).
     """
     args = ["--set", f"{toggle}=false"]
-    if toggle in {"minio.enabled", "postgres.enabled"}:
+    if toggle in {"seaweedfs.enabled", "postgres.enabled"}:
         args += ["--set", "mlflow.enabled=false"]
     out = helm("template", "avaloka", str(CHART_DIR), *args).stdout
     # Ignore comment lines -- a doc comment naming the service is not a resource.
@@ -1108,7 +1127,7 @@ def test_t7h_component_can_be_disabled(toggle, workload):
 
 @requires_helm
 @pytest.mark.parametrize("toggle,expected_msg", [
-    ("minio.enabled", "artifactsDestination"),
+    ("seaweedfs.enabled", "artifactsDestination"),
     ("postgres.enabled", "backendStoreUri"),
 ])
 def test_t7h_mlflow_requires_its_stores(toggle, expected_msg):
@@ -1123,7 +1142,7 @@ def test_t7h_mlflow_requires_its_stores(toggle, expected_msg):
     ("redis.enabled", "avaloka-redis"),
     ("chroma.enabled", "avaloka-chroma"),
     ("postgres.enabled", "avaloka-postgres"),
-    ("minio.enabled", "avaloka-minio"),
+    ("seaweedfs.enabled", "avaloka-seaweedfs"),
     ("mlflow.enabled", "avaloka-mlflow"),
     ("mcp.enabled", "avaloka-mcp"),
     ("webui.enabled", "avaloka-webui"),
@@ -1168,8 +1187,12 @@ def test_t7h_api_scales(replicas):
 # T7i — kind cluster + deploy wiring (offline)
 # =============================================================================
 
+# 30092 was the MinIO console. It is gone, not renumbered: SeaweedFS ships no
+# console, so there is no NodePort behind it and a retained mapping would forward
+# the host port to nothing. Removed from this list rather than repointed, and
+# asserted absent below so it cannot creep back.
 @pytest.mark.parametrize("container_port,host_port", [
-    (30085, 9010), (30265, 8265), (30090, 30090), (30091, 30091), (30092, 30092),
+    (30085, 9010), (30265, 8265), (30090, 30090), (30091, 30091),
 ])
 def test_t7i_kind_port_mapping(container_port, host_port):
     """A NodePort with no host mapping is unreachable, and the failure is silent."""
@@ -1177,6 +1200,19 @@ def test_t7i_kind_port_mapping(container_port, host_port):
     y = (Path(__file__).resolve().parents[2] / "deploy/clusters/kind-cluster.yaml").read_text()
     assert f"containerPort: {container_port}" in y
     assert f"hostPort: {host_port}" in y
+
+
+def test_t7i_kind_maps_no_console_port():
+    """The inverse of the above: a mapping with no NodePort behind it is a lie.
+
+    Browsing the bucket from the laptop is now:
+        kubectl port-forward svc/avaloka-seaweedfs 8333:8333
+    """
+    from pathlib import Path
+    y = (Path(__file__).resolve().parents[2] / "deploy/clusters/kind-cluster.yaml").read_text()
+    assert "containerPort: 30092" not in y, (
+        "kind-cluster.yaml still maps 30092 (the retired MinIO console NodePort)"
+    )
 
 
 @pytest.mark.parametrize("name", ["up", "connect", "status", "down", "images"])

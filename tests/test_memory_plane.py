@@ -14,19 +14,35 @@ import pytest
 
 # ── the circuit breaker must be longer than a retrieval takes ──────────────
 
+# The only measurement there is of a real retrieval: 4.4s warm, 5.8s cold, on a
+# healthy deployment (deploy/helm/avaloka/values.yaml). It predates PR #420,
+# which took the LLM call and the per-request connects off this path, so a
+# retrieval today should be quicker -- but nobody has measured one, and "should
+# be" is how the breaker came to abort every call the first time.
+_SLOWEST_MEASURED_RETRIEVAL_S = 5.8
+
+
 def test_circuit_breaker_allows_a_real_retrieval() -> None:
     """3.0s aborted EVERY call; a healthy retrieval measures 4.4-5.8s.
 
     The breaker exists to stop a hung backend stalling a turn. Set below the
     normal completion time it stops everything, forever, and reports the same
     empty payload it would report if the system had simply learned nothing.
-    """
-    from app.services import memory_plane
 
-    assert memory_plane._CIRCUIT_BREAKER_TIMEOUT >= 10.0, (
-        f"breaker is {memory_plane._CIRCUIT_BREAKER_TIMEOUT}s; a successful "
-        f"retrieval measured 4.4-5.8s on a healthy deployment, so anything "
-        f"near that aborts every call")
+    Stated as a relationship rather than a floor: the time the stages are
+    actually allowed (the breaker less its headroom) must cover the slowest
+    retrieval ever measured with room for one stage to time out on top.
+    """
+    from app.services import memory_plane as mp
+
+    stage_budget = mp._CIRCUIT_BREAKER_TIMEOUT * (1.0 - mp._BREAKER_HEADROOM)
+    needed = _SLOWEST_MEASURED_RETRIEVAL_S + mp._STAGE_TIMEOUT
+
+    assert stage_budget >= needed, (
+        f"breaker is {mp._CIRCUIT_BREAKER_TIMEOUT}s, leaving the stages "
+        f"{stage_budget:.1f}s; the slowest measured healthy retrieval "
+        f"({_SLOWEST_MEASURED_RETRIEVAL_S}s) plus one stage timing out "
+        f"({mp._STAGE_TIMEOUT}s) needs {needed:.1f}s")
 
 
 # ── the embedding model must not need the network ─────────────────────────

@@ -24,6 +24,8 @@ from typing import Any, List, Optional, Tuple
 
 import pandas as pd
 
+from .null_policy import keeps_null_words
+
 logger = logging.getLogger(__name__)
 
 #: How far down to look for a header. Past this, whatever the sheet is doing is
@@ -198,18 +200,50 @@ def reinfer_dtypes(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     for column in out.columns:
         series = out[column]
-        if not (series.dtype == object or pd.api.types.is_string_dtype(series)):
+        if not _is_untyped(series):
             continue
         series = series.replace(r"^\s*$", pd.NA, regex=True)
-        numeric = _as_numeric(series)
-        if numeric is not None:
-            out[column] = numeric
+        typed = _typed(series)
+        out[column] = series if typed is None else typed
+    return out
+
+
+def _is_untyped(series: pd.Series) -> bool:
+    return series.dtype == object or pd.api.types.is_string_dtype(series)
+
+
+def _typed(series: pd.Series) -> Optional[pd.Series]:
+    """The column as numbers or dates, or None if it is neither."""
+    numeric = _as_numeric(series)
+    if numeric is not None:
+        return numeric
+    return _as_datetime(series)
+
+
+def keep_null_word_labels(frame: pd.DataFrame, words: pd.DataFrame) -> pd.DataFrame:
+    """Put null-like words back into the text columns of ``frame``.
+
+    ``frame`` is a table found with those words blanked (so header and table
+    detection behave as they always have); ``words`` has the same shape and
+    holds the word each blanked cell contained (file_handler.null_policy).
+    Each column is typed exactly as reinfer_dtypes would type it. A column that
+    types keeps its gaps; a text column gets its labels back. The decision
+    itself is null_policy.keeps_null_words -- this only asks it.
+    """
+    if words.empty or not words.notna().to_numpy().any():
+        return frame
+    out = frame.copy()
+    for position in range(len(out.columns)):
+        held = words.iloc[:, position]
+        if not held.notna().any():
             continue
-        stamped = _as_datetime(series)
-        if stamped is not None:
-            out[column] = stamped
+        series = out.iloc[:, position]
+        blanked = series.replace(r"^\s*$", pd.NA, regex=True) if _is_untyped(series) else series
+        reader_typed = (not _is_untyped(series)) or _typed(blanked) is not None
+        if not keeps_null_words(blanked.dropna().tolist(), reader_typed):
             continue
-        out[column] = series
+        restored = series.astype(object).where(held.isna().to_numpy(), held.to_numpy())
+        out.isetitem(position, restored)
     return out
 
 
@@ -245,11 +279,19 @@ def reshape(raw: pd.DataFrame) -> Tuple[pd.DataFrame, dict]:
     the user what happened -- silently reshaping someone's file is its own kind
     of wrong answer.
     """
+    frame, report, _rows, _columns = reshape_with_positions(raw)
+    return frame, report
+
+
+def reshape_with_positions(raw: pd.DataFrame) -> Tuple[pd.DataFrame, dict, list, list]:
+    """reshape(), plus the labels of the ``raw`` rows and columns the table's
+    cells came from, in the table's own order. A caller holding a second frame
+    aligned with ``raw`` can use them to pick out the matching cells."""
     report = {"header_row": None, "dropped_leading_rows": 0,
               "dropped_empty_columns": 0, "dropped_empty_rows": 0,
               "synthesized_names": False}
     if raw.empty:
-        return raw, report
+        return raw, report, list(raw.index), list(raw.columns)
 
     frame = raw.copy()
 
@@ -265,13 +307,15 @@ def reshape(raw: pd.DataFrame) -> Tuple[pd.DataFrame, dict]:
 
     if header_row is None:
         frame = frame.dropna(how="all")
+        source_columns = list(frame.columns)
         frame.columns = _clean_names([None] * len(frame.columns), len(frame.columns))
         report["synthesized_names"] = True
         report["dropped_empty_rows"] = len(raw) - len(frame)
-        return frame.reset_index(drop=True), report
+        return frame.reset_index(drop=True), report, list(frame.index), source_columns
 
     names = _clean_names(frame.iloc[header_row].tolist(), len(frame.columns))
     body = frame.iloc[header_row + 1:].copy()
+    source_columns = list(body.columns)
     body.columns = names
     report["dropped_leading_rows"] = header_row
 
@@ -279,7 +323,7 @@ def reshape(raw: pd.DataFrame) -> Tuple[pd.DataFrame, dict]:
     body = body.dropna(how="all")
     report["dropped_empty_rows"] = before - len(body)
 
-    return body.reset_index(drop=True), report
+    return body.reset_index(drop=True), report, list(body.index), source_columns
 
 
 def needs_reshaping(df: pd.DataFrame) -> bool:
@@ -358,12 +402,20 @@ def extract_tables(raw: pd.DataFrame, min_rows: int = 2) -> List[Tuple[pd.DataFr
     Returns [(frame, report), ...] in reading order: left to right, then top to
     bottom. A sheet with one table returns one entry, which is the common case.
     """
-    tables: List[Tuple[pd.DataFrame, dict]] = []
+    return [(frame, report) for frame, report, _rows, _columns
+            in extract_tables_with_positions(raw, min_rows)]
+
+
+def extract_tables_with_positions(
+    raw: pd.DataFrame, min_rows: int = 2
+) -> List[Tuple[pd.DataFrame, dict, list, list]]:
+    """extract_tables(), each table with its reshape_with_positions() labels."""
+    tables: List[Tuple[pd.DataFrame, dict, list, list]] = []
     for column_block in split_column_blocks(raw):
         for row_block in split_row_blocks(column_block):
-            frame, report = reshape(row_block)
+            frame, report, rows, columns = reshape_with_positions(row_block)
             if frame.empty or len(frame) < min_rows or not len(frame.columns):
                 continue
             report["source_columns"] = [int(c) for c in row_block.columns]
-            tables.append((frame, report))
+            tables.append((frame, report, rows, columns))
     return tables
