@@ -1,20 +1,39 @@
 import { useEffect, useRef, useState, type DragEvent } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { UploadCloud02, X, Play, CheckCircle, Loading01, File02, AlertTriangle } from "@untitledui/icons";
+import { UploadCloud02, X, Play, CheckCircle, Loading01, File02, AlertTriangle, Diamond01 } from "@untitledui/icons";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { Button } from "@/components/base/buttons/button";
 import { analysesKey } from "@/lib/analyses";
 import { createAnalysis as persistCreateAnalysis } from "@/lib/analysis-messages";
 import { projectDashboardKey } from "@/lib/api/project-dashboard";
-import { backendApi } from "@/lib/api/backendApi";
-// import { setPendingDashboardAnalysis } from "@/lib/pending-dashboard-analysis";
+import { backendApi, type UploadLimits } from "@/lib/api/backendApi";
+import { setPendingDashboardAnalysis } from "@/lib/pending-dashboard-analysis";
 import { cx } from "@/lib/utils/cx";
+import { finishAutoInsightsBot, startAutoInsightsBot } from "@/lib/auto-insights-bot";
 import { toast } from "sonner";
+import { ConnectCloudModal } from "@/components/database/ConnectCloudModal";
 
-const ACCEPTED = [".csv", ".xlsx", ".xls", ".json",".parquet"];
-const MAX_BYTES = 100 * 1024 * 1024;
+const ACCEPTED = [".csv", ".xlsx", ".xls", ".json"];
+/** Fallback limits while /api/limits is loading or unavailable. */
+const FALLBACK_MAX_BYTES = 100 * 1024 * 1024;
 
 type Status = "idle" | "selected" | "uploading" | "complete";
+
+type LimitDialog = {
+  kind: "upgrade" | "cloud";
+  title: string;
+  message: string;
+  showUpgrade: boolean;
+};
+
+const PLAN_LABEL: Record<string, string> = {
+  free: "Free",
+  professional: "Professional",
+  enterprise: "Enterprise",
+};
+const planLabel = (plan?: string | null) => PLAN_LABEL[String(plan ?? "free").toLowerCase()] ?? "Free";
+const toMb = (bytes: number) => Math.round(bytes / (1024 * 1024));
 
 interface UploadResponse {
   dataset_id: string;
@@ -22,24 +41,26 @@ interface UploadResponse {
   thread_id: string;
   schema: string[];
   samples: unknown[];
-  rows_sampled: number;
+  rows_sampled: number | null;
   visualization_config?: unknown;
   visualization_status?: string;
   [k: string]: unknown;
 }
 
+/** File TYPE check only — size is decided by checkLimits() from the plan limits. */
 function validate(file: File): string | null {
   const ext = "." + (file.name.split(".").pop() ?? "").toLowerCase();
   if (!ACCEPTED.includes(ext)) return "File type not supported. Use CSV, Excel or JSON.";
-  if (file.size > MAX_BYTES) return "File too large. Maximum 100MB.";
   return null;
 }
 
 function mapError(err: unknown): string {
   if (err instanceof TypeError) return "Connection failed. Check your internet and try again.";
-  const e = err as { status?: number; message?: string };
+  const e = err as { status?: number; message?: string; detail?: any };
+  // Never replace a server-supplied message with generic text.
+  if (typeof e?.detail?.message === "string" && e.detail.message) return e.detail.message;
+  if (typeof e?.detail === "string" && e.detail) return e.detail;
   if (e?.status === 415) return "File type not supported. Use CSV, Excel or JSON.";
-  if (e?.status === 413) return "File too large. Maximum 100MB.";
   return e?.message || "Upload failed. Please try again.";
 }
 
@@ -81,7 +102,7 @@ interface UploadModalProps {
   /** Multiple files already chosen outside the modal. */
   initialFiles?: File[] | null;
   /** Called when upload completes without a project (dashboard flow). */
-  // onStandaloneAnalysisSaved?: (analysisId: string) => void;
+  onStandaloneAnalysisSaved?: (analysisId: string) => void;
 }
 
 type NormalizedDataset = {
@@ -122,7 +143,7 @@ function normalizeDataset(d: any): NormalizedDataset {
     alias: d?.alias,
     schema: d?.columns ?? d?.schema ?? null,
     samples,
-    rows_sampled: d?.rows_sampled ?? samples.length,
+    rows_sampled: d?.visualization_config?.dataset?.rows_sampled ?? d?.sample_statistics?.sample_size ?? null,
     visualization_config: d?.visualization_config ?? d?.visualization_configs ?? null,
     visualization_status: d?.visualization_status,
   };
@@ -138,7 +159,7 @@ export function UploadModal({
   motherAnalysisId,
   initialFile,
   initialFiles,
-  // onStandaloneAnalysisSaved,
+  onStandaloneAnalysisSaved,
 }: UploadModalProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -152,7 +173,72 @@ export function UploadModal({
   const [fileErrors, setFileErrors] = useState<Record<string, string>>({});
   const [batchError, setBatchError] = useState<string | null>(null);
   const [dragActive, setDragActive] = useState(false);
+  const [limitExceeded, setLimitExceeded] = useState<LimitDialog | null>(null);
+  const [cloudOpen, setCloudOpen] = useState(false);
+  const [uploadPhase, setUploadPhase] = useState<"uploading" | "processing">("uploading");
   const attemptedRef = useRef<string>("");
+
+  // Plan upload limits — fetched once when the modal opens and cached.
+  const { data: limits } = useQuery<UploadLimits>({
+    queryKey: ["upload-limits"],
+    queryFn: () => backendApi.getUploadLimits(),
+    enabled: open,
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+  });
+
+  /** Effective limits — 100 MB per file / 100 MB total until /api/limits answers. */
+  const effLimits = {
+    plan: (limits?.plan as string | undefined) ?? "free",
+    maxFileBytes: typeof limits?.max_file_bytes === "number" ? limits.max_file_bytes : FALLBACK_MAX_BYTES,
+    maxTotalBytes: typeof limits?.max_total_bytes === "number" ? limits.max_total_bytes : FALLBACK_MAX_BYTES,
+    maxFiles: typeof limits?.max_files === "number" ? limits.max_files : null,
+    batchJobs: limits?.batch_jobs === true,
+  };
+  const maxFileMb =
+    typeof limits?.max_file_mb === "number" ? limits.max_file_mb : toMb(effLimits.maxFileBytes);
+  const maxTotalMb =
+    typeof limits?.max_total_mb === "number" ? limits.max_total_mb : toMb(effLimits.maxTotalBytes);
+
+  /** Pre-upload plan limit check. Returns the dialog to show, or null. */
+  const checkLimits = (files: File[]): LimitDialog | null => {
+    const { plan, maxFileBytes, maxTotalBytes, maxFiles, batchJobs } = effLimits;
+    const label = planLabel(plan);
+    const isFree = String(plan).toLowerCase() === "free" || !batchJobs;
+    const upgradeDialog = (message: string): LimitDialog => ({
+      kind: "upgrade",
+      title: `${label} plan limit reached`,
+      message,
+      showUpgrade: isFree,
+    });
+    const cloudDialog: LimitDialog = {
+      kind: "cloud",
+      title: "Load large files from cloud storage",
+      message: `Files larger than ${maxFileMb} MB are loaded from your cloud storage, where they run as background jobs and you'll be notified when the analysis is ready.`,
+      showUpgrade: false,
+    };
+
+    if (typeof maxFiles === "number" && files.length > maxFiles) {
+      return upgradeDialog(
+        `You selected ${files.length} files, but the ${label} plan allows up to ${maxFiles} file${maxFiles > 1 ? "s" : ""} per upload.`,
+      );
+    }
+    const tooBig = files.filter((f) => f.size > maxFileBytes);
+    if (tooBig.length) {
+      if (!isFree) return cloudDialog;
+      return upgradeDialog(
+        `${tooBig.map((f) => f.name).join(", ")} exceed${tooBig.length > 1 ? "" : "s"} the per-file limit of ${maxFileMb} MB on the ${label} plan.`,
+      );
+    }
+    const total = files.reduce((sum, f) => sum + f.size, 0);
+    if (total > maxTotalBytes) {
+      if (!isFree) return cloudDialog;
+      return upgradeDialog(
+        `Your selection totals ${formatSize(total)}, which exceeds the ${label} plan limit of ${maxTotalMb} MB of data per analysis.`,
+      );
+    }
+    return null;
+  };
 
   /** Dataset returned for a given selected file (matched by filename, else by order). */
   const datasetFor = (f: File, index: number): NormalizedDataset | null => {
@@ -160,9 +246,6 @@ export function UploadModal({
     const byName = batch.datasets.find((d) => d.filename === f.name || d.alias === f.name);
     if (byName) return byName;
     if (batch.datasets.length === selectedFiles.length) return batch.datasets[index] ?? null;
-    // If a single file produced multiple datasets (e.g., Excel with multiple sheets),
-    // consider the file completed and associate the first dataset for UI completion state.
-    if (selectedFiles.length === 1 && batch.datasets.length > 0) return batch.datasets[index] ?? batch.datasets[0] ?? null;
     return null;
   };
 
@@ -184,20 +267,23 @@ export function UploadModal({
     if (datasetFor(f, index)) return null;
     if (fileErrors[f.name]) return fileErrors[f.name];
     if (batchError) return batchError;
-    // Only mark as skipped when the server response has no datasets.
-    if (batch && (!batch.datasets || batch.datasets.length === 0)) return "Skipped by the server";
+    if (batch) return "Skipped by the server";
     return null;
   };
 
   const uploadAll = async (files: File[]) => {
     if (!files.length) return;
     setUploading(true);
-    setProgress(8);
+    setProgress(0);
+    setUploadPhase("uploading");
     setBatchError(null);
     setFileErrors({});
-    const timer = setInterval(() => setProgress((p) => (p < 90 ? p + Math.max(1, (90 - p) / 12) : p)), 300);
     try {
-      const res = (await backendApi.uploadFiles(files)) as any;
+      // Real byte-level progress from the upload request (bytes sent / total).
+      const res = (await backendApi.uploadFiles(files, undefined, undefined, (p) => {
+        setUploadPhase(p.phase);
+        setProgress(p.total > 0 ? Math.min(100, (p.loaded / p.total) * 100) : 0);
+      })) as any;
 
       // Whole-response soft failure: keep whatever good insights we already have.
       const envelope = softFailure(res);
@@ -240,14 +326,47 @@ export function UploadModal({
       });
       setProgress(100);
     } catch (err) {
+      const e = err as { status?: number; detail?: unknown };
+      if (e?.status === 413) {
+        // Plan limit rejected by the server — show detail.message as-is.
+        const detail = e.detail as
+          | { reason?: string; message?: string; plan?: string; upgrade_available?: boolean }
+          | string
+          | undefined;
+        const obj = typeof detail === "object" && detail ? detail : null;
+        const reason = String(obj?.reason ?? "limit_exceeded");
+        const label = planLabel(obj?.plan ?? effLimits.plan);
+        const fallbackMessages: Record<string, string> = {
+          file_count: `You selected more files than the ${label} plan allows per upload.`,
+          max_files: `You selected more files than the ${label} plan allows per upload.`,
+          file_size: `One or more files exceed the per-file size limit of the ${label} plan.`,
+          max_file_bytes: `One or more files exceed the per-file size limit of the ${label} plan.`,
+          total_size: `The total size of your selection exceeds the ${label} plan limit.`,
+          max_total_bytes: `The total size of your selection exceeds the ${label} plan limit.`,
+        };
+        const message =
+          typeof detail === "string" && detail
+            ? detail
+            : typeof obj?.message === "string" && obj.message
+              ? obj.message
+              : fallbackMessages[reason] ?? `The file(s) exceed the ${label} plan limit.`;
+        setLimitExceeded({
+          kind: "upgrade",
+          title: `${label} plan limit reached`,
+          message,
+          showUpgrade: obj?.upgrade_available === true,
+        });
+        setProgress(0);
+        return;
+      }
       const msg = mapError(err);
       setBatchError(msg);
       toast.error(msg);
       setProgress(0);
 
     } finally {
-      clearInterval(timer);
       setUploading(false);
+      setUploadPhase("uploading");
     }
   };
 
@@ -267,7 +386,15 @@ export function UploadModal({
         seen.add(key);
         accepted.push(f);
       }
-      return accepted.length ? [...prev, ...accepted] : prev;
+      if (!accepted.length) return prev;
+      const next = [...prev, ...accepted];
+      // Plan limit gate: block before any upload happens.
+      const violation = checkLimits(next);
+      if (violation) {
+        setLimitExceeded(violation);
+        return prev;
+      }
+      return next;
     });
   };
 
@@ -333,6 +460,7 @@ export function UploadModal({
 
   const start = async () => {
     if (!file || !response || !batch) return;
+    startAutoInsightsBot();
     // Close instantly so the dataset details are not visible while we persist.
     onOpenChange(false);
     const vizConfig = response.visualization_config ?? null;
@@ -435,7 +563,28 @@ export function UploadModal({
 
     onOpenChange(false);
 
+    const isStandaloneDashboardUpload = redirectTo === "analysis" && !resolvedProjectId && !isChildUpload && !!newAid;
 
+    if (isStandaloneDashboardUpload && newAid) {
+      finishAutoInsightsBot();
+      setPendingDashboardAnalysis(newAid);
+      onStandaloneAnalysisSaved?.(newAid);
+      try {
+        sessionStorage.setItem(
+          "analysis:context",
+          JSON.stringify({
+            name,
+            project: "",
+            projectId: null,
+            analysisId: newAid,
+          }),
+        );
+      } catch {}
+      toast.success("Analysis saved. Create or select a project to add it.");
+      navigate({ to: "/dashboard" });
+      reset();
+      return;
+    }
 
     const urlAid = isChildUpload ? (motherAnalysisId ?? parentAnalysisId) : newAid;
     navigate({
@@ -549,7 +698,11 @@ export function UploadModal({
               </button>{" "}
               <span className="text-tertiary">or drag and drop file</span>
             </p>
-            <p className="mt-1 text-xs text-tertiary">CSV, Excel or JSON (max. 100MB each)</p>
+            <p className="mt-1 text-xs text-tertiary">
+              {limits
+                ? `CSV, Excel or JSON (max. ${maxFileMb} MB per file, ${maxTotalMb} MB total)`
+                : "CSV, Excel or JSON (max. 100MB)"}
+            </p>
           </div>
 
           {/* Floating file badge (top-right inside dropzone) when uploaded */}
@@ -574,7 +727,8 @@ export function UploadModal({
               </p>
               {uploading && (
                 <span className="inline-flex items-center gap-1 text-xs text-tertiary">
-                  <Loading01 className="size-3 animate-spin" /> Uploading…
+                  <Loading01 className="size-3 animate-spin" />{" "}
+                  {uploadPhase === "processing" ? "Processing your data…" : "Uploading…"}
                 </span>
               )}
             </div>
@@ -626,7 +780,8 @@ export function UploadModal({
                           <span className="text-fg-quaternary">|</span>
                           {uploading ? (
                             <span className="inline-flex items-center gap-1 text-tertiary">
-                              <Loading01 className="size-3 animate-spin" /> Uploading…
+                              <Loading01 className="size-3 animate-spin" />{" "}
+                              {uploadPhase === "processing" ? "Processing your data…" : "Uploading…"}
                             </span>
                           ) : ds ? (
                             <span className="inline-flex items-center gap-1 font-medium text-[#067647]">
@@ -717,6 +872,78 @@ export function UploadModal({
           </button>
         </div>
       </DialogContent>
+      {/* Plan limit dialog — its own nested Radix dialog so it stays clickable */}
+      <Dialog
+        open={!!limitExceeded}
+        onOpenChange={(o) => {
+          if (!o) setLimitExceeded(null);
+        }}
+      >
+        {limitExceeded && (
+          <DialogContent
+            className="max-w-[420px] gap-0 rounded-2xl border border-secondary bg-primary p-6 shadow-xl [&>button]:hidden"
+            onPointerDownOutside={(e) => e.stopPropagation()}
+          >
+            <DialogDescription className="sr-only">{limitExceeded.message}</DialogDescription>
+            <button
+              type="button"
+              onClick={() => setLimitExceeded(null)}
+              aria-label="Close"
+              className="absolute right-4 top-4 rounded-md p-1 text-fg-secondary hover:bg-secondary"
+            >
+              <X className="size-4" />
+            </button>
+
+            <div className="grid size-11 place-items-center rounded-full bg-[#eff5ff] text-[#1565ef]">
+              <Diamond01 className="size-5" />
+            </div>
+
+            <DialogTitle className="mt-4 text-lg font-semibold text-primary">{limitExceeded.title}</DialogTitle>
+            <p className="mt-1.5 text-sm text-tertiary">{limitExceeded.message}</p>
+
+            <div className="mt-6 flex justify-end gap-2">
+              {limitExceeded.kind === "cloud" ? (
+                <>
+                  <Button color="secondary" size="md" onClick={() => setLimitExceeded(null)}>
+                    Cancel
+                  </Button>
+                  <Button
+                    color="primary"
+                    size="md"
+                    onClick={() => {
+                      setLimitExceeded(null);
+                      handleClose(false);
+                      setCloudOpen(true);
+                    }}
+                  >
+                    Load from cloud storage
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <Button color="secondary" size="md" onClick={() => setLimitExceeded(null)}>
+                    Reduce file size
+                  </Button>
+                  {limitExceeded.showUpgrade && (
+                    <Button
+                      color="primary"
+                      size="md"
+                      onClick={() => {
+                        setLimitExceeded(null);
+                        handleClose(false);
+                        navigate({ to: "/settings", search: { tab: "billing" } as any });
+                      }}
+                    >
+                      Upgrade to Professional
+                    </Button>
+                  )}
+                </>
+              )}
+            </div>
+          </DialogContent>
+        )}
+      </Dialog>
+      <ConnectCloudModal open={cloudOpen} onOpenChange={setCloudOpen} />
     </Dialog>
   );
 }

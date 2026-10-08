@@ -94,6 +94,40 @@ rather than being swallowed.
 
 ---
 
+## Lineage
+
+Avaloka records which dataset each result was derived from, which columns it
+has, which were flagged as personal data, and which models were trained on it.
+"Where did this come from?" in chat reads that graph.
+
+It is stored in Postgres, in four `lineage_*` tables created on first use.
+
+| Variable | Meaning |
+|---|---|
+| `AVALOKA_LINEAGE_DB_URL` | Where lineage is stored. Optional. |
+| `POSTGRES_URL` | Used when the variable above is unset. |
+| `AVALOKA_LINEAGE` | `off` disables lineage even when a database is configured. |
+
+With neither URL set, lineage is **off**: nothing is recorded, provenance
+questions answer "unavailable", and one warning is logged per process. There is
+no local-file fallback, deliberately. The API and the LangGraph server are
+separate processes that each record lineage, and a file per process means each
+answers only for what it recorded itself. For a single-process install without
+Postgres, say so explicitly: `AVALOKA_LINEAGE_DB_URL=sqlite:////var/lib/avaloka/lineage.db`.
+
+On Helm the default install needs nothing: `postgres.enabled=true` already
+gives every pod `POSTGRES_URL`. `lineage.databaseUrl` points it elsewhere and
+`lineage.enabled=false` switches it off.
+
+Every row belongs to the user who produced it, and no query crosses users, so
+one colleague cannot see another's lineage even within an organisation. File
+names are stored as written. Column names are stored as salted digests with the
+plaintext in `lineage_name_vault`; both live in the same database, so treat
+that database as holding your users' schemas.
+
+If the database is unreachable, analyses are unaffected: lineage is skipped,
+one warning is logged, and the store is retried every 60 seconds.
+
 ## Serving a trained model
 
 MTA v1 trains locally with PyTorch, exports ONNX, and records to MLflow. MTA v2

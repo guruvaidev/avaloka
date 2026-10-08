@@ -126,7 +126,15 @@ def test_count_bar_orders_groups_and_reports_shares_of_the_present_rows():
     points, meta, text = va._ground_categories(_REGION_ROWS, "region", None, "count", 15, False)
 
     assert points == [{"x": "East", "y": 6.0}, {"x": "West", "y": 3.0}]
-    assert meta == {"n_groups": 2, "aggregate": "count", "measure": None}
+    assert meta == {
+        "n_groups": 2,
+        "aggregate": "count",
+        "measure": None,
+        "n_rows": 10,
+        "shares": {"East": 6 / 9, "West": 3 / 9},   # out of the 9 rows with a region
+        "counts": [6.0, 3.0, 1.0],                  # includes the 1 missing row the text cites
+        "total": 9.0,
+    }
     assert "East (6 rows, 66.7%)" in text and "West (3 rows, 33.3%)" in text
     assert "1 rows (10.0%) have no region and are left out of the chart" in text
 
@@ -622,24 +630,102 @@ def test_shares_are_still_reported_when_no_group_is_negative():
     assert [(p["x"], p["y"]) for p in points] == [("East", 60.0), ("West", 40.0), ("Other", 0.0)]
 
 
+# What the UI's reader gets. dynamicChart.tsx reads each point by the keys the
+# backend declares -- category = point[x_key], value = point[y_key] -- and
+# nothing in the tree reads the generic x / y / label / name / value aliases.
+def _as_the_ui_reads_it(chart):
+    derived = chart["derived_data"]
+    return sorted(
+        ((p[derived["x_key"]], p[derived["y_key"]]) for p in derived["points"]),
+        key=lambda pair: str(pair[0]),
+    )
+
+
+_EAST_WEST = [("East", 10)] * 3 + [("West", 40)] * 2
+
+
+@pytest.mark.parametrize("label_column,measure_column", [
+    ("x", "y"),            # named like the generic keys, on their own axes
+    ("y", "x"),            # crossed: the case the old PR420-V3 marker was about
+    ("value", "sales"),    # label column named like the generic value key
+    ("region", "label"),   # measure column named like the generic label key
+    ("name", "value"),
+    ("label", "name"),
+    ("count", "n"),        # label column named like the synthetic count key
+])
+def test_declared_point_keys_address_the_right_values_whatever_the_columns_are_called(
+    label_column, measure_column
+):
+    """Replaces the PR420-V3 strict xfail, whose expectation was wrong.
+
+    _keyed_points writes each point under generic names AND under the chart's
+    own column names, and a column called 'x', 'y', 'value', 'label' or 'name'
+    overwrites the generic entry of that name. V3 asserted the GENERIC entry
+    must survive. But the only reader uses the declared keys, and for it the
+    current behaviour is the correct one: with a label column 'y' and a measure
+    column 'x', the declared keys give ('West', 80.0). Had the generic names
+    won, they would have given (80.0, 'West') -- label and value swapped.
+
+    So this pins the contract that matters: read through x_key / y_key, every
+    point gives its own label and its own value. Every point also carries both
+    declared keys, so a reader never has to fall back to a generic alias --
+    which is what makes the overwritten aliases harmless.
+    """
+    rows = [{label_column: label, measure_column: amount} for label, amount in _EAST_WEST]
+    chart = {
+        "title": "bar", "type": "bar", "config": {},
+        "encodings": {"x": {"field": label_column},
+                      "y": {"field": measure_column, "aggregate": "sum"}},
+    }
+
+    assert va._ground_chart(chart, rows, _profiles(rows)) is True
+
+    derived = chart["derived_data"]
+    assert (derived["x_key"], derived["y_key"]) == (label_column, measure_column)
+    assert all(label_column in p and measure_column in p for p in derived["points"])
+    assert _as_the_ui_reads_it(chart) == [("East", 30.0), ("West", 80.0)]
+
+
+def test_a_generic_alias_can_be_overwritten_by_a_column_of_that_name():
+    """The true half of the old V3 marker, kept as a statement of fact: the
+    generic aliases are best-effort. Anything that starts reading them (a
+    fallback for points missing a declared key, say) inherits this."""
+    points = va._keyed_points([{"x": "West", "y": 80.0}], x_key="y", y_key="x")
+
+    assert (points[0]["y"], points[0]["x"]) == ("West", 80.0)     # declared keys: right
+    assert points[0]["label"] == "West" and points[0]["value"] == 80.0
+
+
 @pytest.mark.defect
 @pytest.mark.xfail(
     strict=True,
     reason=(
-        "DEFECT PR420-V3: _keyed_points writes each point's values under the "
-        "chart's column names INTO the same dict that holds the generic x/y/"
-        "label/name/value keys, so a column whose name is one of those keys can "
-        "overwrite the generic one. It needs the names CROSSED: a column called "
-        "'y' on the x axis (as below), or one called 'value', 'label' or 'name' "
-        "on the opposite axis (x field 'value' leaves point['value'] holding the "
-        "label). Columns 'x' and 'y' on their own axes are harmless. Remove this "
-        "xfail when fixed."
+        "DEFECT PR420-V6 (found while retiring V3; reproduced by running "
+        "_ground_chart on develop-1.6 d7f383bb): the two DECLARED keys can "
+        "collide with each other. WHAT THE USER SEES: a count chart over a text "
+        "column that is literally named 'count' draws bars or slices labelled '3' "
+        "and '2' instead of 'low' and 'high'. WHY: a count chart sets y_key to the "
+        "synthetic name 'count'; with a label column of the same name x_key == "
+        "y_key == 'count' and the count overwrites the label in every point. WHO "
+        "READS IT: the UI (dynamicChart.tsx), the only reader of points, takes "
+        "category = point[x_key] and value = point[y_key], so it gets (3.0, 3.0), "
+        "(2.0, 2.0) instead of ('low', 3), ('high', 2). Affects count bars and "
+        "count pies; a bar that sums another measure over that column is fine. "
+        "Not present before #420 (_ground_chart is new there). Remove this xfail "
+        "when fixed."
     ),
 )
-def test_generic_point_keys_survive_columns_named_like_them():
-    points = va._keyed_points([{"x": 1.0, "y": 2.0}], x_key="y", y_key="x")
+@pytest.mark.parametrize("ctype,encodings", [
+    ("bar", {"x": {"field": "count"}, "y": {"aggregate": "count"}}),
+    ("pie", {"color": {"field": "count"}, "theta": {"field": "count", "aggregate": "count"}}),
+])
+def test_a_count_chart_over_a_column_named_count_keeps_its_labels(ctype, encodings):
+    rows = [{"count": "low"}] * 3 + [{"count": "high"}] * 2
+    chart = {"title": ctype, "type": ctype, "config": {}, "encodings": encodings}
 
-    assert (points[0]["x"], points[0]["y"]) == (1.0, 2.0)
+    assert va._ground_chart(chart, rows, _profiles(rows)) is True
+
+    assert _as_the_ui_reads_it(chart) == [("high", 2.0), ("low", 3.0)]
 
 
 def test_a_single_row_summary_returns_no_config_so_the_api_keeps_the_session_charts():
@@ -703,3 +789,11 @@ def test_a_timeout_or_rate_limit_is_not_repeated_as_a_plain_call(monkeypatch, er
     with pytest.raises(type(error)):
         va.invoke_viz_llm("prompt")
     assert len(llm.calls) == 1
+
+
+
+def test_pie_shares_add_up_to_one_when_groups_fold_into_other():
+    rows = [{"region": f"R{i}"} for i in range(5) for _ in range(5 - i)]  # 5 groups: 5,4,3,2,1
+    _, meta, _ = va._ground_categories(rows, "region", None, "count", 2, True)
+    assert abs(sum(meta["shares"].values()) - 1.0) < 1e-9
+    assert set(meta["shares"]) == {"R0", "R1", "Other"}

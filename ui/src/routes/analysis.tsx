@@ -14,7 +14,6 @@ import remarkGfm from "remark-gfm";
 import { analysesKey, useAnalysisMutations } from "@/lib/analyses";
 import { deriveVizFromResultTable, deriveVizFromRows, type ResultTableForViz } from "@/lib/derive-viz";
 import { buildInsightGroups } from "@/lib/insight-groups";
-import { collectAutoInsightHighlights, collectChartFindings } from "@/lib/auto-insight-highlights";
 
 
 import { useProjects } from "@/lib/projects";
@@ -87,7 +86,15 @@ import { InsightCommentCard } from "@/components/dashboard/AddCommentPopover";
 import { CommentsPanel } from "@/components/dashboard/CommentsPanel";
 import { ProjectNotificationsPopover } from "@/components/dashboard/ProjectNotificationsPopover";
 import { ShareCollaboratorsButton } from "@/components/dashboard/ShareCollaboratorsButton";
-import { BackendApiError, backendApi, isDeferredTurn } from "@/lib/api/backendApi";
+import { backendApi, isDeferredTurn } from "@/lib/api/backendApi";
+import { buildUploadSummaryMessage } from "@/lib/upload-summary";
+
+/** Analyses whose upload summary was already saved this session (prevents duplicates). */
+const summaryPersisted = new Set<string>();
+
+
+const SERVER_NO_RESPONSE_MESSAGE =
+  "The server didn't respond. Your request may still be running — please retry in a moment.";
 import { startTrainingJob, claimTrainingResult, TRAINING_RESULT_EVENT } from "@/lib/training-jobs";
 import { scheduledTaskStore, extractSchedulePhrase, currentUserLabel } from "@/lib/api/scheduled-tasks";
 import { useTypingPresence } from "@/hooks/useTypingPresence";
@@ -836,7 +843,7 @@ function collectSlidesInsights(slides: Slide[]) {
     list.push(t);
   };
   for (const slide of slides) {
-    if (slide.subtitle !== slide.reason) add(summaries, slide.subtitle);
+    add(summaries, slide.subtitle);
     slide.insights.forEach((item) => add(insights, item));
   }
   return { summaries, insights };
@@ -984,7 +991,6 @@ useEffect(() => {
     setTableRuns((prev) => prev.map((r) => (r.id === runId ? { ...r, ...patch } : r)));
   }, []);
   const [analysisVizConfig, setAnalysisVizConfig] = useState<any>(null);
-  const [showAllAutoInsightHighlights, setShowAllAutoInsightHighlights] = useState(false);
   const [persistedDataset, setPersistedDataset] = useState<UploadedDataset | null>(null);
   const [outputFile, setOutputFile] = useState<OutputFile | null>(null);
   const [isSending, setIsSending] = useState(false);
@@ -1531,7 +1537,49 @@ useEffect(() => {
     setMotherAnalysisName("");
     setChildAnalyses([]);
     setActiveAnalysisId(null);
-    setMessages([]);
+    // // Explain the data right away, built only from the upload response.
+    // const summaryText = buildUploadSummaryMessage(up, navState?.filename);
+    // if (summaryText) {
+    //   setMessages([
+    //     {
+    //       id: `upload-summary-${key}`,
+    //       role: "ai",
+    //       content: summaryText,
+    //       time: new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }),
+    //     } as any,
+    //   ]);
+    //   if (freshAid) {
+    //     persistMessage({ analysis_id: freshAid, role: "assistant", content: summaryText }).catch((err) =>
+    //       console.warn("Failed to save upload summary message", err),
+    //     );
+    //   }
+    // } else {
+    //   setMessages([]);
+    // }
+    let summaryText: string | null = null;
+    try {
+      summaryText = buildUploadSummaryMessage(up, navState?.filename);
+    } catch (err) {
+      console.error("[auto-insight-message]", err);
+    }
+    if (summaryText) {
+      setMessages([
+        {
+          id: `upload-summary-${key}`,
+          role: "ai",
+          content: summaryText,
+          time: new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }),
+        } as any,
+      ]);
+      if (freshAid && !summaryPersisted.has(freshAid)) {
+        summaryPersisted.add(freshAid);
+        persistMessage({ analysis_id: freshAid, role: "assistant", content: summaryText }).catch((err) =>
+          console.warn("Failed to save upload summary message", err),
+        );
+      }
+    } else {
+      setMessages([]);
+    }
     setUserInsightsList([]);
     setUserInsightsViz(null);
     setUserInsightsRows(null);
@@ -2317,6 +2365,44 @@ useEffect(() => {
           }),
         );
 
+      }
+      const hasChat = rows.some((r) => {
+        const o = r.output as { pasted_analysis?: unknown; pasted_analyses?: unknown } | null;
+        return !o?.pasted_analysis && !o?.pasted_analyses;
+      });
+      if (!hasChat && row) {
+        let summaryText: string | null = null;
+        try {
+          summaryText = buildUploadSummaryMessage(
+            {
+              dataset_id: row?.dataset_id ?? null,
+              filename: row?.filename ?? null,
+              alias: row?.name ?? null,
+              schema: row?.schema ?? null,
+              samples: row?.samples ?? null,
+              visualization_config: row?.viz_config ?? null,
+            },
+            row?.filename ?? row?.name ?? undefined,
+          );
+        } catch (err) {
+          console.error("[auto-insight-message]", err);
+        }
+        if (summaryText) {
+          setMessages([
+            {
+              id: `upload-summary-${targetAnalysisId}`,
+              role: "ai",
+              content: summaryText,
+              time: new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }),
+            } as any,
+          ]);
+          if (!summaryPersisted.has(targetAnalysisId)) {
+            summaryPersisted.add(targetAnalysisId);
+            persistMessage({ analysis_id: targetAnalysisId, role: "assistant", content: summaryText }).catch((err) =>
+              console.warn("Failed to save upload summary message", err),
+            );
+          }
+        }
       }
 
       const hydratedRuns = extractTableRunsFromMessages(rows, hydrateDefaultSectionId);
@@ -3203,29 +3289,8 @@ useEffect(() => {
   }, [selectedRun, selectedRunIndex]);
 
 
-  const tabVizInsights = useMemo(() => collectChartFindings(autoChartSlides), [autoChartSlides]);
-  const autoInsightHighlights = useMemo(
-    () => collectAutoInsightHighlights(autoInsightGroups),
-    [autoInsightGroups],
-  );
-  const autoInsightEntries = useMemo(() => {
-    const entries = multiDatasetInsights
-      ? autoInsightHighlights.map((item) => ({ id: item.datasetId, label: item.datasetName, text: item.text }))
-      : [
-          ...autoInsightHighlights.slice(0, 1).map((item) => ({ id: item.datasetId, label: "", text: item.text })),
-          ...tabVizInsights.map((text, i) => ({ id: `chart-${i}`, label: "", text })),
-        ];
-    const seen = new Set<string>();
-    return entries.filter(({ text }) => {
-      if (seen.has(text)) return false;
-      seen.add(text);
-      return true;
-    });
-  }, [multiDatasetInsights, autoInsightHighlights, tabVizInsights]);
-
-  useEffect(() => {
-    setShowAllAutoInsightHighlights(false);
-  }, [autoInsightGroups]);
+  const tabVizInsights = useMemo(() => collectSlidesInsights(autoChartSlides), [autoChartSlides]);
+  const hasTabInsights = tabVizInsights.summaries.length > 0 || tabVizInsights.insights.length > 0;
 
   const resolveThreadVizConfig = useCallback(
     (targetAnalysisId: string) => {
@@ -3596,12 +3661,16 @@ useEffect(() => {
       // eslint-disable-next-line no-console
       console.log("[analysis.sendMessage] raw response", res);
 
-      // LONG-RUNNING TURN: the backend either accepted a training job and is
-      // still running it, or the proxy stopped waiting for a slow response.
-      // Keep the user's message, show a progress bubble and poll for the
-      // real result instead of failing or faking a "Done." reply.
-      if (isDeferredTurn(res)) {
+          if (isDeferredTurn(res)) {
         const deferredId = (res as any).analysis_task_id ?? null;
+        // The backend now tells us WHAT deferred. Only a real training turn may
+        // show training UI; a slow analysis shows a neutral "still running".
+        const pendingKind: "training" | "analysis" =
+          (res as any).pending_kind === "training" || (res as any).training_status === "running"
+            ? "training"
+            : "analysis";
+        const isTraining = pendingKind === "training";
+
         setMessages((curr) =>
           curr.map((m) =>
             m.id === placeholderId
@@ -3609,50 +3678,67 @@ useEffect(() => {
                   ...m,
                   thinking: true,
                   error: false,
-                  content:
-                    "Training is running — this can take a few minutes. Results will appear here automatically.",
+                  content: isTraining
+                    ? "Training is running — this can take a few minutes. Results will appear here automatically."
+                    : "This analysis is taking longer than usual — results will appear here automatically when it's done.",
                 }
               : m,
           ),
         );
 
-        // Polling lives in the global training-jobs store so it survives
-        // navigation between threads/views. Exactly one poll per thread.
         const pending = await startTrainingJob({
           threadId,
           deferredId,
           sessionId,
           analysisId: aid ?? resolvedAnalysisId ?? null,
-          label: String(content ?? "").trim().slice(0, 80) || "Training run",
+          kind: pendingKind, // NEW: suppress the "Training model…" toast for analysis
+          label:
+            (isTraining ? "Training run" : "Analysis") +
+            (String(content ?? "").trim() ? `: ${String(content).trim().slice(0, 60)}` : ""),
         });
 
         if (pending.status === "done" && pending.result) {
-          // Claim it so the background listener doesn't render it twice.
           claimTrainingResult(threadId);
           res = pending.result;
           // eslint-disable-next-line no-console
           console.log("[analysis.sendMessage] deferred result", res);
         } else if (pending.status === "error") {
-          const failMsg = pending.message || "Training failed. Please try again.";
+          const failMsg =
+            pending.message ||
+            (isTraining ? "Training failed. Please try again." : "The analysis failed. Please try again.");
           setMessages((curr) =>
             curr.map((m) =>
               m.id === placeholderId
-                ? {
-                    ...m,
-                    thinking: false,
-                    error: true,
-                    content: `⚠️ ${failMsg}`,
-                    time: new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }),
-                  }
+                ? { ...m, thinking: false, error: true, content: `⚠️ ${failMsg}`,
+                    time: new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) }
                 : m,
             ),
           );
           return false;
         } else {
-          // superseded / none — a newer turn took over. Drop the bubble quietly.
           setMessages((curr) => curr.filter((m) => m.id !== placeholderId));
           return true;
         }
+      }
+
+
+      // Failed / unreachable backend (proxy fallback envelope or empty body):
+      // never turn it into a "Done." reply.
+      if (!res || typeof res !== "object" || (res as any).fallback === true || (res as any).error) {
+        setMessages((curr) =>
+          curr.map((m) =>
+            m.id === placeholderId
+              ? {
+                  ...m,
+                  thinking: false,
+                  error: true,
+                  content: `⚠️ ${SERVER_NO_RESPONSE_MESSAGE}`,
+                  time: new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }),
+                }
+              : m,
+          ),
+        );
+        return false;
       }
 
 
@@ -3999,9 +4085,13 @@ useEffect(() => {
       }
       return true;
     } catch (err: any) {
-      const msg = err?.message || "Something went wrong sending your message.";
-      const serviceIsRestarting =
-        err instanceof BackendApiError && err.code === "SERVICE_RESTARTING";
+      const unreachable =
+        err instanceof TypeError ||
+        (typeof err?.status === "number" && err.status >= 500) ||
+        /failed to fetch|network|SERVICE_UNAVAILABLE|UPSTREAM_TIMEOUT/i.test(String(err?.message ?? ""));
+      const msg = unreachable
+        ? SERVER_NO_RESPONSE_MESSAGE
+        : err?.message || "Something went wrong sending your message.";
       setMessages((curr) =>
         curr.map((m) =>
           m.id === placeholderId
@@ -4009,9 +4099,7 @@ useEffect(() => {
                 ...m,
                 thinking: false,
                 error: true,
-                content: serviceIsRestarting
-                  ? `⚠️ **Service temporarily unavailable**\n\n${msg}`
-                  : `⚠️ ${msg}`,
+                content: `⚠️ ${msg}`,
                 time: new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }),
               }
             : m,
@@ -4646,30 +4734,37 @@ useEffect(() => {
                             {/* Same toolbar directly under the charts of this result */}
                             {view === "chart" ? renderResultToolbar() : null}
 
-                            {autoInsightEntries.length > 0 && (
-                              <CollapsibleInsights title="Key Insights">
-                                <ul className="list-disc space-y-1.5 pl-5 text-sm text-secondary">
-                                  {autoInsightEntries
-                                    .slice(0, showAllAutoInsightHighlights ? undefined : 3)
-                                    .map((entry) => (
-                                      <li key={entry.id}>
-                                        {entry.label && <strong>{entry.label}:</strong>} {entry.text}
-                                      </li>
-                                    ))}
-                                </ul>
-                                {autoInsightEntries.length > 3 && (
-                                  <button
-                                    type="button"
-                                    onClick={() => setShowAllAutoInsightHighlights((current) => !current)}
-                                    className="mt-3 text-sm font-semibold text-[#1565ef] hover:underline"
-                                  >
-                                    {showAllAutoInsightHighlights
-                                      ? "Show fewer insights"
-                                      : `Show ${autoInsightEntries.length - 3} more insight${autoInsightEntries.length - 3 === 1 ? "" : "s"}`}
-                                  </button>
+                            {/* Key Insights */}
+                            <CollapsibleInsights>
+                              <ul className="list-disc space-y-1.5 pl-5 text-sm text-secondary">
+                                {resolvedAutoViz ? (
+                                  hasTabInsights ? (
+                                    <>
+                                      {tabVizInsights.summaries.map((summary, i) => (
+                                        <li key={`summary-${i}`}>
+                                          <InlineMarkdown content={summary} />
+                                        </li>
+                                      ))}
+                                      {tabVizInsights.insights.map((insight, i) => (
+                                        <li key={`insight-${i}`}>
+                                          <InlineMarkdown content={insight} />
+                                        </li>
+                                      ))}
+                                    </>
+                                  ) : (
+                                    <li className="text-tertiary">
+                                      Chart insights will appear here once analysis completes.
+                                    </li>
+                                  )
+                                ) : insightsGenerating ? (
+                                  <li className="text-tertiary">Generating key insights…</li>
+                                ) : isPersistedAnalysis ? (
+                                  <li className="text-tertiary">No insights saved for this analysis yet.</li>
+                                ) : (
+                                  <li className="text-tertiary">Insights will appear here once analysis completes.</li>
                                 )}
-                              </CollapsibleInsights>
-                            )}
+                              </ul>
+                            </CollapsibleInsights>
 
                             {pastedPreviews.map(({ groupId, runs, slides, insights }, pastedIndex) => (
                               <PastedAnalysisSection
@@ -4766,7 +4861,7 @@ useEffect(() => {
           </main>
 
           {/* Chat panel */}
-          {chatOpen && pane === "workspace" && (() => {
+          {pane === "workspace" && (() => {
             const isFloat = chatDock === "float";
             const isLeft = chatDock === "left";
 

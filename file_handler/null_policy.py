@@ -44,31 +44,50 @@ ONE DECISION, TWO MECHANISMS
       reads without coercion, lets table detection see the cells blanked as it
       always has, types each finished column, and puts the words back where the
       decision says so. It decides AFTER reading, from the whole column.
-    * CSV must tell pandas which strings are missing BEFORE the read, so it
-      cannot try-and-see without reading the file twice (measured: +2 to +6 s on
-      a 170 MB file). It decides from the first rows instead. NOT YET ADOPTED --
-      see KNOWN LIMITS.
+    * CSV (read_csv_keeping_labels below) must tell pandas which strings are
+      missing BEFORE the read, so it cannot try-and-see without reading the file
+      twice (measured: +2 to +6 s on a 170 MB file, against no extra cost for
+      this way). It reads the first CSV_SNIFF_ROWS rows with pandas' defaults,
+      asks the decision about each column, and then does ONE full read with a
+      per-column list of missing strings: only "" for a text column, the whole
+      default list for every other column. A column is only called text when
+      the sniff found a real string in it, and any column holding a real string
+      is already text to pandas -- so a column pandas would type numerically can
+      never be given the short list.
 
     Same word list, same decision, same table. Do not merge the mechanisms, and
     do not give either reader its own copy of the rule.
+
+THIS FILE IS ALSO SHIPPED AS TEXT
+    app/agents/execution_agent.py splices this module's source, verbatim, into
+    the scripts it runs in the execution environment, where the repository may
+    not exist. So this file must stay self-contained: standard library and
+    pandas only, no relative imports, and no ``from __future__`` line (it would
+    land in the middle of a script). tests/test_null_policy.py enforces all of
+    that. There is deliberately no second copy of anything here to keep in step.
 
 KNOWN LIMITS
     * Excel: a ROW holding nothing but null-like words and empty cells is still
       dropped. Table detection has to keep seeing those cells as blank, and to
       it that is a blank row. One real value anywhere in the row keeps it.
-    * The CSV readers do not use this yet. An Excel sheet converted to CSV now
-      keeps ``None`` in the file, but ``pd.read_csv`` still drops it when that
-      CSV is read back. Until the CSV readers adopt the policy the label
-      survives in the converted file and not in the analysis.
-    * Generated analysis code may call ``pd.read_csv(path)`` with a variable
-      path. No helper reaches that call; it keeps pandas' defaults whatever is
-      done here.
+    * Only reads that go through read_csv_best_effort get the CSV policy: the
+      analysis input, and ``pd.read_csv("literal.csv")`` in generated code, which
+      is rewritten to it. Generated code may also call ``pd.read_csv(path)``
+      with a VARIABLE path -- the coder prompt allows that for extra datasets --
+      and no helper reaches that call. It keeps pandas' defaults whatever is
+      done here. The other pandas CSV sites (upload sampler, sandbox service,
+      multi-action, training loaders) have not adopted it either.
+    * CSV: the sniff sees CSV_SNIFF_ROWS rows. A column that looks typed in
+      those rows and holds real text further down is treated as typed, so its
+      null-like words are lost exactly as they were before. No worse than
+      before; not fixed.
+    * CSV: a caller that passes its own ``dtype``, NA options, ``index_col``,
+      ``converters`` or asks for chunks is controlling the read itself and gets
+      pandas' plain behaviour, unchanged.
     * Daft and the stdlib ``csv`` reader already keep these words as text, but
       they also keep an EMPTY cell as an empty-string label where pandas makes
       it missing. That difference is not addressed here.
 """
-from __future__ import annotations
-
 from typing import Any, Iterable
 
 import pandas as pd
@@ -119,3 +138,79 @@ def null_word_cells(frame: pd.DataFrame) -> pd.DataFrame:
     # and requirements.txt allows 2.0.
     holds_word = frame.apply(lambda column: column.map(is_null_word)).astype(bool)
     return frame.where(holds_word)
+
+
+# ---------------------------------------------------------------------------
+# CSV: decide before the read
+# ---------------------------------------------------------------------------
+
+#: How many rows the CSV reader looks at to tell text columns from typed ones.
+CSV_SNIFF_ROWS = 20000
+
+#: A caller passing any of these is deciding types or missing values itself.
+_CALLER_CONTROLS_THE_READ = (
+    "dtype", "keep_default_na", "na_values", "na_filter", "index_col",
+    "converters", "chunksize", "iterator",
+)
+
+
+def csv_text_columns(head: pd.DataFrame) -> list:
+    """The columns of a default-read sample whose null-like words are labels."""
+    text = []
+    for position in range(len(head.columns)):
+        series = head.iloc[:, position]
+        reader_typed = series.dtype != object
+        if keeps_null_words(series.dropna().tolist(), reader_typed):
+            text.append(head.columns[position])
+    return text
+
+
+def read_csv_keeping_labels(path: Any, **kwargs: Any) -> pd.DataFrame:
+    """``pd.read_csv`` under the policy above. One full read; see the module
+    docstring for why this is not a read followed by a repair."""
+    if any(name in kwargs for name in _CALLER_CONTROLS_THE_READ):
+        return pd.read_csv(path, **kwargs)
+    sniff = dict(kwargs)
+    asked = sniff.get("nrows")
+    sniff["nrows"] = CSV_SNIFF_ROWS if asked is None else min(int(asked), CSV_SNIFF_ROWS)
+    head = pd.read_csv(path, **sniff)
+    text = csv_text_columns(head)
+    if not text:
+        # Nothing to keep: exactly the read pandas always did.
+        return pd.read_csv(path, **kwargs)
+    every_word = sorted(NULL_WORDS | {""})
+    missing = {column: ([""] if column in text else every_word) for column in head.columns}
+    return pd.read_csv(path, keep_default_na=False, na_values=missing, **kwargs)
+
+
+def read_csv_best_effort(path: str, **kwargs: Any) -> pd.DataFrame:
+    """Robust CSV reader for analysis code.
+
+    - tries utf-16 if a BOM is detected, then utf-8-sig, utf-8, cp1252, latin-1
+    - keeps null-like words as labels in text columns (read_csv_keeping_labels)
+    - passes extra read_csv kwargs through (sep, delimiter, low_memory, ...)
+    """
+    try:
+        with open(path, "rb") as handle:
+            head = handle.read(4)
+    except Exception:
+        head = b""
+
+    encodings = []
+    if head.startswith(b"\xff\xfe") or head.startswith(b"\xfe\xff"):
+        encodings.append("utf-16")
+    encodings += ["utf-8-sig", "utf-8", "cp1252", "latin-1"]
+
+    last_err = None
+    for enc in encodings:
+        try:
+            return read_csv_keeping_labels(path, encoding=enc, encoding_errors="replace", **kwargs)
+        except TypeError:
+            try:
+                return read_csv_keeping_labels(path, encoding=enc, **kwargs)
+            except Exception as exc:
+                last_err = exc
+        except Exception as exc:
+            last_err = exc
+
+    raise last_err

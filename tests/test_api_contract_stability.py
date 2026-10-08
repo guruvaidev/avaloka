@@ -50,6 +50,8 @@ NEW_FIELDS = {
     "multi_action_actions", "multi_action_missing",
     "multi_action_notes", "multi_action_status",
     "output_tables",
+    "pending_kind",
+    "pending_status",
 }
 
 

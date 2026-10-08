@@ -1,6 +1,7 @@
 """Execute python code from the coding agent via the infra agent."""
 
 import ast
+import inspect
 import base64
 import logging
 import os
@@ -283,36 +284,25 @@ def render_rayjob_yaml(
 # Shared helpers
 # ---------------------------------------------------------------------------
 
-def read_csv_best_effort(path: str):
-    """
-    Robust CSV reader: tries utf-16 if BOM detected,
-    then utf-8-sig, utf-8, cp1252, latin-1.
-    """
-    try:
-        with open(path, "rb") as f:
-            head = f.read(4)
-    except Exception:
-        head = b""
+# The ONE CSV reader. It lives in file_handler/null_policy.py and is imported
+# here for in-process callers. The scripts built below run where this
+# repository may not exist, so they cannot import it: they get that module's
+# source spliced in verbatim (_with_csv_reader). There used to be three
+# hand-kept copies of this function -- this one and two inside script
+# templates -- and a fix to one left the two that actually run the user's
+# analysis untouched. Do not paste the function back into a template.
+from file_handler import null_policy as _null_policy
+from file_handler.null_policy import read_csv_best_effort  # noqa: E402,F401
 
-    encodings = []
-    if head.startswith(b"\xff\xfe") or head.startswith(b"\xfe\xff"):
-        encodings.append("utf-16")
+_CSV_READER_SOURCE = inspect.getsource(_null_policy)
+_CSV_READER_MARKER = "# <<AVALOKA_CSV_READER>>"
 
-    encodings += ["utf-8-sig", "utf-8", "cp1252", "latin-1"]
 
-    last_err = None
-    for enc in encodings:
-        try:
-            return pd.read_csv(path, encoding=enc, encoding_errors="replace")
-        except TypeError:
-            try:
-                return pd.read_csv(path, encoding=enc)
-            except Exception as e:
-                last_err = e
-        except Exception as e:
-            last_err = e
-
-    raise last_err
+def _with_csv_reader(script_template: str) -> str:
+    """``script_template`` with the reader module's source in place of its marker."""
+    if script_template.count(_CSV_READER_MARKER) != 1:
+        raise ValueError("script template must contain the CSV reader marker exactly once")
+    return script_template.replace(_CSV_READER_MARKER, _CSV_READER_SOURCE)
 
 
 def _csv_has_data_rows(path: Optional[str]) -> bool:
@@ -2369,38 +2359,7 @@ def avaloka_result(value, kind=None, columns=None, **kw):
            "columns": list(columns or []), **kw}
     print(f"<<<AVALOKA_RESULT>>>{_avaloka_json.dumps(obj)}<<<END_AVALOKA_RESULT>>>", flush=True)
 
-def read_csv_best_effort(path: str, **kwargs):
-    """
-    Robust CSV reader:
-    - tries utf-16 if BOM detected
-    - then utf-8-sig, utf-8, cp1252, latin-1
-    - preserves extra read_csv kwargs (sep, delimiter, low_memory, etc.)
-    """
-    try:
-        with open(path, "rb") as f:
-            head = f.read(4)
-    except Exception:
-        head = b""
-
-    encodings = []
-    if head.startswith(b"\xff\xfe") or head.startswith(b"\xfe\xff"):
-        encodings.append("utf-16")
-
-    encodings += ["utf-8-sig", "utf-8", "cp1252", "latin-1"]
-
-    last_err = None
-    for enc in encodings:
-        try:
-            return pd.read_csv(path, encoding=enc, encoding_errors="replace", **kwargs)
-        except TypeError:
-            try:
-                return pd.read_csv(path, encoding=enc, **kwargs)
-            except Exception as e:
-                last_err = e
-        except Exception as e:
-            last_err = e
-
-    raise last_err
+# <<AVALOKA_CSV_READER>>
 
 
 def safe_groupby_agg(df, group_cols, agg_col, agg_func='sum'):
@@ -2449,7 +2408,7 @@ def safe_groupby_multiple_agg(df, group_cols, agg_cols, agg_funcs=['sum']):
     # 4) Build final script, ensuring both parts are left-aligned
     #script_to_run = textwrap.dedent(helper_functions).lstrip() + "\n\n" + textwrap.dedent(extracted_code).lstrip()
     script_parts = [
-        textwrap.dedent(helper_functions).lstrip(),
+        _with_csv_reader(textwrap.dedent(helper_functions).lstrip()),
         textwrap.dedent(extracted_code).lstrip(),
     ]
 
@@ -2617,38 +2576,7 @@ def avaloka_result(value, kind=None, columns=None, **kw):
            "columns": list(columns or []), **kw}
     print(f"<<<AVALOKA_RESULT>>>{_avaloka_json.dumps(obj)}<<<END_AVALOKA_RESULT>>>", flush=True)
 
-def read_csv_best_effort(path: str, **kwargs):
-    """
-    Robust CSV reader:
-    - tries utf-16 if BOM detected
-    - then utf-8-sig, utf-8, cp1252, latin-1
-    - preserves extra read_csv kwargs (sep, delimiter, low_memory, etc.)
-    """
-    try:
-        with open(path, "rb") as f:
-            head = f.read(4)
-    except Exception:
-        head = b""
-
-    encodings = []
-    if head.startswith(b"\xff\xfe") or head.startswith(b"\xfe\xff"):
-        encodings.append("utf-16")
-
-    encodings += ["utf-8-sig", "utf-8", "cp1252", "latin-1"]
-
-    last_err = None
-    for enc in encodings:
-        try:
-            return pd.read_csv(path, encoding=enc, encoding_errors="replace", **kwargs)
-        except TypeError:
-            try:
-                return pd.read_csv(path, encoding=enc, **kwargs)
-            except Exception as e:
-                last_err = e
-        except Exception as e:
-            last_err = e
-
-    raise last_err
+# <<AVALOKA_CSV_READER>>
 
 
 def safe_groupby_agg(df, group_cols, agg_col, agg_func='sum'):
@@ -2695,7 +2623,10 @@ def safe_groupby_multiple_agg(df, group_cols, agg_cols, agg_funcs=['sum']):
 '''
 
     # 4) Build final script
-    script_to_run = textwrap.dedent(helper_functions).lstrip() + "\n\n" + textwrap.dedent(extracted_code).lstrip()
+    script_to_run = (
+        _with_csv_reader(textwrap.dedent(helper_functions).lstrip())
+        + "\n\n" + textwrap.dedent(extracted_code).lstrip()
+    )
 
     logger.info("\n\nscript to run is : \n\n%s\n\n", script_to_run)
 

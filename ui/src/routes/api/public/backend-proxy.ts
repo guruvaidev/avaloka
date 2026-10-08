@@ -24,12 +24,19 @@ function jsonError(message: string, status: number) {
 }
 
 async function forward(request: Request, method: string) {
+  let targetUrl = "";
   try {
     const path = request.headers.get("x-backend-path");
     if (!path || !path.startsWith("/")) {
+      console.error({
+        proxyStage: "early-return",
+        method,
+        requestedPath: path,
+        error: "Missing or invalid X-Backend-Path header",
+      });
       return jsonError("Missing or invalid X-Backend-Path header", 400);
     }
-    const base = request.headers.get("x-backend-base") || DEFAULT_API_BASE;
+    const base = DEFAULT_API_BASE;
 
     const headers: Record<string, string> = {};
     const auth = request.headers.get("authorization");
@@ -45,15 +52,25 @@ async function forward(request: Request, method: string) {
         ? undefined
         : await request.arrayBuffer();
 
-    // Wait as long as the platform allows before giving up. Slow turns now
-    // resolve asynchronously via /threads/{id}/pending-turn, so this timeout
-    // is only a last-resort guard that yields a readable JSON error.
-    const upstream = await fetch(`${base}${path}`, {
+    targetUrl = `${base}${path}`;
+    // Log request metadata only. Never log the body: it can carry user
+    // prompts, pasted data and connection credentials.
+    console.log({
+      proxyStage: "incoming",
+      method,
+      requestedPath: path,
+      upstreamBaseUrl: base,
+      contentType: ct ?? null,
+      bodyBytes: body?.byteLength ?? 0,
+    });
+
+    const upstream = await fetch(targetUrl, {
       method,
       headers,
       body,
       signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
     });
+    console.log({ proxyStage: "upstream-response", targetUrl, status: upstream.status });
     const buf = await upstream.arrayBuffer();
 
     const respHeaders = new Headers(CORS);
@@ -62,8 +79,10 @@ async function forward(request: Request, method: string) {
 
     return new Response(buf, { status: upstream.status, headers: respHeaders });
   } catch (err: any) {
+    // Covers both an upstream timeout and an unreachable backend
+    // (the case the removed /health pre-check used to handle).
     const timedOut = err?.name === "TimeoutError" || err?.name === "AbortError";
-    console.error("[backend-proxy] upstream fetch failed", err);
+    console.error({ proxyStage: "forwarding-error", targetUrl, error: String(err) });
     return new Response(
       JSON.stringify({
         error: timedOut ? "UPSTREAM_TIMEOUT" : "SERVICE_UNAVAILABLE",

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Button } from "@/components/base/buttons/button";
+
 const mysql = { url: "/assets/logos/Logo_Type_MySQL.png" };
 const postgres = { url: "/assets/logos/Logo_Type_PostgreSQL.png" };
 const sqlserver = { url: "/assets/logos/Logo_Type_Microsoft_SQL.png" };
@@ -8,6 +9,7 @@ const mongodb = { url: "/assets/logos/Logo_Type_Mongodb.png" };
 const gcs = { url: "/assets/logos/Logo_Type_GCS.png" };
 const s3 = { url: "/assets/logos/Logo_Type_S3.png" };
 const azure = { url: "/assets/logos/Logo_Type_Azure.png" };
+
 import type {
   StorageConnection,
   StorageProvider,
@@ -17,7 +19,6 @@ import { CloudStorageConnectionsListModal } from "@/components/database/CloudSto
 import { DatabaseConnectionsListModal } from "@/components/database/DatabaseConnectionsListModal";
 import type { DbType } from "@/components/database/DatabaseConnectModal";
 import { cn } from "@/lib/utils";
-import { useUpgradeGate } from "@/components/dashboard/UpgradeGate";
 
 export type DataSource = {
   id: string;
@@ -35,7 +36,13 @@ const initialSources: DataSource[] = [
   { id: "postgres", name: "PostgreSQL", logoUrl: postgres.url, dbType: "postgresql" },
   { id: "sqlserver", name: "SQL Server", logoUrl: sqlserver.url, dbType: "mssql" },
   { id: "mariadb", name: "MariaDB", logoUrl: mariadb.url, dbType: "mariadb" },
-  { id: "mongodb", name: "MongoDB", logoUrl: mongodb.url,darkLogoUrl: "/assets/logos/Logo_Type_Mongo.png", dbType: "mongodb" },
+  {
+    id: "mongodb",
+    name: "MongoDB",
+    logoUrl: mongodb.url,
+    darkLogoUrl: "/assets/logos/Logo_Type_Mongo.png",
+    dbType: "mongodb",
+  },
 ];
 
 const moreSources: DataSource[] = [
@@ -44,8 +51,13 @@ const moreSources: DataSource[] = [
   { id: "azure", name: "Azure Blob Storage", logoUrl: azure.url, storageProvider: "azure" },
 ];
 
-export function DataSourceGrid({ onSelect, disabled = false }: { onSelect?: (id: string) => void; disabled?: boolean }) {
-  const { blocked, dialog: upgradeDialog } = useUpgradeGate();
+export function DataSourceGrid({
+  onSelect,
+  disabled = false,
+}: {
+  onSelect?: (id: string) => void;
+  disabled?: boolean;
+}) {
   const [expanded, setExpanded] = useState(false);
   const [connectProvider, setConnectProvider] = useState<StorageProvider | null>(null);
   const [browseConnection, setBrowseConnection] = useState<StorageConnection | null>(null);
@@ -55,7 +67,6 @@ export function DataSourceGrid({ onSelect, disabled = false }: { onSelect?: (id:
   const handleTileClick = (s: DataSource) => {
     if (disabled) return;
     if (s.comingSoon) return;
-    if (blocked(`Connecting ${s.name}`)) return;
     if (s.storageProvider) {
       setConnectProvider(s.storageProvider);
       return;
@@ -91,26 +102,18 @@ export function DataSourceGrid({ onSelect, disabled = false }: { onSelect?: (id:
               (s.comingSoon || disabled) && "cursor-not-allowed opacity-60",
             )}
           >
-          { s.darkLogoUrl ? (
-            <>
-              <img
-                src={s.logoUrl}
-                alt={s.name}
-                className="max-w-[100%] object-contain dark:hidden "
-              />
-              <img
-                src={s.darkLogoUrl}
-                alt={s.name}
-                className="hidden ml-4 max-w-[80%] object-contain dark:block"
-              />
-            </>
-          ) : (
-            <img
-              src={s.logoUrl}
-              alt={s.name}
-              className="max-w-[100%] object-contain dark:invert"
-            />
-          )}
+            {s.darkLogoUrl ? (
+              <>
+                <img src={s.logoUrl} alt={s.name} className="max-w-[100%] object-contain dark:hidden" />
+                <img
+                  src={s.darkLogoUrl}
+                  alt={s.name}
+                  className="ml-4 hidden max-w-[80%] object-contain dark:block"
+                />
+              </>
+            ) : (
+              <img src={s.logoUrl} alt={s.name} className="max-w-[100%] object-contain dark:invert" />
+            )}
           </Button>
           {s.comingSoon && (
             <span className="pointer-events-none absolute -right-1 -top-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-medium text-amber-700 shadow">
@@ -125,12 +128,14 @@ export function DataSourceGrid({ onSelect, disabled = false }: { onSelect?: (id:
           size="lg"
           isDisabled={disabled}
           onPress={() => setExpanded(true)}
-          className={cn("h-[72px] w-full justify-center rounded-xl", disabled && "cursor-not-allowed opacity-60")}
+          className={cn(
+            "h-[72px] w-full justify-center rounded-xl",
+            disabled && "cursor-not-allowed opacity-60",
+          )}
         >
           View More
         </Button>
       )}
-
 
       {connectProvider && (
         <CloudStorageConnectionsListModal
@@ -161,7 +166,6 @@ export function DataSourceGrid({ onSelect, disabled = false }: { onSelect?: (id:
           }}
         />
       )}
-      {upgradeDialog}
     </div>
   );
 }

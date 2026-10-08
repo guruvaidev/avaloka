@@ -13,6 +13,7 @@ branch ``ui-k8s-deploy-1.5.2`` and skips when those templates are absent.
 """
 from __future__ import annotations
 
+import os
 import pathlib
 import re
 from typing import Iterator, Optional
@@ -635,3 +636,135 @@ def test_avaloka_images_are_registry_qualified():
         "fail with ImagePullBackOff on any cluster that cannot side-load: "
         + "; ".join(unqualified)
     )
+
+
+# --------------------------------------------------------------------------- lineage store
+# These render the chart. A scan of template text passes when the key sits
+# inside a conditional that never fires; what matters is what a pod is handed.
+_LINEAGE_URL = "postgresql://lineage@lineage-db:5432/lineage"
+
+
+def _render(*args: str):
+    """`helm template` -> (returncode, parsed documents, stderr)."""
+    import shutil
+    import subprocess
+
+    import yaml
+
+    helm = shutil.which("helm")
+    if helm is None:
+        # A skip reads as a pass in a summary line. That is tolerable on a
+        # laptop and not on the run that gates a merge: the secret-material
+        # checks in test_c1 went unexercised for weeks exactly this way, when a
+        # missing `git` became a skip.
+        message = "helm is not installed; the rendered-chart lineage checks did not run"
+        if os.environ.get("CI", "").strip().lower() not in ("", "0", "false"):
+            pytest.fail(message + ". CI is set, so this is a failure rather than a skip.")
+        pytest.skip(message)
+    run = subprocess.run([helm, "template", "avaloka", str(CHART_ROOT), *args],
+                         capture_output=True, text=True)
+    docs = [d for d in yaml.safe_load_all(run.stdout) if d] if run.returncode == 0 else []
+    return run.returncode, docs, run.stderr
+
+
+def _one(docs, kind: str, suffix: str) -> dict:
+    """The object named <release><suffix>; the release here is `avaloka`."""
+    found = [d for d in docs if d.get("kind") == kind and d["metadata"]["name"] == "avaloka" + suffix]
+    assert len(found) == 1, f"expected one {kind} avaloka{suffix}, got {len(found)}"
+    return found[0]
+
+
+def _env_sources(docs) -> dict:
+    """workload name -> the ConfigMap and Secret names its containers load whole."""
+    out = {}
+    for doc in docs:
+        if doc.get("kind") not in ("Deployment", "StatefulSet"):
+            continue
+        names = set()
+        for container in doc["spec"]["template"]["spec"]["containers"]:
+            for source in container.get("envFrom") or []:
+                names.add((source.get("configMapRef") or source.get("secretRef") or {}).get("name"))
+        out[doc["metadata"]["name"]] = names
+    return out
+
+
+def test_lineage_default_install_gives_every_graph_compiling_pod_the_same_database() -> None:
+    """Lineage is recorded by the API pod and read by the LangGraph pod, or the reverse.
+
+    The store was a file under $HOME, so each pod kept its own and neither could
+    answer for the other. It is now wherever AVALOKA_LINEAGE_DB_URL or
+    POSTGRES_URL points (app/core/lineage.py), which only helps if every pod
+    that compiles the graph is handed the same value.
+    """
+    code, docs, err = _render()
+    assert code == 0, err
+    config = _one(docs, "ConfigMap", "-config")
+    secret = _one(docs, "Secret", "-secrets")
+    assert config["data"]["POSTGRES_URL"].startswith("postgresql://")
+    assert "AVALOKA_LINEAGE" not in config["data"], "on by default: no off switch rendered"
+    assert "AVALOKA_LINEAGE_DB_URL" not in secret["stringData"]
+
+    sources = _env_sources(docs)
+    wanted = {config["metadata"]["name"], secret["metadata"]["name"]}
+    graph_pods = {name for name in sources
+                  if name == "avaloka" or name.endswith(("-langgraph", "-celery", "-celery-redbeat"))}
+    assert {n.removeprefix("avaloka") for n in graph_pods} == {
+        "", "-langgraph", "-celery", "-celery-redbeat"}, sorted(sources)
+    for name in graph_pods:
+        assert wanted <= sources[name], f"{name} is not handed the lineage database: {sources[name]}"
+
+
+def test_lineage_switch_and_dedicated_url_reach_the_rendered_objects() -> None:
+    code, docs, err = _render("--set", "lineage.enabled=false")
+    assert code == 0, err
+    assert _one(docs, "ConfigMap", "-config")["data"]["AVALOKA_LINEAGE"] == "off"
+
+    code, docs, err = _render("--set-string", f"lineage.databaseUrl={_LINEAGE_URL}")
+    assert code == 0, err
+    assert _one(docs, "Secret", "-secrets")["stringData"]["AVALOKA_LINEAGE_DB_URL"] == _LINEAGE_URL
+    config = _one(docs, "ConfigMap", "-config")["data"]
+    assert "AVALOKA_LINEAGE_DB_URL" not in config, "a database URL belongs in the Secret"
+    assert _LINEAGE_URL not in str(config)
+
+
+def test_lineage_url_with_an_existing_secret_is_a_render_error_not_a_silent_drop() -> None:
+    """existingSecret means the chart renders no Secret, so the URL would reach no pod."""
+    code, docs, err = _render("--set", "existingSecret=ops-managed")
+    assert code == 0, err
+    assert not [d for d in docs if d.get("kind") == "Secret" and d["metadata"]["name"] == "avaloka-secrets"]
+
+    code, _, err = _render("--set", "existingSecret=ops-managed",
+                           "--set-string", f"lineage.databaseUrl={_LINEAGE_URL}")
+    assert code != 0, "the URL was dropped without a word"
+    assert "lineage.databaseUrl" in err and "AVALOKA_LINEAGE_DB_URL" in err
+
+
+def _outcome(call) -> str:
+    """'failed' or 'skipped'. pytest.raises cannot be used for this: a Skipped
+    raised inside it escapes and marks the calling test skipped, which is the
+    very outcome under test."""
+    try:
+        call()
+    except pytest.fail.Exception:
+        return "failed"
+    except pytest.skip.Exception:
+        return "skipped"
+    return "ran"
+
+
+def test_rendered_chart_checks_fail_rather_than_skip_on_ci_without_helm(monkeypatch) -> None:
+    import shutil
+
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    monkeypatch.setenv("CI", "true")
+    assert _outcome(_render) == "failed"
+    monkeypatch.delenv("CI")
+    assert _outcome(_render) == "skipped"
+
+
+def test_lineage_chart_defaults() -> None:
+    """Runs without helm. The floor under the rendered checks above, not a substitute."""
+    values = _load_values(CHART_ROOT / "values.yaml")
+    assert values["lineage"] == {"enabled": True, "databaseUrl": ""}
+    assert values["postgres"]["enabled"] is True, (
+        "the default install must give lineage a database, or it ships switched off")

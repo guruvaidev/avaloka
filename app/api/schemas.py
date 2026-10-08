@@ -46,6 +46,13 @@ class ChatResponse(BaseModel):
     training_completed: Optional[bool] = False
     ready_to_train: Optional[bool] = False
     training_status: Optional[str] = None
+    # Deferred-turn signalling (slow turn returned before the proxy aborts).
+    # pending_status="running" means "keep polling" for ANY kind of work;
+    # pending_kind says whether it's training or a normal analysis, so the UI
+    # only shows training messaging for real training. training_status above
+    # is now a training-only field.
+    pending_status: Optional[str] = None   # "running" when a turn deferred (any kind)
+    pending_kind: Optional[str] = None      # "training" | "analysis"
     dataset_size_bytes: Optional[int] = None
 
     # NEW: dropdown + multi-dataset support

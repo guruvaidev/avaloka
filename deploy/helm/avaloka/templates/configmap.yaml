@@ -1,4 +1,5 @@
 {{- include "avaloka.checkSupabaseCredentials" . -}}
+{{- include "avaloka.checkLineageDatabaseUrl" . -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -51,6 +52,11 @@ data:
   {{- end }}
   {{- if or .Values.postgres.enabled .Values.postgres.externalUrl }}
   POSTGRES_URL: {{ include "avaloka.postgresUrl" . | quote }}
+  {{- end }}
+  {{- if not .Values.lineage.enabled }}
+  # Lineage otherwise follows POSTGRES_URL above (or AVALOKA_LINEAGE_DB_URL in
+  # the Secret). Stated explicitly so "off" is a decision, not a missing URL.
+  AVALOKA_LINEAGE: "off"
   {{- end }}
   {{- if .Values.milvus.enabled }}
   # Point at the in-chart Milvus when one is deployed, unless an external host

@@ -105,9 +105,14 @@ def test_the_prompt_carries_the_question_the_true_row_count_and_the_columns(narr
 
 
 def test_empty_cells_are_left_out_of_the_prompt():
-    rows = [{"col": "fare", "mean": 12.5, "top": None, "mode": "nan", "n": 0, "flag": False},
+    """Changed on purpose: this used to pin the TEXT "nan" as empty, which was
+    the accepted loss of the N2 fix. It stopped being accepted once every load
+    path was measured -- see _is_empty_cell. A real missing value (None, a
+    float NaN, an empty or blank string) is still left out; the text is kept."""
+    rows = [{"col": "fare", "mean": 12.5, "top": None, "gap": float("nan"), "blank": " ",
+             "mode": "nan", "n": 0, "flag": False},
             "not a row"]
-    assert rn._compact_rows(rows) == [{"col": "fare", "mean": 12.5, "n": 0, "flag": False}]
+    assert rn._compact_rows(rows) == [{"col": "fare", "mean": 12.5, "mode": "nan", "n": 0, "flag": False}]
 
 
 # ---------------------------------------------------------------------------
@@ -276,48 +281,76 @@ def test_the_node_falls_back_when_the_model_raises_on_both_calls(narrator):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.defect
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEFECT PR420-N1: the optional 'rewrite as a summary' call is not "
-        "guarded. If it raises (timeout, 429, 500) the exception leaves "
-        "_narrate, result_narrator_node catches it, and the user gets the generic "
-        "fallback text -- although a complete, accurate first answer was already "
-        "in hand. An optional polish step must not cost the answer. Remove this "
-        "xfail when fixed."
-    ),
-)
-def test_a_failed_rewrite_keeps_the_answer_already_in_hand(narrator):
-    narrator(_Reply(RECITAL), TimeoutError("read timed out"), TimeoutError("read timed out"))
+def test_a_failed_rewrite_keeps_the_answer_already_in_hand(narrator, caplog):
+    """Was DEFECT PR420-N1: the optional 'rewrite as a summary' call was not
+    guarded, so when it raised the user got the generic fallback text although
+    a complete, accurate first answer was already in hand. Two errors are
+    scripted because _invoke retries once without tuning kwargs."""
+    llm = narrator(_Reply(RECITAL), TimeoutError("read timed out"), TimeoutError("read timed out"))
+
+    with caplog.at_level("WARNING", logger=rn.logger.name):
+        out = rn.result_narrator_node(_state(_CSV))
+
+    assert out["messages"][-1].content == RECITAL
+    assert len(llm.calls) == 3
+    assert "summary rewrite failed" in caplog.text
+
+
+def test_a_rewrite_that_comes_back_empty_keeps_the_first_answer(narrator):
+    narrator(_Reply(RECITAL), _Reply(""))
+
+    assert rn._narrate("total sales by region", ROWS) == RECITAL
+
+
+def test_a_failed_first_answer_is_still_an_error_for_the_node_to_handle(narrator):
+    """Only the optional step is guarded. With no answer in hand there is
+    nothing to keep, and the node's own fallback text is the right outcome."""
+    narrator(TimeoutError("read timed out"), TimeoutError("read timed out"))
 
     out = rn.result_narrator_node(_state(_CSV))
 
-    assert out["messages"][-1].content == RECITAL
+    assert out["messages"][-1].content == rn._fallback(ROWS)
 
 
-@pytest.mark.parametrize("label", ["None", "none", "null", "NULL"])
+@pytest.mark.parametrize("label", [
+    "None", "none", "null", "NULL", "nan", "NaN", "NaT", "<NA>", "NA", "N/A",
+])
 def test_a_category_literally_named_none_keeps_its_label(label):
-    """Was DEFECT PR420-N2. _compact_rows dropped any cell whose text was
-    'none' or 'null', and the prompt tells the model 'a cell left out of a row
-    was empty'. A group whose LABEL is one of those words -- payment_method =
+    """Was DEFECT PR420-N2. _compact_rows dropped any cell whose text looked
+    like a null, and the prompt tells the model 'a cell left out of a row was
+    empty'. A group whose LABEL is one of those words -- payment_method =
     'None' is a real category -- lost its label, so the model saw {'n': 5} and
-    could not name the group. Those two words are now kept.
+    could not name the group.
 
-    The original reason also listed 'nan' and 'nat'. Those are deliberately
-    still dropped (see the next test, and test_empty_cells_are_left_out_of_the_
-    prompt): they are how pandas prints a null, and every cell here is a string,
-    so a label spelled 'nan' cannot be told from a stringified null.
+    First fixed for 'none' and 'null' only, with 'nan' / 'nat' / '<na>' kept as
+    an accepted loss. All of them are kept now: a text cell is never empty
+    unless it is blank (see _is_empty_cell for why).
     """
     rows = [{"payment_method": label, "n": 5}, {"payment_method": "Card", "n": 9}]
     assert rn._compact_rows(rows)[0] == {"payment_method": label, "n": 5}
 
 
-@pytest.mark.parametrize("cell", ["", "  ", "nan", "NaN", "NaT", "<NA>", None])
-def test_cells_that_are_how_a_null_is_printed_are_still_left_out(cell):
-    """The accepted residual of the N2 fix: a category literally named 'nan' is
-    still dropped. Pinned so nobody has to rediscover it."""
+class _NoTruthValue:
+    """Stands in for pd.NA without importing pandas: comparing it cannot be
+    turned into True or False."""
+
+    def __ne__(self, other):
+        return self
+
+    def __bool__(self):
+        raise TypeError("boolean value of NA is ambiguous")
+
+
+@pytest.mark.parametrize("cell", ["", "  ", "\t", None, float("nan"), _NoTruthValue()])
+def test_a_cell_with_nothing_in_it_is_still_left_out(cell):
+    """Blank text, None, and missing values that arrive as objects (the
+    output_json path hands over real NaN floats, not the text 'nan')."""
     assert rn._compact_rows([{"payment_method": cell, "n": 5}]) == [{"n": 5}]
+
+
+@pytest.mark.parametrize("cell", [0, 0.0, False, "0", "False"])
+def test_zero_and_false_are_values_not_gaps(cell):
+    assert rn._compact_rows([{"flag": cell, "n": 5}]) == [{"flag": cell, "n": 5}]
 
 
 @pytest.mark.parametrize("cell", ["None", "null", "nan", ""])
@@ -365,22 +398,40 @@ def test_a_finding_that_happens_to_mention_issues_is_not_deleted():
     assert rn._strip_unrequested_quality(reply) == reply
 
 
-@pytest.mark.defect
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEFECT PR420-N5 (response time): _NUMBER_RE counts each part of an ISO "
-        "date as a number, so '2024-03-01' is three. Four dates alone are 12 -- "
-        "exactly the limit; with the two values the summary also quotes it is 14, "
-        "over the 12-number limit, and triggers a second, full LLM call on a "
-        "time-series answer -- extra latency from the PR that exists to cut it. "
-        "Remove this xfail when fixed."
-    ),
-)
 def test_dates_are_not_counted_as_recited_table_values():
+    """Was DEFECT PR420-N5 (response time): each part of an ISO date counted as
+    a number, so this two-bullet summary -- four dates and two values -- read
+    as 14 numbers, over the limit of 12, and was sent back for a second, full
+    LLM call."""
     reply = (
         "Sales peaked on 2024-03-01 and bottomed on 2024-06-01.\n"
         "- 2023-01-01 opened at 5.\n"
         "- 2023-02-01 rose to 6."
     )
+    assert rn._count_numbers(reply) == 2
     assert rn._too_detailed(reply, 12) is False
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("on 2024-03-01", 0),
+    ("on 2024/3/1", 0),
+    ("at 2024-03-01T10:30:00Z it was 7", 1),
+    ("at 2024-03-01 10:30 it was 7", 1),
+    ("from 2023-01-01 to 2023-12-31: 1,200 then 3.5", 2),
+    # Not dates: every part is still a number.
+    ("scores 10-2-3", 3),
+    ("a range of 2020-2024", 2),
+    ("ratio 3/4", 2),
+    ("version 1.2.3 and 12-01-2024", 4),
+    ("1,200 units, -5.5%, 3 regions", 3),
+])
+def test_only_year_first_dates_are_left_out_of_the_count(text, expected):
+    assert rn._count_numbers(text) == expected
+
+
+def test_a_recital_full_of_dates_is_still_too_detailed():
+    """Dates not counting must not let a per-row listing through: its VALUES
+    still exceed the limit."""
+    reply = "\n".join(f"- 2024-01-{day:02d}: {day * 10} units" for day in range(1, 14))
+    assert rn._count_numbers(reply) == 13
+    assert rn._too_detailed(reply, 30) is True

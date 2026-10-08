@@ -90,7 +90,7 @@ function DatabasePage() {
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(1);
   const [category, setCategory] = useState<string>("All");
-  const { blocked, dialog: upgradeDialog } = useUpgradeGate();
+  const { dialog: upgradeDialog } = useUpgradeGate();
 
   const { data: uploads, isLoading: uploadsLoading } = useUploadedDatasets();
 
@@ -182,7 +182,6 @@ function DatabasePage() {
 
   const openSelectedForAnalysis = async () => {
     if (openingSelection || selectedMembers.length === 0) return;
-    if (blocked("Opening datasets in analysis")) return;
     setOpeningSelection(true);
     try {
       await openUploadedDatasetsInAnalysis(selectedMembers, navigate);
@@ -206,7 +205,6 @@ function DatabasePage() {
 
   const handleOpenAnalysis = async (source: DataSource) => {
     if (openingAnalysisId) return;
-    if (blocked("Opening datasets in analysis")) return;
     setOpeningAnalysisId(source.id);
 
     try {
@@ -232,14 +230,13 @@ function DatabasePage() {
               <Button
                 variant="outline"
                 className="gap-2"
-                onClick={() => blocked("Syncing data")}
+                onClick={() => undefined}
               >
                 <RefreshCw className="h-4 w-4" />
                 Sync Data
               </Button>
               <Button
                 onClick={() => {
-                  if (blocked("Connecting data sources")) return;
                   setConnectOpen(true);
                 }}
                 className="gap-2 bg-[#1565EF] text-white hover:bg-[#1257cf]"
@@ -337,7 +334,6 @@ function DatabasePage() {
                 <EmptyState
                   section={section}
                   onConnect={() => {
-                    if (blocked("Connecting data sources")) return;
                     setConnectOpen(true);
                   }}
                   onUpload={() => navigate({ to: "/dashboard" })}
@@ -401,18 +397,15 @@ function DatabasePage() {
                       openingAnalysis={openingAnalysisId === s.id}
                       onOpenAnalysis={() => handleOpenAnalysis(s)}
                       onDisconnect={() => {
-                        if (blocked("Managing data sources")) return;
                         setDisconnect(s);
                       }}
                       onReconnect={() => {
-                        if (blocked("Managing data sources")) return;
                         update.mutate(
                           { id: s.id, patch: { status: "connected" }, type: s.connectionType },
                           { onSuccess: () => toast.success("Reconnected") },
                         );
                       }}
                       onDelete={() => {
-                        if (blocked("Deleting data sources")) return;
                         remove.mutate(
                           { id: s.id, type: s.connectionType },
                           { onSuccess: () => toast.success("Removed") },
