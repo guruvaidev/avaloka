@@ -50,7 +50,7 @@ from pydantic import BaseModel, Field, ConfigDict
 from starlette.responses import StreamingResponse
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.runnables import RunnableLambda
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 import asyncio
 from app.api.integrations import (
     SUPPORTED_INTEGRATION_PROVIDERS,
@@ -115,7 +115,15 @@ for _name in ("app", "app.agents", "app.graph", "app.api"):
 for _noisy in ("tracing", "tracing.span"):
     logging.getLogger(_noisy).setLevel(logging.WARNING)
 
-
+# A bare "train" is not a training request ("which train line is busiest"):
+# require a model as the object, or "model training" / "start training".
+_TRAINING_TURN_RE = re.compile(
+    r"\b(?:re-?)?train(?:ing)?\s+(?:(?:a|an|the|my|new)\s+)?(?:\w+\s+){0,2}models?\b"
+    r"|\b(?:fit|build)\s+(?:(?:a|an|the|my|new)\s+)?(?:\w+\s+){0,2}models?\b"
+    r"|\bmodel\s+training\b"
+    r"|\bstart\s+training\b",
+    re.I,
+)
 
 
 logging.getLogger(__name__).info("Avaloka logging configured (AVALOKA_LOG_LEVEL=%s)", LOG_LEVEL)
@@ -315,6 +323,7 @@ from app.services.persistence_service import (
 )
 from app.agents.visualization_agent import build_visualization_config_from_sample
 from app.agents.chart_explainer import explain_charts
+from app.core.plan_limits import resolve_plan, limits_for, check_sizes, limit_error
 
 import jwt
 from jwt import PyJWKClient, InvalidTokenError
@@ -1022,21 +1031,29 @@ TURN_SYNC_DEADLINE_S = float(os.getenv("AVALOKA_TURN_SYNC_DEADLINE_S", "70"))
 _deferred_turn_tasks: set[asyncio.Task] = set()
 
 
-def _pending_turn_running(deferred_id: str):
+def _pending_turn_running(deferred_id: str, kind: str = "analysis"):
     def _apply(cur: Dict[str, Any]) -> None:
         pt = cur.get("pending_turn")
         pt = _maybe_json_load(pt) if isinstance(pt, str) else pt
-        # Never downgrade a turn we've already finished.
         if isinstance(pt, dict) and pt.get("id") == deferred_id and pt.get("status") in ("done", "error"):
             return
-        cur["pending_turn"] = {"id": deferred_id, "status": "running", "created_at": _now_iso()}
+        cur["pending_turn"] = {
+            "id": deferred_id, "status": "running",
+            "kind": kind, "created_at": _now_iso(),
+        }
     return _apply
+
+
+def _carry_pending_kind(cur: Dict[str, Any]) -> str:
+    prev = cur.get("pending_turn")
+    prev = _maybe_json_load(prev) if isinstance(prev, str) else prev
+    return (prev.get("kind") if isinstance(prev, dict) else None) or "analysis"
 
 
 def _pending_turn_done(deferred_id: str, result: Dict[str, Any]):
     def _apply(cur: Dict[str, Any]) -> None:
         cur["pending_turn"] = {
-            "id": deferred_id, "status": "done",
+            "id": deferred_id, "status": "done", "kind": _carry_pending_kind(cur),
             "result": _json_safe_payload(result), "finished_at": _now_iso(),
         }
     return _apply
@@ -1045,11 +1062,10 @@ def _pending_turn_done(deferred_id: str, result: Dict[str, Any]):
 def _pending_turn_error(deferred_id: str, message: str):
     def _apply(cur: Dict[str, Any]) -> None:
         cur["pending_turn"] = {
-            "id": deferred_id, "status": "error",
+            "id": deferred_id, "status": "error", "kind": _carry_pending_kind(cur),
             "message": message, "finished_at": _now_iso(),
         }
     return _apply
-
 
 def _resolve_user_id(req: Request) -> Optional[str]:
     auth_header = req.headers.get("Authorization", "")
@@ -1179,6 +1195,41 @@ async def _upload_timing_middleware(request: Request, call_next):
     return resp
 
 
+@app.middleware("http")
+async def _upload_plan_precheck(request: Request, call_next):
+    """Refuse an over-limit upload from its Content-Length, before the body is read.
+
+    The upload handler only runs after FastAPI has received and parsed the whole
+    multipart body, so a 240 MB file on a Free plan would otherwise be fully
+    transferred and written to disk just to be rejected. This middleware sits
+    outside CORSMiddleware, so it adds the CORS headers itself; without them the
+    browser reports a CORS error instead of the 413.
+    """
+    if request.method != "POST" or request.url.path != "/api/upload":
+        return await call_next(request)
+    try:
+        declared = int(request.headers.get("content-length") or 0)
+    except ValueError:
+        declared = 0
+    user_id = _resolve_user_id(request) if declared else None
+    if user_id:
+        limits = limits_for(await asyncio.to_thread(resolve_plan, user_id))
+        # Multipart framing adds bytes beyond the files themselves.
+        slack = int(os.getenv("AVALOKA_UPLOAD_CL_SLACK_BYTES", str(1 << 20)))
+        if declared > limits.max_total_bytes + slack:
+            body = limit_error(limits, "total_size", declared)
+            logger.info("[upload-limits] refused before body: user=%s plan=%s bytes=%d",
+                        user_id, limits.plan, declared)
+            resp = JSONResponse(status_code=413, content={"detail": body})
+            origin = request.headers.get("origin")
+            if origin and ("*" in allow_origins or origin in allow_origins):
+                resp.headers["Access-Control-Allow-Origin"] = origin
+                resp.headers["Access-Control-Allow-Credentials"] = "true"
+                resp.headers["Vary"] = "Origin"
+            return resp
+    return await call_next(request)
+
+
 # -------------------------------------------------------------------
 # Health
 # -------------------------------------------------------------------
@@ -1217,6 +1268,17 @@ async def health():
 @app.get("/version")
 async def get_version():
     return {"version": APP_VERSION}
+
+
+@app.get("/api/limits")
+async def get_plan_limits(request: Request):
+    """The caller's plan and upload limits, so the UI can check file sizes
+    before uploading and show the upgrade dialog without sending anything."""
+    user_id = _resolve_user_id(request)
+    if not user_id:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing or invalid auth token")
+    plan = await asyncio.to_thread(resolve_plan, user_id)
+    return {"plan": plan, "limits": limits_for(plan).as_dict()}
 
 @app.get("/debug/whoami")
 async def whoami(request: Request):
@@ -1437,11 +1499,20 @@ async def upload_csv(
     if not incoming:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "No files provided (use 'files' or 'file').")
 
-    if len(incoming) > MAX_UPLOAD_FILES:
-        raise HTTPException(
-            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            f"Too many files. Max allowed is {MAX_UPLOAD_FILES} per upload."
-        )
+    _limits = limits_for(await asyncio.to_thread(resolve_plan, user_id))
+    # Starlette knows each file's size once the body is parsed: check the plan
+    # before copying anything to disk. The streaming checks below stay as a backstop.
+    _sizes = [getattr(up, "size", None) for up in incoming]
+    _err = (
+        check_sizes(_limits, _sizes)
+        if all(s is not None for s in _sizes)
+        else (limit_error(_limits, "file_count", len(incoming))
+              if len(incoming) > _limits.max_files else None)
+    )
+    if _err:
+        logger.info("[upload-limits] refused: plan=%s reason=%s actual=%s",
+                    _limits.plan, _err["reason"], _err["actual"])
+        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, _err)
 
     used_files_field = files is not None  # did caller use multi field
 
@@ -1532,16 +1603,25 @@ async def upload_csv(
             tmp_upload = TMP_ROOT / f"upload_{_new_id()}.{ext}"
             created_tmp_uploads.append(tmp_upload)
 
-            file_bytes = await _read_upload_to_path_with_limit(
-                up=up,
-                dest_path=tmp_upload,
-                per_file_limit=MAX_UPLOAD_FILE_BYTES,
-            )
+            try:
+                file_bytes = await _read_upload_to_path_with_limit(
+                    up=up,
+                    dest_path=tmp_upload,
+                    per_file_limit=_limits.max_file_bytes,
+                )
+            except HTTPException as exc:
+                if exc.status_code == status.HTTP_413_REQUEST_ENTITY_TOO_LARGE:
+                    raise HTTPException(
+                        exc.status_code,
+                        limit_error(_limits, "file_size",
+                                    getattr(up, "size", None) or _limits.max_file_bytes + 1),
+                    )
+                raise
             total_bytes_written += file_bytes
-            if total_bytes_written > MAX_UPLOAD_TOTAL_BYTES:
+            if total_bytes_written > _limits.max_total_bytes:
                 raise HTTPException(
                     status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                    f"Total upload size exceeds limit ({MAX_UPLOAD_TOTAL_BYTES} bytes).",
+                    limit_error(_limits, "total_size", total_bytes_written),
                 )
             try:
                 await up.close()
@@ -1746,6 +1826,11 @@ async def upload_csv(
                         build_visualization_config_from_sample,
                         dataset_id=dsid, sample_rows=samples, schema=schema_any,
                         task_type="unsupervised", target_column=None,
+                        # Charts chosen from the sample, numbers computed on the
+                        # whole local file (only the charted columns are read).
+                        full_data_path=str(input_copy) if used_agent else None,
+                        full_data_type=ext,
+                        total_rows=((sample_statistics or {}).get("data_shape") or {}).get("rows"),
                     )
 
             #prof_out, viz_out = await asyncio.gather(_profile(), _viz(), return_exceptions=True)
@@ -2449,6 +2534,13 @@ async def register_existing(
                 build_visualization_config_from_sample,
                 dataset_id=dsid, sample_rows=samples, schema=schema_any,
                 task_type="unsupervised", target_column=None,
+                # Sub-1 GB objects are downloaded to local_input above; >= 1 GB
+                # keeps sample-based charts (only a streamed head is local).
+                full_data_path=(str(local_input)
+                                if (not _is_large_file and local_input.exists()) else None),
+                full_data_type=ext,
+                total_rows=(((sample_statistics or {}).get("data_shape") or {}).get("rows")
+                            if not _is_large_file else None),
             )
 
     prof_out, viz_out = await asyncio.gather(_profile(), _viz(), return_exceptions=True)
@@ -6276,16 +6368,36 @@ Ready to proceed with model training!"""
                 )
         _turn_task.add_done_callback(_cleanup)
 
-        await update_session(bound_sid, _pending_turn_running(_deferred_id))
+        # Classify the deferred work ONCE, before anything is stored or returned,
+        # so every surface agrees (pending-turn record, poll endpoint, response,
+        # frontend). A slow ANALYSIS must never be labelled training — that was
+        # the misleading "Training model…" popup on normal analyses.
+        _is_training_turn = bool(
+            _TRAINING_TURN_RE.search(body.content or "")
+            or state_in.get("ready_to_train")
+        )
+        _pending_kind = "training" if _is_training_turn else "analysis"
+
+        await update_session(bound_sid, _pending_turn_running(_deferred_id, _pending_kind))
+
+        _pending_text = (
+            "Model training is running — this can take a few minutes. "
+            "The results will appear here automatically when it's done."
+            if _is_training_turn else
+            "This analysis is taking longer than usual. "
+            "The result will appear here automatically when it's finished."
+        )
 
         resp = ChatResponse(
             messages=[
                 {"role": "user", "content": body.content},
-                {"role": "assistant", "content":
-                    "Model training is running — this can take a few minutes. "
-                    "The results will appear here automatically when it's done."},
+                {"role": "assistant", "content": _pending_text},
             ],
-            training_status="running",
+            # training_status is now a TRAINING-ONLY signal. The generic
+            # "keep polling" signal is pending_status; pending_kind says what it is.
+            training_status="running" if _is_training_turn else None,
+            pending_status="running",
+            pending_kind=_pending_kind,
             analysis_task_id=_deferred_id,
             datasets=_turn_holder.get("datasets") or datasets_dropdown,
             active_dataset_ids=_turn_holder.get("active_dataset_ids")
@@ -6341,11 +6453,14 @@ async def get_pending_turn(
         return {"status": "superseded"}   # a newer turn replaced this one
 
     status_val = pt.get("status")
+    kind = pt.get("kind") or "analysis"
     if status_val == "done":
-        return {"status": "done", "result": pt.get("result") or {}}
+        return {"status": "done", "kind": kind, "result": pt.get("result") or {}}
     if status_val == "error":
-        return {"status": "error", "message": pt.get("message") or "Training failed."}
-    return {"status": "running"}
+        default_err = ("Training failed. Please try again." if kind == "training"
+                       else "The analysis failed. Please try again.")
+        return {"status": "error", "kind": kind, "message": pt.get("message") or default_err}
+    return {"status": "running", "kind": kind}
 
 @app.get("/threads/{thread_id}/planner-graph")
 async def get_planner_graph_image(request: Request, thread_id: str):

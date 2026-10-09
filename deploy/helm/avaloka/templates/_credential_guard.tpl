@@ -30,3 +30,18 @@ render error rather than a quiet security hole.
 {{- end -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+Refuse to render a lineage database URL that would go nowhere.
+
+lineage.databaseUrl is delivered through the chart's own Secret, because it
+carries a password. With existingSecret the chart renders no Secret, so the
+value would be dropped and every pod would quietly fall back to POSTGRES_URL --
+or, with no Postgres at all, switch lineage off. Either way the operator asked
+for one database and got another without being told.
+*/}}
+{{- define "avaloka.checkLineageDatabaseUrl" -}}
+{{- if and .Values.existingSecret .Values.lineage.databaseUrl -}}
+{{- fail (printf "lineage.databaseUrl is set but existingSecret=%q means this chart renders no Secret to carry it, so no pod would receive it. Add the key AVALOKA_LINEAGE_DB_URL to that Secret yourself and leave lineage.databaseUrl empty." .Values.existingSecret) -}}
+{{- end -}}
+{{- end -}}

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { useQueryClient } from "@tanstack/react-query";
-import { Dialog, DialogContent } from "@/components/ui/dialog";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { backendApi } from "@/lib/api/backendApi";
+import { backendApi, type UploadLimits } from "@/lib/api/backendApi";
 import { supabase } from "@/integrations/supabase/client";
 import { createAnalysis as persistCreateAnalysis } from "@/lib/analysis-messages";
 import type { StorageConnection, StorageProvider } from "./CloudStorageConnectModal";
@@ -97,6 +97,17 @@ export function CloudStorageBrowserModal({
   const [folderBusy, setFolderBusy] = useState(false);
   const [folderError, setFolderError] = useState("");
   const [folderTableType, setFolderTableType] = useState<string | null>(null);
+  const [planLimitMsg, setPlanLimitMsg] = useState<string | null>(null);
+  const [largeJob, setLargeJob] = useState(false);
+
+  // Same cached plan limits as the browser upload.
+  const { data: limits } = useQuery<UploadLimits>({
+    queryKey: ["upload-limits"],
+    queryFn: () => backendApi.getUploadLimits(),
+    enabled: open,
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+  });
 
 
   const { bucket, prefix } = useMemo(
@@ -245,47 +256,37 @@ export function CloudStorageBrowserModal({
     return `${scheme}://${b}`;
   };
 
-  function formatFileSize(size: string | number | null | undefined): string {
-  if (size === null || size === undefined || size === "") {
-    return "—";
-  }
-
-  // If API already returns "20 MB", keep it
-  if (typeof size === "string") {
-    const trimmed = size.trim();
-    if (!trimmed) return "—";
-    if (/[a-zA-Z]/.test(trimmed)) return trimmed;
-  }
-
-  const bytes = Number(size);
-
-  if (!Number.isFinite(bytes) || bytes < 0) {
-    return String(size);
-  }
-
-  if (bytes === 0) return "0 B";
-
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  const index = Math.min(
-    Math.floor(Math.log(bytes) / Math.log(1024)),
-    units.length - 1
-  );
-
-  const value = bytes / Math.pow(1024, index);
-
-  const formatted =
-    index === 0
-      ? Math.round(value).toString()
-      : value.toFixed(1).replace(/\.0$/, "");
-
-  return `${formatted} ${units[index]}`;
-}
-
   const handleUse = async () => {
     if (!connection || selected.size === 0) return;
 
     const keys = Array.from(selected);
     const storageUri = buildStorageUri();
+
+    // Plan size gate — sum the selected objects' sizes (bytes, sent as strings).
+    const sizeOf = (k: string) => {
+      const n = Number(objects.find((o) => o.key === k)?.size ?? 0);
+      return Number.isFinite(n) ? n : 0;
+    };
+    const totalBytes = keys.reduce((s, k) => s + sizeOf(k), 0);
+    const largestBytes = keys.reduce((m, k) => Math.max(m, sizeOf(k)), 0);
+    const plan = String(limits?.plan ?? "free").toLowerCase();
+    const isPaid = limits?.batch_jobs === true && plan !== "free";
+    if (!isPaid) {
+      const maxTotal =
+        typeof limits?.max_total_bytes === "number" ? limits.max_total_bytes : 100 * 1024 * 1024;
+      if (totalBytes > maxTotal) {
+        const maxMb =
+          typeof limits?.max_total_mb === "number" ? limits.max_total_mb : Math.round(maxTotal / 1048576);
+        setPlanLimitMsg(
+          `Your selection totals ${(totalBytes / 1048576).toFixed(1)} MB, which exceeds the Free plan limit of ${maxMb} MB of data per analysis.`,
+        );
+        return;
+      }
+      setLargeJob(false);
+    } else {
+      const maxFile = typeof limits?.max_file_bytes === "number" ? limits.max_file_bytes : Infinity;
+      setLargeJob(largestBytes > maxFile);
+    }
 
     setRegistering(true);
     setRowStatus((prev) => {
@@ -293,7 +294,6 @@ export function CloudStorageBrowserModal({
       keys.forEach((k) => (next[k] = { state: "running" }));
       return next;
     });
-
 
     type SuccessEntry = { response: any; filename: string; key: string };
     let firstSuccess: SuccessEntry | null = null;
@@ -338,6 +338,7 @@ export function CloudStorageBrowserModal({
     }
 
     setRegistering(false);
+    setLargeJob(false);
 
     // Persist registered keys on the connection so the dataset count on the
     // connection card reflects reality. Merge new keys with any previously
@@ -384,9 +385,10 @@ export function CloudStorageBrowserModal({
           alias: s.filename,
           schema: s.response.schema,
           samples: s.response.samples,
-          rows_sampled:
-            s.response.rows_sampled ??
-            (Array.isArray(s.response.samples) ? s.response.samples.length : undefined),
+          total_rows: s.response.total_rows,
+          sample_statistics: s.response.sample_statistics,
+          rows_sampled: s.response.rows_sampled,
+
           visualization_config:
             s.response.visualization_config ?? s.response.visualization_configs,
           visualization_status: s.response.visualization_status,
@@ -400,8 +402,11 @@ export function CloudStorageBrowserModal({
         thread_id: v.thread_id,
         schema: v.schema,
         samples: v.samples,
-        rows_sampled:
-          v.rows_sampled ?? (Array.isArray(v.samples) ? v.samples.length : undefined),
+        filename: fs.filename,
+        total_rows: v.total_rows,
+        sample_statistics: v.sample_statistics,
+        rows_sampled: v.rows_sampled,
+
         file_size_mb: v.file_size_mb,
         file_size_bytes: v.file_size_bytes,
 
@@ -423,8 +428,10 @@ export function CloudStorageBrowserModal({
             alias: fs.filename,
             schema: v.schema,
             samples: v.samples,
-            rows_sampled:
-              v.rows_sampled ?? (Array.isArray(v.samples) ? v.samples.length : undefined),
+            total_rows: v.total_rows,
+            sample_statistics: v.sample_statistics,
+            rows_sampled: v.rows_sampled,
+
             visualization_config: v.visualization_config ?? v.visualization_configs,
             visualization_status: v.visualization_status,
             analysis_fidelity: v.analysis_fidelity,
@@ -552,9 +559,10 @@ export function CloudStorageBrowserModal({
       alias: s.name,
       schema: s.response.schema,
       samples: s.response.samples,
-      rows_sampled:
-        s.response.rows_sampled ??
-        (Array.isArray(s.response.samples) ? s.response.samples.length : undefined),
+      total_rows: s.response.total_rows,
+      sample_statistics: s.response.sample_statistics,
+      rows_sampled: s.response.rows_sampled,
+
       file_size_mb: s.response.file_size_mb,
       file_size_bytes: s.response.file_size_bytes,
       visualization_config: s.response.visualization_config ?? s.response.visualization_configs,
@@ -569,8 +577,11 @@ export function CloudStorageBrowserModal({
       thread_id: v.thread_id,
       schema: v.schema,
       samples: v.samples,
-      rows_sampled:
-        v.rows_sampled ?? (Array.isArray(v.samples) ? v.samples.length : undefined),
+      filename: first.name,
+      total_rows: v.total_rows,
+      sample_statistics: v.sample_statistics,
+      rows_sampled: v.rows_sampled,
+
       file_size_mb: v.file_size_mb,
       file_size_bytes: v.file_size_bytes,
       analysis_fidelity: v.analysis_fidelity,
@@ -774,7 +785,7 @@ export function CloudStorageBrowserModal({
             </p>
           ) : (
             <table className="w-full text-sm">
-              <thead className="sticky top-[-1] z-20 border-b border-border bg-background text-xs text-muted-foreground shadow-sm">
+              <thead className="sticky top-0 z-10 border-b border-border bg-muted/40 text-xs text-muted-foreground">
                 <tr>
                   <th className="w-10 px-3 py-2">
                     <input
@@ -882,7 +893,7 @@ export function CloudStorageBrowserModal({
                         />
                       </td>
                       <td className="px-3 py-2 font-medium text-foreground">{o.key}</td>
-                      <td className="px-3 py-2 text-muted-foreground">{formatFileSize(o.size)}</td>
+                      <td className="px-3 py-2 text-muted-foreground">{o.size || "—"}</td>
                       <td className="px-3 py-2 text-muted-foreground">{o.updated || "—"}</td>
                       <td className="px-3 py-2 text-muted-foreground">{fileType(o.key)}</td>
                       <td className="px-3 py-2">
@@ -963,7 +974,11 @@ export function CloudStorageBrowserModal({
         )}
 
         <div className="flex items-center justify-between border-t border-border bg-background px-5 py-3">
-          <p className="text-xs text-muted-foreground">{selectionLabel}</p>
+          <p className="text-xs text-muted-foreground">
+            {registering && largeJob
+              ? "Large file: this runs as a background job and can take several minutes. You'll be notified when the analysis is ready."
+              : selectionLabel}
+          </p>
           <div className="flex items-center gap-2">
             {(() => {
               const folderMode = selectedFolders.length > 0;
@@ -1010,6 +1025,46 @@ export function CloudStorageBrowserModal({
         </div>
 
       </DialogContent>
+      <Dialog
+        open={!!planLimitMsg}
+        onOpenChange={(o) => {
+          if (!o) setPlanLimitMsg(null);
+        }}
+      >
+        {planLimitMsg && (
+          <DialogContent
+            className="max-w-[420px] gap-0 rounded-2xl border border-border bg-background p-6 shadow-xl [&>button]:hidden"
+            onPointerDownOutside={(e) => e.stopPropagation()}
+          >
+            <DialogDescription className="sr-only">{planLimitMsg}</DialogDescription>
+            <button
+              type="button"
+              onClick={() => setPlanLimitMsg(null)}
+              aria-label="Close"
+              className="absolute right-4 top-4 rounded-md p-1 text-muted-foreground hover:bg-muted"
+            >
+              <X className="h-4 w-4" />
+            </button>
+            <DialogTitle className="text-lg font-semibold text-foreground">Free plan limit reached</DialogTitle>
+            <p className="mt-1.5 text-sm text-muted-foreground">{planLimitMsg}</p>
+            <div className="mt-6 flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setPlanLimitMsg(null)}>
+                Reduce file size
+              </Button>
+              <Button
+                className="bg-[#1565EF] text-white hover:bg-[#1257d6]"
+                onClick={() => {
+                  setPlanLimitMsg(null);
+                  onOpenChange(false);
+                  navigate({ to: "/settings", search: { tab: "billing" } as any });
+                }}
+              >
+                Upgrade to Professional
+              </Button>
+            </div>
+          </DialogContent>
+        )}
+      </Dialog>
     </Dialog>
   );
 }

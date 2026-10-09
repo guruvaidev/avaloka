@@ -178,6 +178,22 @@ postgres:
       cpu: "1"
       memory: 1Gi
 
+# Lineage — where a dataset came from and what was built on it
+# (app/core/lineage.py). The API pod and the LangGraph pod each compile the
+# graph, so the store has to be one both can reach; it is the Postgres above
+# unless databaseUrl names another. There is no file fallback: with
+# postgres.enabled=false, no postgres.externalUrl and no databaseUrl, lineage is
+# off and the pods say so once at first use.
+#
+# The tables hold every user's file names and column names, scoped per user.
+lineage:
+  enabled: true      # false sets AVALOKA_LINEAGE=off
+  # Optional. A postgresql:// URL for a database other than POSTGRES_URL. It
+  # carries a password, so it is rendered into the chart's Secret, not the
+  # ConfigMap. With existingSecret the chart renders no Secret: setting both is
+  # a render error, and the key AVALOKA_LINEAGE_DB_URL goes in your Secret.
+  databaseUrl: ""
+
 # SeaweedFS — in-cluster S3-compatible object store (layer-1 dataset/artifact plane).
 #
 # This is the local/on-prem answer to "where do datasets live". The alternative on

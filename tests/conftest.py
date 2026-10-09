@@ -25,6 +25,26 @@ import os
 os.environ.setdefault("CHROMA_HOST", "127.0.0.1")
 os.environ.setdefault("CHROMA_PORT", "59999")
 
+# ---------------------------------------------------------------------------
+# Lineage goes to a throwaway file -- MUST run before any app import.
+#
+# Every test that runs an execution node, a training node or the preparation
+# pipeline reaches app/agents/lineage_hooks.py, and the store resolves its
+# location from AVALOKA_LINEAGE_DB_URL, then POSTGRES_URL. A developer with
+# POSTGRES_URL exported, or a CI job that provides one, would have the suite
+# write test datasets into a real shared database.
+#
+# Assigned, not setdefault: whatever the environment says, the suite does not
+# write there. Tests that want a real Postgres name it themselves through
+# AVALOKA_TEST_POSTGRES_URL (tests/test_lineage.py).
+# ---------------------------------------------------------------------------
+import tempfile
+
+_LINEAGE_TEST_DIR = tempfile.mkdtemp(prefix="avaloka-lineage-tests-")
+os.environ["AVALOKA_LINEAGE_DB_URL"] = "sqlite:///" + os.path.join(
+    _LINEAGE_TEST_DIR, "lineage.db").replace(os.sep, "/")
+os.environ.pop("AVALOKA_LINEAGE", None)
+
 import pytest
 
 

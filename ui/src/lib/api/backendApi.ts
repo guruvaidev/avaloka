@@ -206,7 +206,8 @@ export function isDeferredTurn(res: any): boolean {
   if (res.fallback === true && res.error === "UPSTREAM_TIMEOUT") return true;
   const hasRows = Array.isArray(res.output_json) && res.output_json.length > 0;
   return (
-    String(res.training_status ?? "").toLowerCase() === "running" &&
+        (String(res.training_status ?? "").toLowerCase() === "running" ||
+      String(res.pending_status ?? "").toLowerCase() === "running") &&
     res.training_completed !== true &&
     !hasRows
   );
@@ -365,6 +366,32 @@ async function mcpProxyFetch(base: string, path: string, init: RequestInit = {})
 
 export { mcpProxyFetch, proxyFetch };
 
+export interface UploadLimits {
+  plan?: "free" | "professional" | "enterprise" | string;
+  max_file_bytes?: number | null;
+  max_total_bytes?: number | null;
+  max_files?: number | null;
+  max_file_mb?: number | null;
+  max_total_mb?: number | null;
+  batch_jobs?: boolean;
+  [k: string]: unknown;
+}
+
+export type UploadPhase = "uploading" | "processing";
+export interface UploadProgressInfo {
+  phase: UploadPhase;
+  loaded: number;
+  total: number;
+}
+
+/** Fail an upload only after this long with no bytes sent. */
+const UPLOAD_STALL_MS = 60_000;
+/** Server processing wait after the last byte: 60 s + 1 s per MB, capped at 180 s. */
+function processingTimeoutMs(totalBytes: number) {
+  const mb = totalBytes / (1024 * 1024);
+  return Math.min(180_000, 60_000 + Math.ceil(mb) * 1000);
+}
+
 export const backendApi = {
   async getPlannerGraph(threadId: string): Promise<Blob> {
     const accessToken = await getAccessToken();
@@ -384,6 +411,22 @@ export const backendApi = {
     const response = await proxyFetch(`/health`, { method: "GET" });
     if (!response.ok) throw new Error(`Health check failed: ${response.statusText}`);
     return response.json();
+  },
+
+  /** Plan upload limits for the signed-in user. Unwraps `{ plan, limits: {...} }` (flat responses also accepted). */
+  async getUploadLimits(): Promise<UploadLimits> {
+    const accessToken = await getAccessToken();
+    const response = await proxyFetch(`/api/limits`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!response.ok) throw new Error(`Limits check failed: ${response.statusText}`);
+    const json: any = await response.json();
+    if (json?.fallback === true || (json?.error && !json?.limits && json?.max_file_bytes == null)) {
+      throw new Error("Limits unavailable");
+    }
+    const nested = json?.limits && typeof json.limits === "object" ? json.limits : json;
+    return { ...nested, plan: json?.plan ?? nested?.plan };
   },
 
   async getVersion(): Promise<{ version: string }> {
@@ -442,27 +485,103 @@ export const backendApi = {
     return response.json();
   },
 
-  async uploadFiles(files: File[], backend?: string, connectionId?: string): Promise<MultiUploadResponse> {
+  async uploadFiles(
+    files: File[],
+    backend?: string,
+    connectionId?: string,
+    onProgress?: (p: UploadProgressInfo) => void,
+  ): Promise<MultiUploadResponse> {
     const formData = new FormData();
     files.forEach((file) => formData.append("files", file));
     if (backend) formData.append("backend", backend);
     if (connectionId) formData.append("connection_id", connectionId);
 
     const accessToken = await getAccessToken();
-    const response = await proxyFetch(`/api/upload`, {
-      method: "POST",
-      headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
-      body: formData,
+    const totalBytes = files.reduce((s, f) => s + f.size, 0);
+
+    // XHR gives real byte-level progress. No fixed total timeout: we only fail
+    // after 60 s without progress, then wait a size-based window for processing.
+    return new Promise<MultiUploadResponse>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      let stallTimer: ReturnType<typeof setTimeout> | null = null;
+      let processTimer: ReturnType<typeof setTimeout> | null = null;
+      const clearTimers = () => {
+        if (stallTimer) clearTimeout(stallTimer);
+        if (processTimer) clearTimeout(processTimer);
+        stallTimer = processTimer = null;
+      };
+      const fail = (message: string, extra: Record<string, unknown> = {}) => {
+        clearTimers();
+        const err: any = new Error(message);
+        Object.assign(err, extra);
+        reject(err);
+      };
+      const armStall = () => {
+        if (stallTimer) clearTimeout(stallTimer);
+        stallTimer = setTimeout(() => {
+          xhr.abort();
+          fail("Upload stalled — check your connection and retry", { code: "upload_stalled" });
+        }, UPLOAD_STALL_MS);
+      };
+      const startProcessing = () => {
+        if (processTimer) return;
+        if (stallTimer) clearTimeout(stallTimer);
+        stallTimer = null;
+        onProgress?.({ phase: "processing", loaded: totalBytes, total: totalBytes });
+        processTimer = setTimeout(() => {
+          xhr.abort();
+          fail("Processing is taking longer than expected. Your data may still be processing — please retry.", {
+            code: "processing_timeout",
+          });
+        }, processingTimeoutMs(totalBytes));
+      };
+
+      xhr.open("POST", proxyUrl());
+      xhr.setRequestHeader("X-Backend-Path", "/api/upload");
+      xhr.setRequestHeader("X-Backend-Base", API_BASE);
+      if (accessToken) xhr.setRequestHeader("Authorization", `Bearer ${accessToken}`);
+
+      xhr.upload.onprogress = (e) => {
+        const total = e.lengthComputable ? e.total : totalBytes;
+        onProgress?.({ phase: "uploading", loaded: e.loaded, total });
+        if (e.loaded >= total) startProcessing();
+        else armStall();
+      };
+      xhr.upload.onload = () => startProcessing();
+      xhr.onerror = () =>
+        fail("The server didn't respond. Your request may still be running — please retry in a moment.", {
+          network: true,
+        });
+      xhr.onload = () => {
+        clearTimers();
+        let json: any = null;
+        try {
+          json = xhr.responseText ? JSON.parse(xhr.responseText) : null;
+        } catch {
+          json = null;
+        }
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve(json as MultiUploadResponse);
+          return;
+        }
+        const detail = json?.detail;
+        const message =
+          typeof detail === "string"
+            ? detail
+            : typeof detail?.message === "string"
+              ? detail.message
+              : xhr.status >= 500
+                ? "The server didn't respond. Your request may still be running — please retry in a moment."
+                : `Batch upload failed (${xhr.status})`;
+        const err: any = new Error(message);
+        err.status = xhr.status;
+        err.detail = detail;
+        reject(err);
+      };
+
+      armStall();
+      xhr.send(formData);
     });
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}) as any);
-      const err: any = new Error(errorData.detail || `Batch upload failed: ${response.statusText}`);
-      err.status = response.status;
-      throw err;
-    }
-
-    return response.json();
   },
 
   async sendMessage(
@@ -1082,10 +1201,15 @@ export const backendApi = {
     features: Record<string, unknown>,
     datasetId?: string | null,
     sessionIdOverride?: string | null,
-  ): Promise<{ prediction: unknown; reply: string }> {
+  ): Promise<{
+    prediction: unknown;
+    reply: string;
+    probabilities?: unknown;
+    rawResponse: MessageResponse;
+  }> {
     const sessionId = sessionIdOverride || getInferenceSessionId();
     if (!datasetId) {
-      throw new Error("Select a dataset to provide inference session context.");
+      throw new Error("This model has no linked training dataset, so inference can't run.");
     }
     const threadKey = `${runId}::${sessionId}::${datasetId ?? ""}`;
     let threadId = _inferenceThreads.get(threadKey);
@@ -1122,7 +1246,29 @@ export const backendApi = {
       parsePredictionFromJson((res as any).output_json) ??
       parsePredictionFromJson((res as any).output_file_data);
 
-    return { prediction, reply };
+    const probabilities = [res.output_json, res.output_file_data, res]
+      .map((value) => {
+        if (typeof value !== "string") return value;
+        try {
+          return JSON.parse(value);
+        } catch {
+          return null;
+        }
+      })
+      .map((value) => (Array.isArray(value) ? value[0] : value))
+      .find(
+        (value) =>
+          value &&
+          typeof value === "object" &&
+          ("probabilities" in value || "class_probabilities" in value),
+      ) as { probabilities?: unknown; class_probabilities?: unknown } | undefined;
+
+    return {
+      prediction,
+      reply,
+      probabilities: probabilities?.probabilities ?? probabilities?.class_probabilities,
+      rawResponse: res,
+    };
   },
 
 

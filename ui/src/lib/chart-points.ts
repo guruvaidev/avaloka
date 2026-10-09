@@ -23,7 +23,6 @@ export function getLineRenderData(slide: Slide): { data: any[]; xKey: string } {
 
   const ts = times as number[];
   const monthly = Math.max(...ts) - Math.min(...ts) > 90 * 86_400_000;
-  const sumBuckets = ["count", "sum"].includes(slide.aggregate?.toLowerCase() ?? "");
   const buckets = new Map<number, { label: string; sums: Record<string, number>; counts: Record<string, number> }>();
   rows.forEach((row, i) => {
     const d = new Date(ts[i]);
@@ -46,9 +45,7 @@ export function getLineRenderData(slide: Slide): { data: any[]; xKey: string } {
       const out: Record<string, unknown> = { [xKey]: b.label };
       for (const s of slide.series) {
         const c = b.counts[s.dataKey];
-        out[s.dataKey] = c
-          ? Number((sumBuckets ? b.sums[s.dataKey] : b.sums[s.dataKey] / c).toFixed(4))
-          : null;
+        out[s.dataKey] = c ? Number((b.sums[s.dataKey] / c).toFixed(4)) : null;
       }
       return out;
     });
@@ -80,6 +77,10 @@ export function getRenderedPoints(slide: Slide): RenderedPoint[] {
   const yKey = slide.series[0]?.dataKey ?? "y";
   const rows = Array.isArray(slide.data) ? slide.data : [];
   if (slide.chartKind === "histogram") {
+    // Precomputed bins already carry their exact backend range labels.
+    if (rows.every((r) => typeof r?.[slide.xKey] === "string")) {
+      return rows.slice(0, MAX_POINTS).map((r) => ({ x: r[slide.xKey], y: Number(r?.[yKey]) }));
+    }
     const starts = rows.map((r) => Number(r?.[slide.xKey]));
     const width = starts.length > 1 && Number.isFinite(starts[1] - starts[0]) ? starts[1] - starts[0] : 0;
     return rows.slice(0, MAX_POINTS).map((r, i) => {

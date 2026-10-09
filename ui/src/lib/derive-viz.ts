@@ -17,6 +17,7 @@ type ColStats = {
 const SAMPLE = 50;
 const TOP_K = 10;
 const SCATTER_CAP = 500;
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}(?:[T ][\d:.]+(?:Z|[+-]\d{2}:?\d{2})?)?$/;
 
 function parseNumber(v: unknown): number | null {
   if (typeof v === "number" && Number.isFinite(v)) return v;

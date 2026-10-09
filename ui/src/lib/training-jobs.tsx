@@ -12,6 +12,7 @@ import { toast } from "sonner";
 import { backendApi, type PendingTurnResponse } from "@/lib/api/backendApi";
 
 export type TrainingJobStatus = "running" | "done" | "error" | "superseded";
+export type PendingJobKind = "training" | "analysis";
 
 export type TrainingJob = {
   key: string;
@@ -20,6 +21,7 @@ export type TrainingJob = {
   sessionId: string;
   analysisId: string | null;
   label: string;
+  kind: PendingJobKind;   // what the deferred turn actually is
   status: TrainingJobStatus;
   message?: string;
   startedAt: number;
@@ -90,6 +92,7 @@ export type StartTrainingJobInput = {
   sessionId: string;
   analysisId?: string | null;
   label?: string;
+  kind?: PendingJobKind;   // defaults to "training" so existing callers are unchanged
 };
 
 /**
@@ -111,13 +114,15 @@ export function startTrainingJob(input: StartTrainingJobInput): Promise<PendingT
   let resolve!: (v: PendingTurnResponse) => void;
   const promise = new Promise<PendingTurnResponse>((r) => (resolve = r));
 
+    const kind: PendingJobKind = input.kind ?? "training";
   const job: InternalJob = {
     key,
     threadId: input.threadId,
     deferredId: input.deferredId ?? null,
     sessionId: input.sessionId,
     analysisId: input.analysisId ?? null,
-    label: input.label || "Training model",
+    label: input.label || (kind === "training" ? "Training model" : "Analysis"),
+    kind,
     status: "running",
     startedAt: Date.now(),
     timer: null,
@@ -127,6 +132,7 @@ export function startTrainingJob(input: StartTrainingJobInput): Promise<PendingT
     errors: 0,
     polls: 0,
   };
+  
   jobs.set(key, job);
   emit();
   ensureNotificationPermission();

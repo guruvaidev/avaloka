@@ -280,3 +280,203 @@ def test_keep_null_word_labels_leaves_a_frame_with_no_words_alone():
     words = pd.DataFrame({"a": [None, None], "b": [None, None]})
 
     assert keep_null_word_labels(frame, words) is frame
+
+
+# ===========================================================================
+# CSV: the same policy, decided before the read
+# ===========================================================================
+
+import ast
+import inspect
+import subprocess
+import sys
+import textwrap
+
+
+def _csv(tmp_path, text, name="data.csv"):
+    path = tmp_path / name
+    path.write_text(text)
+    return str(path)
+
+
+SURVEY_CSV = "payment_method,amount\n" + "".join(
+    f"{label},{i + 1}\n" for i, label in enumerate(WORDS + ["", "Card"])
+)
+
+
+def test_the_reported_case_a_category_named_none_survives_a_group_by(tmp_path):
+    """The defect as first measured: of 55 only Card's 10 survived."""
+    path = _csv(tmp_path, SURVEY_CSV)
+
+    before = pd.read_csv(path).groupby("payment_method")["amount"].sum()
+    after = null_policy.read_csv_best_effort(path).groupby("payment_method")["amount"].sum()
+
+    assert before.to_dict() == {"Card": 10}
+    assert set(after.index) == set(WORDS) | {"Card"}
+    assert int(after.sum()) == 46          # 55 minus the 9 on the genuinely empty cell
+
+
+@pytest.mark.parametrize("word", WORDS)
+def test_csv_a_null_word_is_a_label_in_a_text_column_and_missing_in_a_numeric_one(tmp_path, word):
+    path = _csv(tmp_path, f"method,amount\nCard,1\n{word},2\nCash,{word}\n")
+
+    df = null_policy.read_csv_keeping_labels(path)
+
+    assert df["method"].tolist() == ["Card", word, "Cash"]
+    assert df["amount"].dtype == "float64"
+    assert df["amount"].isna().tolist() == [False, False, True]
+
+
+CSVS_THE_POLICY_MUST_NOT_CHANGE = {
+    "no missing cells": "region,amount,flag\nEast,1,True\nWest,2,False\n",
+    "gaps only in numeric columns": "region,amount,qty\nEast,NA,1\nWest,2,n/a\nNorth,,3\n",
+    "an empty cell in a text column": "region,amount\nEast,1\n,2\nNorth,3\n",
+    "booleans with NA": "region,active\nEast,True\nWest,NA\nNorth,False\n",
+    "a column of only null-like words": "region,note\nEast,NA\nWest,None\n",
+    "all numeric": "a,b\n1,2\nNA,4\n5,null\n",
+}
+
+
+@pytest.mark.parametrize("name", sorted(CSVS_THE_POLICY_MUST_NOT_CHANGE))
+def test_csv_files_with_no_label_to_keep_read_exactly_as_before(tmp_path, name):
+    """Values AND dtypes. This is what 'numeric typing cannot change' means."""
+    path = _csv(tmp_path, CSVS_THE_POLICY_MUST_NOT_CHANGE[name])
+
+    pdt.assert_frame_equal(null_policy.read_csv_keeping_labels(path), pd.read_csv(path))
+
+
+def test_csv_typed_columns_next_to_a_labelled_one_are_typed_as_before(tmp_path):
+    path = _csv(tmp_path, "method,amount,qty,active\nCard,1.5,1,True\nNone,NA,2,False\nN/A,3.5,n/a,True\n")
+
+    policy, default = null_policy.read_csv_keeping_labels(path), pd.read_csv(path)
+
+    assert policy["method"].tolist() == ["Card", "None", "N/A"]
+    pdt.assert_frame_equal(policy.drop(columns="method"), default.drop(columns="method"))
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"dtype": str}, {"keep_default_na": True}, {"na_values": ["Card"]},
+    {"na_filter": False}, {"index_col": 0}, {"converters": {"amount": str}},
+])
+def test_csv_a_caller_controlling_the_read_gets_plain_pandas(tmp_path, kwargs):
+    path = _csv(tmp_path, "method,amount\nCard,1\nNone,2\nCash,NA\n")
+
+    pdt.assert_frame_equal(null_policy.read_csv_keeping_labels(path, **kwargs), pd.read_csv(path, **kwargs))
+
+
+def test_csv_reader_kwargs_still_pass_through(tmp_path):
+    path = _csv(tmp_path, "method;amount\nCard;1\nNone;2\n")
+
+    df = null_policy.read_csv_best_effort(path, sep=";", nrows=2)
+
+    assert df["method"].tolist() == ["Card", "None"] and df["amount"].tolist() == [1, 2]
+
+
+def test_csv_duplicate_headers_are_each_decided_on_their_own(tmp_path):
+    """pandas renames the second one ``method.1``; the per-column list of
+    missing strings is keyed by those names, so each column gets its own."""
+    path = _csv(tmp_path, "method,method,amount\nCard,None,1\nNone,Cash,NA\n")
+
+    df = null_policy.read_csv_keeping_labels(path)
+
+    assert df["method"].tolist() == ["Card", "None"]
+    assert df["method.1"].tolist() == ["None", "Cash"]
+    assert df["amount"].isna().tolist() == [False, True]
+
+
+def test_csv_text_that_only_appears_after_the_sniff_keeps_the_old_behaviour(tmp_path, monkeypatch):
+    """Known limit, pinned: looks typed in the sniffed rows, real text later."""
+    monkeypatch.setattr(null_policy, "CSV_SNIFF_ROWS", 2)
+    path = _csv(tmp_path, "code,amount\n1,1\nNA,2\nabc,3\n")
+
+    pdt.assert_frame_equal(null_policy.read_csv_keeping_labels(path), pd.read_csv(path))
+
+
+def test_csv_utf16_and_cp1252_files_still_open(tmp_path):
+    utf16 = tmp_path / "u16.csv"
+    utf16.write_bytes("method,amount\nCard,1\nNone,2\n".encode("utf-16"))
+    cp1252 = tmp_path / "cp.csv"
+    cp1252.write_bytes("method,amount\nCaf\xe9,1\nNone,2\n".encode("cp1252"))
+
+    assert null_policy.read_csv_best_effort(str(utf16))["method"].tolist() == ["Card", "None"]
+    assert null_policy.read_csv_best_effort(str(cp1252))["method"].tolist()[1] == "None"
+
+
+# ---------------------------------------------------------------------------
+# One reader, shipped as text: it must stand alone and it must be the only one
+# ---------------------------------------------------------------------------
+
+
+def test_the_policy_module_can_run_with_no_repository():
+    """Its source is spliced into scripts that run where this repo may not
+    exist. Standard library and pandas only; nothing relative; no __future__
+    line, which would be a SyntaxError in the middle of a script."""
+    tree = ast.parse(inspect.getsource(null_policy))
+    allowed = set(sys.stdlib_module_names) | {"pandas"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                assert alias.name.split(".")[0] in allowed, alias.name
+        elif isinstance(node, ast.ImportFrom):
+            assert node.level == 0, "relative import"
+            assert node.module != "__future__"
+            assert (node.module or "").split(".")[0] in allowed, node.module
+
+
+def test_execution_scripts_get_the_module_itself_not_a_copy():
+    import app.agents.execution_agent as agent
+
+    source = inspect.getsource(agent)
+
+    assert agent.read_csv_best_effort is null_policy.read_csv_best_effort
+    assert agent._CSV_READER_SOURCE == inspect.getsource(null_policy)
+    assert "def read_csv_best_effort" not in source, "a hand-kept copy of the reader is back"
+    # Two script templates, each with the marker on a line of its own.
+    assert source.count("\n" + agent._CSV_READER_MARKER + "\n") == 2
+    with pytest.raises(ValueError):
+        agent._with_csv_reader("import pandas as pd\n")
+
+
+def test_the_spliced_reader_works_in_a_script_that_cannot_import_this_repo(tmp_path):
+    import app.agents.execution_agent as agent
+
+    path = _csv(tmp_path, SURVEY_CSV)
+    script = tmp_path / "standalone.py"
+    script.write_text(textwrap.dedent('''
+        import sys
+
+        class _NoRepo:
+            def find_spec(self, name, path=None, target=None):
+                if name.split(".")[0] in ("app", "file_handler", "avaloka"):
+                    raise ImportError("no repository here: " + name)
+        sys.meta_path.insert(0, _NoRepo())
+        import pandas as pd
+    ''') + agent._with_csv_reader(agent._CSV_READER_MARKER) + textwrap.dedent(f'''
+        df = read_csv_best_effort({path!r})
+        print("|".join(str(v) for v in df["payment_method"].tolist()))
+    '''))
+
+    result = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, cwd=tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "|".join(WORDS + ["nan", "Card"])
+
+
+def test_an_analysis_run_through_the_real_local_executor_keeps_the_category(tmp_path):
+    """End to end through execute_code_on_local: the script it builds, the
+    reader spliced into it, the rewrite of the literal path, a real subprocess."""
+    import app.agents.execution_agent as agent
+
+    source, output = _csv(tmp_path, SURVEY_CSV), str(tmp_path / "out.csv")
+    code = textwrap.dedent('''
+        import pandas as pd
+        df = read_csv_best_effort("input.csv")
+        df.groupby("payment_method", as_index=False)["amount"].sum().to_csv("output.csv", index=False)
+    ''')
+
+    agent.execute_code_on_local(code=code, input_data_location=source, output_location=output)
+
+    with open(output, newline="") as handle:
+        totals = {row["payment_method"]: row["amount"] for row in csv.DictReader(handle)}
+    assert set(totals) == set(WORDS) | {"Card"}
+    assert totals["None"] == "1" and totals["Card"] == "10"

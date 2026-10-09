@@ -117,13 +117,30 @@ _DQ_LINE_RE = re.compile(
 
 _CONTEXT_SPLIT = re.compile(r"\n\s*\[(?:analysis context|context)\]", re.IGNORECASE)
 _EMPTY_CELLS = {"", "nan", "none", "null", "<na>", "nat"}
-# What _compact_rows leaves out of the prompt. Narrower than _EMPTY_CELLS:
-# "None" and "null" are real category labels (payment_method = "None"), and by
-# the time rows reach here every cell is a string, so a label cannot be told
-# from a stringified null. Dropping the label left the model a row it could not
-# name. "nan" / "nat" / "<na>" are still dropped: that is how pandas prints a
-# null, and a label literally spelled that way is the accepted loss.
-_OMITTED_CELLS = _EMPTY_CELLS - {"none", "null"}
+
+
+def _is_empty_cell(value: Any) -> bool:
+    """What _compact_rows leaves out of the prompt: a cell with nothing in it.
+
+    Only that. A cell holding the TEXT "None", "null", "nan" or "NaT" is kept,
+    because here it is far more likely a real label than a null:
+      - pandas writes a missing value to CSV as an empty cell, never as "nan",
+        and the result table is read back as text, so a genuine gap arrives
+        as "";
+      - a category really called None or NA is common (payment_method), and
+        dropping it leaves the model a row it cannot name.
+    A missing value that arrives as an object rather than as text (None, float
+    NaN, NaT, pd.NA -- the output_json path) is still empty. _EMPTY_CELLS above
+    stays wider on purpose: in an `issues` column "None" does mean no issue.
+    """
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    try:
+        return bool(value != value)      # NaN and NaT are the values unequal to themselves
+    except (TypeError, ValueError):
+        return True                      # pd.NA: comparing it has no truth value
 
 
 def _wants_data_quality(question: str, rows: List[Dict[str, Any]]) -> bool:
@@ -180,7 +197,7 @@ def _compact_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             continue
         out.append({
             k: v for k, v in row.items()
-            if v is not None and str(v).strip().lower() not in _OMITTED_CELLS
+            if not _is_empty_cell(v)
         })
     return out
 
@@ -240,12 +257,22 @@ def _narrate(question: str, rows: List[Dict[str, Any]]) -> Optional[str]:
     if text and _too_detailed(text, len(rows)):
         logger.info(
             "Narrator reply listed table values (%d numbers); asking for a summary instead.",
-            len(_NUMBER_RE.findall(text)),
+            _count_numbers(text),
         )
         retry_messages = messages + [AIMessage(content=text), HumanMessage(content=_REWRITE_NOTE)]
         # Shortening an answer it already wrote needs no deep reasoning.
-        resp = _invoke(retry_messages, _NARRATOR_MAX_TOKENS, effort="low")
-        summary = str(getattr(resp, "content", "") or "").strip()
+        # The rewrite is optional polish over a complete answer already in
+        # hand. If it fails (timeout, 429, 500) keep that answer: letting the
+        # error out of _narrate makes the node fall back to the generic
+        # "the analysis produced N rows" text and throws the real one away.
+        try:
+            rewrite = _invoke(retry_messages, _NARRATOR_MAX_TOKENS, effort="low")
+            summary = str(getattr(rewrite, "content", "") or "").strip()
+        except Exception as exc:
+            logger.warning(
+                "Narrator summary rewrite failed (%s); keeping the first answer.", exc,
+            )
+            summary = ""
         if summary:
             text = summary
 
@@ -267,6 +294,21 @@ def _narrate(question: str, rows: List[Dict[str, Any]]) -> Optional[str]:
 # prompt alone is not reliable on long multi-part requests ("for each X compute
 # A, B and C"), where models tend to emit one bullet per part listing every row.
 _NUMBER_RE = re.compile(r"(?<![\w.])-?\d[\d,]*(?:\.\d+)?")
+# A date names a row; it is not a value recited from the table. Without this,
+# "2024-03-01" counted as three numbers and a two-bullet time-series summary
+# that mentioned four dates was sent back for a second, full LLM call.
+# Year-first dates only (2024-03-01, 2024/3/1, optionally with a time): that is
+# what a result table holds, and anything looser would hide real numbers.
+_DATE_RE = re.compile(
+    r"(?<![\w.])\d{4}[-/]\d{1,2}[-/]\d{1,2}"
+    r"(?:[T ]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?![\w/-])"
+)
+
+
+def _count_numbers(text: str) -> int:
+    """How many table values a reply quotes. Dates are not counted."""
+    return len(_NUMBER_RE.findall(_DATE_RE.sub(" ", text)))
+
 _MAX_REPLY_NUMBERS = int(os.getenv("AVALOKA_NARRATOR_MAX_NUMBERS", "12"))
 _MAX_REPLY_BULLETS = int(os.getenv("AVALOKA_NARRATOR_MAX_BULLETS", "6"))
 _REWRITE_NOTE = (
@@ -280,7 +322,7 @@ def _too_detailed(text: str, n_rows: int) -> bool:
     """True when a reply recites the table instead of summarising it."""
     if n_rows <= 3:
         return False  # a tiny result IS the answer; stating its values is correct
-    numbers = len(_NUMBER_RE.findall(text))
+    numbers = _count_numbers(text)
     bullets = sum(1 for line in text.splitlines() if line.lstrip().startswith(("-", "*", "•")))
     return numbers > _MAX_REPLY_NUMBERS or bullets > _MAX_REPLY_BULLETS
 

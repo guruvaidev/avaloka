@@ -1,3 +1,4 @@
+
 import {
   ComposedChart,
   Area,
@@ -42,6 +43,8 @@ export type Slide = {
   xAxisTitle?: string;
   yAxisTitle?: string;
   reason?: string | null;
+  /** Backend values are already percentages. */
+  yFormat?: "percent";
   /** Chart couldn't be drawn; title + insights are still shown. */
   undrawable?: boolean;
 };
@@ -117,7 +120,7 @@ function buildFromEncodings(raw: any, samples: any[]): { data: any[]; xKey: stri
   let yField = yFieldRaw ? (resolveFieldKey(samples, yFieldRaw) ?? undefined) : undefined;
   const countKey = "__count__";
 
-  if (enc.x?.bin) {
+  if (enc.x?.bin || String(raw?.type ?? raw?.chart_type ?? raw?.kind ?? "").toLowerCase().includes("hist")) {
     const nbins = Number(raw?.config?.nbins) || 20;
     const nums = samples.map((r) => Number(r?.[xField])).filter((n) => Number.isFinite(n));
     if (!nums.length) return null;
@@ -141,8 +144,12 @@ function buildFromEncodings(raw: any, samples: any[]): { data: any[]; xKey: stri
     };
   }
 
+  const operation = aggregate || "mean";
+  const supportedAggregates = new Set(["count", "sum", "mean", "avg", "average", "median", "min", "max"]);
+  if (!supportedAggregates.has(operation)) return null;
+
   if (!yField) {
-    if (aggregate === "count") yField = countKey;
+    if (operation === "count") yField = countKey;
     else return null;
   }
 
@@ -259,6 +266,7 @@ export function normalizeChart(raw: any, samples?: any[]): Slide | null {
         ? undefined
         : (str(raw?.yAxisTitle ?? raw?.y_axis_title ?? raw?.yLabel ?? raw?.y_label) ?? undefined)),
     reason: str(raw?.reason),
+    yFormat: slide.type === "bar" && raw?.config?.y_format === "percent" ? "percent" : undefined,
   };
 }
 
@@ -367,6 +375,20 @@ function normalizeChartInner(raw: any, samples?: any[]): Slide | null {
     const type = pickType(raw);
     const title = raw.title ?? raw.name ?? raw.label ?? "Auto Insight";
     const subtitle = raw.subtitle ?? raw.description ?? raw.reason ?? undefined;
+
+    // Full-file bins must win over preview rows, including an explicitly empty bin list.
+    const isHistogram = String(raw.type ?? raw.chart_type ?? raw.kind ?? "").toLowerCase().includes("hist") || raw.encodings?.x?.bin;
+    if (isHistogram && Array.isArray(raw.derived_data?.points)) {
+      return {
+        title, subtitle, type: "bar",
+        data: raw.derived_data.points.map((point: any) => ({ x: point.x, count: Number(point.count ?? point.y) })),
+        xKey: "x",
+        series: [{ dataKey: "count", name: "Count", color: PALETTE[0] }],
+        insights: pickInsights(raw),
+        xAxisTitle: raw.encodings?.x?.title ?? raw.encodings?.x?.field,
+        yAxisTitle: "Count",
+      };
+    }
 
     const cat = buildCategorical(raw, samples, type);
     if (cat) {
@@ -575,7 +597,11 @@ export function DynamicChart({
   chartKey?: string;
 }) {
   const uid = (chartKey ?? slide.title ?? "chart").replace(/[^a-zA-Z0-9_-]/g, "_");
-  const axisTitles = chartAxisTitles(slide);
+  const inferredAxisTitles = chartAxisTitles(slide);
+  const axisTitles = {
+    x: inferredAxisTitles.x,
+    y: slide.yFormat === "percent" ? "Rate (%)" : inferredAxisTitles.y,
+  };
   const categoryTooltip =
     slide.xKey === "category"
       ? {
@@ -616,7 +642,7 @@ export function DynamicChart({
                 dataKey="value"
                 nameKey="name"
                 innerRadius={Math.max(40, height / 4)}
-                outerRadius={Math.max(60, height / 2.7)}
+                outerRadius={Math.min(105, Math.max(60, height / 2.7))}
                 paddingAngle={2}
               >
                 {pieData.map((_, i) => (
@@ -688,8 +714,19 @@ export function DynamicChart({
 
 
   if (slide.type === "bar") {
-    const margin = compact ? { top: 4, right: 4, left: -16, bottom: 0 } : { top: 8, right: 16, left: 24, bottom: 56 };
+    const margin = compact ? { top: 4, right: 4, left: -16, bottom: 0 } : { top: 8, right: 16, left: 24, bottom: 26 };
     const tickSize = compact ? 9 : 10;
+    const isPercent = slide.yFormat === "percent";
+    const formatValue = isPercent ? (value: number | string) => `${formatNumberCompact(value)}%` : formatNumberCompact;
+    const barTooltip = isPercent ? {
+      ...categoryTooltip,
+      formatter: (value: any, name: any, item: any) => {
+        const n = item?.payload?.n;
+        const count = n == null || n === "" ? NaN : Number(n);
+        const scope = Number.isFinite(count) ? ` (of ${count.toLocaleString("en-US")} rows)` : "";
+        return [`${formatValue(value)}${scope}`, slide.xKey === "category" ? item?.payload?.category ?? name : name];
+      },
+    } : categoryTooltip;
     return (
       <div className="w-full min-w-0" style={{ height, minHeight: height }}>
         <ResponsiveContainer width="100%" height="100%">
@@ -697,7 +734,15 @@ export function DynamicChart({
             <CartesianGrid stroke="#e4e7ec" strokeDasharray="3 3" />
             <XAxis
               dataKey={slide.xKey}
-              tick={{ fill: "#667085", fontSize: tickSize }}
+              tick={({ x, y, payload }: any) => {
+                const words = String(payload.value).match(/.{1,12}(?:\s|$)|.{1,12}/g) ?? [String(payload.value)];
+                return (
+                  <text x={x} y={y + 10} transform={`rotate(-45, ${x}, ${y + 10})`} textAnchor="end" className="fill-tertiary" fontSize={tickSize}>
+                    {words.map((word: string, i: number) => <tspan key={i} x={x} dy={i === 0 ? 0 : tickSize + 1}>{word.trim()}</tspan>)}
+                  </text>
+                );
+              }}
+              interval={0}
               tickLine={false}
               axisLine={false}
               hide={compact}
@@ -706,13 +751,13 @@ export function DynamicChart({
             />
             <YAxis
               tick={{ fill: "#667085", fontSize: tickSize }}
-              tickFormatter={formatNumberCompact}
+              tickFormatter={formatValue}
               tickLine={false}
               axisLine={false}
               width={compact ? 28 : 72}
               label={compact ? undefined : { value: axisTitles.y, angle: -90, position: "insideLeft", offset: 10, fill: "#344054", fontSize: 12, fontWeight: 600, style: { textAnchor: "middle" } }}
             />
-            <RTooltip {...categoryTooltip} />
+            <RTooltip {...barTooltip} />
             {slide.series.map((s) => (
 
               <Bar
