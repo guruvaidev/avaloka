@@ -72,6 +72,27 @@ Changelog = "https://github.com/guruvaidev/avaloka/blob/main/CHANGELOG.md"
 [project.optional-dependencies]
 llm = ["anthropic>=0.40"]
 dev = ["pytest>=8.0"]
+# Readers for declared formats that the base eight do not cover.
+#
+# pandas and pyarrow already decode JSON, XML, Parquet and ORC -- XML via the
+# standard library's `etree` parser, so lxml is a preference and not a
+# requirement. Two formats genuinely need a library: `.xlsx` needs openpyxl and
+# `.avro` needs fastavro, because pyarrow has no Avro reader.
+#
+# They are an extra rather than runtime dependencies because the CLI's eight are
+# contractually fixed -- `pip install avaloka` must not grow a spreadsheet
+# library. The absence of one is reported by `avaloka/io/loader.py` with this
+# install command, not as a traceback.
+#
+#   pip install 'avaloka[formats]'
+formats = ["openpyxl>=3.1", "fastavro>=1.9", "lxml>=5.0"]
+# The benchmark needs the same readers, to write the fixtures as well as read
+# them. Kept as its own name so `[formats]` stays the one a user installs.
+# It also re-publishes each dataset through the sources it grades: SQLite needs
+# SQLAlchemy and the object-storage source needs fsspec. Without them the
+# pipeline's benchmark step dies on its first task with ModuleNotFoundError.
+benchmark = ["openpyxl>=3.1", "fastavro>=1.9", "lxml>=5.0",
+             "sqlalchemy>=2.0", "fsspec>=2023.1"]
 
 [project.scripts]
 avaloka = "avaloka.cli:main"

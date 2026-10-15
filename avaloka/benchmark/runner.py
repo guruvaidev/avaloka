@@ -18,7 +18,7 @@ from typing import Optional
 import pandas as pd
 
 from avaloka import ray_batch, workload
-from avaloka.benchmark import scoring
+from avaloka.benchmark import comprehension, scoring
 from avaloka.benchmark.datasets import ensure_kaggle_dataset
 from avaloka.benchmark.spec import (BenchmarkTask, CheckResult, Scorecard,
                                     TaskResult)
@@ -29,17 +29,39 @@ from avaloka.mission.context import MissionContext, MissionKind
 from avaloka.missions import run_analyze, run_train
 
 
+#: What a plain install is told when a benchmark task needs a library that only
+#: the `benchmark` extra in pyproject.toml brings in.
+BENCHMARK_EXTRA_HINT = 'pip install "avaloka[benchmark]"'
+
+
 class BenchmarkRunner:
     """Runs a list of :class:`BenchmarkTask` and returns a :class:`Scorecard`."""
 
-    def __init__(self, base_dir: str | Path, *, verbose: bool = False) -> None:
+    def __init__(self, base_dir: str | Path, *, verbose: bool = False,
+                 edgar: bool = False) -> None:
         self.base_dir = Path(base_dir).expanduser()
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self.verbose = verbose
+        # EDGAR tasks reach the network, so they are opt-in exactly as Kaggle
+        # tasks are. Default off keeps `python -m avaloka.benchmark run`
+        # hermetic with every key unset.
+        self.edgar = edgar
 
     def _log(self, msg: str) -> None:
         if self.verbose:
             print(msg, flush=True)
+
+    @staticmethod
+    def _read_any(path: Path) -> pd.DataFrame:
+        """Read a prepared dataset back, whatever format it is in.
+
+        Goes through :func:`avaloka.io.load_dataset` -- the same reader the
+        missions use -- so the benchmark never sees a table the product could
+        not have seen. A private CSV read here would have quietly given the
+        suite a better view of the file than Avaloka gets, which is the one
+        thing a benchmark must not do.
+        """
+        return load_dataset(str(path)).frame
 
     # -- source exposure ---------------------------------------------------
     def _expose(self, base_csv: Path, frame: pd.DataFrame, scheme: str,
@@ -49,6 +71,9 @@ class BenchmarkRunner:
             return str(base_csv)
         workdir.mkdir(parents=True, exist_ok=True)
         if scheme in ("sqlite", "database"):
+            if frame is None:
+                raise ValueError(f"{base_csv.name}: only a CSV dataset can be re-published "
+                                 "through sqlite")
             import sqlalchemy
             db = workdir / "bench.db"
             engine = sqlalchemy.create_engine(f"sqlite:///{db}")
@@ -68,14 +93,28 @@ class BenchmarkRunner:
 
     # -- dataset preparation ----------------------------------------------
     def _prepare_dataset(self, task: BenchmarkTask, workdir: Path) -> Optional[tuple[Path, str]]:
-        """Return ``(local_csv_path, target)`` or None when unavailable (Kaggle skip)."""
+        """Return ``(local_path, target)`` or None when unavailable (Kaggle/EDGAR skip).
+
+        The suffix comes from the spec rather than being hard-coded ``.csv``.
+        That one assumption is why eight of the nine declared upload formats had
+        no benchmark coverage: a builder could only ever write a CSV, so there
+        was nowhere to put a workbook or an Avro container.
+        """
         spec = task.dataset
         if spec.kind == "synthetic":
-            dest = workdir / f"{spec.name}.csv"
+            dest = workdir / f"{spec.name}{spec.suffix}"
             spec.builder(dest)
             return dest, (task.target or spec.target or "")
         if spec.kind == "kaggle":
             path = ensure_kaggle_dataset(spec.kaggle_slug, spec.preferred_file)
+            if path is None:
+                return None
+            return path, (task.target or spec.target or "")
+        if spec.kind == "edgar":
+            if not self.edgar:
+                return None
+            from avaloka.benchmark.edgar import ensure_edgar_filing
+            path = ensure_edgar_filing(spec.edgar_cik, spec.edgar_accession, workdir)
             if path is None:
                 return None
             return path, (task.target or spec.target or "")
@@ -97,6 +136,7 @@ class BenchmarkRunner:
                 budget=Budget(limit_usd=task.budget), target=(target or None),
                 metric=task.metric, deployable=task.deployable)
             ctx.blackboard["workload"] = wl.as_dict()
+            ctx.blackboard["resolved_source"] = resolved.as_dict()
 
             (run_train if kind is MissionKind.TRAIN else run_analyze)(ctx)
 
@@ -107,19 +147,26 @@ class BenchmarkRunner:
             checks += scoring.score_workload(out, task.expectations)
             checks += scoring.score_roles(out, task.expectations)
             checks += scoring.score_quality(out, task.expectations)
+            checks += scoring.score_schema(out, task.expectations)
             checks += scoring.score_transformation(out)
             checks += scoring.score_leakage(out, task.expectations)
             checks += scoring.score_deployment_level(out, task.expectations)
             checks += scoring.score_fireflies(out, task.expectations)
             checks += scoring.score_economics(out, task.expectations)
             checks += scoring.score_plan(out, task.expectations)
+            checks += scoring.score_goal_analysis(out, task.expectations)
             checks += scoring.score_split_was_performed(out, task.expectations, frame)
+            # Did it understand the file at all? Every scorer above grades what
+            # Avaloka did with `frame`; none asks whether `frame` is the table
+            # that was in the file.
+            checks += comprehension.score_comprehension(out, task.expectations, frame)
             if task.kind == "train" and target:
                 model_frame = frame if target in frame.columns else \
                     pd.read_parquet(out / "transformed_dataset.parquet")
                 checks += scoring.score_model(out, task.expectations, model_frame, target)
                 checks += scoring.score_baseline(out, task.expectations)
                 checks += scoring.score_features_used(out, task.expectations)
+            checks = scoring.mark_guards(checks, task.expectations)
 
             error = None
         except Exception:
@@ -132,7 +179,7 @@ class BenchmarkRunner:
         started = time.perf_counter()
         checks: list[CheckResult] = []
         try:
-            frame = pd.read_csv(base_csv)
+            frame = self._read_any(base_csv)
             wl = workload.route(str(base_csv))
             if task.expectations.expected_lane:
                 checks.append(CheckResult(
@@ -156,7 +203,7 @@ class BenchmarkRunner:
         started = time.perf_counter()
         checks: list[CheckResult] = []
         try:
-            frame = pd.read_csv(base_csv)
+            frame = self._read_any(base_csv)
             kind = MissionKind.TRAIN if task.kind == "train" else MissionKind.ANALYZE
             main = MainAvaloka()
             cr = main.coordinate(
@@ -185,18 +232,92 @@ class BenchmarkRunner:
                           source_scheme="fleet", checks=checks, error=error,
                           artifacts_dir=str(out), duration_s=time.perf_counter() - started)
 
+    def _grade_refusal(self, task: BenchmarkTask, path: Path,
+                       workdir: Path) -> TaskResult:
+        """Grade a dataset the reader must refuse rather than guess at."""
+        started = time.perf_counter()
+        wanted = list(task.expectations.expected_refusal)
+        checks: list[CheckResult] = []
+        try:
+            frame = self._read_any(path)
+        except Exception as exc:
+            message = f"{type(exc).__name__}: {exc}"
+            missing = [token for token in wanted
+                       if token.lower() not in message.lower()]
+            checks.append(CheckResult(
+                "reader_refuses_ambiguous_document", True,
+                f"refused, as it must: {message[:200]}", weight=2.0))
+            checks.append(CheckResult(
+                "refusal_names_the_problem", not missing,
+                (f"the refusal does not name {missing}; a refusal that does not "
+                 f"say what is wrong leaves the user no next step. Message: "
+                 f"{message[:160]}") if missing else
+                f"names {wanted}, so the user knows what to extract",
+                weight=2.0))
+        else:
+            checks.append(CheckResult(
+                "reader_refuses_ambiguous_document", False,
+                (f"the reader returned a frame of {frame.shape[0]} rows and "
+                 f"columns {list(frame.columns)[:8]} for a document with no "
+                 f"single correct reading. It should have refused naming "
+                 f"{wanted}: silently choosing one interpretation is the defect "
+                 "this task exists for."), weight=2.0))
+            checks.append(CheckResult(
+                "refusal_names_the_problem", False,
+                "not reached: the reader did not refuse", weight=2.0))
+        return TaskResult(
+            task=task.name, family=task.family, kind=task.kind,
+            source_scheme="file", checks=checks, artifacts_dir=str(workdir),
+            duration_s=time.perf_counter() - started)
+
     # -- public API --------------------------------------------------------
     def run_task(self, task: BenchmarkTask) -> list[TaskResult]:
         workdir = self.base_dir / task.name
         workdir.mkdir(parents=True, exist_ok=True)
-        prepared = self._prepare_dataset(task, workdir)
+        try:
+            prepared = self._prepare_dataset(task, workdir)
+        except Exception as exc:
+            # A dataset that cannot be built is a FAILED run, with its reason,
+            # and the other tasks still run. It must never read as a skip: the
+            # exit rule skips an error containing one particular word, so the
+            # text is composed here and checked not to contain it.
+            reason = f"dataset could not be built: {type(exc).__name__}: {exc}"
+            if isinstance(exc, ImportError):
+                # The spreadsheet tasks write their own file with a library the
+                # CLI does not depend on. Say what to install.
+                reason += f' -- install the benchmark extra: {BENCHMARK_EXTRA_HINT}'
+            reason = reason.replace("unavailable", "not available")
+            self._log(f"  · {task.name}: {reason}")
+            return [TaskResult(task=task.name, family=task.family, kind=task.kind,
+                               source_scheme="—", checks=[], error=reason)]
         if prepared is None:
             self._log(f"  · {task.name}: dataset unavailable — skipped")
             return [TaskResult(task=task.name, family=task.family, kind=task.kind,
                                source_scheme="—", checks=[],
                                error="dataset unavailable (Kaggle not downloaded)")]
         base_csv, target = prepared
-        frame = pd.read_csv(base_csv)
+
+        # A dataset the reader is *supposed* to refuse is graded here, not by a
+        # mission: the decision happens at load time, and no mission should run
+        # on a document whose shape has no single correct reading.
+        if task.expectations.expected_refusal:
+            return [self._grade_refusal(task, base_csv, workdir)]
+
+        try:
+            frame = self._read_any(base_csv)
+        except Exception:
+            # A dataset the loader cannot read is a red task, not a dead run.
+            # This read was `pd.read_csv` with no guard, so the first
+            # unreadable format would have aborted the whole suite before any
+            # scorecard was written.
+            return [TaskResult(
+                task=task.name, family=task.family, kind=task.kind,
+                source_scheme="file", checks=[CheckResult(
+                    "dataset_is_readable", False,
+                    f"the benchmark could not read its own {task.dataset.suffix} "
+                    f"dataset back: {traceback.format_exc().strip().splitlines()[-1]}",
+                    weight=2.0)],
+                error=traceback.format_exc(), artifacts_dir=str(workdir))]
         results: list[TaskResult] = []
 
         if task.kind == "batch":

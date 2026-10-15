@@ -132,8 +132,8 @@ make connect RAY_ADDRESS=ray://<head-host>:10001
 ## Images: pull, or build
 
 Avaloka's own images are published to **GHCR** by
-`.github/workflows/images.yml`, which runs on pushes to `main`, `develop-1.6`
-and `oss/**`, and on `v*` tags — but only when something that actually goes
+`.github/workflows/images.yml`, which runs on pushes to `main` and
+`develop-1.6`, and on `v*` tags — but only when something that actually goes
 into an image changes (`app/`, `ui/`, `requirements.txt`, `pyproject.toml`,
 `deploy/docker/**`). All four images are currently published and pull
 anonymously:

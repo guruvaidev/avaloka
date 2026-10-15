@@ -53,12 +53,14 @@ that broke, or would have broken, a clean install or a first run.
   `live-local-model-nightly.yml` exercises a local model server, both driving
   `tests/live/`. Neither runs on pull requests, so a provider outage cannot
   redden a PR.
-- **`oss/1.6` is now generated**, not hand-maintained:
+- **The public tree is now generated**, not hand-maintained:
   `scripts/generate-oss.sh` builds it from `develop-1.6` per
   `oss/manifest.yaml`, which carries eight exclusion rules — several covering
   whole directories — plus an overlay and a set of assertions the generated
   tree must satisfy. Editing the public tree directly is not supported: the
-  next generation overwrites it. See
+  next generation overwrites it. Publishing is one squash commit on top of the
+  public `main`; the intermediate `oss/1.6` branch and the generator's `--write`
+  mode are retired, and the dry run compares against the published tree. See
   [`docs/oss-branch-model.md`](docs/oss-branch-model.md).
 
 ### Removed

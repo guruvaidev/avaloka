@@ -13,8 +13,17 @@ from app.agents.blueprint_contract import (
     check_contract,
     format_violations,
 )
+from app.agents.logical_review_verdict import (
+    LogicalReviewDecision,
+    record_logical_verdict,
+)
 import os
 STRICT_LOGIC_ENV = "AVALOKA_STRICT_LOGIC_VALIDATION"
+# Incomplete results are sent back to the coder (default on), but only while
+# the coder has had at most this many attempts, so a flaky reviewer can cost
+# one extra round, never a loop. Soft flags of any other kind still pass.
+INCOMPLETE_OUTPUT_ENV = "AVALOKA_BLOCK_INCOMPLETE_OUTPUT"
+INCOMPLETE_OUTPUT_MAX_ATTEMPTS = int(os.getenv("AVALOKA_INCOMPLETE_OUTPUT_MAX_ATTEMPTS", "2"))
 logger = logging.getLogger(__name__)
 from app.core.model_config import resolve as resolve_model
 from app.core.model_fallback import attach_fallback
@@ -22,10 +31,13 @@ from app.core.log_utils import describe_response
 
 _validator_api_key = (os.environ.get("GROQ_API_KEY_CODING_AGENT")
               or os.environ.get("GROQ_API_KEY"))
+# The gate must not run on the small tier. model_config names the model below,
+# but only the Groq path reads groq_model: on every other provider the tier,
+# not the table, decides the model, so the tier has to say "large" too.
 validator_llm = build_chat_model(
     role="coding",
     agent="VALIDATOR",
-    tier="small",
+    tier="large",
     temperature=0.0,
     groq_model=resolve_model("validator"),
     groq_api_key=_validator_api_key,
@@ -2335,15 +2347,43 @@ def contract_validator_node(state: CodingAgentState) -> dict:
     }
 
 
+_MALFORMED_VERDICT = object()
+
+
+def _read_verdict_flag(reply: dict, key: str):
+    """Read one reviewer verdict key by type, not by truthiness.
+
+    JSON mode guarantees valid JSON, not correct types: a reviewer that
+    answers ``"is_logically_correct": "false"`` has said "not correct", and
+    truthiness reads that string as approval.
+
+    Returns ``True`` / ``False`` for a JSON boolean, for the strings
+    "true" / "false" (any case, surrounding whitespace ignored) and for the
+    integers 1 / 0; ``None`` when the key is absent or null (the model did not
+    say; callers treat that as before, i.e. not true); and
+    ``_MALFORMED_VERDICT`` for anything else, which is no verdict either way.
+    """
+    value = reply.get(key)
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in (0, 1):
+        return value == 1
+    if isinstance(value, str) and value.strip().lower() in ("true", "false"):
+        return value.strip().lower() == "true"
+    return _MALFORMED_VERDICT
+
+
 def logical_semantic_validator_node(state: CodingAgentState) -> dict:
     """Uses an LLM to check if the code logically fulfills the user prompt."""
-    if state.get("syntax_error") or state.get("static_semantic_error"): return {}
+    if state.get("syntax_error") or state.get("static_semantic_error"):
+        return record_logical_verdict(LogicalReviewDecision.SKIPPED_UPSTREAM_ERROR)
     logger.info("--- Checking Logic with LLM Reviewer ---")
     logger.info(f"--- CODE TO VALIDATE ---\n{state.get('generated_code')}\n")
 
     if validator_llm is None:
         logger.info("Skipping LLM review because GROQ_API_KEY_CODING_AGENT is not configured.")
-        return {"logical_semantic_error": False, "code_validation_feedback": "APPROVED"}
+        return {"logical_semantic_error": False, "code_validation_feedback": "APPROVED",
+                **record_logical_verdict(LogicalReviewDecision.SKIPPED_NO_REVIEWER)}
     
     # strict_mode = os.getenv(STRICT_LOGIC_ENV, "0") == "1"
     # #  include output preview to reduce hallucinations
@@ -2430,15 +2470,36 @@ def logical_semantic_validator_node(state: CodingAgentState) -> dict:
     ```
     - Output columns: {output_cols_text}
     - Output preview (2-row sample run):
-        Does the code meet all requirements, avoid inventing undefined logic, and run without unexpected errors?
+    {output_preview_text}
+
+    OUTPUT COMPLETENESS:
+    - The user sees ONLY the DataFrame returned by main(df). Values that are only
+      printed to STDOUT are invisible to the user.
+    - List in "missing_outputs" every value the user EXPLICITLY asked for (for example
+      "total row count", "number of duplicate rows", "negative billing amounts") that is
+      not a column or row of the returned DataFrame, including values that appear only
+      in print() output. Use [] when everything requested is in the returned DataFrame.
+    - Do not list things the user did not ask for.
+    - Only list computed VALUES that are absent. Do NOT list commentary, summaries,
+      rankings, comparisons or explanations ("point out which ...", "comment on ...",
+      "summarise ...") when the numbers they need are already in the returned table:
+      a separate step writes the chat answer from that table.
+
+    Does the code meet all requirements, avoid inventing undefined logic, and run without unexpected errors?
     {{
       "is_logically_correct": <true_or_false>,
       "is_fabricated": <true_or_false>,
+      "missing_outputs": [<requested values not in the returned DataFrame>],
       "rationale": "<Your reasoning. If false, provide clear, actionable feedback for the developer.>"
     }}
     """
     messages = [SystemMessage(content="You are a python code reviewer."), HumanMessage(content=prompt)]
-    response = validator_llm.invoke(messages)
+    try:
+        response = validator_llm.invoke(messages)
+    except Exception:
+        # Instrumentation only: count the failed call, then let it propagate as before.
+        record_logical_verdict(LogicalReviewDecision.NO_VERDICT_LLM_ERROR)
+        raise
     logger.info("Validator LLM answered: %s", describe_response(response))
     logger.info(f"--- LLM CODE REVIEW RESPONSE ---\n{response}\n")
     try:
@@ -2447,9 +2508,38 @@ def logical_semantic_validator_node(state: CodingAgentState) -> dict:
         if review is None:
             raise json.JSONDecodeError("Reviewer output was not valid JSON.", raw_content, 0)
         logger.info(f"--- LLM REVIEW ---\n{review}\n")
-        if review.get("is_logically_correct"):
+        verdict_correct = _read_verdict_flag(review, "is_logically_correct")
+        verdict_fabricated = _read_verdict_flag(review, "is_fabricated")
+        # Each verdict is read on its own: an unreadable one is no verdict for
+        # that key only. Recorded as read (None when unreadable), never acted on.
+        correctness_unreadable = verdict_correct is _MALFORMED_VERDICT
+        fabrication_unreadable = verdict_fabricated is _MALFORMED_VERDICT
+        judged_correct = None if correctness_unreadable else bool(verdict_correct)
+        judged_fabricated = None if fabrication_unreadable else bool(verdict_fabricated)
+        recheck_ran = False
+        recheck_confirmed = None
+        # Returned when the correctness verdict parsed as JSON but is unusable:
+        # handled exactly like an unparseable reply (neither approval nor rejection).
+        no_correctness_verdict = {
+            "logical_semantic_error": False,
+            "code_validation_feedback": "Reviewer response unparsable; skipping logical validation.",
+        }
+        # A readable is_fabricated=true stands on its own and still goes to the
+        # recheck below; without one there is nothing readable to act on.
+        if correctness_unreadable and verdict_fabricated is not True:
+            logger.error("Reviewer verdict was not a boolean; skipping logical validation.")
+            return {
+                **no_correctness_verdict,
+                **record_logical_verdict(
+                    LogicalReviewDecision.NO_VERDICT_MALFORMED_VALUE,
+                    judged_fabricated=judged_fabricated),
+            }
+        if verdict_correct is True:
             logger.info("✅ Logic is correct.")
-            return {"logical_semantic_error": False, "code_validation_feedback": "APPROVED"}
+            return {"logical_semantic_error": False, "code_validation_feedback": "APPROVED",
+                    **record_logical_verdict(
+                        LogicalReviewDecision.APPROVED,
+                        judged_correct=judged_correct, judged_fabricated=judged_fabricated)}
         # else:
         #     feedback = review.get("rationale", "No rationale provided.")
         #     logger.warning(f"❌ Logic is flawed: {feedback}")
@@ -2462,7 +2552,7 @@ def logical_semantic_validator_node(state: CodingAgentState) -> dict:
             # / magic constants / category mappings must never be silently approved
             # and shipped as confident-but-meaningless numbers. (Runtime crashes are
             # handled by the execution feedback loop, not this pre-execution node.)
-            is_fabricated = bool(review.get("is_fabricated"))
+            is_fabricated = verdict_fabricated is True
 
             # A fabrication block must survive a second independent judge pass:
             # the small reviewer model flakes on standard derivations (grouped
@@ -2471,26 +2561,96 @@ def logical_semantic_validator_node(state: CodingAgentState) -> dict:
             # are stable across calls and still confirm; flaky misfires do not.
             if is_fabricated and not strict_mode:
                 try:
+                    recheck_ran = True
                     recheck_resp = validator_llm.invoke(messages)
                     recheck = _extract_json_dict(_coerce_message_content(recheck_resp.content)) or {}
-                    if not bool(recheck.get("is_fabricated")):
+                    # A malformed recheck value neither confirms nor approves,
+                    # the same as a recheck reply that did not parse.
+                    recheck_fabricated = _read_verdict_flag(recheck, "is_fabricated")
+                    recheck_confirmed = (
+                        None if recheck_fabricated is _MALFORMED_VERDICT else bool(recheck_fabricated)
+                    )
+                    fabrication_unreadable = recheck_fabricated is _MALFORMED_VERDICT
+                    if recheck_fabricated is not True:
                         logger.warning(
                             "Fabrication verdict NOT confirmed on recheck; treating as soft flag."
                         )
                         is_fabricated = False
-                        if recheck.get("is_logically_correct"):
+                        if _read_verdict_flag(recheck, "is_logically_correct") is True:
                             logger.info("✅ Recheck approved the code outright.")
-                            return {"logical_semantic_error": False, "code_validation_feedback": "APPROVED"}
+                            return {"logical_semantic_error": False, "code_validation_feedback": "APPROVED",
+                                    **record_logical_verdict(
+                                        LogicalReviewDecision.APPROVED_ON_RECHECK,
+                                        judged_correct=judged_correct, judged_fabricated=judged_fabricated,
+                                        recheck_ran=recheck_ran, recheck_confirmed=recheck_confirmed)}
                 except Exception:
                     logger.exception("Fabrication recheck failed; keeping original verdict.")
+
+            # Requested values missing from the returned DataFrame (often computed
+            # but only print()-ed): the user would get a confident answer without
+            # them, and the narrator would describe a table that omits them.
+            # Send back once; after that, accept the code as before.
+            missing_outputs = [
+                str(m).strip() for m in (review.get("missing_outputs") or [])
+                if str(m).strip()
+            ] if isinstance(review.get("missing_outputs"), list) else []
+            attempts = int(state.get("retry_count") or 0)
+            block_incomplete = os.getenv(INCOMPLETE_OUTPUT_ENV, "1").lower() not in ("0", "false", "no")
+            if missing_outputs and not (block_incomplete and not is_fabricated
+                                        and attempts <= INCOMPLETE_OUTPUT_MAX_ATTEMPTS):
+                logger.info(
+                    "Incomplete output noted but not blocked (attempt=%d, max=%d, enabled=%s, "
+                    "fabricated=%s): %s", attempts, INCOMPLETE_OUTPUT_MAX_ATTEMPTS,
+                    block_incomplete, is_fabricated, ", ".join(missing_outputs),
+                )
+            if (missing_outputs and block_incomplete and not is_fabricated
+                    and attempts <= INCOMPLETE_OUTPUT_MAX_ATTEMPTS):
+                logger.warning(
+                    "Blocking code (incomplete output: %s) and returning it to the coder "
+                    "(attempt %d).", ", ".join(missing_outputs), attempts,
+                )
+                return {
+                    "logical_semantic_error": True,
+                    "code_validation_feedback": (
+                        "The returned DataFrame is missing values the user asked for: "
+                        + "; ".join(missing_outputs)
+                        + ". Put every requested value into the DataFrame that main(df) "
+                        "returns (as columns, or as rows of a summary table). Values only "
+                        "printed with print() are not shown to the user. Reviewer notes: "
+                        + feedback
+                    ),
+                }
 
             # STRICT MODE, or a fabricated result: block and send feedback to coder.
             if strict_mode or is_fabricated:
                 reason = "fabricated logic" if is_fabricated else "strict mode"
                 logger.warning("Blocking code (%s) and returning feedback to coder.", reason)
+                # Strict mode blocks any "not correct" verdict, fabricated or not,
+                # and runs no recheck; otherwise the block is a fabrication one.
+                if strict_mode:
+                    decided_by = LogicalReviewDecision.BLOCKED_STRICT_MODE
+                elif recheck_confirmed:
+                    decided_by = LogicalReviewDecision.BLOCKED_FABRICATION_CONFIRMED
+                else:
+                    decided_by = LogicalReviewDecision.BLOCKED_FABRICATION_RECHECK_FAILED
                 return {
                     "logical_semantic_error": True,
                     "code_validation_feedback": feedback,
+                    **record_logical_verdict(
+                        decided_by,
+                        judged_correct=judged_correct, judged_fabricated=judged_fabricated,
+                        recheck_ran=recheck_ran, recheck_confirmed=recheck_confirmed),
+                }
+
+            # Fabrication was not confirmed and correctness was never readable:
+            # still no verdict, not an overrule of a "not correct".
+            if correctness_unreadable:
+                return {
+                    **no_correctness_verdict,
+                    **record_logical_verdict(
+                        LogicalReviewDecision.NO_VERDICT_MALFORMED_VALUE,
+                        judged_fabricated=judged_fabricated,
+                        recheck_ran=recheck_ran, recheck_confirmed=recheck_confirmed),
                 }
 
             # DEFAULT MODE (soft flags only): do NOT block pipeline; don't trigger stub fallback
@@ -2498,12 +2658,18 @@ def logical_semantic_validator_node(state: CodingAgentState) -> dict:
                 "logical_semantic_error": False,
                 "code_validation_feedback": "APPROVED",
                 "logical_review_feedback": feedback,  # store notes separately
+                **record_logical_verdict(
+                    LogicalReviewDecision.SOFT_FLAG_FABRICATION_UNREADABLE if fabrication_unreadable
+                    else LogicalReviewDecision.SOFT_FLAG_DEFAULT_MODE,
+                    judged_correct=judged_correct, judged_fabricated=judged_fabricated,
+                    recheck_ran=recheck_ran, recheck_confirmed=recheck_confirmed),
             }
     except (json.JSONDecodeError, AttributeError) as exc:
         logger.error(f"Reviewer LLM failed to return valid JSON: {exc}")
         return {
             "logical_semantic_error": False,
-            "code_validation_feedback": "Reviewer response unparsable; skipping logical validation."
+            "code_validation_feedback": "Reviewer response unparsable; skipping logical validation.",
+            **record_logical_verdict(LogicalReviewDecision.NO_VERDICT_UNPARSEABLE),
         }
 
 

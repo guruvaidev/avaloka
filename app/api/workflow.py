@@ -15,6 +15,7 @@ from app.core.analysis_limits import byte_routing_enabled
 
 from app.agents.coder import coder_node, coder_llm
 from app.agents.state import CodingAgentState
+from app.agents.logical_review_verdict import LOGICAL_REVIEW_VERDICT_KEYS
 from app.agents.multi_action import ActionPlan, execute_action_plan, plan_metric_actions
 from app.agents.validator import (
     syntactic_validator_node,
@@ -848,6 +849,7 @@ def coding_subgraph_node(state: ETLState) -> dict:
             "coder_raw_response": coder_message_text,
             "coder_pseudocode": final_coding_state.get("coder_pseudocode"),
             "logical_review_feedback": final_coding_state.get("logical_review_feedback"),
+            **{k: final_coding_state.get(k) for k in LOGICAL_REVIEW_VERDICT_KEYS},
             "execution_error": refusal,
         }
 
@@ -864,6 +866,7 @@ def coding_subgraph_node(state: ETLState) -> dict:
         "execution_stderr": final_coding_state.get("execution_stderr"),
         "execution_error": final_coding_state.get("execution_error"),
         "logical_review_feedback": final_coding_state.get("logical_review_feedback"),
+        **{k: final_coding_state.get(k) for k in LOGICAL_REVIEW_VERDICT_KEYS},
         "structured_action_plan": None,
         "multi_action_actions": None,
         "multi_action_missing": None,

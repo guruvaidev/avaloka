@@ -249,3 +249,102 @@ def build_no_signal(dest: Path, n: int = 800, seed: int = 29) -> Path:
     })
     frame.to_csv(dest, index=False)
     return dest
+
+
+#: build_null_labelled_payments' ground truth: label -> planted row count.
+#: Three of the eight labels are words pandas reads as missing.
+NULL_LABELLED_PAYMENT_COUNTS = {
+    "card": 12, "cash": 9, "bank_transfer": 7, "wallet": 6, "cheque": 5,
+    "None": 8, "NA": 5, "N/A": 3,
+}
+NULL_LABELLED_REVENUE_PER_ROW = 100.0
+NULL_LABELLED_AMOUNT_GAP_ROWS = (4, 21, 40)
+
+
+def build_null_labelled_payments(dest: Path, n: int = 55) -> Path:
+    """Null-like words that are real categories, plus a typed column that is not.
+
+    THIS DATASET MUST STAY SMALL, AND THAT IS NOT A STYLE PREFERENCE
+        Every expectation here is an exact count: 8 categories, 55 rows,
+        revenue = 100.0 per row so each group's sum is 100 x its planted count.
+        Above SAMPLE_THRESHOLD_ROWS (avaloka/fireflies/sampling_specialist.py:18,
+        100_000) the SamplingSpecialist replaces working_frame with a sample, and
+        AnalysisPlanner hands that sample to analyze_goal. Every exact count then
+        becomes approximate and every check here degrades to vacuous WITHOUT
+        ANYTHING GOING RED. Do not grow n to "make it more realistic": a larger
+        n measures less. If you need a large-data variant, make it a separate
+        task with separate, inexact expectations.
+
+    WHY THREE OF THE EIGHT CATEGORIES ARE None / NA / N/A
+        They are the defect. A text column's null-like words are labels, not
+        missing values (file_handler/null_policy.py). A bare pd.read_csv loses
+        them, and avaloka/io/loader.py was one: 6 groups instead of 8, with the
+        three merged into one "nan" bucket holding their exact combined sum.
+
+    WHY `amount` WRITES ITS GAPS AS THE LITERAL "NA"
+        It must stay numeric, and it is here to fail the wrong fix rather than
+        the current one. The obvious repair for the above -- keep_default_na
+        =False -- keeps the labels and breaks every column that writes its gaps
+        as NA: it loads as text and arithmetic on it fails. null_policy.py:30-37
+        says so in its own words. expected_roles pins `amount` to "numeric", so
+        that repair cannot land green. This column is green today, on purpose,
+        and is category-marked "guard" for that reason.
+    """
+    planted = sum(NULL_LABELLED_PAYMENT_COUNTS.values())
+    if n != planted:
+        raise ValueError(f"the planted counts are exact and sum to {planted}; n={n} is not supported")
+    labels = [label for label, count in NULL_LABELLED_PAYMENT_COUNTS.items() for _ in range(count)]
+    # A fixed interleaving, so no label sits in one contiguous block.
+    order = np.random.default_rng(31).permutation(n)
+    amount = [f"{10.5 + 1.25 * i:.2f}" for i in range(n)]
+    for gap in NULL_LABELLED_AMOUNT_GAP_ROWS:
+        amount[gap] = "NA"
+    frame = pd.DataFrame({
+        "payment_method": [labels[i] for i in order],
+        "revenue": [NULL_LABELLED_REVENUE_PER_ROW] * n,
+        "amount": amount,
+    })
+    frame.to_csv(dest, index=False)
+    return dest
+
+
+#: build_titled_sheet's ground truth: the header as written, and the data rows.
+TITLED_SHEET_TITLE = "Quarterly sales report"
+TITLED_SHEET_HEADER = ["region", "units", "revenue"]
+TITLED_SHEET_ROWS_PER_REGION = 4
+TITLED_SHEET_REVENUE_PER_ROW = 100.0
+
+
+def build_titled_sheet(dest: Path, regions: tuple[str, ...] = ("north", "south", "east")) -> Path:
+    """A spreadsheet whose table does not start in cell A1.
+
+    The shape hand-maintained sheets have: a title in row 1, a blank row, the
+    header in row 3, everything indented one column so column A is empty, and
+    the pane frozen under the header. Read as if row 1 were the header, the
+    title becomes a column name and the real headers become "Unnamed: n".
+
+    Four rows per region, units 1, 2, 3 ... and revenue 100.0 on every row, so
+    a total by region is 400.0 exactly. Small for the same reason as the other
+    exact datasets here.
+
+    Written with openpyxl, which is in the `benchmark` extra and not among the
+    CLI's runtime dependencies. Without it this raises, and the runner records
+    the task as FAILED, not skipped, with the extra to install.
+    """
+    import openpyxl
+
+    book = openpyxl.Workbook()
+    sheet = book.active
+    sheet.title = "Sales"
+    sheet["B1"] = TITLED_SHEET_TITLE
+    for offset, name in enumerate(TITLED_SHEET_HEADER):
+        sheet.cell(row=3, column=2 + offset, value=name)
+    row = 4
+    for region in regions:
+        for _ in range(TITLED_SHEET_ROWS_PER_REGION):
+            for offset, value in enumerate((region, row - 3, TITLED_SHEET_REVENUE_PER_ROW)):
+                sheet.cell(row=row, column=2 + offset, value=value)
+            row += 1
+    sheet.freeze_panes = "C4"
+    book.save(dest)
+    return dest

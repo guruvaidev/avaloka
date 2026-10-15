@@ -435,3 +435,13 @@ def test_a_recital_full_of_dates_is_still_too_detailed():
     reply = "\n".join(f"- 2024-01-{day:02d}: {day * 10} units" for day in range(1, 14))
     assert rn._count_numbers(reply) == 13
     assert rn._too_detailed(reply, 30) is True
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("total 56\u202f106\u202f087\u202f508 units", 1),   # narrow no-break spaces: one value
+    ("56\u00a0106.5 and 7", 2),                        # no-break space, with a decimal
+    ("56,106,087,508", 1),                             # comma groups: one value
+    ("100 101 102", 3),                                # plain spaces separate values
+])
+def test_space_grouped_values_count_once_but_plain_spaces_separate(text, expected):
+    assert rn._count_numbers(text) == expected

@@ -172,7 +172,7 @@ including which cases are blocked and on what.
 
 **Benchmarks.** `python -m avaloka.benchmark run` is a deterministic regression
 harness — no LLM involved — over the ingestion and data-science paths. It
-currently passes 17/17. That number is a floor, not a leaderboard result: it
+currently passes 19/19. That number is a floor, not a leaderboard result: it
 scored 1.00 before *and* after five real defects were fixed, because no task
 carried the shape that triggers them. Full scorecard and an account of what it
 does **not** measure: [docs/benchmarks.md](docs/benchmarks.md).

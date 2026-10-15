@@ -860,6 +860,13 @@ def _load_file_with_daft(path: str, source_type: str, **kwargs) -> Tuple[Optiona
             import pandas as pd
             handler = FileHandler(path, source_type)
             df = daft.from_pandas(pd.DataFrame(handler.load_data(), columns=handler.get_columns()))
+        elif source_fmt == "orc":
+            # Declared in SUPPORTED_UPLOAD_EXTS and, until the ORC connector
+            # landed, readable by nothing: the upload path had no branch and
+            # this one fell through to the ValueError below. Daft has no ORC
+            # reader, so go via pyarrow -- already a dependency on both sides.
+            import pandas as pd
+            df = daft.from_pandas(pd.read_orc(abs_path))
         elif source_fmt == "json":
             df = daft.read_json(abs_path, **kwargs)
         elif source_fmt == "xml":
@@ -875,7 +882,7 @@ def _load_file_with_daft(path: str, source_type: str, **kwargs) -> Tuple[Optiona
         else:
             raise ValueError(
                 f"Unsupported source type: {source_fmt}. Supported: "
-                f"csv, tsv, json, xml, parquet, avro, xls, xlsx.")
+                f"csv, tsv, json, xml, parquet, orc, avro, xls, xlsx.")
         
         return df, temp_files
     except Exception as e:

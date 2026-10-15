@@ -3253,7 +3253,7 @@ def test_e2e_connect_then_job_push_uses_connection(client, monkeypatch):
 
 
 # ======================================================================================
-# ADDITIONAL TESTS — append below the existing contents of test_server_integration.py
+# ADDITIONAL TESTS — append below the existing contents of test_server_unit.py
 #
 # These reuse the fixtures/helpers already defined in that file:
 #   client, SESSIONS, THREAD_TO_SESSION, PERSIST_CALLS, FakeGraph, FakeBlobStore,

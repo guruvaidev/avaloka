@@ -21,10 +21,12 @@ redacted or name-stripped version of it, not counts derived from its content.
 Also not: user ids, e-mail addresses, file names, column or table names, cell
 values, IP addresses, or any key outside ``allowlist.EXPORT_KEYS``.
 
-The wire format is PR #329's: gzip NDJSON, one record per line. Its ingest
-currently rejects every event type this module produces
-(``telemetry_service/schema.py`` has a closed four-value ``EVENT_TYPES``), so
-the destination must accept the ``analytics.*`` types before this is enabled.
+The wire format is the telemetry ingest's: gzip NDJSON, one record per line. It
+(``telemetry_service/schema.py``) accepts the ``analytics.*`` types this module
+produces and, per type, exactly the fields ``to_wire`` can emit; anything else
+rejects the batch. That schema is restated there, not imported from here, so a
+field added to ``to_wire`` must be added to it as well --
+``tests/telemetry_ingest/test_analytics_contract.py`` fails until it is.
 """
 
 from __future__ import annotations

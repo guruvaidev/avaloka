@@ -14,7 +14,7 @@ from app.core.log_utils import describe_messages
 from langchain_anthropic import ChatAnthropic
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
-from app.core.agent_llm import build_agent_llm
+from app.core.agent_llm import build_agent_llm, unconfigured_reason
 from sqlalchemy import create_engine, text
 from app.agents.coder import (
     _coerce_response_text,
@@ -50,21 +50,33 @@ def _get_cached_chroma_collection(db_path: str, collection_name: str, embedding_
     return load_chroma_collection(db_path, collection_name, embedding_model)
 
 # LLM initialisation
+def _coder_groq_key() -> str | None:
+    return (os.environ.get("GROQ_API_KEY_CODING_AGENT")
+            or os.environ.get("GROQ_API_KEY"))
+
+
+def coder_unavailable_reason() -> str:
+    """Why there is no coder model, naming the setting that would fix it."""
+    return unconfigured_reason(
+        agent="DTA_CODER",
+        api_key=_coder_groq_key(),
+        role="coding",
+        groq_key_var="GROQ_API_KEY_CODING_AGENT (or GROQ_API_KEY)",
+    )
+
+
 def _build_coder_llm() -> ChatGroq | None:
-    """Construct the coder LLM from environment variables, or return None."""
-    api_key = (os.environ.get("GROQ_API_KEY_CODING_AGENT")
-               or os.environ.get("GROQ_API_KEY"))
-    if not api_key:
-        logger.warning(
-            "GROQ_API_KEY_CODING_AGENT is not set — code generation will be skipped."
-        )
-        return None
+    """Construct the coder LLM for the active provider, or return None."""
+    # No early return on a missing Groq key: it is the credential on the Groq
+    # path only, and the factory returns None itself when the provider it
+    # resolves has none. See the same note in daft_validator.py.
+    api_key = _coder_groq_key()
 
     # Hybrid-reasoning code generation (effort "medium": correctness of the
     # transfer code benefits from deliberation; verified live to be fast and
     # AST-clean). DTA_CODER_MODEL=llama-3.3-70b-versatile restores the
     # previous non-reasoning behavior.
-    return build_agent_llm(
+    llm = build_agent_llm(
         agent="DTA_CODER",
         api_key=api_key,
         default_model="openai/gpt-oss-120b",
@@ -73,6 +85,12 @@ def _build_coder_llm() -> ChatGroq | None:
         env_model_var="DTA_CODER_MODEL",
         role="coding",
     )
+    if llm is None:
+        logger.warning(
+            "No data-transfer coder model: %s. Code generation will be skipped.",
+            coder_unavailable_reason(),
+        )
+    return llm
 
 coder_llm = _build_coder_llm()
 

@@ -53,6 +53,12 @@ Per-role override (``PLANNING`` | ``CODING`` | ``VIZ``)::
 Per-agent override (highest precedence), e.g. the planner::
 
     AVALOKA_PLANNER_PROVIDER=local
+
+OpenRouter routing (applies to EVERY agent on the OpenRouter path)::
+
+    AVALOKA_OPENROUTER_SORT=throughput        # default; "price"/"latency", or "none"
+    AVALOKA_<AGENT>_OPENROUTER_SORT=latency   # per-agent override
+    AVALOKA_OPENROUTER_PROVIDERS=Groq,Cerebras  # optional preferred providers, in order
 """
 from __future__ import annotations
 
@@ -258,6 +264,24 @@ _PROVIDER_MODEL_DEFAULTS = {
 }
 
 
+#: What each provider's builder below needs before it returns a client, in the
+#: operator's words. Groq is absent on purpose: its key is per agent, so the
+#: caller names it. Kept beside the builders so the two cannot drift apart.
+_PROVIDER_REQUIREMENT = {
+    OPENROUTER: "OPENROUTER_API_KEY",
+    OPENAI: "OPENAI_API_KEY",
+    LOCAL: "INFERENCE_LOCAL_BASE_URL",
+    BEDROCK: "AWS_REGION and the langchain-aws package",
+    VERTEX: "the langchain-google-vertexai package and Google credentials",
+    AZURE: "AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_API_KEY and a deployment name",
+}
+
+
+def provider_requirement(provider: str) -> str:
+    """The setting to name when *provider* returned no client."""
+    return _PROVIDER_REQUIREMENT.get(provider, f"credentials for provider {provider!r}")
+
+
 def _resolve_model(provider: str, agent: str, tier: str) -> str:
     tier = "small" if str(tier).lower() == "small" else "large"
     default = _PROVIDER_MODEL_DEFAULTS.get(provider, {}).get(tier, "")
@@ -290,7 +314,47 @@ def _build_groq(*, model, temperature, api_key, reasoning_effort, reasoning_form
     return ChatGroq(**kwargs)
 
 
-def _build_openai_compatible(*, provider, model, temperature):
+# OpenRouter sends each request to one of several upstream providers. Its
+# default choice is not the fastest: measured on gpt-oss locally, agents on the
+# default route got ~55-70 output tokens/s (validator 780 tokens in 14.6 s),
+# while the visualization agent, the only one that asked for
+# sort=throughput, got ~1,000 tokens/s. Set the routing here, once, so every
+# agent gets it.
+_OPENROUTER_SORTS = ("throughput", "price", "latency")
+
+
+def _openrouter_routing(agent: str) -> Optional[dict]:
+    """The OpenRouter ``provider`` preferences for *agent*, or None for default routing."""
+    sort = (_env_first(
+        f"AVALOKA_{agent.upper()}_OPENROUTER_SORT",
+        "AVALOKA_OPENROUTER_SORT",
+        default="throughput",
+    ) or "").strip().lower()
+    order = [
+        p.strip()
+        for p in (_env_first(
+            f"AVALOKA_{agent.upper()}_OPENROUTER_PROVIDERS",
+            "AVALOKA_OPENROUTER_PROVIDERS",
+            default="",
+        ) or "").split(",")
+        if p.strip()
+    ]
+    routing: dict = {}
+    if sort in _OPENROUTER_SORTS:
+        routing["sort"] = sort
+    elif sort not in ("", "none", "off", "default"):
+        logger.warning("Ignoring unknown OpenRouter sort %r for %s (use %s or none).",
+                       sort, agent, "/".join(_OPENROUTER_SORTS))
+    if order:
+        routing["order"] = order
+        # Preferred providers first, but never fail the request because they
+        # are busy: fall back to the rest of the pool.
+        routing["allow_fallbacks"] = True
+    return routing or None
+
+
+def _build_openai_compatible(*, provider, model, temperature, agent: str = "",
+                             reasoning_effort: Optional[str] = None):
     """Local vLLM/Ollama, hosted OpenAI, and OpenRouter — all OpenAI-spec."""
     from langchain_openai import ChatOpenAI
 
@@ -321,7 +385,21 @@ def _build_openai_compatible(*, provider, model, temperature):
     if not model:
         logger.warning("%s selected but no model resolved — LLM disabled.", provider)
         return None
-    return ChatOpenAI(model=model, temperature=temperature, api_key=api_key, base_url=base_url)
+
+    kwargs = dict(model=model, temperature=temperature, api_key=api_key, base_url=base_url)
+    if provider == OPENROUTER:
+        extra_body: dict = {}
+        routing = _openrouter_routing(agent)
+        if routing:
+            extra_body["provider"] = routing
+        # Same reasoning effort the Groq path sends. Without it OpenRouter used
+        # the model default, and gpt-oss spent most of its output on hidden
+        # reasoning (validator: 648 of 780 tokens).
+        if reasoning_effort is not None and supports_reasoning(model):
+            extra_body["reasoning"] = {"effort": reasoning_effort}
+        if extra_body:
+            kwargs["extra_body"] = extra_body
+    return ChatOpenAI(**kwargs)
 
 
 def _build_bedrock(*, model, temperature):
@@ -494,7 +572,10 @@ def build_chat_model(
         model = _resolve_model(provider, agent, tier)
         model_desc = model
         if provider in (LOCAL, OPENAI, OPENROUTER):
-            llm = _build_openai_compatible(provider=provider, model=model, temperature=temperature)
+            llm = _build_openai_compatible(
+                provider=provider, model=model, temperature=temperature,
+                agent=agent, reasoning_effort=reasoning_effort,
+            )
         elif provider == BEDROCK:
             llm = _build_bedrock(model=model, temperature=temperature)
         elif provider == VERTEX:
@@ -504,7 +585,13 @@ def build_chat_model(
             return None
 
     if llm is not None:
-        logger.info("%s LLM: %s/%s", agent, provider, model_desc)
+        if provider == OPENROUTER:
+            routing = _openrouter_routing(agent)
+            effort = reasoning_effort if (reasoning_effort and supports_reasoning(model_desc)) else "default"
+            logger.info("%s LLM: %s/%s (routing=%s, reasoning=%s)",
+                        agent, provider, model_desc, routing or "openrouter-default", effort)
+        else:
+            logger.info("%s LLM: %s/%s", agent, provider, model_desc)
     # model_desc, not model: the Azure branch never assigns `model` because Azure
     # addresses a deployment name rather than a model id, and referencing it here
     # raised UnboundLocalError on that path alone.

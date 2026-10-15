@@ -116,7 +116,7 @@ max safe deployment level {{ validation.max_safe_deployment_level }}.</p>
 {% for c in validation.checks %}<tr><td>{{ c.name }}</td><td class="{{ c.status }}">{{ c.status }}</td><td class="muted">{{ c.detail }}</td></tr>{% endfor %}
 </table></div>
 
-<p class="muted">Reproduce with <code>analysis.py</code> / <code>analysis.ipynb</code>; see <code>lineage.json</code> and <code>environment.lock</code>.</p>
+<p class="muted">{% if script_declines_to_reread %}<code>analysis.py</code> / <code>analysis.ipynb</code> do not re-read the source ({{ script_declines_to_reread }}); the prepared data is <code>transformed_dataset.parquet</code>;{% else %}Reproduce with <code>analysis.py</code> / <code>analysis.ipynb</code>;{% endif %} see <code>lineage.json</code> and <code>environment.lock</code>.</p>
 </div></body></html>"""
 
 _EVAL = """<!doctype html><html><head><meta charset="utf-8"><title>Evaluation — {{ goal }}</title>

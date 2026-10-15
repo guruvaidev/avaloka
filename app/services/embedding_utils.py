@@ -20,6 +20,7 @@ Environment variables
 import os
 import math
 import logging
+import threading
 from typing import List
 from app.services.memory_runtime import ensure_fallback_allowed
 
@@ -39,6 +40,45 @@ _PROVIDER   = os.environ.get("EMBEDDING_PROVIDER", "auto").strip().lower()
 
 # Cache the sentence-transformer model instance to avoid re-loading on every call
 _st_instance = None
+# Two first requests at once must not both load the model.
+_st_lock = threading.Lock()
+
+
+def _get_st_model(st_model_name: str):
+    """Load the sentence-transformer once (thread-safe) and return it."""
+    global _st_instance
+    if _st_instance is None:
+        with _st_lock:
+            if _st_instance is None:
+                from sentence_transformers import SentenceTransformer  # noqa: PLC0415
+                logger.info(
+                    f"[embed] Loading sentence-transformer '{st_model_name}' (first call). "
+                    "Subsequent calls will reuse the cached instance."
+                )
+                _st_instance = SentenceTransformer(st_model_name)
+    return _st_instance
+
+
+def warmup_local_model() -> bool:
+    """Load and run the local model once, on the CALLING thread (server startup).
+
+    Loading torch/sentence-transformers lazily inside a request worker thread
+    crashed the process with SIGSEGV (exit 139). The local model is loaded
+    whenever it CAN be used, including as the fallback when OpenAI is
+    configured, because that fallback also happens inside a request.
+    Returns True when the model is loaded and working.
+    """
+    provider = os.environ.get("EMBEDDING_PROVIDER", _PROVIDER).strip().lower()
+    if provider not in ("auto", "sentence_transformers"):
+        logger.info("[embed] warm-up skipped: provider pinned to %r", provider)
+        return False
+    st_model_name = os.environ.get("SENTENCE_TRANSFORMER_MODEL", _ST_MODEL)
+    try:
+        _get_st_model(st_model_name).encode("warmup")
+        return True
+    except ImportError:
+        logger.info("[embed] warm-up skipped: sentence-transformers not installed")
+        return False
 
 
 def _pad_or_trim(vec: List[float], dim: int) -> List[float]:
@@ -111,16 +151,18 @@ def embed_text(text: str, target_dim: int = None) -> List[float]:
     st_model_name = os.environ.get("SENTENCE_TRANSFORMER_MODEL", _ST_MODEL)
 
     try:
-        from sentence_transformers import SentenceTransformer  # noqa: PLC0415
+        # from sentence_transformers import SentenceTransformer  # noqa: PLC0415
 
-        if _st_instance is None:
-            logger.info(
-                f"[embed] Loading sentence-transformer '{st_model_name}' (first call). "
-                "Subsequent calls will reuse the cached instance."
-            )
-            _st_instance = SentenceTransformer(st_model_name)
+        # if _st_instance is None:
+        #     logger.info(
+        #         f"[embed] Loading sentence-transformer '{st_model_name}' (first call). "
+        #         "Subsequent calls will reuse the cached instance."
+        #     )
+        #     _st_instance = SentenceTransformer(st_model_name)
 
-        raw = _st_instance.encode(text)
+        # raw = _st_instance.encode(text)
+        
+        raw = _get_st_model(st_model_name).encode(text)
         vec = raw.tolist() if hasattr(raw, "tolist") else list(raw)
         logger.info(
             f"[embed] sentence-transformers '{st_model_name}' → {len(vec)}d "

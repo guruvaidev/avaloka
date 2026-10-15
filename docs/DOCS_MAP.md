@@ -39,7 +39,7 @@ to start: **[README.md](../README.md)** for what Avaloka is,
 | [benchmarks.md](benchmarks.md) | evaluators | The in-repo benchmark: what it measures, what it does not, and how to re-run it |
 | [model-routing-cost.md](model-routing-cost.md) | operators choosing models | Per-agent model routing and what it costs. Read its caveat on the accuracy numbers |
 | [testing.md](testing.md) | contributors | The test tiers, the eleven pytest markers, the live provider tier, and how to run each |
-| [test-reports/](test-reports/) | reviewers | Dated measurement records — [reliability](test-reports/1.6-reliability-measurements.md) and [three-pillar coverage](test-reports/three-pillar-coverage.md). Snapshots, not current state |
+| [test-reports/](test-reports/) | reviewers | Dated measurement records — [reliability](test-reports/1.6-reliability-measurements.md), [three-pillar coverage](test-reports/three-pillar-coverage.md) and the [1.6 test integrity review](test-reports/1.6-test-integrity-review.md). Snapshots, not current state |
 | [TEST_PLAN-1.6.md](TEST_PLAN-1.6.md) | the test lead | The 1.6 master test plan — sheet assignments for a manual pass |
 
 ## Contributing
@@ -48,7 +48,7 @@ to start: **[README.md](../README.md)** for what Avaloka is,
 | --- | --- | --- |
 | [CONTRIBUTING.md](../CONTRIBUTING.md) | contributors | Environment setup, the house style, how to run the suite, the project layout, and how to sign your work |
 | [CHANGELOG.md](../CHANGELOG.md) | upgraders | What changed, including the breaking changes since 1.6.0 |
-| [oss-branch-model.md](oss-branch-model.md) | maintainers | How `oss/1.6` is generated from `develop-1.6`, what is withheld, and the invariants that block a bad push |
+| [oss-branch-model.md](oss-branch-model.md) | maintainers | How the public `main` is generated from `develop-1.6`, what is withheld, and the invariants that block a bad push |
 | [SECURITY.md](../SECURITY.md) | everyone | How to report a vulnerability. **Defect status lives in the issue tracker, not in `docs/`** |
 
 ## Proposals, not product

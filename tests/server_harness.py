@@ -1,11 +1,12 @@
 """Shared fakes, fixtures and helpers for the API server tests.
 
 Not a test module (pytest does not collect it). Used by:
-  - tests/test_server_integration.py  (deselected by the CI gate: `not integration`)
+  - tests/test_server_unit.py         (runs in the CI gate since its rename from
+                                       test_server_integration.py)
   - tests/test_slow_turns.py           (runs in the CI gate)
   - tests/test_plan_limits_api.py      (runs in the CI gate)
 
-Moved here unchanged from test_server_integration.py so the deferred-turn and
+Moved here unchanged from that file so the deferred-turn and
 plan-limit endpoint tests can live in files the gate runs (review item 10).
 """
 import os

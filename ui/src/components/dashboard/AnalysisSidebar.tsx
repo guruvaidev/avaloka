@@ -253,7 +253,7 @@ export function AnalysisSidebar({ analyses: _analysesProp }: AnalysisSidebarProp
             size="xs"
             color="tertiary"
             icon={Plus}
-            tooltip="New analysis"
+            tooltip="New Analysis"
             onClick={() => setUploadOpen(true)}
             className="absolute right-2 top-1/2 -translate-y-1/2"
           />
@@ -266,13 +266,13 @@ export function AnalysisSidebar({ analyses: _analysesProp }: AnalysisSidebarProp
             onClick={() => navigate({ to: "/scheduled-analysis" })}
             className="w-full justify-start *:data-text:flex-1 *:data-text:text-left"
           >
-            Schedule analysis
+            Schedule Analysis
           </Button>
           <ButtonUtility
             size="xs"
             color="tertiary"
             icon={Plus}
-            tooltip="New schedule"
+            tooltip="New Schedule"
             onClick={() => setScheduleOpen(true)}
             className="absolute right-2 top-1/2 -translate-y-1/2"
           />

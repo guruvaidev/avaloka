@@ -271,29 +271,9 @@ class TestExecuteTrainingRay:
         assert result.get("task_schedule") is not None
         assert result["task_schedule"]["task_type"] == "training"
 
-    def test_runs_ray_trainer_when_already_scheduled(self):
-        """Second call with training_scheduled=True → RayTrainer.train() is called."""
-        from app.agents.mta_v2.agent import ModelTrainingAgent
-
-        plan = _make_ray_training_plan()
-        mock_result = {
-            "mlflow_run_id": "ray-run-xyz",
-            "dashboard_url": "http://localhost:8265",
-            "final_accuracy": 0.91,
-        }
-        agent = ModelTrainingAgent()
-        state = _make_state(training_plan=plan, training_scheduled=True)
-
-        mock_ray_trainer = MagicMock()
-        mock_ray_trainer.train.return_value = mock_result
-
-        with patch("app.agents.mta_v2.agent.llm") as mock_llm, \
-             patch("app.agents.mta_v2.agent.RayTrainer", return_value=mock_ray_trainer):
-            mock_llm.invoke.return_value = MagicMock(content="Training done.", tool_calls=[])
-            result = agent.execute(state)
-
-        mock_ray_trainer.train.assert_called_once_with(plan)
-        assert result["training_result"] == mock_result
+    # test_runs_ray_trainer_when_already_scheduled is in
+    # tests/test_mta_v2_flows_integration.py: on that path the agent reads the
+    # plan's gs:// dataset over the network, which the test never stubbed.
 
 
 # ---------------------------------------------------------------------------

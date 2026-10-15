@@ -1,22 +1,29 @@
 # How the public branch is produced
 
-`oss/1.6` is **generated** from `develop-1.6`. It is not a parallel branch, and
-editing it directly is not supported — the next generation overwrites it.
+The public repository's `main` is **generated** from `develop-1.6`. It is not a
+parallel branch, and editing it directly is not supported — the next generation
+overwrites it.
 
 ```
-develop-1.6  ──(scripts/generate-oss.sh)──▶  oss/1.6  ──▶  github.com/guruvaidev/avaloka
+develop-1.6  ──(scripts/generate-oss.sh --publish)──▶  one squash commit  ──▶  github.com/guruvaidev/avaloka  main
 ```
+
+There are two hops and no branch in between. The generator builds the public
+tree in a temporary directory, checks it, and lands it as a single commit on
+top of the public `main`. The public repository's own history is the record of
+what was published; nothing else holds a copy of it.
 
 The two remotes this involves are `origin`
 (`git@bitbucket.org:kamaliincteam/avaloka-dev.git`, internal) and `github`
 (`git@github.com:guruvaidev/avaloka.git`, public) — `git remote -v` in a
 checkout of this branch shows both. `SRC_BRANCH` defaults to `develop-1.6`
-(`scripts/generate-oss.sh:12`).
+(`scripts/generate-oss.sh:41`).
 
 ## Why this changed
 
-`oss/1.6` had been maintained by hand, merging from `develop-1.6` when someone
-remembered. Measured before the switch:
+The public tree used to be a branch of its own, `oss/1.6`, maintained by hand
+and merged from `develop-1.6` when someone remembered. Measured before the
+switch:
 
 | | |
 |---|---|
@@ -43,7 +50,7 @@ exactly what a hand-maintained mirror accumulates.
 
 The public quickstart deliberately does **not** assume `SUPABASE_JWT_SECRET` or
 a running `redis-server`; the internal one does. Copying `develop-1.6`'s README
-onto `oss/1.6` silently reverts that, along with the scale-boundary language
+onto the public tree silently reverts that, along with the scale-boundary language
 (`support@avaloka.ai`, "at your own risk", "Not tested on"). That has happened.
 
 So the README is spliced, not copied: `oss/overlay/README.quickstart.md`
@@ -102,10 +109,10 @@ file, not to add a content filter.
 ## Two trees, one source
 
 The goal is not a smaller public tree for its own sake. It is that
-`develop-1.6` and `oss/1.6` stay as close as possible, differing only where
-there is a reason:
+`develop-1.6` and the public tree stay as close as possible, differing only
+where there is a reason:
 
-| | `develop-1.6` | `oss/1.6` |
+| | `develop-1.6` | public `main` |
 |---|---|---|
 | Product code | full | full |
 | Enterprise features | yes | withheld |
@@ -151,17 +158,17 @@ is expressed as `keep_globs: ["*.pdf"]` rather than as two diverging trees.
 
 ## Reconciling, not overwriting
 
-Generation is one-way, so anything valuable that only exists on `oss/1.6` must
-be moved to `develop-1.6` first or it is lost. Before switching, every
-oss-only path was checked against develop rather than assumed stale — the
+Generation is one-way, so anything valuable that only exists in the public
+tree must be moved to `develop-1.6` first or it is lost. Before switching, every
+public-only path was checked against develop rather than assumed stale — the
 avatar work is the worked example, and the manifest records the date evidence
 for why the older implementation goes and the newer one stays.
 
-Run the dry run and read the deletions before every `--write`. A file
-disappearing that you did not expect is the signal that something needs to go
-back to `develop-1.6` first.
+Run the dry run and read the removals — the lines marked `D` — before every
+`--publish`. A file disappearing that you did not expect is the signal that
+something needs to go back to `develop-1.6` first.
 
-The first pass found eleven files where `oss/1.6` was ahead. They were sorted
+The first pass found eleven files where the hand-maintained branch was ahead. They were sorted
 by last-touched date on each branch rather than by assuming the internal branch
 leads:
 
@@ -184,9 +191,10 @@ invariants assert the gate survives generation.
 ## Publishing is a squash, never a push of an internal branch
 
 `git push <internal-branch> <public-remote>` carries every commit behind that
-branch, no matter how clean its tip tree is. Both `develop-1.6` and `oss/1.6`
-have 50 commits touching a `.env` that was force-added in July 2026 and deleted
-in August. A tree-level check passes on those branches and tells you nothing.
+branch, no matter how clean its tip tree is. `develop-1.6` has 50 commits
+touching a `.env` that was force-added in July 2026 and deleted in August, and
+so did the hand-maintained `oss/1.6`. A tree-level check passes on such a branch
+and tells you nothing.
 
 That is not hypothetical — it happened. A test branch pushed to the public repo
 on 29 Sep 2026 tripped GitHub secret scanning on a `.env` that was nowhere in
@@ -209,9 +217,52 @@ pushed, and refuses if any probe path is reachable.
 ## Using it
 
 ```bash
-scripts/generate-oss.sh            # dry run: what would change
-scripts/generate-oss.sh --write    # commit onto oss/1.6
+scripts/generate-oss.sh             # dry run: generate, check, compare
+scripts/generate-oss.sh --publish   # build the squash commit, print the push
 ```
+
+The dry run generates the tree, runs every invariant and the secret scan, and
+then lists what differs from the published tree — `github/main` by default, the
+same base `--publish` builds on:
+
+```
+== compare vs github/main (dry run; nothing is written or pushed) ==
+   base: github/main at <sha>
+   M	app/api/server.py
+   A	app/core/plan_limits.py
+   ...
+   12 added, 32 modified, 0 removed
+```
+
+`A` is a file the next publish would add, `M` one whose content would change,
+`D` one it would remove. The dry run commits nothing and pushes nothing.
+
+A checkout that does not have the public repository as a remote can still run
+it. The generation, invariants and secret scan all run; the comparison is
+skipped and the output says so, rather than printing an empty diff that would
+read as "nothing would change":
+
+```
+== compare vs github/main (dry run; nothing is written or pushed) ==
+   SKIPPED -- this checkout has no remote named 'github'
+```
+
+`PUBLISH_REMOTE` and `PUBLISH_BASE` choose what to compare against, and are the
+same variables `--publish` reads.
+
+### There is no intermediate branch
+
+An earlier version of this flow had a third hop: `--write` committed the
+generated tree onto `oss/1.6`, and that branch was then pushed to the public
+repository. Once publishing became a squash onto the public tip, nothing read
+the intermediate branch any more. It kept existing, fell behind what was
+actually published, and still looked like a branch one could open a pull
+request against — a second copy of the public tree, and the wrong one.
+
+So it is retired. `--write` now exits with an error that names the two modes
+above instead of committing anywhere, and the generator no longer reads or
+writes `oss/1.6`. Changes go to `develop-1.6`; the public `main` is where the
+published tree lives.
 
 `oss/manifest.yaml` is the whole contract: what is withheld, what is added,
 what is spliced, what is asserted. Change the manifest, not the output.
@@ -219,6 +270,7 @@ what is spliced, what is asserted. Change the manifest, not the output.
 ## Flowing work the other way
 
 Anything genuinely public-first — governance, the DCO, community docs — belongs
-in `oss/overlay/`. Anything else that lands on `oss/1.6` and matters should be
-committed to `develop-1.6` instead, or it will be erased on the next run. The
+in `oss/overlay/`. Anything else that lands only in the public repository and matters
+should be committed to `develop-1.6` instead, or it will be erased on the next
+run. The
 57 divergent commits are how the current gap was built.

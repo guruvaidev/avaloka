@@ -1,6 +1,6 @@
 # Product Analytics — Design (develop-1.6, 1.7-compatible)
 
-**Status:** implemented on `feat/product-analytics-1.6`, not merged · **Schema:** 1.0
+**Status:** implemented and merged on `develop-1.6`; the export is not called by anything · **Schema:** 1.1
 
 ## What it is for
 
@@ -297,10 +297,16 @@ egress inventory as `product_analytics_export`. Nothing on develop-1.6 calls it.
 
 Before it can be enabled:
 
-1. PR #329's ingest has a closed four-value event-type set and rejects unknown
-   keys. It must accept the `analytics.*` types and their fields. Do not add
-   them to `telemetry_service/schema.py` from this branch; that file belongs to
-   PR #329.
+1. ~~The ingest must accept the `analytics.*` types and their fields.~~ Done.
+   `telemetry_service/schema.py` accepts the twelve `analytics.*` types and, for
+   each, exactly the fields `to_wire` can emit. Its set is still closed: an
+   unknown type or an undeclared key rejects the batch, and the stored-tier
+   fields (`prompt` and everything in `EXPORT_TEXT_KEYS`) are refused by name.
+   The ingest restates this schema rather than importing it, so a change to
+   `schema.EVENTS` or to what `to_wire` emits must be made on both sides;
+   `tests/telemetry_ingest/test_analytics_contract.py` builds wire records with
+   this package's own export and fails when they disagree. Still open under
+   this item: the ingest has no report that reads an `analytics.*` event.
 2. Something must call `export_pending()`. Reuse #329's uploader schedule rather
    than adding a second CronJob to a one-node cluster.
 3. **Required before anything exports:** the customer-facing egress inventory /

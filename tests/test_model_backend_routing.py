@@ -100,14 +100,23 @@ def test_describe_all_reports_each_agents_own_backend(monkeypatch):
     assert set(described) == set(mc.DEFAULT_MODELS)
 
 
-def test_the_narrator_has_no_model_entry_so_it_uses_the_summarizers():
-    """result_narrator._resolve_narrator_model depends on this KeyError."""
+def test_the_narrator_reads_its_own_model_entry(monkeypatch):
+    """The narrator used to have no entry and borrow the summarizer's through a
+    KeyError, which this test pinned. That left the table silent about a model
+    that runs on every chat answer. It now has an entry and reads it; the
+    summarizer's override no longer reaches it, and its own does.
+    """
     from app.agents import result_narrator
 
-    assert "narrator" not in mc.DEFAULT_MODELS
-    with pytest.raises(KeyError):
-        mc.resolve("narrator")
-    assert result_narrator._NARRATOR_MODEL == mc.model_for("summarizer").model
+    monkeypatch.delenv("AVALOKA_NARRATOR_MODEL", raising=False)
+    assert "narrator" in mc.DEFAULT_MODELS
+    assert mc.resolve("narrator") == mc.DEFAULT_MODELS["narrator"]
+    assert result_narrator._NARRATOR_MODEL == mc.model_for("narrator").model
+
+    monkeypatch.setenv("AVALOKA_SUMMARIZER_MODEL", "openai/gpt-oss-safeguard-20b")
+    assert mc.model_for("narrator").model == mc.DEFAULT_MODELS["narrator"]
+    monkeypatch.setenv("AVALOKA_NARRATOR_MODEL", "openai/gpt-oss-120b")
+    assert mc.model_for("narrator").model == "openai/gpt-oss-120b"
 
 
 # ---------------------------------------------------------------------------

@@ -1320,8 +1320,8 @@ class TestExecuteToolRouting:
     def test_routes_execute_inference(self):
         self._run_with_tool("execute_inference")
 
-    def test_unknown_tool_skipped(self):
-        """Unknown tool names should not raise; state is returned with flags cleared."""
+    def test_unknown_tool_skipped(self, caplog):
+        """Unknown tool names are skipped, not failed; state is returned with flags cleared."""
         from app.agents.mta_v2.agent import ModelTrainingAgent
 
         mock_llm = MagicMock()
@@ -1331,12 +1331,24 @@ class TestExecuteToolRouting:
 
         agent = ModelTrainingAgent()
         state = _make_state()
+        # execute() appends to the caller's list in place, so compare against
+        # a snapshot, not against state["messages"].
+        messages_before = list(state["messages"])
 
-        with patch("app.agents.mta_v2.agent.llm", mock_llm):
+        with patch("app.agents.mta_v2.agent.llm", mock_llm), \
+             caplog.at_level("WARNING", logger="app.agents.mta_v2.agent"):
             result = agent.execute(state)
 
-        # Should not raise and should return a state dict
-        assert isinstance(result, dict)
+        # execute() catches everything, so "did not raise" proves nothing: a
+        # failed turn also returns a dict, with an apology appended. Skipped
+        # means no reply was added and the skip was logged as a warning.
+        assert result["messages"] == messages_before
+        assert [
+            record.levelname for record in caplog.records
+            if "nonexistent_tool" in record.getMessage()
+        ] == ["WARNING"]
+        assert result["enable_training"] is False
+        assert result["skip_to_training"] is False
 
     def test_training_scheduled_bypasses_llm(self):
         """When training_scheduled=True execute() should call _execute_training directly."""

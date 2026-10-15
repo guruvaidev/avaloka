@@ -10,6 +10,8 @@ Covers:
   - retrieve_historical_analysis Pydantic parse / tool schema contract
   - circuit breaker: 3-second timeout enforcement
   - embedding path: mock OPENAI_API_KEY activates OpenAIEmbeddings branch
+  - embedding fallback: zero-vector when no provider is available, even with a
+    cached local model; local-model warm-up skip rules
 
 All DB calls are mocked — no live infrastructure required.
 Heavy transitive dependencies (groq, langchain_groq, pymilvus, celery…)
@@ -383,17 +385,89 @@ class TestMilvusRecorderEmbedding:
         assert call_kwargs.get("vector") == fake_vector, "Expected real embedding vector"
 
     def test_falls_back_to_zeros_without_any_embedding_provider(self):
+        import app.services.embedding_utils as eu
+
         env = {k: v for k, v in os.environ.items() if k != "OPENAI_API_KEY"}
 
-        mock_client = self._call_recorder(env, block_sentence_transformers=True)
+        # embedding_utils keeps the loaded model in _st_instance (warm-up at
+        # startup, or any earlier test). With a cached model nothing is imported,
+        # so blocking the import alone no longer simulates "no provider".
+        with patch.object(eu, "_st_instance", None):
+            mock_client = self._call_recorder(env, block_sentence_transformers=True)
 
         mock_client.insert_insight.assert_called_once()
         call_kwargs = mock_client.insert_insight.call_args[1]
         vec = call_kwargs.get("vector")
-        # The zero-vector length comes from milvus_client._vector_dim (may be mocked),
-        # but the values must all be 0.0.
         assert isinstance(vec, list), f"Expected a list, got {type(vec)}"
         assert all(v == 0.0 for v in vec), f"Expected all-zero vector, got: {vec[:5]}..."
+
+    def test_a_cached_local_model_is_reused_without_importing_again(self):
+        """The model is loaded once (server warm-up) and reused: a later call
+        must not import sentence-transformers again. This is why the zero-vector
+        test above has to hide _st_instance as well as block the import."""
+        import app.services.embedding_utils as eu
+
+        class _FakeModel:
+            def encode(self, text):
+                return [0.5, 0.25]
+
+        env = {k: v for k, v in os.environ.items() if k != "OPENAI_API_KEY"}
+        env["EMBEDDING_PROVIDER"] = "auto"
+        with patch.object(eu, "_st_instance", _FakeModel()):
+            mock_client = self._call_recorder(env, block_sentence_transformers=True)
+
+        vec = mock_client.insert_insight.call_args[1].get("vector")
+        assert vec[:2] == [0.5, 0.25], "the cached model was not used"
+        assert len(vec) == 1536 and all(v == 0.0 for v in vec[2:]), "not padded to the target dim"
+
+
+class TestLocalModelWarmup:
+    """warmup_local_model() loads the local model on the server's startup
+    thread: loading torch lazily inside a request worker crashed with SIGSEGV."""
+
+    def test_warmup_is_skipped_when_provider_is_pinned_to_openai(self, monkeypatch):
+        import app.services.embedding_utils as eu
+
+        monkeypatch.setenv("EMBEDDING_PROVIDER", "openai")
+        monkeypatch.setattr(eu, "_st_instance", None)
+
+        assert eu.warmup_local_model() is False
+        assert eu._st_instance is None, "a pinned provider must not load the local model"
+
+    def test_warmup_reports_false_when_sentence_transformers_is_missing(self, monkeypatch):
+        import app.services.embedding_utils as eu
+
+        monkeypatch.setenv("EMBEDDING_PROVIDER", "auto")
+        monkeypatch.setattr(eu, "_st_instance", None)
+        # A None entry in sys.modules makes `import sentence_transformers` raise ImportError.
+        monkeypatch.setitem(sys.modules, "sentence_transformers", None)
+
+        assert eu.warmup_local_model() is False
+
+    def test_warmup_loads_and_runs_the_model_once(self, monkeypatch):
+        import app.services.embedding_utils as eu
+
+        loads, encoded = [], []
+
+        class _FakeST:
+            def __init__(self, name):
+                loads.append(name)
+
+            def encode(self, text):
+                encoded.append(text)
+                return [0.1]
+
+        fake_mod = types.ModuleType("sentence_transformers")
+        fake_mod.SentenceTransformer = _FakeST
+        monkeypatch.setenv("EMBEDDING_PROVIDER", "auto")
+        monkeypatch.setenv("SENTENCE_TRANSFORMER_MODEL", "tiny-test-model")
+        monkeypatch.setattr(eu, "_st_instance", None)
+        monkeypatch.setitem(sys.modules, "sentence_transformers", fake_mod)
+
+        assert eu.warmup_local_model() is True
+        assert eu.warmup_local_model() is True
+        assert loads == ["tiny-test-model"], "the model must be loaded exactly once"
+        assert encoded == ["warmup", "warmup"]
 
 
 

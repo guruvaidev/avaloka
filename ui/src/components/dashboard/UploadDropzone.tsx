@@ -1,6 +1,8 @@
 import { useRef, useState, type DragEvent } from "react";
 import { cx } from "@/lib/utils/cx";
 import { UploadModal } from "./UploadModal";
+import { Button } from "@/components/base/buttons/button";
+import { Upload01 } from "@untitledui/icons";
 const bgPattern = { url: "/assets/dashboard/Background_pattern_decorative.png" };
 const illustration = { url: "/assets/dashboard/Upload_Illustration.png" };
 
@@ -45,7 +47,7 @@ export function UploadDropzone({ projectId, projectName, redirectTo, disabled = 
         ref={inputRef}
         type="file"
         multiple
-        accept=".csv,.xls,.xlsx,.json,.parquet"
+        accept=".csv,.xls,.xlsx,.json"
         className="hidden"
         onChange={(e) => {
           const files = Array.from(e.target.files ?? []);
@@ -56,24 +58,30 @@ export function UploadDropzone({ projectId, projectName, redirectTo, disabled = 
       />
       <div
         aria-disabled={disabled}
-        onClick={openPicker}
+        onClick={(e) => {
+          if ((e.target as HTMLElement).closest("button")) return;
+          openPicker();
+        }}
         onDragOver={(e) => { e.preventDefault(); if (!disabled) setDragActive(true); }}
         onDragEnter={(e) => { e.preventDefault(); if (!disabled) setDragActive(true); }}
-        onDragLeave={() => setDragActive(false)}
+        onDragLeave={(e) => {
+          if (e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) return;
+          setDragActive(false);
+        }}
         onDrop={onDrop}
         className={cx(
-          "group relative block w-full overflow-hidden rounded-2xl border-2 border-dashed bg-primary/60 px-6 py-12 text-center outline-focus-ring transition",
+           "group relative block w-full overflow-hidden rounded-2xl border-2 border-dashed px-6 py-8 text-center outline-focus-ring transition-colors",
           disabled
             ? "cursor-not-allowed border-secondary opacity-60 select-none"
-            : "cursor-pointer hover:border-brand",
-          dragActive && !disabled ? "border-brand" : "border-secondary",
+             : "cursor-pointer hover:border-brand hover:bg-brand-primary_alt focus-within:border-brand",
+           dragActive && !disabled ? "border-brand bg-brand-primary_alt ring-2 ring-brand" : "border-secondary bg-primary/60",
         )}
       >
         <img
           src={bgPattern.url}
           alt=""
           aria-hidden
-          className="pointer-events-none absolute left-1/2 top-1/2 w-[480px] -translate-x-1/2 -translate-y-1/2 select-none"
+          className="pointer-events-none absolute left-1/2 top-1/2 w-[480px] -translate-x-1/2 -translate-y-1/2 select-none opacity-30"
         />
         <div className="relative flex flex-col items-center">
           <img
@@ -85,7 +93,10 @@ export function UploadDropzone({ projectId, projectName, redirectTo, disabled = 
           <h3 className="mt-6 text-md font-semibold text-primary">
             Select or drag &amp; drop file to analyze data
           </h3>
-          <p className="mt-1 text-sm text-tertiary">CSV, Excel or JSON, Parquet (100MB)</p>
+          <Button color="primary" size="md" iconLeading={Upload01} isDisabled={disabled} onPress={openPicker} className="mt-4">
+            Browse files
+          </Button>
+          <p className="mt-3 text-sm text-tertiary">CSV, Excel (.xls, .xlsx) or JSON · up to 100MB</p>
         </div>
       </div>
 
@@ -96,7 +107,7 @@ export function UploadDropzone({ projectId, projectName, redirectTo, disabled = 
         projectId={projectId}
         projectName={projectName}
         redirectTo={redirectTo}
-        // onStandaloneAnalysisSaved={onStandaloneAnalysisSaved}
+        onStandaloneAnalysisSaved={onStandaloneAnalysisSaved}
       />
     </div>
   );

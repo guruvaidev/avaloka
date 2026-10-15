@@ -21,6 +21,7 @@ from langchain_core.messages import AIMessage
 from app.agents.infra_agent import infra_agent_node
 from app.agents.result_renderer import render_response
 from app.agents.lineage_hooks import record_analysis_lineage
+from app.analytics.schema import column_count_bucket, row_count_bucket
 from pathlib import Path
 
 from app.graph.etl_state import ETLState
@@ -547,12 +548,62 @@ def execute_code_on_k8s(
 
 
 # ---------------------------------------------------------------------------
+# The execution_result log line  (every backend, persisted or not)
+# ---------------------------------------------------------------------------
+
+#: Fields of the ``execution_result`` log line, in the order they are written.
+#: Behaviour only: every value is a literal from this module, an exception
+#: class name, a number, or a band from app.analytics.schema. Nothing here is
+#: read out of the data, the code, the question or a path, so a column name, a
+#: file name or a cell value has no way into it.
+EXECUTION_RESULT_LOG_KEYS = (
+    "backend", "outcome", "error_class", "duration_ms",
+    "row_count_bucket", "column_count_bucket", "fresh_output", "output_kind",
+)
+
+
+def _log_execution_result(
+    backend: str,
+    outcome: str,
+    started: float,
+    *,
+    error_class: str = "none",
+    output_data: Any = None,
+    output_kind: str = "none",
+) -> None:
+    """Write the one line that says how an execution ended.
+
+    The result is logged whether or not anything downstream persists it, so a
+    run is visible in ``kubectl logs`` on every backend. ``started`` is a
+    ``time.monotonic()`` reading taken when the node was entered.
+    """
+    has_output = output_data is not None
+    fields = {
+        "backend": backend,
+        "outcome": outcome,
+        "error_class": error_class,
+        "duration_ms": int((time.monotonic() - started) * 1000),
+        "row_count_bucket": row_count_bucket(len(output_data)) if has_output else "none",
+        "column_count_bucket": (
+            column_count_bucket(len(output_data.columns)) if has_output else "none"
+        ),
+        "fresh_output": has_output and outcome == "success",
+        "output_kind": output_kind,
+    }
+    logger.info(
+        "execution_result " + " ".join(f"{key}=%s" for key in EXECUTION_RESULT_LOG_KEYS),
+        *(fields[key] for key in EXECUTION_RESULT_LOG_KEYS),
+    )
+
+
+# ---------------------------------------------------------------------------
 # execution_agent_node  (k8s service path)
 # ---------------------------------------------------------------------------
 
 def execution_agent_node(state: ETLState) -> ETLState:
     """LangGraph node that executes Python code using Kubernetes infrastructure"""
     logger.info("Execution Agent: Starting k8s execution process")
+    started = time.monotonic()
     code = state.get("coder_definition", {}).get("code", "")
     if not code:
         message = "No code provided for execution"
@@ -562,6 +613,7 @@ def execution_agent_node(state: ETLState) -> ETLState:
             "messages": new_state["messages"] + [AIMessage(content=message)],
             "execution_result": {"status": "failed", "message": message}
         })
+        _log_execution_result("k8s", "failed", started, error_class="NoCode")
         return new_state
 
     cleaned_code = _strip_markdown_code_fences(code)
@@ -586,6 +638,9 @@ def execution_agent_node(state: ETLState) -> ETLState:
             "messages": new_state.get("messages", []) + [AIMessage(content=message)],
             "execution_result": {"status": "failed", "message": message},
         })
+        _log_execution_result(
+            "k8s", "failed", started, error_class="InfrastructureUnavailable"
+        )
         return new_state
 
     data_source_location = state.get("data_source_location")
@@ -606,14 +661,18 @@ def execution_agent_node(state: ETLState) -> ETLState:
 
     file_data = None
     output_data = None
-    if execution_result.get("status") == "success" and execution_result.get("output"):
+    # Why this run is not a success, as a class name; None while it still is.
+    error_class = None
+    returned_output = bool(
+        execution_result.get("status") == "success" and execution_result.get("output")
+    )
+    if returned_output:
         try:
             output_data_str = execution_result["output"]
             if output_data_str.startswith("data:text/csv;base64,"):
                 csv_str = base64.b64decode(output_data_str.split("base64,")[1]).decode()
                 output_data = pd.read_csv(StringIO(csv_str))
                 if not output_data.empty:
-                    logger.info(f"output data is {output_data.head().to_markdown()}")
                     ai_response = AIMessage(content=output_data.to_markdown())
                 else:
                     logger.info(f"Empty dataset returned")
@@ -627,13 +686,29 @@ def execution_agent_node(state: ETLState) -> ETLState:
                         "size": output_file_info["size"]
                     }
                     logger.info(f"Prepared file data for download: {output_file_info['filename']}")
+                else:
+                    # The pod's filesystem is not ours, so the returned CSV is
+                    # the only copy. Carry it as the file, as the local path
+                    # does, rather than leave a success with nothing attached.
+                    file_data = {
+                        "filename": f"{generate_filename_timestamp()}_output.csv",
+                        "content": output_data_str,
+                        "size": len(csv_str.encode("utf-8")),
+                    }
             else:
-                ai_response = AIMessage(content="Code executed successfully but no valid CSV output received")
+                failure_message = "Code executed successfully but no valid CSV output received"
+                ai_response = AIMessage(content=failure_message)
+                execution_error = failure_message
+                error_class = "NoOutput"
         except Exception as e:
             logger.error(f"Failed to process output: {e}")
             ai_response = AIMessage(content=(
             f"The step ran, but I couldn't prepare the output: {_brief_error(e)}"
         ))
+            failure_message = str(e)
+            execution_error = failure_message
+            error_class = type(e).__name__
+            file_data = None
     else:
         # Full stderr to the logs; the chat gets one readable line.
         error_msg = execution_result.get("message", "Unknown error")
@@ -641,13 +716,60 @@ def execution_agent_node(state: ETLState) -> ETLState:
         if stderr:
             logger.error("Execution failed. stderr:\n%s", stderr)
         ai_response = AIMessage(content=_friendly_failure_message(stderr or error_msg))
+        failure_message = f"{error_msg}\n\n{stderr.strip()}" if stderr.strip() else error_msg
+        execution_error = error_msg
+        error_class = "ExecutionFailed"
+
+    succeeded = error_class is None
+
+    # The same keys execution_agent_node_local writes on each outcome, so a
+    # reader of execution_result never has to know which backend ran.
+    if succeeded:
+        result_for_state = {
+            "status": "success",
+            "message": "ETL job completed successfully",
+            # A path inside the executor pod, not on this host: nothing here
+            # can open it. The content travels in output_file_data.
+            "output_file": str(output_location) if output_location else file_data["filename"],
+            "fresh_output": True,
+            "output_row_count": len(output_data),
+        }
+    elif returned_output:
+        result_for_state = {
+            "status": "failed",
+            "message": failure_message,
+            "output_file": None,
+            "fresh_output": False,
+            "output_row_count": None,
+        }
+    else:
+        result_for_state = {
+            "status": "failed",
+            "message": failure_message,
+            "returncode": execution_result.get("returncode"),
+            "output_file": None,
+        }
 
     new_state.update({
         "messages": new_state["messages"] + [ai_response],
         "output_location": output_location,
         "output_file_data": file_data,
+        "output_json": output_data.to_dict(orient="records") if succeeded else None,
+        "fresh_output_produced": succeeded,
+        "execution_stdout": execution_result.get("stdout"),
+        "execution_stderr": execution_result.get("stderr"),
+        "execution_error": None if succeeded else execution_error,
+        "execution_result": result_for_state,
     })
-    if output_data is not None and execution_result.get("status") == "success":
+    _log_execution_result(
+        "k8s",
+        "success" if succeeded else "failed",
+        started,
+        error_class=error_class or "none",
+        output_data=output_data if succeeded else None,
+        output_kind="inline" if succeeded else "none",
+    )
+    if succeeded:
         lineage_dataset_id = record_analysis_lineage(new_state, output_data)
         if lineage_dataset_id:
             new_state["latest_output_dataset_id"] = lineage_dataset_id
@@ -692,6 +814,7 @@ def execution_agent_node(state: ETLState) -> ETLState:
 def execution_agent_node_local(state: ETLState) -> ETLState:
     """LangGraph node that executes Python code locally"""
     logger.info("Execution Agent: Starting local execution process")
+    started = time.monotonic()
 
     code = state.get("coder_definition", {}).get("code", "")
     if not code:
@@ -702,6 +825,7 @@ def execution_agent_node_local(state: ETLState) -> ETLState:
             "messages": new_state["messages"] + [AIMessage(content=message)],
             "execution_result": {"status": "failed", "message": message}
         })
+        _log_execution_result("local", "failed", started, error_class="NoCode")
         return new_state
 
     input_data_location = state.get("data_source_location")
@@ -737,6 +861,8 @@ def execution_agent_node_local(state: ETLState) -> ETLState:
             "messages": new_state.get("messages", []) + [ai_response],
             "output_location": output_location,
             "output_file_data": None,
+            "output_json": None,
+            "fresh_output_produced": False,
             "execution_stdout": stdout,
             "execution_stderr": stderr,
             "execution_error": execution_result.get("execution_error"),
@@ -747,6 +873,7 @@ def execution_agent_node_local(state: ETLState) -> ETLState:
                 "output_file": None,
             },
         })
+        _log_execution_result("local", "failed", started, error_class="ExecutionFailed")
         return new_state
 
     coder_message = state.get("coder_raw_response")
@@ -794,8 +921,7 @@ def execution_agent_node_local(state: ETLState) -> ETLState:
             )
 
         logger.info(
-            "[local-output] candidate=%s exists=True size=%d",
-            result_output_location,
+            "[local-output] candidate exists=True size=%d",
             output_size,
         )
 
@@ -863,11 +989,8 @@ def execution_agent_node_local(state: ETLState) -> ETLState:
         execution_message = "ETL job completed successfully"
 
         logger.info(
-            "[local-output] promoted fresh output: "
-            "path=%s rows=%d filename=%s",
-            result_output_location,
+            "[local-output] promoted fresh output: rows=%d",
             len(output_data),
-            filename,
         )
 
     except Exception as exc:
@@ -906,6 +1029,9 @@ def execution_agent_node_local(state: ETLState) -> ETLState:
                 "output_row_count": None,
             },
         })
+        _log_execution_result(
+            "local", "failed", started, error_class=type(exc).__name__
+        )
 
         return new_state
 
@@ -955,6 +1081,9 @@ def execution_agent_node_local(state: ETLState) -> ETLState:
             "output_row_count": len(output_data),
         },
     })
+    _log_execution_result(
+        "local", "success", started, output_data=output_data, output_kind="file"
+    )
     if execution_status == "success":
         lineage_dataset_id = record_analysis_lineage(new_state, output_data)
         if lineage_dataset_id:
@@ -1699,6 +1828,7 @@ def execution_agent_node_ray(state: ETLState) -> ETLState:
         ns_ = state.copy()
         ns_["messages"] = state.get("messages", []) + [AIMessage(content=msg)]
         ns_["execution_result"] = {"mode": "k8s-ray", "status": "error", "message": msg}
+        ns_["execution_error"] = msg
         return ns_
 
 
@@ -1712,6 +1842,7 @@ def execution_agent_node_ray(state: ETLState) -> ETLState:
         ns_ = state.copy()
         ns_["messages"] = state.get("messages", []) + [AIMessage(content=msg)]
         ns_["execution_result"] = {"mode": "k8s-ray", "status": "error", "message": msg}
+        ns_["execution_error"] = msg
         return ns_
 
     connection_id = (
@@ -1833,6 +1964,7 @@ def execution_agent_node_ray(state: ETLState) -> ETLState:
             "artifact_uri":      output_artifact_uri,
             "metrics":           output_metrics_uri,
         }
+        new_state["execution_error"] = None
         new_state["messages"] = state.get("messages", []) + [
             AIMessage(content=f"[DRYRUN] RayJob YAML rendered for {rayjob_name} (not submitted)")
         ]
@@ -1927,6 +2059,7 @@ def execution_agent_node_ray(state: ETLState) -> ETLState:
             "artifact_uri": artifact_uri,
             "message":      str(e),
         }
+        new_state["execution_error"] = str(e)
         new_state["messages"] = state.get("messages", []) + [
             AIMessage(content=_friendly_failure_message(e))
         ]
@@ -1956,6 +2089,14 @@ def execution_agent_node_ray(state: ETLState) -> ETLState:
         "metrics":      metrics,
         "artifact_uri": artifact_uri,
     }
+    # execution_error is a declared channel, so a value left by an earlier node
+    # or turn stays until something clears it. It is set exactly when the
+    # status is one route_after_execution already treats as a failure.
+    _ray_status = new_state["execution_result"]["status"]
+    new_state["execution_error"] = (
+        f"RayJob {rayjob_name} finished with {_ray_status}"
+        if _ray_status in ("error", "failed") else None
+    )
 
     # ── Fetch the output artifact from cloud storage ──────────────────
     output_file_data = None

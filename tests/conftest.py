@@ -89,13 +89,31 @@ collect_ignore = [
 ]
 
 
-_INTEGRATION_DIRS = ("tests/e2e/", "tests/k8s/", "tests/infra/")
+# Both rules are anchored at tests/. They used to be a bare substring and a bare
+# suffix -- "tests/e2e/" anywhere in the path, "_integration.py" at the end of
+# any path -- which is broader than "these suites" and would have silently
+# deselected a test collected from anywhere else that happened to match, e.g.
+# a vendored package's own tests/e2e/, or a module beside
+# app/agents/mta/mlflow_integration.py. Nothing matched that way when this was
+# tightened (the deselected count did not move), so this closes a hole rather
+# than fixing a miscount; tests/test_integration_marker_scope.py pins it.
+#
+# A name ending _integration.py is a claim that the file needs something outside
+# the process. Twelve files made that claim while mocking every boundary, and
+# the gate believed the name and never ran them. They are now *_unit.py. The
+# converse also happened: tests that looked mocked still shelled out to scp and
+# kubectl or read a gs:// object. Before naming a file either way, run it with
+# the network off and read what it touches.
+_TESTS_ROOT = "tests/"
+_INTEGRATION_DIRS = ("tests/e2e/", "tests/k8s/", "tests/infra/", "tests/containers/")
 _INTEGRATION_SUFFIXES = ("_integration.py",)
 
 
 def _wants_integration_marker(relpath: str) -> bool:
     normalised = relpath.replace("\\", "/")
-    if any(seg in normalised for seg in _INTEGRATION_DIRS):
+    if not normalised.startswith(_TESTS_ROOT):
+        return False
+    if normalised.startswith(_INTEGRATION_DIRS):
         return True
     return normalised.endswith(_INTEGRATION_SUFFIXES)
 

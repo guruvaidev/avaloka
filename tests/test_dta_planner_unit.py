@@ -20,7 +20,7 @@ routing* of the integration — fast, deterministic, no network, no Docker, no L
 A live end-to-end smoke runner (mirroring test_dta_d2d) is provided at the bottom
 behind ``RUN_LIVE=1`` for when you want a real transfer.
 
-Run:  pytest tests/test_dta_planner_integration.py -v
+Run:  pytest tests/test_dta_planner_unit.py -v
 """
 
 import os

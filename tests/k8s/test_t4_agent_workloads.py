@@ -1,8 +1,8 @@
 """T4 — Agent workloads (integration).
 
 The in-process agent contracts (coder/DTA/MTA) are already covered by the existing
-suite (tests/test_coder_integration.py, tests/test_dta_planner_integration.py,
-tests/test_mta_integration.py). This module adds the *k8s variants* the plan calls
+suite (tests/test_coder_integration.py, tests/test_dta_planner_unit.py,
+tests/test_mta_unit.py). This module adds the *k8s variants* the plan calls
 for — the same contracts against a DEPLOYED backend — plus the DTA GKE render seam.
 
 Gating:

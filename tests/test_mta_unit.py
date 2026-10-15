@@ -26,20 +26,20 @@ tests_dir = str(Path(__file__).resolve().parent)
 if tests_dir not in sys.path:
     sys.path.insert(0, tests_dir)
 
-# Import test fixtures from test_server_integration using importlib
+# Import test fixtures from test_server_unit using importlib
 import importlib.util
-test_server_path = Path(__file__).parent / "test_server_integration.py"
-spec = importlib.util.spec_from_file_location("test_server_integration", test_server_path)
-test_server_integration = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(test_server_integration)
+test_server_path = Path(__file__).parent / "test_server_unit.py"
+spec = importlib.util.spec_from_file_location("test_server_unit", test_server_path)
+test_server_unit = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(test_server_unit)
 
-FakeCache = test_server_integration.FakeCache
-FakeBlobStore = test_server_integration.FakeBlobStore
+FakeCache = test_server_unit.FakeCache
+FakeBlobStore = test_server_unit.FakeBlobStore
 
-# test_server_integration no longer exports HEADERS / _make_csv_bytes; the current
+# test_server_unit no longer exports HEADERS / _make_csv_bytes; the current
 # API is make_auth_headers(user_id) + inline CSV bytes. Recreate both locally so the
 # rest of this file (unchanged) keeps working.
-make_auth_headers = test_server_integration.make_auth_headers
+make_auth_headers = test_server_unit.make_auth_headers
 HEADERS = make_auth_headers("user-1")
 
 
@@ -65,7 +65,7 @@ def client(tmp_path, monkeypatch):
 
     # Align the server's JWT secret with the one make_auth_headers() signs HEADERS
     # with, so auth-gated routes (/api/upload, /threads/...) accept the test token.
-    monkeypatch.setattr(server, "JWT_SECRET", test_server_integration.TEST_JWT_SECRET, raising=False)
+    monkeypatch.setattr(server, "JWT_SECRET", test_server_unit.TEST_JWT_SECRET, raising=False)
 
     # Use a temp TMP_ROOT
     tmp_root = tmp_path / "avaloka_tmp"
@@ -74,12 +74,12 @@ def client(tmp_path, monkeypatch):
     os.environ["TMP_ROOT"] = str(tmp_root)
 
     # Fake the session cache + a SINGLE shared blob store and reuse
-    # test_server_integration's session helpers, so /api/upload and
+    # test_server_unit's session helpers, so /api/upload and
     # /threads/{id}/messages work in-process without a real Redis (matching that
     # suite's plumbing). Every blob-store constructor returns the SAME fake_store so
     # what upload writes is what sampling reads back. Tests still patch GRAPH per-test.
     from app.services import session_service
-    tsi = test_server_integration
+    tsi = test_server_unit
     tsi.SESSIONS.clear()
     tsi.THREAD_TO_SESSION.clear()
     server.THREAD_META.clear()

@@ -407,7 +407,7 @@ avaloka-dev/
 │   ├── execution-agent/           # Execution agent tests
 │   ├── test_mta_agent.py          # MTA v1 agent tests
 │   ├── test_mta_training.py       # MTA v1 training tests
-│   ├── test_mta_v2_*.py           # MTA v2 tests (unit, training, integration)
+│   ├── test_mta_v2_*.py           # MTA v2 tests (unit, training, agent flows)
 │   ├── test_daft*.py              # Daft / DTA / RAG tests
 │   ├── test_ray*.py               # Ray execution tests
 │   ├── test_profiling_agent_standalone.py

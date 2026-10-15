@@ -47,7 +47,7 @@ class ParquetConnector(BaseConnector):
         total_rows = self.get_row_count()
 
         rows_to_sample = set(
-            random.sample(range(total_rows - 1), k=num_rows)
+            random.sample(range(total_rows), k=min(num_rows, total_rows))
             if random_rows
             else range(num_rows)
         )
