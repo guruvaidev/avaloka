@@ -166,7 +166,7 @@ pytest-asyncio>=0.23.0
 pytest-mock>=3.12.0
 
 # Vector DB
-pymilvus>=2.3.0
+pymilvus>=3.0.2
 # OpenRouter backup provider (app/core/model_fallback.py) speaks the OpenAI
 # wire protocol, so ChatOpenAI is the whole integration. Capped below 1.0:
 # langchain-openai 1.x pulls langchain-core 1.x, which langchain 0.3.28 and
