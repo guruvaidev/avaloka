@@ -23,7 +23,7 @@ plotly
 # Imported by generated analysis code. Keep in sync with the AVAILABLE LIBRARIES
 # section of the coder system prompt in app/agents/coder.py.
 seaborn>=0.13.0
-statsmodels>=0.14.0
+statsmodels>=0.15.0
 # Previously only transitive (via scikit-learn/seaborn); generated code imports
 # them directly, so pin them.
 scipy>=1.11.0
