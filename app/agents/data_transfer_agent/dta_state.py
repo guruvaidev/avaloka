@@ -97,6 +97,8 @@ class DaftCodingAgentState(TypedDict):
     syntax_error: Optional[bool]
     static_semantic_error: Optional[bool]
     logical_semantic_error: Optional[bool]
+    # True when the logic review did not run because no reviewer model exists.
+    logic_review_unavailable: Optional[bool]
     execution_stdout: Optional[str]
     execution_stderr: Optional[str]
     execution_error: Optional[str]

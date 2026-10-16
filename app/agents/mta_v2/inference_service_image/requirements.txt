@@ -6,7 +6,7 @@ langgraph-cli>=0.4.2,<0.5 ; python_version < "3.11"
 langgraph-cli[inmem]>=0.4.2,<0.5 ; python_version >= "3.11"
 
 # Data Processing and Analysis
-pandas>=2.0.0
+pandas>=2.0.0,<3
 numpy>=1.24.0
 pyspark>=4.0.0
 

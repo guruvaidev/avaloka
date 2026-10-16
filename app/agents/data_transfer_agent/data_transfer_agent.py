@@ -25,7 +25,7 @@ from app.agents.data_transfer_agent.dta_state import (
     cloud_storage_credentials,
     db_credentials,
 )
-from app.agents.data_transfer_agent import daft_coder
+from app.agents.data_transfer_agent import daft_coder, daft_validator
 from app.agents.data_transfer_agent.daft_coder import (
     daft_coder_node,
     daft_pseudocode_node,
@@ -778,6 +778,16 @@ def daft_code_generation_pipeline(state: ETLState) -> ETLState:
             if not state["coder_definition"].get("logical_semantic_error"):
                 logger.info("[%s]  Code generation successful after attempt %s.", _ts(), label)
                 break
+
+            if state["coder_definition"].get("logic_review_unavailable"):
+                # Nobody judged the code, so there is nothing to repair, and
+                # regenerating cannot supply a missing key. Stop here rather
+                # than spend the remaining attempts on coder calls.
+                logger.error(
+                    "[%s] Logic review could not run (attempt %s) — not retrying: %s",
+                    _ts(), label, state["coder_definition"].get("code_validation_feedback"),
+                )
+                return state
 
             logger.warning(
                 "[%s]  Logic validator flagged issues (attempt %s): %s",
@@ -1580,18 +1590,35 @@ def data_transfer_pipeline(
             )
         }, None
 
-    # Step 0: Pre-flight — fail fast if the coder LLM is not configured.
-    # coder_llm is built at import time; the key may have been set since (e.g. a
-    # late-loaded .env), so re-attempt the build before failing.
-    if daft_coder.coder_llm is None:
+    # Step 0: Pre-flight — fail fast if the coder or the reviewer LLM is not
+    # configured. Both are built at import time; the key may have been set since
+    # (e.g. a late-loaded .env), so re-attempt the build before failing. The
+    # reviewer is rebuilt too: rebuilding only the coder left a transfer that
+    # generated real code and had it "approved" by a reviewer that was None.
+    if daft_coder.coder_llm is None or daft_validator.validator_llm is None:
         from dotenv import load_dotenv
         load_dotenv()
-        daft_coder.coder_llm = daft_coder._build_coder_llm()
+        if daft_coder.coder_llm is None:
+            daft_coder.coder_llm = daft_coder._build_coder_llm()
+        if daft_validator.validator_llm is None:
+            daft_validator.validator_llm = daft_validator._build_validator_llm()
     if daft_coder.coder_llm is None:
         raise RuntimeError(
-            "GROQ_API_KEY_CODING_AGENT is not set — the code-generation LLM could "
-            "not be initialised. Set it in your environment (or .env) before running "
-            "the data-transfer pipeline."
+            "The code-generation LLM could not be initialised: "
+            f"{daft_coder.coder_unavailable_reason()}. Set it in your environment "
+            "(or .env) before running the data-transfer pipeline."
+        )
+    # A missing reviewer is a configuration error, so it is reported here,
+    # before any schema, sample or coder work is spent on a transfer whose
+    # review cannot run. Unreviewed transfers are available only by decision:
+    # the existing advisory opt-out.
+    if daft_validator.validator_llm is None and not daft_validator.logic_review_is_advisory():
+        raise RuntimeError(
+            "The logic-review LLM could not be initialised: "
+            f"{daft_validator.reviewer_unavailable_reason()}. A transfer is not run "
+            "unreviewed by default; set that in your environment (or .env), or set "
+            f"{daft_validator.STRICT_LOGIC_ENV}=0 to accept transfers without a "
+            "blocking review."
         )
 
     # Step 1: Build connection strings
@@ -1871,7 +1898,14 @@ def data_transfer_pipeline(
         )
     elif generation_failed or stub_used:
         final_state["code_generated_successfully"] = False
-        if stub_used and not generation_failed:
+        if (
+            final_state["coder_definition"].get("logic_review_unavailable")
+            and final_state["coder_definition"].get("logical_semantic_error")
+        ):
+            # Not a problem with the request, so do not ask for a rephrase.
+            final_state["error_message"] = final_state["coder_definition"]["code_validation_feedback"]
+            logger.error("[%s] Aborting: %s", _ts(), final_state["error_message"])
+        elif stub_used and not generation_failed:
             final_state["error_message"] = (
                 "Code Generation Failed: the transformation could not be generated "
                 "and fell back to a no-op stub. Aborting instead of transferring "

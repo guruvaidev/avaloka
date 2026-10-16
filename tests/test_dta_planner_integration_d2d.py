@@ -206,13 +206,15 @@ def test_11b_planner_execution_failure(mock_pipeline, mock_session, mock_gke, mo
 # SECTION 2: THE ENGINE TESTS (data_transfer_agent.data_transfer_pipeline)
 #   Uses the CURRENT internals: probe_db_connection, deduce_schema,
 #   _read_daft_df, daft_code_generation_pipeline, make_injection_script.
-#   coder_llm is patched so the Step-0 preflight passes without an API key.
+#   coder_llm and the reviewer are patched so the Step-0 preflight passes
+#   without an API key: a transfer is refused when either cannot be built.
 # ==============================================================================
 
 _DB_SRC = {"host": "h", "port": 3306, "database": "d", "user": "u", "password": "p", "table": "src"}
 _DB_DST = {"host": "h", "port": 5432, "database": "d", "user": "u", "password": "p", "table": "dst"}
 
 @patch("app.agents.data_transfer_agent.daft_coder.coder_llm", new=MagicMock())
+@patch("app.agents.data_transfer_agent.daft_validator.validator_llm", new=MagicMock())
 @patch("app.agents.data_transfer_agent.data_transfer_agent.deduce_schema")
 @patch("app.agents.data_transfer_agent.data_transfer_agent.probe_db_connection")
 def test_12_engine_source_schema_crash_fatal(mock_probe, mock_deduce):
@@ -225,6 +227,7 @@ def test_12_engine_source_schema_crash_fatal(mock_probe, mock_deduce):
     assert script is None
 
 @patch("app.agents.data_transfer_agent.daft_coder.coder_llm", new=MagicMock())
+@patch("app.agents.data_transfer_agent.daft_validator.validator_llm", new=MagicMock())
 @patch("app.agents.data_transfer_agent.data_transfer_agent.make_injection_script", return_value="SCRIPT")
 @patch("app.agents.data_transfer_agent.data_transfer_agent.daft_code_generation_pipeline")
 @patch("app.agents.data_transfer_agent.data_transfer_agent._read_daft_df")
@@ -254,6 +257,7 @@ def test_13_engine_dest_schema_unverifiable_is_fatal_with_retry_hint(mock_deduce
     assert script is None
 
 @patch("app.agents.data_transfer_agent.daft_coder.coder_llm", new=MagicMock())
+@patch("app.agents.data_transfer_agent.daft_validator.validator_llm", new=MagicMock())
 @patch("app.agents.data_transfer_agent.data_transfer_agent._read_daft_df")
 @patch("app.agents.data_transfer_agent.data_transfer_agent.deduce_schema")
 @patch("app.agents.data_transfer_agent.data_transfer_agent.probe_db_connection")
@@ -268,6 +272,7 @@ def test_14_engine_sample_data_db_crash(mock_probe, mock_deduce, mock_read):
     assert script is None
 
 @patch("app.agents.data_transfer_agent.daft_coder.coder_llm", new=MagicMock())
+@patch("app.agents.data_transfer_agent.daft_validator.validator_llm", new=MagicMock())
 @patch("app.agents.data_transfer_agent.data_transfer_agent._read_daft_df")
 @patch("app.agents.data_transfer_agent.data_transfer_agent.deduce_schema")
 def test_15_engine_sample_data_csv_crash(mock_deduce, mock_read):
@@ -280,6 +285,7 @@ def test_15_engine_sample_data_csv_crash(mock_deduce, mock_read):
     assert "Could not fetch sample data" in state["error_message"]
 
 @patch("app.agents.data_transfer_agent.daft_coder.coder_llm", new=MagicMock())
+@patch("app.agents.data_transfer_agent.daft_validator.validator_llm", new=MagicMock())
 @patch("app.agents.data_transfer_agent.data_transfer_agent.daft_code_generation_pipeline")
 @patch("app.agents.data_transfer_agent.data_transfer_agent._read_daft_df")
 @patch("app.agents.data_transfer_agent.data_transfer_agent.deduce_schema")
@@ -299,6 +305,7 @@ def test_16_engine_code_gen_validation_failure(mock_deduce, mock_read, mock_code
     assert "Reason: Missing colon" in state["error_message"]
 
 @patch("app.agents.data_transfer_agent.daft_coder.coder_llm", new=MagicMock())
+@patch("app.agents.data_transfer_agent.daft_validator.validator_llm", new=MagicMock())
 @patch("app.agents.data_transfer_agent.data_transfer_agent.daft_code_generation_pipeline")
 @patch("app.agents.data_transfer_agent.data_transfer_agent._read_daft_df")
 @patch("app.agents.data_transfer_agent.data_transfer_agent.deduce_schema")
@@ -323,6 +330,7 @@ def test_17_engine_schema_match_failure(mock_deduce, mock_read, mock_codegen):
     assert "Schema Mismatch Detected" in state["error_message"]
 
 @patch("app.agents.data_transfer_agent.daft_coder.coder_llm", new=MagicMock())
+@patch("app.agents.data_transfer_agent.daft_validator.validator_llm", new=MagicMock())
 @patch("app.agents.data_transfer_agent.data_transfer_agent.daft_code_generation_pipeline")
 @patch("app.agents.data_transfer_agent.data_transfer_agent._read_daft_df")
 @patch("app.agents.data_transfer_agent.data_transfer_agent.deduce_schema")
@@ -338,6 +346,7 @@ def test_18_engine_cloud_source_parquet(mock_deduce, mock_read, mock_codegen):
     assert state is not None
 
 @patch("app.agents.data_transfer_agent.daft_coder.coder_llm", new=MagicMock())
+@patch("app.agents.data_transfer_agent.daft_validator.validator_llm", new=MagicMock())
 @patch("app.agents.data_transfer_agent.data_transfer_agent.daft_code_generation_pipeline")
 @patch("app.agents.data_transfer_agent.data_transfer_agent._read_daft_df")
 @patch("app.agents.data_transfer_agent.data_transfer_agent.deduce_schema")
@@ -357,6 +366,7 @@ def test_19_engine_cloud_dest_parquet(mock_deduce, mock_read, mock_codegen):
 # ==============================================================================
 
 @patch("app.agents.data_transfer_agent.daft_coder.coder_llm", new=MagicMock())
+@patch("app.agents.data_transfer_agent.daft_validator.validator_llm", new=MagicMock())
 @patch("app.agents.planner.requests.Session")
 def test_20_real_connection_error(mock_session):
     _config_session(mock_session)  # onboarding API unavailable -> use registry creds
@@ -464,6 +474,7 @@ def test_23_case2_named_table_overrides_registered_default(
 # ---- Case 3: named table doesn't exist in the destination -> ask to create it ----
 
 @patch("app.agents.data_transfer_agent.daft_coder.coder_llm", new=MagicMock())
+@patch("app.agents.data_transfer_agent.daft_validator.validator_llm", new=MagicMock())
 @patch("app.agents.data_transfer_agent.data_transfer_agent.daft_code_generation_pipeline")
 @patch("app.agents.data_transfer_agent.data_transfer_agent._read_daft_df")
 @patch("app.agents.data_transfer_agent.data_transfer_agent.deduce_schema")
@@ -545,6 +556,7 @@ def test_26_columns_missing_reports_offenders():
 # ---- #3 source-table existence guard ----
 
 @patch("app.agents.data_transfer_agent.daft_coder.coder_llm", new=MagicMock())
+@patch("app.agents.data_transfer_agent.daft_validator.validator_llm", new=MagicMock())
 @patch("app.agents.data_transfer_agent.data_transfer_agent.deduce_schema")
 @patch("app.agents.data_transfer_agent.data_transfer_agent.probe_db_connection")
 def test_27_source_table_missing_guard(mock_probe, mock_deduce):

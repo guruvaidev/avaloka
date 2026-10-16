@@ -19,6 +19,56 @@ def _mentioned_columns(goal: str, columns: list[str]) -> list[str]:
     ]
 
 
+#: Words in a goal that never name a measure, whatever the columns are called.
+_NOT_A_MEASURE = frozenset({
+    "the", "and", "for", "per", "each", "every", "all", "what", "which", "show",
+    "total", "sum", "average", "mean", "median", "count", "number", "highest",
+    "lowest", "maximum", "minimum", "max", "min", "largest", "smallest", "over",
+    "time", "month", "monthly", "trend", "compare", "breakdown", "segment",
+    "grouped", "group", "how", "many", "much", "between", "across", "value",
+})
+
+
+def _unresolved_measure(goal: str, frame: pd.DataFrame, exclude: list[str]) -> dict[str, Any] | None:
+    """The measure a goal asks for when no column it names can supply it.
+
+    "Total revenue by region" over ``gross_revenue`` and ``net_revenue`` names
+    no column: ``_mentioned_columns`` matches whole names, and "revenue" is
+    neither. Falling back to counting rows answers a different question and
+    labelled it answered. A goal is unresolved when it asks for a statistic
+    other than a count, or uses a word that is part of a numeric column's
+    name (identifier columns aside); a goal that asks only for a count is not; the numeric columns sharing a word with the goal are returned as the
+    candidates, so the report can say which ones the user could mean rather
+    than pick one of them.
+    """
+    requested = _requested_numeric_metrics(goal)
+    statistics = [m for m in requested if m != "count"]
+    if "count" in requested and not statistics:
+        return None                       # "how many ... by region": a row count is the answer
+    words = {w for w in re.findall(r"[a-z0-9]+", goal.lower())
+             if len(w) >= 3 and w not in _NOT_A_MEASURE}
+    candidates = [
+        str(col) for col in frame.columns
+        if str(col) not in exclude and pd.api.types.is_numeric_dtype(frame[col])
+        and "id" not in (tokens := set(re.findall(r"[a-z0-9]+", str(col).lower())))
+        and words & tokens
+    ]
+    if not statistics and not candidates:
+        return None
+    asked = " ".join(sorted(words & {t for c in candidates for t in re.findall(r"[a-z0-9]+", c.lower())})) or None
+    return {"statistics": statistics, "measure": asked, "candidates": candidates}
+
+
+def _unresolved_findings(unresolved: dict[str, Any]) -> list[str]:
+    asked = unresolved["measure"] or " ".join(unresolved["statistics"]) or "a measure"
+    if unresolved["candidates"]:
+        named = ", ".join(unresolved["candidates"])
+        return [f"The goal asks for {asked}, but no column is named that; it could mean "
+                f"{named}. Name the column in the goal to get a figure."]
+    return [f"The goal asks for {asked}, but names no numeric column to calculate it from. "
+            "Name the column in the goal to get a figure."]
+
+
 def _number(value: Any) -> float:
     return round(float(value), 6)
 
@@ -149,6 +199,14 @@ def analyze_goal(
             if col != date_col and pd.api.types.is_numeric_dtype(frame[col])
         ]
         metric = numeric[0] if numeric else None
+        if not metric:
+            unresolved = _unresolved_measure(goal, frame, [date_col])
+            if unresolved:
+                result.update(kind="trend", status="limited", metrics={
+                    "time_column": date_col, "value_column": None,
+                    "aggregation": None, "unresolved_measure": unresolved,
+                }, findings=_unresolved_findings(unresolved))
+                return result
         series = (
             pd.to_numeric(frame[metric], errors="coerce")
             if metric
@@ -207,6 +265,14 @@ def analyze_goal(
             col for col in mentioned
             if col != group_col and pd.api.types.is_numeric_dtype(frame[col])
         ), None)
+        if not metric:
+            unresolved = _unresolved_measure(goal, frame, [group_col])
+            if unresolved:
+                result.update(kind="group_comparison", status="limited", metrics={
+                    "group_column": group_col, "value_column": None,
+                    "aggregation": None, "unresolved_measure": unresolved,
+                }, findings=_unresolved_findings(unresolved))
+                return result
         grouped = frame.groupby(group_col, dropna=False)
         if metric:
             aggregation = "sum" if re.search(r"\b(total|sum|revenue|sales)\b", lower) else "mean"

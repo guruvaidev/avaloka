@@ -26,7 +26,7 @@ pytest tests/e2e -q
 ```
 
 In hermetic mode the API runs in-process (FastAPI `TestClient`) over the
-in-memory fakes defined in `tests/test_server_integration.py` — one definition
+in-memory fakes defined in `tests/test_server_unit.py` — one definition
 of the fake blob store, cache and LangGraph, shared rather than forked. Setting
 `AVALOKA_API_URL` switches the same test bodies to black-box HTTP and mints
 tokens with the cluster's `SUPABASE_JWT_SECRET`. Legs that can only be observed

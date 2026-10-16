@@ -1,8 +1,9 @@
 """Deferred (slow) chat turns: the pending-turn endpoint, fast vs slow turns,
 the training/analysis wait message, and the training-turn classifier.
 
-Moved out of test_server_integration.py, which the CI gate deselects
-(`-m "not integration"`), so these run on every pipeline.
+Moved out of test_server_unit.py while that file was still named
+test_server_integration.py and deselected by the CI gate
+(`-m "not integration"`). It runs in the gate now; these stayed here.
 """
 import time
 

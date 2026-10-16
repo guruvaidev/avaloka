@@ -95,12 +95,39 @@ _CAUSAL_EVIDENCE_KEYS = ("experiment", "randomized", "randomised", "ab_test",
                          "instrument", "did", "difference_in_differences")
 
 # _NUMBER = re.compile(r"-?\d+(?:\.\d+)?%?")
-_NUMBER = re.compile(r"(?<![\w.])-?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?%?")
+#
+# A narrative writes large values compactly ("56.1B", "24 million") or with
+# space-like thousands separators ("56 106 087 508", often U+202F). The old
+# pattern read those as 56.1 / 24, or as four separate numbers (56, 106, ...),
+# and flagged correct sentences: "cites 56, which does not appear in the
+# computed evidence" for a 56,106,087,508 value in the result table.
+_NUMBER = re.compile(
+    r"(?<![\w.])-?"
+    r"(?:\d{1,3}(?:[,\u00a0\u202f\u2009]\d{3})+|\d{1,3}(?: \d{3}){2,}|\d+)"
+    r"(?:\.\d+)?"
+    r"(?:\s?%|\s?percent\b|\s?(?:thousand|million|billion|trillion)\b|(?:[kKmMbBtT]|bn|Bn|BN|mn|tn)(?![\w]))?"
+)
+_SCALES = {
+    "k": 1e3, "thousand": 1e3,
+    "m": 1e6, "mn": 1e6, "million": 1e6,
+    "b": 1e9, "bn": 1e9, "billion": 1e9,
+    "t": 1e12, "tn": 1e12, "trillion": 1e12,
+}
+_SCALE_SUFFIX = re.compile(r"^(.*\d)\s?([A-Za-z]+)$")
+
+
+def _is_percent(raw: str) -> bool:
+    return raw.rstrip().endswith("%") or raw.rstrip().lower().endswith("percent")
 
 
 def _parse_number(raw: str) -> Optional[float]:
+    text = re.sub(r"\s?(?:%|percent)$", "", raw.strip(), flags=re.IGNORECASE)
+    scale = 1.0
+    m = _SCALE_SUFFIX.match(text)
+    if m and m.group(2).lower() in _SCALES:
+        text, scale = m.group(1), _SCALES[m.group(2).lower()]
     try:
-        return float(raw.rstrip("%").replace(",", ""))
+        return float(re.sub(r"[,\u00a0\u202f\u2009 ]", "", text)) * scale
     except ValueError:
         return None
 
@@ -243,12 +270,14 @@ def check_invented_numbers(claim: str, flat: Dict[str, Any],
     """A figure in the narrative that appears nowhere in the evidence."""
     stated = []
     # Typographic minus ("−2,008.49") is still a negative number.
-    for match in _NUMBER.finditer(claim.replace("\u2212", "-")):
+    # "–2,008.49" (en dash), "−$2,008.49" and "-$2,008.49" are negative numbers too.
+    normalized = re.sub(r"[-\u2212\u2013]\s?[$€£₹]", "-", claim).replace("\u2212", "-").replace("\u2013", "-")
+    for match in _NUMBER.finditer(normalized):
         raw = match.group(0)
         value = _parse_number(raw)
         if value is None:
             continue
-        is_percentage = raw.endswith("%")
+        is_percentage = _is_percent(raw)
 
         # Preserve the useful exemption for ordinary prose counts ("3
         # segments") and calendar years. Percentages are explicitly excluded:
@@ -274,8 +303,17 @@ def check_invented_numbers(claim: str, flat: Dict[str, Any],
                     "to support it"),
         )
 
+    def _matches(value: float, k: float) -> bool:
+        return abs(value - k) <= max(tolerance, abs(k) * tolerance)
+
     for value, raw in stated:
-        if not any(abs(value - k) <= max(tolerance, abs(k) * tolerance) for k in known):
+        # A percentage may be stored as a fraction: "33.6%" vs 0.336 in the table.
+        # Rounded to one decimal of a percent, so allow half a tenth of a point.
+        if _is_percent(raw) and any(
+            _matches(value, k * 100) or abs(value - k * 100) <= 0.051 for k in known
+        ):
+            continue
+        if not any(_matches(value, k) for k in known):
             return ClaimFinding(
                 claim=claim, verdict=Verdict.UNSUPPORTED, check="invented_number",
                 detail=(f"cites {raw}, which does not appear in the computed "

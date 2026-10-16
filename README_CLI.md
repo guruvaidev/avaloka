@@ -129,11 +129,16 @@ What to be careful about
 Validation verdict: WARN; max safe deployment level 2/4
   ! data_sufficiency: Too few rows for stable EDA.
 
-Deliverables -> ./avaloka-analysis
-  open ./avaloka-analysis/executive_report.html   the decision summary
-  cat  ./avaloka-analysis/README.md               findings and limitations
-  python ./avaloka-analysis/analysis.py           reproduce this run
+Deliverables -> avaloka-analysis/3f9a1c0b7d2e
+  open avaloka-analysis/3f9a1c0b7d2e/executive_report.html   the decision summary
+  cat  avaloka-analysis/3f9a1c0b7d2e/README.md               findings and limitations
+  python avaloka-analysis/3f9a1c0b7d2e/analysis.py           reproduce this run
 ```
+
+The folder name is different on every run: without `--output`, each run writes
+to its own folder under `./avaloka-analysis/`, so copy the paths the command
+prints rather than the ones above. Pass `--output ./my-analysis` to choose the
+folder yourself.
 
 A verdict never appears without the check that produced it, and a model score
 never appears without the baseline it has to beat:

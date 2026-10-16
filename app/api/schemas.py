@@ -117,6 +117,10 @@ class UploadResponse(BaseModel):
     # Set when a single uploaded file expanded into several datasets (one per
     # Excel sheet). Top-level fields describe the primary (largest) sheet.
     datasets: Optional[List["UploadedDatasetOut"]] = None
+    # What the reader assumed about the primary dataset (header row, rows
+    # skipped, sheet chosen). Same strings as UploadedDatasetOut.notes; without
+    # this a single-file upload, which has no ``datasets``, said nothing.
+    notes: Optional[List[str]] = None
 
     model_config = {"populate_by_name": True}
 

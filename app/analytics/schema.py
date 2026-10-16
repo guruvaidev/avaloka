@@ -266,6 +266,28 @@ def prompt_chars_bucket(n: int) -> str:
     return "500+"
 
 
+def row_count_bucket(n: int) -> str:
+    """The ``ROW_BUCKETS`` band for a row count. A band, never the count."""
+    if n <= 0:
+        return "0"
+    for label, hi in (("1-1e2", 10**2), ("1e2-1e3", 10**3), ("1e3-1e4", 10**4),
+                      ("1e4-1e5", 10**5), ("1e5-1e6", 10**6), ("1e6-1e7", 10**7),
+                      ("1e7-1e8", 10**8)):
+        if n <= hi:
+            return label
+    return "1e8+"
+
+
+def column_count_bucket(n: int) -> str:
+    """The ``COL_BUCKETS`` band for a column count. A band, never the count."""
+    if n <= 0:
+        return "0"
+    for label, hi in (("1-10", 10), ("10-50", 50), ("50-200", 200), ("200-1000", 1000)):
+        if n <= hi:
+            return label
+    return "1000+"
+
+
 class Rejected(Exception):
     """A batch or record the collector refuses. The client must not retry it."""
 

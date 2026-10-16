@@ -1,8 +1,9 @@
 """Plan-aware upload limits at the API: GET /api/limits, the 413 from the
 upload handler, and the early Content-Length refusal (with CORS headers).
  
-Moved out of test_server_integration.py, which the CI gate deselects
-(`-m "not integration"`), so these run on every pipeline. The plan logic
+Moved out of test_server_unit.py while that file was still named
+test_server_integration.py and deselected by the CI gate
+(`-m "not integration"`). It runs in the gate now; these stayed here. The plan logic
 itself is unit-tested in tests/test_plan_limits.py.
 """
 from fastapi.testclient import TestClient

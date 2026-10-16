@@ -31,14 +31,39 @@ from typing import Optional
 
 # Re-exported for backwards compatibility with any importer of these names.
 from app.core.inference import (  # noqa: F401
+    GROQ,
     REASONING_MODEL_PREFIXES,
     build_chat_model,
+    provider_requirement,
+    resolve_provider,
     supports_reasoning,
 )
 
 from app.core.model_fallback import attach_fallback
 
 logger = logging.getLogger(__name__)
+
+
+def unconfigured_reason(
+    *,
+    agent: str,
+    api_key: Optional[str],
+    role: str = "planning",
+    groq_key_var: str = "GROQ_API_KEY",
+) -> str:
+    """Why build_agent_llm() returned None, naming the setting that fixes it.
+
+    The provider is resolved exactly as the factory resolves it, so the setting
+    named is the one the factory looked for -- not a Groq key on an install
+    whose provider is OpenRouter.
+    """
+    provider = resolve_provider(role=role, agent=agent, groq_api_key=api_key)
+    needs = groq_key_var if provider == GROQ else provider_requirement(provider)
+    return (
+        f"the inference provider for {agent} is {provider!r} and it is not "
+        f"configured: set {needs}, or select a configured provider with "
+        f"INFERENCE_PROVIDER or AVALOKA_{agent}_PROVIDER"
+    )
 
 
 def build_agent_llm(

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, ArrowRight, X, Stars02, Table } from "@untitledui/icons";
+import { ArrowLeft, ArrowRight, ChevronDown, X, Stars02, Table } from "@untitledui/icons";
 import { Code02, Copy01, ThumbsDown, ThumbsUp } from "@untitledui/icons";
 import { toast } from "sonner";
 import { DynamicChart, normalizeVizConfig, type Slide } from "./dynamicChart";
@@ -8,6 +8,9 @@ import { backendApi } from "@/lib/api/backendApi";
 import { buildInsightGroups } from "@/lib/insight-groups";
 import { InsightsAvatar, ExplainChartButton } from "@/components/insights-avatar/InsightsAvatar";
 import { InsightsAvatarProvider, useInsightsAvatar, HIGHLIGHT_CLASS } from "@/components/insights-avatar/InsightsAvatarContext";
+import { Button } from "@/components/base/buttons/button";
+import { Badge } from "@/components/base/badges/badges";
+import { Toggle } from "@/components/base/toggle/toggle";
 
 function chartIdOf(slide: Slide, groupId: string, si: number) {
   return slide.id ?? `${groupId}-${si}`;
@@ -54,6 +57,117 @@ interface AutoInsightsModalProps {
   /** All datasets from a grouped upload; renders a per-dataset tab switcher. */
   datasets?: InsightDataset[];
   primaryDatasetId?: string | null;
+  onPrefillChat?: (text: string) => void;
+}
+
+type ColumnStat = {
+  name?: string;
+  dtype?: string;
+  role?: string;
+  missing_pct?: number;
+  n_unique?: number;
+  min?: unknown;
+  max?: unknown;
+  mean?: unknown;
+  median?: unknown;
+  first?: unknown;
+  last?: unknown;
+  top_values?: Array<{ value?: unknown; pct?: number }>;
+  meaning?: string;
+  predictive_value?: "high" | "medium" | "low";
+};
+
+const finiteNumber = (value: unknown) => {
+  if (value == null || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+};
+
+const formatStatNumber = (value: unknown) => {
+  const number = finiteNumber(value);
+  return number == null ? "—" : number.toLocaleString("en-US", { maximumFractionDigits: 2 });
+};
+
+function columnSummary(column: ColumnStat) {
+  const dtype = String(column.dtype ?? "").toLowerCase();
+  if (/date|time/.test(dtype)) {
+    const firstValue = column.first ?? column.min;
+    const lastValue = column.last ?? column.max;
+    const first = firstValue == null ? "—" : String(firstValue);
+    const last = lastValue == null ? "—" : String(lastValue);
+    return `${first} – ${last}`;
+  }
+  if (/int|float|double|decimal|number|numeric/.test(dtype)) {
+    return `${formatStatNumber(column.min)} – ${formatStatNumber(column.max)} · median ${formatStatNumber(column.median)} · mean ${formatStatNumber(column.mean)}`;
+  }
+  return (Array.isArray(column.top_values) ? column.top_values : [])
+    .slice(0, 3)
+    .map((item) => `${String(item?.value ?? "—")} (${formatStatNumber(item?.pct)}%)`)
+    .join(" · ");
+}
+
+function DatasetOverview({ config, onPrefillChat }: { config: any; onPrefillChat?: (text: string) => void }) {
+  const profile = config?.profile_overview;
+  if (!profile || typeof profile !== "object") return null;
+  const score = finiteNumber(profile.readiness_score);
+  const warnings = (Array.isArray(profile.red_flags) && profile.red_flags.length ? profile.red_flags : profile.concerns) ?? [];
+  const suggestions = [...(Array.isArray(profile.analysis_suggestions) ? profile.analysis_suggestions : []), ...(Array.isArray(profile.quick_wins) ? profile.quick_wins : [])].filter((value) => typeof value === "string" && value.trim()).slice(0, 5);
+  const scoreTone = score == null ? "bg-tertiary" : score >= 80 ? "bg-utility-success-500" : score >= 50 ? "bg-utility-warning-500" : "bg-utility-error-500";
+
+  return (
+    <section className="rounded-2xl border border-[#eaecf0] bg-white p-5 shadow-[0_12px_28px_-12px_rgba(16,24,40,0.18)]">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="text-[15px] font-semibold text-[#101828]">Dataset overview</h3>
+          {profile.domain && <Badge className="mt-2" size="sm" color="blue">{profile.domain}</Badge>}
+        </div>
+        {score != null && (
+          <div className="w-full max-w-[240px]">
+            <p className="text-xs font-semibold text-[#344054]">Data readiness {Math.max(0, Math.min(100, score))}/100</p>
+            <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-[#eaecf0]">
+              <div className={`h-full rounded-full ${scoreTone}`} style={{ width: `${Math.max(0, Math.min(100, score))}%` }} />
+            </div>
+            {profile.readiness_reasoning && <p className="mt-1 line-clamp-1 text-xs text-[#667085]">{profile.readiness_reasoning}</p>}
+          </div>
+        )}
+      </div>
+      {profile.domain_reasoning && <p className="mt-3 text-sm leading-6 text-[#475467]">{profile.domain_reasoning}</p>}
+      {(warnings.length > 0 || suggestions.length > 0) && (
+        <div className="mt-4 grid gap-5 md:grid-cols-2">
+          {warnings.length > 0 && <div><h4 className="text-sm font-semibold text-[#101828]">Watch out for</h4><ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-[#475467]">{warnings.map((item: string, index: number) => <li key={`${item}-${index}`}>{item}</li>)}</ul></div>}
+          {suggestions.length > 0 && <div><h4 className="text-sm font-semibold text-[#101828]">Suggested next steps</h4><div className="mt-2 flex flex-col items-start gap-1">{suggestions.map((item: string, index: number) => <Button key={`${item}-${index}`} color="link-gray" size="sm" onPress={() => onPrefillChat?.(item)} className="h-auto justify-start whitespace-normal text-left">{item}</Button>)}</div></div>}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ColumnStatistics({ config }: { config: any }) {
+  const [showIds, setShowIds] = useState(false);
+  const source = Array.isArray(config?.column_stats) ? config.column_stats as ColumnStat[] : [];
+  if (!source.length) return null;
+  const highValue = new Set(Array.isArray(config?.profile_overview?.high_value_columns) ? config.profile_overview.high_value_columns : []);
+  const ordered = source.map((column, index) => ({ column, index })).sort((a, b) => Number(highValue.has(b.column.name)) - Number(highValue.has(a.column.name)) || a.index - b.index).map(({ column }) => column);
+  const hasIds = ordered.some((column) => String(column.role ?? "").toLowerCase() === "identifier");
+  const visible = showIds ? ordered : ordered.filter((column) => String(column.role ?? "").toLowerCase() !== "identifier");
+  const badgeColor = (value: ColumnStat["predictive_value"]) => value === "high" ? "success" : value === "medium" ? "gray" : "slate";
+
+  return (
+    <details className="group mt-3 rounded-lg border border-[#eaecf0] bg-white">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3.5 py-3 text-[13px] font-semibold text-[#101828]">
+        Column statistics <ChevronDown className="size-4 text-[#667085] transition-transform group-open:rotate-180" />
+      </summary>
+      <div className="border-t border-[#eaecf0] p-3.5">
+        {hasIds && <div className="mb-3"><Toggle slim size="sm" label="Show ID columns" isSelected={showIds} onChange={setShowIds} /></div>}
+        <div className="overflow-x-auto rounded-lg border border-[#eaecf0]">
+          <table className="w-full min-w-[900px] text-left text-xs">
+            <thead className="bg-[#f9fafb] text-[#667085]"><tr>{["Column", "Type", "Meaning", "Predictive value", "Missing %", "Distinct", "Summary"].map((heading) => <th key={heading} className="whitespace-nowrap px-3 py-2 font-medium">{heading}</th>)}</tr></thead>
+            <tbody>{visible.map((column, index) => <tr key={`${column.name}-${index}`} className="border-t border-[#eaecf0] text-[#475467]"><td className="px-3 py-2 font-medium text-[#101828]">{column.name ?? "—"}</td><td className="px-3 py-2">{column.dtype ?? "—"}</td><td className="max-w-[220px] px-3 py-2">{column.meaning ?? ""}</td><td className="px-3 py-2">{column.predictive_value ? <Badge size="sm" color={badgeColor(column.predictive_value)}>{column.predictive_value}</Badge> : null}</td><td className="px-3 py-2">{formatStatNumber(column.missing_pct)}</td><td className="px-3 py-2">{formatStatNumber(column.n_unique)}</td><td className="max-w-[320px] px-3 py-2">{columnSummary(column)}</td></tr>)}</tbody>
+          </table>
+        </div>
+      </div>
+    </details>
+  );
 }
 
 
@@ -119,6 +233,7 @@ function InsightCard({
   defaultView = "chart",
   onOpenCode,
   chartId,
+  config,
 }: {
   slide: Slide;
   datasetName?: string;
@@ -129,6 +244,7 @@ function InsightCard({
   defaultView?: "table" | "chart";
   onOpenCode: () => void;
   chartId: string;
+  config?: any;
 }) {
   const avatar = useInsightsAvatar();
   const [view, setView] = useState<"table" | "chart">(defaultView);
@@ -262,16 +378,17 @@ function InsightCard({
         </div>
       </div>
 
-      {slide.insights.length > 0 && (
+      {(slide.insights.length > 0 || slide.headline || slide.insightFacts || config?.dataset_summary?.insights?.length > 0) && (
         <div className="mt-3 rounded-lg border border-[#eaecf0] bg-white p-3.5">
           <p className="text-[13px] font-semibold text-[#101828]">Key Insights</p>
           <ul className="mt-1.5 list-disc space-y-0.5 pl-5 text-[13px] text-[#475467]">
-            {slide.insights.map((line, i) => (
-              <li key={i}>{line}</li>
-            ))}
+            {slide.headline ? <li><strong className="block text-[#101828]">{slide.headline}</strong>{slide.insightFacts && <span className="mt-0.5 block">{slide.insightFacts}</span>}</li> : slide.insights.map((line, i) => <li key={i}>{line}</li>)}
           </ul>
+          {Array.isArray(config?.dataset_summary?.insights) && config.dataset_summary.insights.length > 0 && <div className="mt-3 border-t border-[#eaecf0] pt-3"><p className="text-[13px] font-semibold text-[#101828]">About this dataset</p><ul className="mt-1.5 list-disc space-y-0.5 pl-5 text-[13px] text-[#475467]">{config.dataset_summary.insights.map((line: string, index: number) => <li key={`${line}-${index}`}>{line}</li>)}</ul></div>}
         </div>
       )}
+
+      <ColumnStatistics config={config} />
 
     </div>
   );
@@ -335,10 +452,9 @@ function CodeViewerModal({
 }
 
 
-function AutoInsightsModalInner({ open, onOpenChange, config, status, datasetName, samples, outputRows, defaultView = "chart", title, subtitle, aid, datasets, primaryDatasetId }: AutoInsightsModalProps) {
+function AutoInsightsModalInner({ open, onOpenChange, config, status, datasetName, samples, outputRows, defaultView = "chart", title, subtitle, aid, datasets, primaryDatasetId, onPrefillChat }: AutoInsightsModalProps) {
   const [index, setIndex] = useState(0);
   const [layout, setLayout] = useState<"stack" | "grid">("stack");
-  const [showAllOverviewCharts, setShowAllOverviewCharts] = useState(false);
   const [codeOpen, setCodeOpen] = useState(false);
   const [codeText, setCodeText] = useState("");
   const [codeLoading, setCodeLoading] = useState(false);
@@ -557,7 +673,7 @@ function AutoInsightsModalInner({ open, onOpenChange, config, status, datasetNam
                   type="button"
                   role="tab"
                   aria-selected={active}
-                  onClick={() => { setActiveDatasetId(g.id); setIndex(0); setShowAllOverviewCharts(false); }}
+                  onClick={() => { setActiveDatasetId(g.id); setIndex(0); }}
                   title={g.name}
                   className={
                     "max-w-[220px] truncate rounded-lg px-3 py-1.5 text-xs transition " +
@@ -580,6 +696,7 @@ function AutoInsightsModalInner({ open, onOpenChange, config, status, datasetNam
             <div className="grid h-full place-items-center text-sm text-[#475467]">Generating insights…</div>
           ) : (
             <div className="mx-auto max-w-[1200px] space-y-8">
+              <DatasetOverview config={activeGroup?.config} onPrefillChat={onPrefillChat} />
               {visibleGroups.map((g) => {
                 const offset = flat.findIndex((f) => f.group.id === g.id);
                 return (
@@ -599,7 +716,7 @@ function AutoInsightsModalInner({ open, onOpenChange, config, status, datasetNam
                       </div>
                     ) : (
                       <div className="grid grid-cols-1 items-start gap-5 sm:grid-cols-2 lg:grid-cols-3">
-                        {g.slides.slice(0, multi && !showAllOverviewCharts ? 2 : undefined).map((slide, si) => {
+                        {g.slides.map((slide, si) => {
                           const globalIdx = offset + si;
                           const cid = chartIdOf(slide, g.id, si);
                           const lit = avatar.isHighlighted(cid);
@@ -631,18 +748,6 @@ function AutoInsightsModalInner({ open, onOpenChange, config, status, datasetNam
                         })}
                       </div>
                     )}
-                    {multi && g.slides.length > 2 && (
-                      <button
-                        type="button"
-                        aria-expanded={showAllOverviewCharts}
-                        onClick={() => setShowAllOverviewCharts((current) => !current)}
-                        className="mt-4 text-sm font-semibold text-[#1565ef] hover:underline"
-                      >
-                        {showAllOverviewCharts
-                          ? "Show fewer charts"
-                          : `Show ${g.slides.length - 2} more chart${g.slides.length - 2 === 1 ? "" : "s"}`}
-                      </button>
-                    )}
                   </section>
                 );
               })}
@@ -656,7 +761,9 @@ function AutoInsightsModalInner({ open, onOpenChange, config, status, datasetNam
           </div>
         </div>
       ) : (
-      <div className="relative flex flex-1 items-center justify-center px-6">
+      <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6">
+        <div className="mx-auto mb-5 max-w-[720px]"><DatasetOverview config={activeGroup?.config} onPrefillChat={onPrefillChat} /></div>
+      <div className="relative flex min-h-[560px] items-center justify-center">
         {total > 1 && (
           <button
             type="button"
@@ -725,6 +832,7 @@ function AutoInsightsModalInner({ open, onOpenChange, config, status, datasetNam
                 defaultView={defaultView}
                 onOpenCode={handleOpenCode}
                 chartId={chartIdOf(activeSlide, activeEntry.group.id, activeEntry.si)}
+                config={activeEntry.group.config}
               />
 
             )}
@@ -741,6 +849,7 @@ function AutoInsightsModalInner({ open, onOpenChange, config, status, datasetNam
             <ArrowRight className="size-5" />
           </button>
         )}
+      </div>
       </div>
       )}
 
@@ -778,3 +887,4 @@ export function AutoInsightsModal(props: AutoInsightsModalProps) {
     </InsightsAvatarProvider>
   );
 }
+

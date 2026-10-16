@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from pathlib import Path
 from typing import Any
 
@@ -46,15 +47,18 @@ def score_roles(out: Path, exp: Expectations) -> list[CheckResult]:
     for col, want in exp.expected_roles.items():
         got = roles.get(col)
         checks.append(CheckResult(
-            f"role[{col}]", got == want, f"inferred '{got}', expected '{want}'"))
+            f"role[{col}]", got == want, f"inferred '{got}', expected '{want}'",
+            category="guard" if col in exp.guard_roles else "assertion"))
     return checks
 
 
 def score_quality(out: Path, exp: Expectations) -> list[CheckResult]:
     checks: list[CheckResult] = []
-    if not (exp.expect_quality_flags or exp.min_quality is not None or exp.max_quality is not None):
+    if not (exp.expect_quality_flags or exp.min_quality is not None or exp.max_quality is not None
+            or exp.expected_category_counts or exp.expected_missing):
         return checks
-    q = _read_json(out / "data_quality.json")["quality"]
+    profile = _read_json(out / "data_quality.json")
+    q = profile["quality"]
     for key, cols in exp.expect_quality_flags.items():
         flagged = set(q.get(key, []))
         for col in cols:
@@ -67,6 +71,82 @@ def score_quality(out: Path, exp: Expectations) -> list[CheckResult]:
     if exp.max_quality is not None:
         checks.append(CheckResult("quality_max", q["score"] <= exp.max_quality,
                                   f"score {q['score']} <= {exp.max_quality}"))
+    columns = {c["name"]: c for c in profile["columns"]}
+    for col, want in exp.expected_category_counts.items():
+        checks.append(_category_counts_check(col, columns.get(col), want))
+    for col, want in exp.expected_missing.items():
+        got = (columns.get(col) or {}).get("missing")
+        checks.append(CheckResult(f"missing[{col}]", got == want,
+                                  f"{col} missing={got}, expected {want}", weight=2.0))
+    return checks
+
+
+def _category_counts_check(col: str, column: dict[str, Any] | None,
+                           want: dict[str, int]) -> CheckResult:
+    """Every planted label present with its exact count, and no label besides.
+
+    Read from ``top_values``, which the profile keeps for the ten most frequent
+    labels only: an expectation with more than ten labels cannot be met.
+    """
+    name = f"category_counts[{col}]"
+    if column is None:
+        return CheckResult(name, False, f"{col} is not in the profile", weight=2.0)
+    got = {v["value"]: v["count"] for v in column.get("top_values", [])}
+    n_unique = column.get("n_unique")
+    wrong = sorted(label for label in want if got.get(label) != want[label])
+    extra = sorted(label for label in got if label not in want)
+    detail = f"{col} n_unique={n_unique}, expected {len(want)}"
+    if wrong:
+        detail += "; absent or miscounted: " + ", ".join(
+            f"{label!r}={got.get(label)} (expected {want[label]})" for label in wrong)
+    if extra:
+        detail += f"; unexpected: {extra}"
+    return CheckResult(name, n_unique == len(want) and not wrong and not extra,
+                       detail, weight=2.0)
+
+
+#: The name pandas gives a column whose header cell is empty.
+_UNNAMED = re.compile(r"^Unnamed:\s*\d+$")
+
+
+def score_schema(out: Path, exp: Expectations) -> list[CheckResult]:
+    """The columns and rows the mission saw, against the file as planted.
+
+    For a sheet whose table does not start in cell A1: a title above the
+    header, an empty first column. Read naively, the title becomes the only
+    column name and every real header a placeholder.
+    """
+    if not (exp.expected_columns or exp.forbid_unnamed_columns or exp.expected_n_rows is not None):
+        return []
+    profile = _read_json(out / "data_quality.json")
+    names = [c["name"] for c in profile["columns"]]
+    checks: list[CheckResult] = []
+    if exp.expected_columns:
+        checks.append(CheckResult(
+            "columns_exact", names == list(exp.expected_columns),
+            f"columns {names}, expected {list(exp.expected_columns)}", weight=2.0))
+    if exp.forbid_unnamed_columns:
+        unnamed = [n for n in names if _UNNAMED.match(str(n))]
+        checks.append(CheckResult(
+            "no_unnamed_columns", not unnamed,
+            f"placeholder column names {unnamed}" if unnamed
+            else f"no placeholder among {names}", weight=2.0))
+    if exp.expected_n_rows is not None:
+        got = profile["dataset"]["n_rows"]
+        checks.append(CheckResult("n_rows", got == exp.expected_n_rows,
+                                  f"{got} rows, expected {exp.expected_n_rows}", weight=2.0))
+    return checks
+
+
+def mark_guards(checks: list[CheckResult], exp: Expectations) -> list[CheckResult]:
+    """Give the checks named in ``guard_checks`` the category "guard"."""
+    names = {c.name for c in checks}
+    never_ran = [g for g in exp.guard_checks if g not in names]
+    if never_ran:
+        raise ValueError(f"guard_checks {never_ran} matched no check this run produced")
+    for check in checks:
+        if check.name in exp.guard_checks:
+            check.category = "guard"
     return checks
 
 
@@ -243,6 +323,55 @@ def score_plan(out: Path, exp: Expectations) -> list[CheckResult]:
         got = (plan.get("split") or {}).get("strategy")
         checks.append(CheckResult("plan_split", got == exp.expected_split,
                                   f"split '{got}', expected '{exp.expected_split}'", weight=2.0))
+    return checks
+
+
+def score_goal_analysis(out: Path, exp: Expectations) -> list[CheckResult]:
+    """The goal-specific answer an analyze mission wrote, against planted truth.
+
+    ``goal_analysis.json`` is the measured answer to the user's question; until
+    this scorer nothing read it. A grouped answer is compared group by group
+    and never by its total, because a total survives the loss it should expose:
+    categories dropped at ingestion merge into one bucket that holds exactly
+    their combined sum. The analyzer reports its ten largest groups, so an
+    expectation with more than ten cannot be met.
+    """
+    if not (exp.expected_goal_status or exp.expected_groups or exp.forbid_unexpected_groups):
+        return []
+    path = out / "goal_analysis.json"
+    if not path.exists():
+        return [CheckResult("goal_analysis_written", False,
+                            "goal_analysis.json is missing (only analyze missions write it)",
+                            weight=2.0)]
+    answer = _read_json(path)
+    checks: list[CheckResult] = []
+    if exp.expected_goal_status:
+        got = answer.get("status")
+        metrics = answer.get("metrics") or {}
+        checks.append(CheckResult(
+            "goal_status", got == exp.expected_goal_status,
+            f"status '{got}', expected '{exp.expected_goal_status}' "
+            f"(kind={answer.get('kind')!r}, value_column={metrics.get('value_column')!r}, "
+            f"aggregation={metrics.get('aggregation')!r})", weight=2.0))
+    if not (exp.expected_groups or exp.forbid_unexpected_groups):
+        return checks
+    rows = (answer.get("metrics") or {}).get("groups")
+    rows = rows if isinstance(rows, list) else []
+    got = {str(row.get("group")): row.get("value") for row in rows}
+    for label, want in exp.expected_groups.items():
+        value = got.get(label)
+        ok = isinstance(value, (int, float)) and math.isclose(
+            value, want, rel_tol=1e-9, abs_tol=1e-6)
+        checks.append(CheckResult(
+            f"goal_group[{label}]", ok,
+            f"group '{label}'={value}, expected {want}" if label in got
+            else f"group '{label}' absent, expected {want}", weight=2.0))
+    if exp.forbid_unexpected_groups:
+        extra = [label for label in got if label not in exp.expected_groups]
+        detail = f"{len(got)} groups, expected {len(exp.expected_groups)}"
+        if extra:
+            detail += "; " + "; ".join(f"unexpected group '{label}'={got[label]}" for label in extra)
+        checks.append(CheckResult("goal_groups_no_unexpected", not extra, detail, weight=2.0))
     return checks
 
 

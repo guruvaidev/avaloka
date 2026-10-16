@@ -107,7 +107,7 @@ def _pin_hermetic_blob_store(monkeypatch: pytest.MonkeyPatch) -> None:
     """Re-point storage at the in-memory fake: the app lifespan swaps in a real cloud client at startup, so an upload issued through the harness would otherwise hit the network."""
     import app.api.server as server
     from app.services import storage_service
-    from tests import test_server_integration as si
+    from tests import test_server_unit as si
 
     store = si.FakeBlobStore(bucket="fake-bucket", prefix="test")
 

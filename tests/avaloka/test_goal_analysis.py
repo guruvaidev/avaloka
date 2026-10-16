@@ -146,3 +146,48 @@ def test_cli_default_output_preserves_two_runs(tmp_path, monkeypatch):
         for out in outputs
     }
     assert kinds == {"missingness", "group_comparison"}
+
+
+def _two_revenues():
+    return pd.DataFrame({
+        "Date": ["2026-01-01", "2026-01-15", "2026-02-01", "2026-02-15"],
+        "region": ["East", "West", "East", "West"],
+        "gross_revenue": [200.0, 200.0, 200.0, 200.0],
+        "net_revenue": [100.0, 100.0, 100.0, 100.0],
+        "customer_id": [1, 2, 3, 4],
+    })
+
+
+def test_a_measure_no_column_is_named_is_disclosed_not_counted():
+    """'revenue' is part of two column names and the whole of neither. Counting
+    rows per region and calling that the answer was the defect (#475)."""
+    result = analyze_goal(_two_revenues(), "Total revenue by region", {"columns": []})
+    assert result["status"] == "limited"
+    assert result["metrics"]["value_column"] is None
+    assert "groups" not in result["metrics"]
+    assert result["metrics"]["unresolved_measure"]["candidates"] == ["gross_revenue", "net_revenue"]
+    assert "gross_revenue, net_revenue" in result["findings"][0]
+    assert not any("count rows" in f for f in result["findings"])
+
+
+def test_a_trend_of_an_unnamed_measure_is_disclosed_not_counted():
+    profile = {"columns": [{"name": "Date", "role": "datetime"}]}
+    result = analyze_goal(_two_revenues(), "Monthly revenue trend", profile)
+    assert result["kind"] == "trend"
+    assert result["status"] == "limited"
+    assert "monthly_values" not in result["metrics"]
+
+
+def test_naming_the_column_still_answers():
+    result = analyze_goal(_two_revenues(), "Total net_revenue by region", {"columns": []})
+    assert result["status"] == "answered"
+    assert result["metrics"]["value_column"] == "net_revenue"
+    assert {g["value"] for g in result["metrics"]["groups"]} == {200.0}
+
+
+def test_a_count_goal_is_still_answered_with_a_row_count():
+    """An identifier column shares a word with the goal; a count is still the answer."""
+    for goal in ("How many customers by region", "Count of rows by region"):
+        result = analyze_goal(_two_revenues(), goal, {"columns": []})
+        assert result["status"] == "answered", goal
+        assert result["metrics"]["aggregation"] == "count", goal

@@ -4,7 +4,7 @@ Shared harness for the L5 API pack (plan suites E2, E3, E7).
 Every test in this package runs unchanged in two modes:
 
   hermetic  (default)  in-process FastAPI TestClient over the in-memory fake
-                       stack from tests/test_server_integration.py. No Docker,
+                       stack from tests/test_server_unit.py. No Docker,
                        no cluster, no keys -- safe as a PR gate.
   deployed             black-box HTTP against a real deployment, selected by
                        exporting AVALOKA_API_URL. Tokens are minted with
@@ -34,7 +34,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEPLOYED_URL = (os.getenv("AVALOKA_API_URL") or "").rstrip("/")
 MODE = "deployed" if DEPLOYED_URL else "hermetic"
 
-# Hermetic mode signs with the same constant tests/test_server_integration.py
+# Hermetic mode signs with the same constant tests/test_server_unit.py
 # patches into the server; deployed mode must use the cluster's real secret.
 HERMETIC_SECRET = "test-jwt-secret"
 JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET") if MODE == "deployed" else HERMETIC_SECRET
@@ -122,14 +122,14 @@ class ApiClient:
 
 def _hermetic_transport(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """
-    Rebuild the fake stack from tests/test_server_integration.py so the L5 pack
+    Rebuild the fake stack from tests/test_server_unit.py so the L5 pack
     shares one definition of the fakes rather than forking a second one.
     """
     from fastapi.testclient import TestClient
 
     import app.api.server as server
     from app.services import session_service, storage_service
-    from tests import test_server_integration as si
+    from tests import test_server_unit as si
 
     # Hermetic means hermetic. settings.storage_backend defaults to "gcs" and is
     # evaluated at import (app/core/settings.py:9), so storage_service builds a

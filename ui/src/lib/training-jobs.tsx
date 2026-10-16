@@ -1,5 +1,7 @@
 /**
- * Global, navigation-proof polling for long-running ("deferred") training turns.
+ * Global, navigation-proof polling for long-running ("deferred") chat turns:
+ * slow analyses AND model training. `kind` says which, so the UI never calls a
+ * slow analysis "Training model…".
  *
  * A job is keyed by `threadId::deferredId` and lives in a module-level
  * singleton, so switching threads / routes never kills an in-flight poll.
@@ -12,7 +14,9 @@ import { toast } from "sonner";
 import { backendApi, type PendingTurnResponse } from "@/lib/api/backendApi";
 
 export type TrainingJobStatus = "running" | "done" | "error" | "superseded";
-export type PendingJobKind = "training" | "analysis";
+
+/** What the deferred turn is doing. The backend reports it as `pending_kind`. */
+export type DeferredJobKind = "analysis" | "training";
 
 export type TrainingJob = {
   key: string;
@@ -21,7 +25,7 @@ export type TrainingJob = {
   sessionId: string;
   analysisId: string | null;
   label: string;
-  kind: PendingJobKind;   // what the deferred turn actually is
+  kind: DeferredJobKind;
   status: TrainingJobStatus;
   message?: string;
   startedAt: number;
@@ -39,8 +43,8 @@ type InternalJob = TrainingJob & {
 
 type CompleteEvent = { job: TrainingJob; result?: any };
 
-const POLL_MS = 3_000;
-const MAX_POLLS = 240; // ~12 minutes
+const POLL_MS = 5_000;
+const MAX_POLLS = 144; // ~12 minutes
 
 const jobs = new Map<string, InternalJob>();
 const listeners = new Set<() => void>();
@@ -63,18 +67,28 @@ function finish(job: InternalJob, status: TrainingJobStatus, payload: PendingTur
   stopTimer(job);
   job.status = status;
   job.message = payload.message;
-  if (status === "done") job.unclaimedResult = payload.result ?? null;
+  if (status === "done") {
+    job.unclaimedResult = payload.result ?? null;
+  }
+  // The backend writes a notification row when a turn finishes (done or
+  // failed); refresh the bell once on either terminal state.
+  if (status === "done" || status === "error") {
+    if (typeof window !== "undefined") window.dispatchEvent(new Event("app-notifications:refresh"));
+  }
   job.resolve(payload);
   emit();
   completeListeners.forEach((l) => l({ job: { ...job }, result: payload.result }));
   // Keep "done" jobs around briefly so a late-mounting view can claim the
   // result; running jobs are removed as soon as they resolve.
-  setTimeout(() => {
-    if (jobs.get(job.key) === job && !job.unclaimedResult) {
-      jobs.delete(job.key);
-      emit();
-    }
-  }, status === "done" ? 5 * 60_000 : 5_000);
+  setTimeout(
+    () => {
+      if (jobs.get(job.key) === job && !job.unclaimedResult) {
+        jobs.delete(job.key);
+        emit();
+      }
+    },
+    status === "done" ? 5 * 60_000 : 5_000,
+  );
 }
 
 export function ensureNotificationPermission() {
@@ -92,8 +106,28 @@ export type StartTrainingJobInput = {
   sessionId: string;
   analysisId?: string | null;
   label?: string;
-  kind?: PendingJobKind;   // defaults to "training" so existing callers are unchanged
+  /** Defaults to "analysis": only a real training turn may say "training". */
+  kind?: DeferredJobKind;
 };
+
+/** User-facing wording per job kind. */
+export function deferredJobText(kind: DeferredJobKind) {
+  return kind === "training"
+    ? {
+        running: "Training model…",
+        doneTitle: "Model training finished",
+        doneBody: "Your training run completed. Click to view the results.",
+        failed: "Training failed. Please try again.",
+        tooLong: "Training is taking longer than expected. It may still finish in the background.",
+      }
+    : {
+        running: "Analyzing…",
+        doneTitle: "Analysis finished",
+        doneBody: "Your analysis completed. Click to view the results.",
+        failed: "The analysis failed. Please try again.",
+        tooLong: "The analysis is taking longer than expected. It may still finish in the background.",
+      };
+}
 
 /**
  * Start (or join) the poll for a deferred turn. Resolves when the turn
@@ -114,7 +148,7 @@ export function startTrainingJob(input: StartTrainingJobInput): Promise<PendingT
   let resolve!: (v: PendingTurnResponse) => void;
   const promise = new Promise<PendingTurnResponse>((r) => (resolve = r));
 
-    const kind: PendingJobKind = input.kind ?? "training";
+  const kind: DeferredJobKind = input.kind === "training" ? "training" : "analysis";
   const job: InternalJob = {
     key,
     threadId: input.threadId,
@@ -132,7 +166,6 @@ export function startTrainingJob(input: StartTrainingJobInput): Promise<PendingT
     errors: 0,
     polls: 0,
   };
-  
   jobs.set(key, job);
   emit();
   ensureNotificationPermission();
@@ -143,7 +176,7 @@ export function startTrainingJob(input: StartTrainingJobInput): Promise<PendingT
     if (job.polls > MAX_POLLS) {
       finish(job, "error", {
         status: "error",
-        message: "Training is taking longer than expected. It may still finish in the background.",
+        message: deferredJobText(job.kind).tooLong,
       });
       return;
     }
@@ -171,14 +204,16 @@ export function startTrainingJob(input: StartTrainingJobInput): Promise<PendingT
 }
 
 /** Claim a finished result for a thread exactly once. */
-export function claimTrainingResult(threadId: string): { deferredId: string | null; result: any } | null {
+export function claimTrainingResult(
+  threadId: string,
+): { deferredId: string | null; result: any; label: string; kind: DeferredJobKind } | null {
   for (const job of jobs.values()) {
     if (job.threadId === threadId && job.unclaimedResult) {
       const result = job.unclaimedResult;
       job.unclaimedResult = null;
       jobs.delete(job.key);
       emit();
-      return { deferredId: job.deferredId, result };
+      return { deferredId: job.deferredId, result, label: job.label, kind: job.kind };
     }
   }
   return null;
@@ -247,8 +282,9 @@ export function TrainingJobsProvider({ children }: { children: ReactNode }) {
       if (job.status === "done") {
         try {
           if (typeof Notification !== "undefined" && Notification.permission === "granted") {
-            const n = new Notification("Model training finished", {
-              body: "Your training run completed. Click to view the results.",
+            const text = deferredJobText(job.kind);
+            const n = new Notification(text.doneTitle, {
+              body: text.doneBody,
               tag: job.key,
             });
             n.onclick = () => {
@@ -261,11 +297,9 @@ export function TrainingJobsProvider({ children }: { children: ReactNode }) {
           /* notifications unavailable */
         }
         // Nudge a mounted analysis view for the same thread.
-        window.dispatchEvent(
-          new CustomEvent(TRAINING_RESULT_EVENT, { detail: { threadId: job.threadId, result } }),
-        );
+        window.dispatchEvent(new CustomEvent(TRAINING_RESULT_EVENT, { detail: { threadId: job.threadId, result } }));
       } else if (job.status === "error") {
-        toast.error(job.message || "Training failed. Please try again.");
+        toast.error(job.message || deferredJobText(job.kind).failed);
       }
     };
     completeListeners.add(onComplete);
@@ -277,6 +311,11 @@ export function TrainingJobsProvider({ children }: { children: ReactNode }) {
   useEffect(() => () => stopAllTrainingJobs(), []);
 
   const running = list.filter((j) => j.status === "running");
+  // "Training model…" only when every running job is training; a mix or any
+  // analysis shows the neutral analysis wording.
+  const pillText = deferredJobText(
+    running.length > 0 && running.every((j) => j.kind === "training") ? "training" : "analysis",
+  ).running;
 
   return (
     <TrainingJobsContext.Provider value={list}>
@@ -289,7 +328,7 @@ export function TrainingJobsProvider({ children }: { children: ReactNode }) {
             className="pointer-events-auto flex items-center gap-2 rounded-full border border-border bg-background/95 px-3 py-1.5 text-xs font-medium text-foreground shadow-lg backdrop-blur"
           >
             <span className="size-3 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-            Training model…
+            {pillText}
             {running.length > 1 && <span className="text-muted-foreground">({running.length})</span>}
           </button>
         </div>

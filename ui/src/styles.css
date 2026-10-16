@@ -95,6 +95,9 @@
   --text-secondary: #3f3f46;
   --text-tertiary: #51525c;
   --text-placeholder: #70707b;
+  /* Shared subdued text remains AA-readable on primary/secondary surfaces. */
+  --color-text-tertiary: var(--text-tertiary);
+  --color-text-quaternary: var(--text-tertiary);
 }
 
 .dark {
@@ -127,6 +130,11 @@
   --text-secondary: #d1d1d6;
   --text-tertiary: #a0a0ab;
   --text-placeholder: #70707b;
+}
+
+.dark-mode {
+  --color-text-tertiary: oklch(0.75 0.01 286);
+  --color-text-quaternary: oklch(0.75 0.01 286);
 }
 
 @layer base {

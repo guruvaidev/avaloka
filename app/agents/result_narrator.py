@@ -23,17 +23,9 @@ from app.core.model_config import resolve as resolve_model
 logger = logging.getLogger(__name__)
 
 
-def _resolve_narrator_model() -> str:
-    # A dedicated "narrator" entry lets the chat answer use a stronger model than
-    # the summarizer. Fall back to the summarizer's model until model_config.py
-    # has that entry, so this file can ship on its own.
-    try:
-        return resolve_model("narrator")
-    except KeyError:
-        return resolve_model("summarizer")
-
-
-_NARRATOR_MODEL = _resolve_narrator_model()
+# The narrator has its own entry in model_config, so the chat answer can be
+# given a stronger model than the summarizer without touching this file.
+_NARRATOR_MODEL = resolve_model("narrator")
 _api_key = os.environ.get("GROQ_API_KEY_CODING_AGENT") or os.environ.get("GROQ_API_KEY")
 narrator_llm = build_chat_model(
     role="coding",
@@ -83,7 +75,9 @@ Accuracy:
   comparing two values, is fine. Never compute new statistics, percentages, ratios or
   totals yourself, never estimate, never add outside knowledge.
 - If only part of the table is provided, describe it as the rows shown, not the whole.
-- Round decimals to at most 2 places and write numbers with thousands separators.
+- Round decimals to at most 2 places. Write values of a million or more compactly with
+  one decimal and a suffix (56.1B, 24.1M); write smaller numbers with comma thousands
+  separators (7,014). Never use spaces as thousands separators.
 - A cell left out of a row in the JSON was empty in the table.
 - If something the user asked for is not in the table, say it was not computed. Never guess.
 - No code, no headings, no preamble, no "the table below shows". Under 120 words."""
@@ -305,9 +299,20 @@ _DATE_RE = re.compile(
 )
 
 
+# One value written with space-like thousands separators ("56 106 087 508",
+# as models emit with a narrow/no-break space) counts as ONE number. Only
+# those special spaces group digits: a plain space separates values, or a
+# recital like "100 101 102 ... 112" reads as one 39-digit number and the
+# "you recited the table" check never fires.
+_GROUPED_NUMBER_RE = re.compile(
+    r"(?<![\w.,])-?\d{1,3}(?:[\u00a0\u202f\u2009]\d{3})+(?:\.\d+)?(?![\w])"
+)
+
+
 def _count_numbers(text: str) -> int:
     """How many table values a reply quotes. Dates are not counted."""
-    return len(_NUMBER_RE.findall(_DATE_RE.sub(" ", text)))
+    text = _GROUPED_NUMBER_RE.sub(lambda m: re.sub(r"\D", "", m.group(0)), _DATE_RE.sub(" ", text))
+    return len(_NUMBER_RE.findall(text))
 
 _MAX_REPLY_NUMBERS = int(os.getenv("AVALOKA_NARRATOR_MAX_NUMBERS", "12"))
 _MAX_REPLY_BULLETS = int(os.getenv("AVALOKA_NARRATOR_MAX_BULLETS", "6"))

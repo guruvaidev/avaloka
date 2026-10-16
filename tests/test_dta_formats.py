@@ -97,6 +97,7 @@ def test_cloud_write_body_materializes_and_uploads(fmt):
 # ── Step-9 auto-create the destination table from the transformed schema ──────
 
 @patch("app.agents.data_transfer_agent.daft_coder.coder_llm", new=MagicMock())
+@patch("app.agents.data_transfer_agent.daft_validator.validator_llm", new=MagicMock())
 @patch("app.agents.data_transfer_agent.data_transfer_agent._create_destination_table")
 @patch("app.agents.data_transfer_agent.data_transfer_agent.make_injection_script", return_value="SCRIPT")
 @patch("app.agents.data_transfer_agent.data_transfer_agent.daft_code_generation_pipeline")
@@ -143,6 +144,7 @@ def test_create_if_missing_creates_table_from_transformed_schema(
 
 
 @patch("app.agents.data_transfer_agent.daft_coder.coder_llm", new=MagicMock())
+@patch("app.agents.data_transfer_agent.daft_validator.validator_llm", new=MagicMock())
 @patch("app.agents.data_transfer_agent.data_transfer_agent.daft_code_generation_pipeline")
 @patch("app.agents.data_transfer_agent.data_transfer_agent._read_daft_df")
 @patch("app.agents.data_transfer_agent.data_transfer_agent.deduce_schema")
@@ -174,6 +176,7 @@ def test_missing_table_without_create_flag_still_asks(
 
 
 @patch("app.agents.data_transfer_agent.daft_coder.coder_llm", new=MagicMock())
+@patch("app.agents.data_transfer_agent.daft_validator.validator_llm", new=MagicMock())
 @patch("app.agents.data_transfer_agent.data_transfer_agent.daft_code_generation_pipeline")
 @patch("app.agents.data_transfer_agent.data_transfer_agent._read_daft_df")
 @patch("app.agents.data_transfer_agent.data_transfer_agent.deduce_schema")

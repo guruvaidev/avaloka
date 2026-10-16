@@ -268,19 +268,20 @@ The repository builds with GitHub Actions workflows
 memory tests run there as part of the normal suite: `tests/test_memory_semantics.py`
 and the other `tests/test_memory_*.py` files.
 
-`tests/test_memory_integration.py` does **not** run in CI. Files named
-`*_integration.py` are marked `integration` automatically (`tests/conftest.py`),
-and the gate (`scripts/ci.sh`) deselects that marker. Run it locally with the
-command below.
+`tests/test_memory_unit.py` runs there too. Until it was renamed from
+`test_memory_integration.py` it did not: files named `tests/**/*_integration.py`
+are marked `integration` automatically (`tests/conftest.py`), and the gate
+(`scripts/ci.sh`) deselects that marker. It mocks the memory model and needs no
+service, so the name was the only thing keeping it out.
 
 ## Tests
 
 ```bash
-pytest tests/test_memory_semantics.py tests/test_memory_integration.py -q
+pytest tests/test_memory_semantics.py tests/test_memory_unit.py -q
 ```
 
 Re-run during this documentation refresh: **42 passed, 5 skipped**
-(`tests/test_memory_semantics.py` 24 passed; `tests/test_memory_integration.py` 18 passed,
+(`tests/test_memory_semantics.py` 24 passed; `tests/test_memory_unit.py` 18 passed,
 5 skipped), with no services running and no provider keys set. The five skips
 are the cases that read sample CSV files from `~/Downloads` and skip when the
 files are not there.

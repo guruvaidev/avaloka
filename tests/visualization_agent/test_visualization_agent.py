@@ -1,20 +1,37 @@
+"""Row accounting and the node's data-selection fallbacks.
 
-from tests._quarantine import requires_api
+Repaired from the quarantined suite that drove `VisualizationAgent.generate_visualizations`.
+That class is gone (grep finds no `VisualizationAgent` anywhere in app/ or avaloka/);
+the entry points are now `build_visualization_config_from_sample` and the
+`visualization_agent_node` wrapper, and the config shape changed from ECharts
+(`metadata.total_charts`, `config.xAxis.data`) to a profile whose charts carry
+`encodings` + `derived_data.points`.
 
-requires_api("app.agents.visualization_agent", "VisualizationAgent", replacement="the VisualizationAgent class was replaced by the visualization_agent_node function; repair against the node API or remove this file.")
+What is kept here is what the gate does not otherwise assert. The chart-shape
+assertions were dropped because tests/test_visualization_grounding.py covers
+them more strictly (`test_the_deterministic_path_grounds_every_chart_it_ships`
+requires non-empty points on every shipped chart; the scatter tests pin exact
+point values). What nothing selected by `-m "not integration"` asserts is the
+*row accounting* -- how many rows the config says it profiled, and which table
+those rows came from -- and the no-data path. When this was written those
+lived only in a file conftest.py auto-marked `integration` on its
+`_integration.py` suffix. That file is now tests/test_visualization_unit.py
+and runs in the gate, so the two overlap on purpose.
 
-import sys
-from pathlib import Path
+No LLM: viz_llm is forced to None, so chart selection takes its deterministic
+path and every number below is computed, not sampled from a model.
+"""
+
+from __future__ import annotations
+
+import base64
 
 import pytest
-from langchain_core.messages import HumanMessage
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-
-from app.agents.visualization_agent import VisualizationAgent, visualization_agent_node
-from app.graph.etl_state import ETLState
+from app.agents.visualization_agent import (
+    build_visualization_config_from_sample,
+    visualization_agent_node,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -23,131 +40,145 @@ def disable_viz_llm(monkeypatch):
     monkeypatch.setattr("app.agents.visualization_agent.viz_llm", None)
 
 
-@pytest.fixture
-def agent():
-    return VisualizationAgent()
-
-
-def _base_state(**overrides) -> ETLState:
-    state: ETLState = {
-        "messages": [HumanMessage(content="Generate a quick visualization")],
-        "planner_definition": {"job_name": "default_job", "transformations": []},
-        "ready_to_summarize": True,
-        "ready_to_code": True,
-        "coder_definition": {},
-        "data_source_location": "/tmp/source.csv",
-        "output_location": "/tmp/output.csv",
-        "schema": {},
-        "infrastructure_request": {},
-        "infrastructure_provisioned": {},
-        "execution_result": {},
-        "input_data_type": "csv",
-        "output_file_data": {},
-        "deploy_on_k8s": False,
-        "uploaded_csv_preview": [],
-        "uploaded_csv_columns": [],
-        "planner_graph_path": None,
-        "planner_graph_base64": None,
-        "planner_graph_status": None,
-        "planner_graph_error": None,
-        "generated_code": None,
-        "coder_pseudocode": None,
-        "execution_output_data": None,
-        "execution_output_preview": None,
-        "visualization_config": None,
-        "visualization_status": None,
-    }
-    state.update(overrides)
-    return state
-
-
-def test_generate_bar_chart_metadata(agent):
-    sample_data = [
-        {"Region": "North", "Sales": 25000},
-        {"Region": "South", "Sales": 18000},
-        {"Region": "East", "Sales": 32000},
+#: A categorical that repeats plus two measures: enough for the deterministic
+#: chart selector to ship something.
+def _rows(n: int = 12) -> list[dict]:
+    return [
+        {
+            "Region": ("North", "South", "East")[i % 3],
+            "Sales": 10_000 + (i * 1_300) % 7_000,
+            "Units": 50 + (i * 7) % 31,
+        }
+        for i in range(n)
     ]
-    result = agent.generate_visualizations(
-        planner_def={"job_name": "sales", "transformations": []},
-        execution_result={},
-        sample_data=sample_data,
-    )
-
-    bar_chart = next((chart for chart in result["charts"] if chart["type"] == "bar"), None)
-    assert result["status"] == "success"
-    assert result["metadata"]["total_charts"] == len(result["charts"])
-    assert result["metadata"]["data_rows"] == len(sample_data)
-    assert bar_chart is not None
-    assert bar_chart["config"]["xAxis"]["data"]
-    assert bar_chart["config"]["series"][0]["data"]
 
 
-def test_scatter_chart_contains_numeric_points(agent):
-    sample_data = [
-        {"Price": 10.5, "Quantity": 100},
-        {"Price": 15.0, "Quantity": 85},
-        {"Price": 8.25, "Quantity": 120},
-        {"Price": 12.0, "Quantity": 95},
+def _datauri(csv_text: str) -> str:
+    return "data:text/csv;base64," + base64.b64encode(csv_text.encode()).decode()
+
+
+# ---------------------------------------------------------------------------
+# The config reports the rows it actually profiled
+#
+# Was: assert result["metadata"]["data_rows"] == len(sample_data)
+# ---------------------------------------------------------------------------
+
+
+def test_the_config_reports_the_row_count_it_profiled():
+    """`dataset.rows_sampled` is the row count the whole profile is computed on.
+
+    Every share, mean and correlation in the shipped charts is derived from
+    these rows, and the UI prints the number next to them, so an off-by-one or
+    a stale count mislabels correct charts.
+    """
+    rows = _rows(12)
+
+    cfg = build_visualization_config_from_sample(dataset_id="ds_rows", sample_rows=rows)
+
+    assert cfg["dataset"]["rows_sampled"] == len(rows)
+    # No full_data_path was given, so the charts are grounded on the sample
+    # itself and the two counts must agree.
+    assert cfg["dataset"]["rows_charted"] == len(rows)
+    assert cfg["dataset"]["charts_scope"] == "sample"
+
+
+# ---------------------------------------------------------------------------
+# The node profiles the computed result, not the uploaded file
+#
+# Was: test_execution_result_rows_used_for_metadata --
+#      assert result["metadata"]["data_rows"] == len(execution_output)
+# The result now arrives as a data-URI CSV in state["output_file_data"].
+# ---------------------------------------------------------------------------
+
+
+def test_the_node_counts_the_computed_result_rows_not_the_upload_rows():
+    """When a transformation produced a table, that table is what gets profiled.
+
+    tests/test_visualization_profiles_the_result_table.py asserts the charted
+    *fields* come from the result. It does not assert the row count, so a node
+    that profiled the result's columns while reporting the upload's row count
+    would pass it.
+    """
+    result_rows = [
+        ("North", 100),
+        ("South", 80),
+        ("East", 120),
+        ("West", 90),
     ]
-    result = agent.generate_visualizations(
-        planner_def={"job_name": "correlations", "transformations": []},
-        execution_result={},
-        sample_data=sample_data,
+    csv_text = "Region,Total\n" + "".join(f"{r},{v}\n" for r, v in result_rows)
+
+    out = visualization_agent_node(
+        {
+            "dataset_id": "ds_exec",
+            "schema": {"Region": "object", "Sales": "int64", "Units": "int64"},
+            "uploaded_csv_columns": ["Region", "Sales", "Units"],
+            # 12 uploaded rows -- deliberately a different count from the result.
+            "uploaded_csv_preview": [[r["Region"], r["Sales"], r["Units"]] for r in _rows(12)],
+            "output_file_data": {"content": _datauri(csv_text)},
+        }
     )
 
-    scatter_chart = next((chart for chart in result["charts"] if chart["type"] == "scatter"), None)
-    assert scatter_chart is not None
-    assert scatter_chart["config"]["series"][0]["data"]
-    assert all(len(point) == 2 for point in scatter_chart["config"]["series"][0]["data"])
+    cfg = out["visualization_config"]
+    assert out["visualization_status"] == "ready"
+    assert cfg["dataset"]["rows_sampled"] == len(result_rows)
+    # And it is the result's columns that were profiled, not the upload's.
+    assert {c["name"] for c in cfg["columns"]} == {"Region", "Total"}
 
 
-def test_execution_result_rows_used_for_metadata(agent):
-    sample_data = [{"Region": "A", "Sales": 10}]
-    execution_output = [
-        {"Region": "North", "Sales": 100},
-        {"Region": "South", "Sales": 80},
-        {"Region": "East", "Sales": 120},
-        {"Region": "West", "Sales": 90},
-    ]
-    result = agent.generate_visualizations(
-        planner_def={"job_name": "sales", "transformations": []},
-        execution_result={"output_data": execution_output},
-        sample_data=sample_data,
+# ---------------------------------------------------------------------------
+# The node charts a positional preview
+#
+# Was: test_visualization_agent_node_converts_preview
+# ---------------------------------------------------------------------------
+
+
+def test_the_node_charts_a_positional_preview_with_its_column_names():
+    """With no computed result, the uploaded preview is charted.
+
+    The preview reaches the node as list-of-lists plus a separate column list
+    (app/api/streamlit_app.py builds it as `[list(row.values()) for row in
+    rows]`), so the node has to zip them back into rows before anything can be
+    profiled. If that conversion breaks, the node reports "no data" and the
+    user sees no charts for a file that has plenty.
+    """
+    rows = _rows(12)
+    columns = ["Region", "Sales", "Units"]
+    preview = [[r[c] for c in columns] for r in rows]
+
+    out = visualization_agent_node(
+        {
+            "dataset_id": "ds_preview",
+            "uploaded_csv_columns": columns,
+            "uploaded_csv_preview": preview,
+        }
     )
 
-    assert result["metadata"]["data_rows"] == len(execution_output)
+    cfg = out["visualization_config"]
+    assert out["visualization_status"] == "ready"
+    assert cfg["dataset"]["rows_sampled"] == len(preview)
+    # The positional values landed under the names they were given, so the
+    # profile is of Region/Sales/Units and not of col_0/col_1/col_2.
+    assert {c["name"] for c in cfg["columns"]} == set(columns)
+    assert cfg["charts"], "a categorical and two measures produced no charts"
 
 
-def test_visualization_agent_node_converts_preview():
-    preview = [
-        ["Category", "Amount"],
-        ["Hardware", "100"],
-        ["Software", "200"],
-        ["Services", "150"],
-    ]
-    state = _base_state(
-        planner_definition={
-            "job_name": "category_sales",
-            "transformations": [{"type": "aggregation", "columns": ["Category", "Amount"]}],
-        },
-        uploaded_csv_preview=preview,
-        uploaded_csv_columns=["Category", "Amount"],
-    )
-
-    result_state = visualization_agent_node(state)
-    viz_config = result_state["visualization_config"]
-
-    assert result_state["visualization_status"] == "success"
-    assert viz_config["metadata"]["data_rows"] == len(preview) - 1
-    assert viz_config["charts"]
+# ---------------------------------------------------------------------------
+# No data is reported, not raised
+#
+# Was: test_generate_visualizations_without_data_returns_error --
+#      assert result["status"] == "error"; assert "No data" in metadata["error"]
+# ---------------------------------------------------------------------------
 
 
-def test_generate_visualizations_without_data_returns_error(agent):
-    result = agent.generate_visualizations(
-        planner_def={"job_name": "empty", "transformations": []},
-        execution_result={},
-        sample_data=[],
-    )
+def test_the_node_reports_no_data_rather_than_failing_the_graph():
+    """A state with nothing to chart must leave the graph runnable.
 
-    assert result["status"] == "error"
-    assert "No data" in result["metadata"]["error"]
+    The node is a LangGraph node: raising here would fail the user's whole run
+    over a missing chart. It returns an empty config and a status that names
+    the reason instead. app/api/server.py reads that falsy config to fall back
+    to the session's charts, so the empty dict is load-bearing, not cosmetic.
+    """
+    out = visualization_agent_node({"dataset_id": "ds_empty"})
+
+    assert out["visualization_config"] == {}
+    assert out["visualization_status"] == "skipped: no data available"

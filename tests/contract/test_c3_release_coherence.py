@@ -215,7 +215,13 @@ _DECLARED_MARKERS: Tuple[str, ...] = (
 
 #: Markers that exist for grouping rather than selection -- they are never
 #: deselected by CI, so adding one does not need a hermetic-filter decision.
-_NON_SELECTION_MARKERS = frozenset({"defect", "single", "multi", "transfer", "operations"})
+#:
+#: `containers` is here by decision, not by default: every test that carries it
+#: also carries `integration` (tests/conftest.py marks tests/containers/ by
+#: directory), so the hermetic filter already deselects it and needs no new
+#: clause. It exists so scripts/integration.sh can select that suite alone.
+_NON_SELECTION_MARKERS = frozenset(
+    {"defect", "single", "multi", "transfer", "operations", "containers"})
 _MARKER_RE = re.compile(r"pytest\.mark\.(?:%s)\b" % "|".join(_DECLARED_MARKERS))
 
 _INFRA_SIGNALS: Dict[str, re.Pattern] = {

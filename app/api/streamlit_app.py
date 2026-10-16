@@ -257,6 +257,7 @@ if prompt := st.chat_input("Describe your ETL job..."):
         "infrastructure_request": st.session_state.infrastructure_request,
         "infrastructure_provisioned": st.session_state.infrastructure_provisioned,
         "execution_result": {},
+        "execution_error": None,
         "input_data_type": st.session_state.get("input_data_type"),
         "output_file_data": {},
         "enable_training": enable_training,

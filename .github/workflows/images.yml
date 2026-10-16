@@ -15,9 +15,9 @@ name: images
 
 on:
   push:
-    # develop-1.6 and oss/1.6 build too, so a deployment from either pulls an
-    # image that already exists instead of building one.
-    branches: [main, develop-1.6, "oss/**"]
+    # develop-1.6 builds too, so a deployment from it pulls an image that
+    # already exists instead of building one.
+    branches: [main, develop-1.6]
     tags: ["v*"]
     # Only when something that actually goes into an image changes. A docs-only
     # commit should not spend twenty minutes rebuilding four images.

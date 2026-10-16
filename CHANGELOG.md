@@ -32,6 +32,23 @@ that broke, or would have broken, a clean install or a first run.
 
 ### Fixed
 
+- **pandas is capped below 3** in `pyproject.toml`, `requirements.txt` and
+  the five image/server requirements files. `>=2.0` let a clean install pick
+  3.0.6, on which the hermetic gate fails 13 more tests (preparation agent,
+  PII, null policy, local inference): pandas 3 reads text as its own `str`
+  dtype and much of the code asks `dtype == object`.
+  `tests/test_pandas_ceiling.py` keeps the cap in every file.
+- **A null-like word in a spreadsheet stays a category in the CLI** (#479).
+  The CLI's Excel reader read `None`, `NA`, `N/A` as missing in every column;
+  it now follows the CSV rule from #474, and that rule also recognises
+  pandas 3's `str` dtype (`avaloka/io/loader.py`,
+  `file_handler/null_policy.py`).
+- **The CLI no longer answers a measure it could not find with a row count**
+  (#475). "Total revenue by region" over `gross_revenue` and `net_revenue`
+  counted rows per region and reported `status="answered"`; it now reports
+  `limited` and names the candidate columns. Count goals and goals that name
+  the column are answered as before (`avaloka/goal_analysis.py`).
+
 - **`tool_choice` is now chosen per provider**, not per client class. `local`,
   `openrouter` and `openai` all build the same `ChatOpenAI`, so the class name
   cannot tell them apart, and the two that matter need opposite values:
@@ -48,17 +65,29 @@ that broke, or would have broken, a clean install or a first run.
 
 ### Added
 
+- **The benchmark declares its known defects**, and its exit code follows
+  them strictly, as `xfail(strict=True)` does: a declared run that fails
+  does not fail the run; an undeclared failure does, as before; a declared
+  run that passes fails it too, until its entry is removed. Before this, the
+  eleven known-red runs made the pull-request Benchmark Scorecard step and
+  the public CI `benchmark` job red on every pull request, so a real
+  regression looked the same as the known ones. The scorecard's counts do
+  not change; `--strict` restores exit 1 on any failure
+  (`avaloka/benchmark/known_defects.py`).
+
 - **A live CI tier**, because a hermetic gate cannot see provider behaviour:
   `.github/workflows/live-provider-weekly.yml` calls real hosted providers and
   `live-local-model-nightly.yml` exercises a local model server, both driving
   `tests/live/`. Neither runs on pull requests, so a provider outage cannot
   redden a PR.
-- **`oss/1.6` is now generated**, not hand-maintained:
+- **The public tree is now generated**, not hand-maintained:
   `scripts/generate-oss.sh` builds it from `develop-1.6` per
   `oss/manifest.yaml`, which carries eight exclusion rules — several covering
   whole directories — plus an overlay and a set of assertions the generated
   tree must satisfy. Editing the public tree directly is not supported: the
-  next generation overwrites it. See
+  next generation overwrites it. Publishing is one squash commit on top of the
+  public `main`; the intermediate `oss/1.6` branch and the generator's `--write`
+  mode are retired, and the dry run compares against the published tree. See
   [`docs/oss-branch-model.md`](docs/oss-branch-model.md).
 
 ### Removed
@@ -75,6 +104,24 @@ that broke, or would have broken, a clean install or a first run.
 
 ### Known issues
 
+- **A multi-sheet workbook is read from its longest sheet**, in the upload
+  path (`file_handler/excel_connector.py::_resolve_sheet`), whatever the
+  question is about. On a 10-K-style workbook that is the balance sheet when
+  the question is about the income statement; a workbook whose decoy sheet
+  is longer than its answer sheet is read off the decoy. The frame parses
+  cleanly, so nothing in the result says so. Workaround: upload the sheet on
+  its own. The fix is to choose the sheet where the question is; the eight
+  tests that grade it are strict xfails in
+  `tests/test_spreadsheet_comprehension_upload_path.py`.
+- **The CLI's spreadsheet reader handles fewer shapes than the upload
+  path**: two-row and merged headers, footnote markers, subtotal and total
+  rows, a second table below the first, `(1,234)` negatives and a
+  "thousands" scale stated in a title are not understood. Ten benchmark
+  tasks measure this and fail, as does the check that the conversational
+  benchmark does not yet drive the product. The eleven are declared in
+  `avaloka/benchmark/known_defects.py`: they still count as failures in the
+  scorecard (39/50), but no longer fail the run. See
+  [`docs/benchmarks.md`](docs/benchmarks.md).
 - **MinIO's images are not currently pullable** from the registries the Helm
   chart points at, including by digest, so the chart's default in-cluster
   object store does not come up unaided. A migration to an alternative object

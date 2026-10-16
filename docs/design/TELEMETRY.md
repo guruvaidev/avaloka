@@ -1,6 +1,6 @@
 # Avaloka Anonymous Usage Telemetry — Design
 
-**Status:** Proposed · **Supersedes:** *Design Doc for Stats Agent* (dual-pipeline OTEL + Redis Streams) · **Audience:** Engineering, Security, Product
+**Status:** Partly implemented — the ingest service (§4.5, `telemetry_service/`) is implemented and tested; the in-process writer (§4.3) and the uploader (§4.4) are not, so no process telemetry is recorded or sent; the product-analytics producer (`docs/analytics/DESIGN.md`) exists, the ingest accepts its exported event types, and its export is not wired to anything · **Supersedes:** *Design Doc for Stats Agent* (dual-pipeline OTEL + Redis Streams) · **Audience:** Engineering, Security, Product
 
 ---
 
@@ -138,7 +138,42 @@ Deliberately a separate process, because in-process network calls are how teleme
 - `POST /v1/events`, TLS 1.3, gzip, no authentication (an anonymous sender has no credential to present).
 - **The source IP is used for rate limiting and then discarded. It is never written to storage.** An IP address is personal data in most jurisdictions and is the most obvious way an "anonymous" dataset becomes identifiable.
 - Rejects payloads containing keys outside the schema, rather than accepting and filtering. Server-side allowlisting is the second half of the control.
+- The schema is per event type and closed: a record is checked against the keys of its own type, and an unknown type is rejected. As built it accepts two producers — the process-telemetry types of §5.1 and the `analytics.*` types exported by product analytics. Question text, column names, table names and file names are refused by name, and no field is meant for free text: every analytics value is a closed vocabulary, a bounded number, an id, a class name or a version. The same holds for process telemetry: `agent`, `llm_provider`, `llm_model`, `file_format`, `edition`, `os`, `arch` and the size bands are closed vocabularies, versions are a version pattern, ids are hex or UUID, and the keys of `column_type_counts` are a fixed list of kinds of column. A value outside a vocabulary is sent as `other` by the sender or the batch is rejected. Vocabularies the world controls (operating system, architecture, file format, model, kind of column) have an `other`; vocabularies we control (edition, agent, provider) do not, so an omission fails loudly.
+- **Deployment order.** A closed vocabulary refuses every batch from a sender that is ahead of it, so a new graph node, default model or edition must reach the ingest before any installation reports it. A contract test in the repository fails when one is added without the ingest's list being updated.
+- What the ingest holds is pseudonymous, not anonymous. It stores no IP address, name or account. It does store `actor_id` on product-analytics records: a per-analyst pseudonym that the exporting deployment computes with a secret it keeps and never transmits, re-keyed every 28 days. The ingest therefore cannot link a pseudonym to a person, or one analyst across 28-day windows; within a window it can tell one analyst's events from another's.
 - Retention: 400 days, then deleted.
+
+#### Configuration
+
+Everything the ingest reads from its environment (`telemetry_service/`). Each
+is optional and falls back to the default shown.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `TELEMETRY_DATABASE_URL` | `telemetry.db` | Where events are stored. A `postgres://` or `postgresql://` connection string selects Postgres; any other value is a SQLite file path. |
+| `TELEMETRY_RETENTION_DAYS` | `400` | Days an event is kept before the retention job (`python -m telemetry_service.retention`) deletes it. |
+| `TELEMETRY_RATE_LIMIT` | `60` | Requests accepted per window from one sender. |
+| `TELEMETRY_RATE_WINDOW` | `3600` | Length of the rate-limit window, in seconds. |
+| `TELEMETRY_MAX_BODY_BYTES` | `8388608` | Largest request body accepted, checked before anything is decompressed. |
+| `TELEMETRY_MAX_DECOMPRESSED_BYTES` | `16777216` | Largest size a compressed body may expand to; bounds the memory one request can cost. |
+| `TELEMETRY_TRUSTED_PROXY_HOPS` | `1` | Number of proxies in front of the service, which decides which `X-Forwarded-For` entry is taken as the sender. Set to `0` when nothing is in front. |
+
+Two of these need a decision rather than a default:
+
+- **`TELEMETRY_DATABASE_URL` must be set for a real deployment.** Unset, the
+  service logs a warning and writes to a local SQLite file. The container image
+  (`telemetry_service/Dockerfile`) sets it to a SQLite file inside the
+  container, which is lost when the container is replaced and is not shared
+  between instances.
+- **`TELEMETRY_TRUSTED_PROXY_HOPS` must match what is actually in front.** Too
+  high, and the rate limit can be evaded with a forged `X-Forwarded-For`. The
+  service logs a warning when it is told to expect the header and none arrives.
+
+The container image also honours `PORT` (default `8080`) for the port it
+listens on. That is read by the image's start command, not by the service code.
+
+`tests/telemetry_ingest/test_configuration_doc.py` fails when this table and
+the variables the service reads disagree.
 
 ---
 
