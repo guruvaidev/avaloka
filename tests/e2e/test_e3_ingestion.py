@@ -3,7 +3,7 @@ Plan suite E3 -- data ingestion: upload format matrix, connector matrix, upload
 limits, multi-file semantics, filename hygiene and alternate destination inputs.
 
 Everything in this module runs hermetically (in-process app over the fake blob
-store / cache / graph from tests/test_server_integration.py). Two legs are
+store / cache / graph from tests/test_server_unit.py). Two legs are
 deployed-only and skip otherwise:
 
   * the byte/count limit cases, which monkeypatch the server's module-level
@@ -44,6 +44,11 @@ EXPECTED_UPLOAD_EXTS = {"csv", "tsv", "json", "xml", "parquet", "avro", "orc", "
 # file_handler/handler.py:36-52 -- connectors whose __init__ touches nothing.
 LAZY_CONNECTORS: Dict[str, str] = {
     "csv": "CSVConnector",
+    # `tsv` is a declared upload extension that `get_connector` had no branch
+    # for, so FileHandler rejected it by name even once the delimiter sniffer
+    # worked. The sniff sits behind a property, so construction still does no
+    # I/O and this stays in the lazy set.
+    "tsv": "CSVConnector",
     "excel": "ExcelConnector",
     "xlsx": "ExcelConnector",
     "xls": "ExcelConnector",
@@ -56,6 +61,7 @@ LAZY_CONNECTORS: Dict[str, str] = {
 # recording stand-in rather than a real Delta/Iceberg/Parquet fixture.
 EAGER_CONNECTORS: Dict[str, str] = {
     "parquet": "ParquetConnector",
+    "orc": "OrcConnector",
     "delta": "DeltaConnector",
     "iceberg": "IcebergConnector",
 }
@@ -69,6 +75,7 @@ ALL_CONNECTOR_CLASSES: Tuple[str, ...] = (
     "DeltaConnector",
     "IcebergConnector",
     "XMLConnector",
+    "OrcConnector",
 )
 
 
@@ -231,19 +238,34 @@ def test_e3_01b_connector_matrix_eager_types(
     assert type(connector).__name__ == class_name
 
 
-@pytest.mark.parametrize("file_type", ["tsv", "orc", "exe", "sqlite", ""])
+@pytest.mark.parametrize("file_type", ["exe", "sqlite", "hudi", ""])
 def test_e3_01b_connector_matrix_has_no_connector(file_type: str) -> None:
-    """tsv/orc (and anything unknown) fall off the end of get_connector and return None."""
+    """Anything the product does not declare falls off the end and returns None.
+
+    ``tsv`` and ``orc`` were in this list. They are declared upload extensions,
+    so asserting they have no connector was pinning the defect rather than the
+    contract -- and it would have failed the fix that closed it. They now
+    dispatch and are covered by the matrices above; what belongs here is only
+    what the product genuinely does not accept.
+    """
     assert FileHandler.get_connector("does-not-need-to-exist", file_type) is None
 
 
 def test_e3_01b_filehandler_raises_documented_error_without_connector(tmp_path: Path) -> None:
-    """FileHandler turns a missing connector into TypeError "<x> files aren't supported" (handler.py:25-27)."""
-    sample = tmp_path / "sample.tsv"
-    sample.write_bytes(b"a\tb\n1\t2\n")
+    """FileHandler turns a missing connector into a TypeError naming the extension.
+
+    The fixture was a ``.tsv``, which now reads. Using an undeclared extension
+    keeps the check about the error path instead of about a format the product
+    offers.
+    """
+    sample = tmp_path / "sample.sav"
+    sample.write_bytes(b"not a supported format")
     with pytest.raises(TypeError) as exc:
-        FileHandler(str(sample), "tsv")
-    assert "aren't supported" in str(exc.value)
+        FileHandler(str(sample), "sav")
+    message = str(exc.value)
+    assert "aren't supported" in message
+    assert "sav" in message, (
+        f"the error must name the extension, not the filename: {message!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -260,24 +282,24 @@ def _upload_exts_without_connector(monkeypatch: pytest.MonkeyPatch) -> Set[str]:
     }
 
 
-@pytest.mark.defect
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEFECT E3.01c (P1): tsv/orc are accepted by /api/upload (app/api/server.py:299) but "
-        "file_handler has no connector for them (file_handler/handler.py:36-52) - the upload 200s "
-        "and sampling later raises TypeError \"files aren't supported\" (handler.py:25-27). "
-        "Remove this xfail when fixed."
-    ),
-)
 def test_e3_01c_every_accepted_upload_ext_has_a_connector(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Intended: every extension the upload gate accepts must be readable by file_handler.get_connector."""
-    assert _upload_exts_without_connector(monkeypatch) == set()
+    """Every extension the upload gate accepts must have a connector.
 
-
-def test_e3_01c_pins_the_current_gap(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Pins the exact size of the gap so a partial fix (or a new orphan format) is noticed."""
-    assert _upload_exts_without_connector(monkeypatch) == {"tsv", "orc"}
+    This was ``xfail(strict=True)`` while tsv and orc had none. Two things had
+    to change together, and the second is the reason this comment is long:
+    ``OrcConnector`` was absent from ``ALL_CONNECTOR_CLASSES``, so
+    ``_stub_all_connectors`` left it real, the un-stubbed constructor raised
+    ``FileNotFoundError`` on the fake path, and ``xfail`` swallowed *that* as
+    the expected failure. The test would have gone on reporting xfailed after
+    the defect was fixed -- a check whose passing state and whose broken state
+    look identical, which is the shape this repo keeps shipping. Adding
+    ``OrcConnector`` to the stub list is what makes the assertion real.
+    """
+    missing = _upload_exts_without_connector(monkeypatch)
+    assert missing == set(), (
+        f"these declared upload extensions have no connector: {sorted(missing)}. "
+        "The upload gate accepts them, so sampling raises "
+        "\"files aren't supported\" after a 200.")
 
 
 # ---------------------------------------------------------------------------

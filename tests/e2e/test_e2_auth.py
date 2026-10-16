@@ -23,7 +23,7 @@ E2.08 is deliberately a *shallow* invariant -- the "never 200" rule: the sweep
 makes every {id} placeholder a real resource owned by user A, then probes it with
 user B's token and asserts the answer is always one of 400/401/403/404/415/422/503
 and never carries an owner-only value. Deeper per-route ownership assertions
-(threads/datasets/models/assets) already live in tests/test_server_integration.py;
+(threads/datasets/models/assets) already live in tests/test_server_unit.py;
 this sweep exists so a newly added {id} route cannot silently skip the ownership
 check. The single documented 200 a non-owner can obtain -- an orphan thread's
 empty history -- is pinned separately.
@@ -172,13 +172,13 @@ def _requires_hermetic_state() -> None:
 
 
 def _seed_session(session_id: str, **fields: Any) -> None:
-    from tests import test_server_integration as si
+    from tests import test_server_unit as si
 
     si.SESSIONS[session_id] = dict(fields)
 
 
 def _seed_thread(thread_id: str, session_id: str) -> None:
-    from tests import test_server_integration as si
+    from tests import test_server_unit as si
 
     si.THREAD_TO_SESSION[thread_id] = session_id
 
@@ -501,7 +501,7 @@ def test_e11_01_foreign_dataset_delete_is_404(api: ApiClient) -> None:
     """Deleting another tenant's dataset is refused with 404 and leaves the owner's session intact."""
     _requires_hermetic_state()
 
-    from tests import test_server_integration as si
+    from tests import test_server_unit as si
 
     _seed_session("sess-a", user_id="user-a", dataset_id="ds-owned-by-a")
 

@@ -1,19 +1,73 @@
 #!/usr/bin/env bash
-# Generate the public oss/1.6 tree from develop-1.6.
+# Generate the public tree from develop-1.6.
 #
-# oss/1.6 is a product of develop-1.6, not a parallel branch. Run this after
-# merging to develop-1.6; review the diff; push.
+# The public repository is a product of develop-1.6, not a parallel branch.
+# There is no intermediate branch: the generated tree is compared against, and
+# published onto, the public repository's own branch.
 #
-#   scripts/generate-oss.sh                 # dry run, prints the diff
-#   scripts/generate-oss.sh --write         # commit onto the oss branch
+#   scripts/generate-oss.sh             # dry run: generate, check, compare
+#   scripts/generate-oss.sh --publish   # build the squash commit; see below
+#
+# Dry run   generates the tree in a temp dir, runs the invariants and the
+#           secret scan, then lists what differs from the published tree
+#           ($PUBLISH_REMOTE/$PUBLISH_BASE, default github/main). Without that
+#           remote the comparison is skipped, visibly, and the checks still run.
+# --publish does the same generation and checks, then builds ONE commit whose
+#           only parent is the published tip. It pushes only when
+#           PUBLISH_CONFIRM=yes.
 #
 set -euo pipefail
 
+usage () {
+  cat <<'USAGE'
+usage: scripts/generate-oss.sh [--publish]
+
+  (no argument)  dry run: generate the public tree, run the invariants and the
+                 secret scan, and list what differs from the published tree.
+                 Writes nothing and pushes nothing.
+  --publish      build one squash commit on top of the published tip and print
+                 the push command. Pushes only with PUBLISH_CONFIRM=yes.
+
+environment:
+  SRC_BRANCH      branch to generate from          (default develop-1.6)
+  REMOTE          remote that holds SRC_BRANCH      (default origin)
+  PUBLISH_REMOTE  remote of the public repository   (default github)
+  PUBLISH_BRANCH  public branch to publish to       (default main)
+  PUBLISH_BASE    published branch to compare with and build on
+                                                    (default $PUBLISH_BRANCH)
+USAGE
+}
+
 SRC_BRANCH="${SRC_BRANCH:-develop-1.6}"
-DST_BRANCH="${DST_BRANCH:-oss/1.6}"
 REMOTE="${REMOTE:-origin}"
-WRITE=0
-case "${1:-}" in --write) WRITE=1 ;; esac
+PUBLISH_REMOTE="${PUBLISH_REMOTE:-github}"
+PUBLISH_BRANCH="${PUBLISH_BRANCH:-main}"
+# Base defaults to the destination, but a new test branch has no tip yet --
+# point PUBLISH_BASE at the published branch it should sit on top of.
+PUBLISH_BASE="${PUBLISH_BASE:-$PUBLISH_BRANCH}"
+
+case "${1:-}" in
+  "" | --publish) ;;
+  -h | --help) usage; exit 0 ;;
+  --write)
+    # Refused before any work is done. --write used to commit the generated
+    # tree onto an intermediate branch that sat between the source and the
+    # public repository. That branch is retired: nothing read it, it drifted
+    # from what was actually published, and it looked like a branch one could
+    # target. An old habit should fail here rather than recreate it.
+    {
+      echo "generate-oss.sh: --write is retired."
+      echo "  It committed the generated tree onto an intermediate branch that no longer"
+      echo "  exists as a step. There are two modes now:"
+      echo "    scripts/generate-oss.sh             dry run, compared against $PUBLISH_REMOTE/$PUBLISH_BASE"
+      echo "    scripts/generate-oss.sh --publish   one squash commit on top of $PUBLISH_REMOTE/$PUBLISH_BASE"
+    } >&2
+    exit 2 ;;
+  *)
+    echo "generate-oss.sh: unknown argument '$1'" >&2
+    usage >&2
+    exit 2 ;;
+esac
 
 repo_root=$(git rev-parse --show-toplevel)
 cd "$repo_root"
@@ -197,17 +251,16 @@ SEC
 #   PUBLISH_REMOTE=github PUBLISH_BRANCH=main scripts/generate-oss.sh --publish
 #
 if [ "${1:-}" = "--publish" ]; then
-  PUBLISH_REMOTE="${PUBLISH_REMOTE:-github}"
-  PUBLISH_BRANCH="${PUBLISH_BRANCH:-main}"
-  # Base defaults to the destination, but a new test branch has no tip yet --
-  # point PUBLISH_BASE at the published branch it should sit on top of.
-  PUBLISH_BASE="${PUBLISH_BASE:-$PUBLISH_BRANCH}"
   echo "== publish (squash onto $PUBLISH_REMOTE/$PUBLISH_BASE -> $PUBLISH_BRANCH) =="
   git fetch -q "$PUBLISH_REMOTE" "$PUBLISH_BASE"
   base=$(git rev-parse FETCH_HEAD)
   echo "   base: $PUBLISH_REMOTE/$PUBLISH_BASE at $(git rev-parse --short "$base")"
 
   idx=$(mktemp -u)
+  # -f is required, not optional. .gitignore lists *.csv and app/sample_data/,
+  # and those files are tracked on the source branch only because they were
+  # force-added. A plain `git add -A` silently omits every such file, which
+  # deletes the sample datasets and test fixtures from the public tree.
   GIT_INDEX_FILE="$idx" GIT_DIR="$repo_root/.git" GIT_WORK_TREE="$work" \
     git -C "$work" add -A -f
   tree=$(GIT_INDEX_FILE="$idx" GIT_DIR="$repo_root/.git" git write-tree)
@@ -257,44 +310,54 @@ the public history. Internal commits are deliberately not parents of this one.")
   exit 0
 fi
 
-if [ "$WRITE" -eq 0 ]; then
-  echo "== diff vs $REMOTE/$DST_BRANCH (dry run; pass --write to commit) =="
-  git --no-index --no-pager diff --stat \
-    <(git ls-tree -r --name-only "$REMOTE/$DST_BRANCH") \
-    <(cd "$work" && find . -type f | sed 's|^\./||' | sort) 2>/dev/null || true
-  ( cd "$work" && find . -type f | sed 's|^\./||' | sort ) > "$work/../gen.txt"
-  echo "   generated files: $(wc -l < "$work/../gen.txt" | tr -d ' ')"
-  echo "   public tree now: $(git ls-tree -r --name-only "$REMOTE/$DST_BRANCH" | wc -l | tr -d ' ')"
+# ---------------------------------------------------------------------------
+# Dry run: compare the generated tree with what is published now -- the same
+# base --publish would build on. Nothing is committed and no object is written.
+#
+# A checkout without the public remote cannot make that comparison. Say so and
+# stop there: the generation, invariants and secret scan above have already
+# run, and those are what a contributor without publish access needs. An empty
+# diff printed in place of a comparison that never happened reads as "nothing
+# would change", which is the wrong thing to tell anyone.
+echo "== compare vs $PUBLISH_REMOTE/$PUBLISH_BASE (dry run; nothing is written or pushed) =="
+generated=$(cd "$work" && find . -type f | wc -l | tr -d ' ')
+if ! fetch_err=$(git fetch -q "$PUBLISH_REMOTE" "$PUBLISH_BASE" 2>&1); then
+  if git remote get-url "$PUBLISH_REMOTE" >/dev/null 2>&1; then
+    why="could not fetch '$PUBLISH_BASE' from '$PUBLISH_REMOTE': $(printf '%s\n' "$fetch_err" | grep -v '^$' | tail -1)"
+  else
+    why="this checkout has no remote named '$PUBLISH_REMOTE'"
+  fi
+  echo "   SKIPPED -- $why"
+  echo "   The tree was generated and the invariants and secret scan above did run;"
+  echo "   only the comparison with the published tree was not made."
+  echo "   To compare, add the public repository as a remote, or point"
+  echo "   PUBLISH_REMOTE / PUBLISH_BASE at the published branch."
+  echo "   generated files: $generated"
   exit 0
 fi
+base=$(git rev-parse FETCH_HEAD)
+echo "   base: $PUBLISH_REMOTE/$PUBLISH_BASE at $(git rev-parse --short "$base")"
 
-
-# Land the generated tree on a branch so it can be reviewed as a diff before it
-# reaches the public one. GEN_BRANCH overrides the name.
-GEN_BRANCH="${GEN_BRANCH:-oss-sync/generated}"
-tmpwt=$(mktemp -d)
-git worktree add -q --detach "$tmpwt" "$REMOTE/$DST_BRANCH"
-( cd "$tmpwt" && git rm -rq --cached . >/dev/null && find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} + )
-( cd "$work" && tar -c . ) | tar -x -C "$tmpwt"
-src_sha=$(git rev-parse --short "$REMOTE/$SRC_BRANCH")
-( cd "$tmpwt"
-  # -f is required, not optional. .gitignore lists *.csv and app/sample_data/,
-  # and those files are tracked on the source branch only because they were
-  # force-added. A plain `git add -A` silently omits every such file, which
-  # deletes the sample datasets and test fixtures from the public tree.
-  git add -A -f
-  if git diff --cached --quiet; then
-    echo "no change -- $DST_BRANCH already matches $SRC_BRANCH"
-  else
-    git commit -q -m "chore(oss): regenerate from $SRC_BRANCH@$src_sha
-
-Generated by scripts/generate-oss.sh from oss/manifest.yaml.
-Do not edit $DST_BRANCH directly -- the next run overwrites it."
-    git branch -f "$GEN_BRANCH" HEAD
-    echo "== wrote =="
-    echo "   branch $GEN_BRANCH at $(git rev-parse --short HEAD)"
-    echo "   files changed vs $DST_BRANCH: $(git diff --name-only "$REMOTE/$DST_BRANCH" HEAD | wc -l | tr -d ' ')"
-    echo "   review:  git diff $REMOTE/$DST_BRANCH $GEN_BRANCH"
-    echo "   publish: git push $REMOTE $GEN_BRANCH:$DST_BRANCH"
-  fi )
-git worktree remove --force "$tmpwt"
+# Read the published tree into a throwaway index and diff the generated files
+# against it. Untracked files are listed without the ignore rules, for the same
+# reason --publish adds with -f: force-added files are part of the tree.
+idx=$(mktemp -u)
+gitdir=$(git rev-parse --absolute-git-dir)
+GIT_INDEX_FILE="$idx" git read-tree "$base"
+changes=$(
+  { GIT_INDEX_FILE="$idx" GIT_DIR="$gitdir" GIT_WORK_TREE="$work" \
+      git -C "$work" -c core.quotePath=false diff --no-renames --name-status
+    GIT_INDEX_FILE="$idx" GIT_DIR="$gitdir" GIT_WORK_TREE="$work" \
+      git -C "$work" -c core.quotePath=false ls-files --others | sed "s/^/A$(printf '\t')/"
+  } | sort -k2
+)
+rm -f "$idx"
+count () { printf '%s\n' "$changes" | grep -c "^$1" || true; }
+if [ -z "$changes" ]; then
+  echo "   no change -- $PUBLISH_REMOTE/$PUBLISH_BASE already matches the generated tree"
+else
+  printf '%s\n' "$changes" | sed 's/^/   /'
+  echo "   $(count A) added, $(count '[MT]') modified, $(count D) removed"
+fi
+echo "   generated files: $generated"
+echo "   public tree now: $(git ls-tree -r --name-only "$base" | wc -l | tr -d ' ')"

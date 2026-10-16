@@ -64,6 +64,7 @@ class Reporter(Firefly):
             "correlations": profile.get("correlations", []), "plan": plan,
             "validation": validation, "model": training_summary, "finops": finops,
             "goal_analysis": goal_analysis,
+            "script_declines_to_reread": self.ctx.blackboard.get("script_declines_to_reread"),
         }
         exec_data = {
             **common,
@@ -196,10 +197,13 @@ class Reporter(Firefly):
 
     def _readme(self, econ, findings, limitations) -> None:
         train = self.ctx.blackboard.get("training_summary") is not None
+        declined = self.ctx.blackboard.get("script_declines_to_reread")
         deliverables = [
             "`executive_report.html` — the decision-maker summary",
             "`technical_report.html` — full methodology, schema, quality and validation",
-            "`analysis.ipynb` / `analysis.py` — reproducible pipeline",
+            ("`analysis.ipynb` / `analysis.py` — reproducible pipeline" if not declined else
+             f"`analysis.ipynb` / `analysis.py` — the preparation steps as code; they do not "
+             f"re-read the source ({declined}) and say so when run"),
             "`transformed_dataset.parquet` — cleaned working dataset",
             "`data_quality.json`, `validation_report.json`, `planner_graph.json` — evidence",
             "`assumptions.yaml`, `lineage.json`, `environment.lock` — governance & reproducibility",
@@ -222,7 +226,11 @@ class Reporter(Firefly):
         md += [f"- {d}" for d in deliverables]
         md += ["", "## Key findings", ""] + [f"- {f}" for f in findings]
         md += ["", "## Limitations", ""] + [f"- {l}" for l in limitations]
-        if train:
+        if train and declined:
+            reproduce = ("# analysis.py does not re-read the source; the prepared data is here:\n"
+                         "python -c \"import pandas as pd; "
+                         "print(pd.read_parquet('transformed_dataset.parquet').shape)\"")
+        elif train:
             reproduce = "python analysis.py  # reproduce data preparation"
         else:
             reproduce = (f"avaloka analyze {shlex.quote(self.ctx.data_source)} "

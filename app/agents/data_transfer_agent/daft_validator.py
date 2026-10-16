@@ -9,7 +9,7 @@ import gcsfs
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import SystemMessage
 from langchain_groq import ChatGroq
-from app.core.agent_llm import build_agent_llm
+from app.core.agent_llm import build_agent_llm, unconfigured_reason
 from app.agents.data_transfer_agent.dta_state import DaftCodingAgentState as CodingAgentState
 from app.agents.validator import (
     DataFrameColumnVisitor,
@@ -47,19 +47,32 @@ SUPPORTED_DOC_EXTENSIONS = (".md", ".txt")
 logger = logging.getLogger(__name__)
 
 # LLM initialisation
+def _reviewer_groq_key() -> str | None:
+    return (os.environ.get("GROQ_API_KEY_CODING_AGENT")
+            or os.environ.get("GROQ_API_KEY"))
+
+
+def reviewer_unavailable_reason() -> str:
+    """Why there is no reviewer model, naming the setting that would fix it."""
+    return unconfigured_reason(
+        agent="DTA_VALIDATOR",
+        api_key=_reviewer_groq_key(),
+        role="coding",
+        groq_key_var="GROQ_API_KEY_CODING_AGENT (or GROQ_API_KEY)",
+    )
+
+
 def _build_validator_llm() -> ChatGroq | None:
-    """Construct the validator LLM from environment variables, or return None."""
-    api_key = (os.environ.get("GROQ_API_KEY_CODING_AGENT")
-               or os.environ.get("GROQ_API_KEY"))
-    if not api_key:
-        logger.warning(
-            "GROQ_API_KEY_CODING_AGENT is not set — logical validation will be skipped."
-        )
-        return None
+    """Construct the validator LLM for the active provider, or return None."""
+    # No early return on a missing Groq key: that key is only the credential on
+    # the Groq path. The factory returns None itself when the provider it
+    # resolves has no credentials, whichever provider that is. Returning None
+    # here for want of a Groq key left an OpenRouter install with no reviewer.
+    api_key = _reviewer_groq_key()
 
     # Mechanical verdict check: reasoning stays at "low".
     # DTA_VALIDATOR_MODEL=llama-3.3-70b-versatile restores the old behavior.
-    return build_agent_llm(
+    llm = build_agent_llm(
         agent="DTA_VALIDATOR",
         api_key=api_key,
         default_model="openai/gpt-oss-120b",
@@ -67,8 +80,17 @@ def _build_validator_llm() -> ChatGroq | None:
         default_effort="low",
         env_model_var="DTA_VALIDATOR_MODEL",
         role="coding",
-        tier="small",
+        # A WRONG verdict here blocks the write, so this is a gate and must not
+        # run on the small tier. default_model is read on the Groq path only;
+        # on every other provider the tier decides the model.
+        tier="large",
     )
+    if llm is None:
+        logger.warning(
+            "No data-transfer logic reviewer: %s. Transfers will be refused "
+            "rather than run unreviewed.", reviewer_unavailable_reason(),
+        )
+    return llm
 
 
 validator_llm: ChatGroq | None = _build_validator_llm()
@@ -270,9 +292,9 @@ def logical_semantic_validator_node(state: CodingAgentState) -> dict[str, Any]:
     Use an LLM to check whether the generated code logically fulfils the user
     prompt.
 
-    Short-circuits without calling the LLM when:
-    - A syntax or static-semantic error was already detected upstream.
-    - The validator LLM is not configured.
+    Short-circuits without calling the LLM when a syntax or static-semantic
+    error was already detected upstream. When no reviewer model is configured
+    it does not approve: see ``_review_unavailable_result``.
 
     Returns a partial state dict consumed by the LangGraph runner.
     """
@@ -281,8 +303,7 @@ def logical_semantic_validator_node(state: CodingAgentState) -> dict[str, Any]:
         return {}
 
     if validator_llm is None:
-        logger.info("Skipping LLM review — GROQ_API_KEY_CODING_AGENT is not configured.")
-        return {"logical_semantic_error": False, "code_validation_feedback": "APPROVED"}
+        return _review_unavailable_result()
 
     logger.info("--- Checking Logic with LLM Reviewer ---")
     logger.debug("Code to validate:\n%s", state.get("generated_code"))
@@ -327,6 +348,46 @@ def logical_semantic_validator_node(state: CodingAgentState) -> dict[str, Any]:
     return _parse_review_response(response, strict_mode)
 
 # Internal helpers
+def logic_review_is_advisory() -> bool:
+    """True when the operator opted out of blocking (AVALOKA_STRICT_LOGIC_VALIDATION=0)."""
+    return os.getenv(STRICT_LOGIC_ENV, "1") == "0"
+
+
+def _review_unavailable_result() -> dict[str, Any]:
+    """The review could not run because there is no reviewer model.
+
+    An absent gate must not report APPROVED. By default this blocks, and it is
+    marked ``logic_review_unavailable`` so the caller stops instead of asking
+    the coder to repair code nobody judged: regenerating cannot supply a key.
+    Running transfers without review is a decision, and the existing advisory
+    opt-out is how it is made; then the transfer proceeds and the note reaches
+    the user as a warning, as any advisory finding does.
+    """
+    message = (
+        "The logic review could not run because no reviewer model is configured: "
+        f"{reviewer_unavailable_reason()}."
+    )
+    if logic_review_is_advisory():
+        logger.warning(
+            "Advisory mode: %s The transfer will proceed UNREVIEWED (%s=0).",
+            message, STRICT_LOGIC_ENV,
+        )
+        return {
+            "logical_semantic_error": False,
+            "code_validation_feedback": "Logic review skipped: no reviewer model is configured.",
+            "logical_review_feedback": message,
+            "logic_review_unavailable": True,
+            "code_validated": False,
+        }
+    logger.error("%s Blocking the transfer.", message)
+    return {
+        "logical_semantic_error": True,
+        "code_validation_feedback": message,
+        "logic_review_unavailable": True,
+        "code_validated": False,
+    }
+
+
 def _serialise_output_preview(output_preview) -> str:
     """Serialise the execution output preview for the reviewer prompt.
 

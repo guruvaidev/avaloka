@@ -292,8 +292,15 @@ def _print_next_steps(result: MissionResult) -> None:
                   soft_wrap=True)
     console.print(f"  [dim]cat  {out}/README.md[/dim]               findings and limitations",
                   soft_wrap=True)
-    console.print(f"  [dim]python {out}/analysis.py[/dim]           reproduce this run",
-                  soft_wrap=True)
+    declined = result.context.blackboard.get("script_declines_to_reread")
+    if declined:
+        # analysis.py stops with a message for this source; do not offer it as
+        # a way to reproduce the run.
+        console.print(f"  [dim]{out}/transformed_dataset.parquet[/dim]   the prepared data "
+                      f"(analysis.py does not re-read {declined})", soft_wrap=True)
+    else:
+        console.print(f"  [dim]python {out}/analysis.py[/dim]           reproduce this run",
+                      soft_wrap=True)
 
 
 def _finish(result: MissionResult, ava: Avaloka | None) -> None:
@@ -374,6 +381,8 @@ def analyze(
         budget=Budget(limit_usd=budget), execution_mode=_mode(local, execution), tier=tier,
         loaded_hourly_rate=hourly_rate)
     ctx.blackboard["workload"] = wl.as_dict()
+    # Where the data really came from: the mission only sees the local copy.
+    ctx.blackboard["resolved_source"] = _resolved.as_dict()
 
     try:
         _run_mission(ctx, analyze_fireflies(), run_analyze, ava, wl, quiet)
@@ -420,6 +429,8 @@ def train(
         metric=metric, objective=objective, deployable=deployable, deployment_latency_ms=latency,
         execution_mode=_mode(local, execution), tier=tier, loaded_hourly_rate=hourly_rate)
     ctx.blackboard["workload"] = wl.as_dict()
+    # Where the data really came from: the mission only sees the local copy.
+    ctx.blackboard["resolved_source"] = _resolved.as_dict()
 
     try:
         result = _run_mission(ctx, train_fireflies(deployable), run_train, ava, wl, quiet)
@@ -690,26 +701,55 @@ def coordinate(
     console.print(f"\n[bold green]Fleet deliverables →[/bold green] {output}")
 
 
-@app.command()
+# ``benchmark`` is a sub-app rather than a plain command so that ``serve`` can
+# hang off it: the owner asked to look at the results in a browser, and
+# ``avaloka benchmark serve`` is where someone would look for that. The
+# callback runs the suite when no subcommand is given, so plain
+# ``avaloka benchmark`` keeps working exactly as before.
+benchmark_app = typer.Typer(
+    help="Run the benchmark against this CLI, or serve its scorecard.",
+    invoke_without_command=True)
+app.add_typer(benchmark_app, name="benchmark")
+
+
+@benchmark_app.callback(invoke_without_command=True)
 def benchmark(
-    family: str | None = typer.Option(None, "--family", help="data_engineering|data_science."),
+    ctx: typer.Context,
+    family: str | None = typer.Option(
+        None, "--family",
+        help="data_engineering|data_science|format_comprehension|conversational_scorers."),
     kaggle: bool = typer.Option(False, "--kaggle", help="Include Kaggle-dataset tasks (if downloaded)."),
+    edgar: bool = typer.Option(False, "--edgar",
+                               help="Include the real SEC EDGAR filing task (network; "
+                                    "needs AVALOKA_EDGAR_USER_AGENT)."),
+    live: bool = typer.Option(False, "--live",
+                              help="Run the conversational family against a real provider "
+                                   "(local model first, then Groq; never Anthropic)."),
     output: Path | None = typer.Option(None, "--output", "-o", help="Artifacts dir (default: temp)."),
     json_out: Path | None = typer.Option(None, "--json", help="Write the scorecard JSON here."),
+    html_out: Path | None = typer.Option(None, "--html",
+                                         help="Write a self-contained HTML scorecard here."),
 ):
     """Run the data-engineering + data-science benchmark against this CLI."""
+    if ctx.invoked_subcommand is not None:
+        return
     import json as _json
     import tempfile
 
     from avaloka.benchmark.runner import BenchmarkRunner
     from avaloka.benchmark.suite import all_tasks
 
-    tasks = all_tasks(include_kaggle=kaggle)
+    tasks = all_tasks(include_kaggle=kaggle, include_edgar=edgar)
     if family:
         tasks = [t for t in tasks if t.family == family]
     base = output.expanduser() if output else Path(tempfile.mkdtemp(prefix="avaloka-bench-"))
     console.print(f"Running [bold]{len(tasks)}[/bold] benchmark tasks → [dim]{base}[/dim]")
-    card = BenchmarkRunner(base, verbose=False).run(tasks)
+    card = BenchmarkRunner(base, verbose=False, edgar=edgar).run(tasks)
+
+    if family in (None, "conversational_scorers"):
+        from avaloka.benchmark.conversational import conversational_results
+        for result in conversational_results(live=live):
+            card.add(result)
 
     t = Table(title="Avaloka benchmark scorecard")
     t.add_column("Task", style="cyan"); t.add_column("Source"); t.add_column("Score", justify="right")
@@ -723,12 +763,38 @@ def benchmark(
         console.print(f"  [dim]{fam}[/dim] {score:.2f}")
     console.print(f"[bold]OVERALL[/bold] {card.overall_score:.2f}  "
                   f"({card.as_dict()['n_passed']}/{card.as_dict()['n_runs']} runs passed)")
+    # A guard is green the day it is written, so it is counted apart from the
+    # assertions: it is not evidence that one of them holds.
+    counts = card.by_category()
+    console.print(f"  [dim]assertions[/dim] {counts['assertion']['passed']}/"
+                  f"{counts['assertion']['total']} passed   "
+                  f"[dim]guards[/dim] {counts['guard']['passed']}/{counts['guard']['total']} held")
     if json_out:
         json_out.expanduser().write_text(_json.dumps(card.as_dict(), indent=2))
         console.print(f"[green]Scorecard →[/green] {json_out}")
+    if html_out:
+        from avaloka.benchmark.report import write_html
+        write_html(card.as_dict(), html_out.expanduser())
+        console.print(f"[green]HTML scorecard →[/green] {html_out}")
     hard = [r for r in card.failures() if not (r.error and "unavailable" in r.error)]
     if hard:
         raise typer.Exit(code=1)
+
+
+@benchmark_app.command("serve")
+def benchmark_serve(
+    scorecard: Path = typer.Option(Path("scorecard.json"), "--scorecard",
+                                   help="The scorecard JSON (or .html) to serve."),
+    port: int = typer.Option(8765, "--port", help="Port (default 8765)."),
+):
+    """Serve the HTML scorecard on localhost so the results can be read in a browser.
+
+    Binds the loopback interface only. Nothing else on the filesystem is
+    served -- the handler answers the scorecard routes and 404s everything
+    else, rather than translating request paths into file paths.
+    """
+    from avaloka.benchmark.serve import serve
+    serve(scorecard.expanduser(), port=port)
 
 
 @app.command()

@@ -366,6 +366,32 @@ async function mcpProxyFetch(base: string, path: string, init: RequestInit = {})
 
 export { mcpProxyFetch, proxyFetch };
 
+export type AppNotificationKind =
+  | "analysis_done"
+  | "analysis_failed"
+  | "training_done"
+  | "training_failed"
+  | "batch_job_done"
+  | "batch_job_failed"
+  | "insights_ready"
+  | "insights_failed"
+  | string;
+
+export interface AppNotification {
+  id: string;
+  kind: AppNotificationKind;
+  title: string;
+  body: string | null;
+  link: { thread_id?: string; dataset_id?: string; deferred_id?: string; job_id?: string } | null;
+  created_at: string;
+  read_at: string | null;
+}
+
+export interface AppNotificationsResponse {
+  items: AppNotification[];
+  unread_count: number;
+}
+
 export interface UploadLimits {
   plan?: "free" | "professional" | "enterprise" | string;
   max_file_bytes?: number | null;
@@ -675,6 +701,39 @@ export const backendApi = {
    * Poll the backend for the result of a long-running (deferred) chat turn.
    * Returns the raw envelope: { status: "running" | "done" | "error" | "superseded" | "none", ... }
    */
+
+  async listNotifications(opts: { limit?: number; unread?: boolean } = {}): Promise<AppNotificationsResponse> {
+    const accessToken = await getAccessToken();
+    const params = new URLSearchParams({ limit: String(opts.limit ?? 20) });
+    if (opts.unread) params.set("unread", "true");
+    const response = await proxyFetch(`/api/notifications?${params.toString()}`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!response.ok) throw new Error(`Notifications fetch failed: ${response.status}`);
+    return response.json();
+  },
+
+  async markNotificationRead(id: string): Promise<{ ok: boolean }> {
+    const accessToken = await getAccessToken();
+    const response = await proxyFetch(`/api/notifications/${encodeURIComponent(id)}/read`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!response.ok) throw new Error(`Mark read failed: ${response.status}`);
+    return response.json();
+  },
+
+  async markAllNotificationsRead(): Promise<{ updated: number }> {
+    const accessToken = await getAccessToken();
+    const response = await proxyFetch(`/api/notifications/read-all`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!response.ok) throw new Error(`Mark all read failed: ${response.status}`);
+    return response.json();
+  },
+
   async getPendingTurn(
     threadId: string,
     sessionId: string,

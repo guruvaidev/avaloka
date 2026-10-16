@@ -3,7 +3,7 @@ Plan suite E2 -- API contract: health, version, whoami, OpenAPI surface freeze,
 pagination reality, rate-limiting reality.
 
 Hermetic (default): everything except the notes below. The app runs in-process
-over the fakes from tests/test_server_integration.py, so the degraded-dependency
+over the fakes from tests/test_server_unit.py, so the degraded-dependency
 leg of /health, the /threads limit-clamp leg and the middleware introspection
 leg are all observable.
 
@@ -158,7 +158,7 @@ def test_e2_02_pins_status_stays_ok_when_dependencies_are_down(
 
     import app.api.server as server
     from app.services import session_service
-    from tests import test_server_integration as si
+    from tests import test_server_unit as si
     from fastapi import HTTPException, status as http_status
 
     # The app lifespan replaces session_service.cache with a real RedisCache, so a
@@ -387,7 +387,7 @@ def test_e2_13_pins_datasets_returns_unbounded_collection(
     """GET /datasets?limit=1 still returns every dataset -- ?limit is silently ignored."""
     _requires_hermetic("seeding the session store needs the in-process fakes")
 
-    from tests import test_server_integration as si
+    from tests import test_server_unit as si
 
     seeded = 5
     for i in range(seeded):

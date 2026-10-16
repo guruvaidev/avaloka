@@ -81,6 +81,12 @@ class ETLState(TypedDict):
     contract_violations: Optional[list]
     coder_raw_response: Optional[str]
     logical_review_feedback: Optional[str]
+    logical_review_decided_by: Optional[str]
+    logical_review_judged_correct: Optional[bool]
+    logical_review_judged_fabricated: Optional[bool]
+    logical_review_recheck_ran: Optional[bool]
+    logical_review_recheck_confirmed: Optional[bool]
+    logical_review_overruled: Optional[bool]
     multi_action_actions: Optional[List[Dict[str, Any]]]
     multi_action_missing: Optional[List[Dict[str, Any]]]
     multi_action_status: Optional[str]
@@ -93,6 +99,16 @@ class ETLState(TypedDict):
     execution_output_data: Optional[Any]
     execution_output_preview: Optional[Any]
     output_json: Optional[List[Dict[str, Any]]]
+    # Written by every execution node next to execution_result. Undeclared,
+    # LangGraph dropped all four on the way out of the node (measured on
+    # 0.6.11), so in the graph the writes never arrived and the reads of
+    # execution_error in route_after_execution and the narrator never fired.
+    # tests/execution_agent/test_execution_result_contract.py fails if a node
+    # writes a key that is not declared here.
+    execution_stdout: Optional[str]
+    execution_stderr: Optional[str]
+    execution_error: Optional[str]
+    fresh_output_produced: Optional[bool]
 
     # Planner graph visualization fields
     planner_graph_path: Optional[str]

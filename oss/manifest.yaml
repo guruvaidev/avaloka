@@ -1,10 +1,13 @@
-# How oss/1.6 is produced from develop-1.6.
+# How the public tree is produced from develop-1.6.
 #
-# oss/1.6 is GENERATED, not maintained by hand. Every change lands on
+# The public tree is GENERATED, not maintained by hand. Every change lands on
 # develop-1.6; this manifest says what is withheld from the public tree and
-# what is added to it. Editing oss/1.6 directly will be overwritten.
+# what is added to it. Editing the public repository directly will be
+# overwritten. There is no intermediate branch: the generated tree is published
+# as one squash commit on top of the public repository's main.
 #
-# Regenerate with: scripts/generate-oss.sh
+# Dry run with: scripts/generate-oss.sh
+# Publish with: scripts/generate-oss.sh --publish
 
 # Paths on develop-1.6 that must never reach the public tree.
 exclude:
@@ -61,6 +64,11 @@ exclude:
       Configuration for the internal CI service. The public repository builds
       with GitHub Actions (.github/workflows), so this file would execute
       nothing there.
+  - path: deploy/telemetry/
+    reason: >-
+      Deployment configuration for the hosted telemetry ingest service. It
+      executes nothing for anyone deploying from the public tree; the service
+      itself (telemetry_service/) and its tests are published.
   - path: docs/research/
     keep_globs: ["*.pdf", "README.md", "*.png"]
     reason: >-
@@ -159,6 +167,7 @@ assert_no_paths:
   - "docs/evaluations/**/*"   # internal assessments, withheld above
   - ".claude/**/*"            # agent definitions and skills, withheld above
   - "**/bitbucket-pipelines.yml"   # internal CI configuration, withheld above
+  - "deploy/telemetry/**/*"   # hosted-service deployment configuration, withheld above
   - "avaloka/arena/**"         # asserted by tests/test_oss_readiness.py
   - "tests/arena/**"
 

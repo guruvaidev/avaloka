@@ -131,6 +131,11 @@ DEFAULT_MODELS: Dict[str, str] = {
     # schema-constrained extraction and leaves 120b capacity for the Coder.
     "summarizer":  "openai/gpt-oss-20b",
 
+    # Chat answer written over result rows that are already computed. It used
+    # to borrow the summarizer's entry through a KeyError; this is the same
+    # model, stated where the next reader will look for it.
+    "narrator":    "openai/gpt-oss-20b",
+
     "profiling":     "openai/gpt-oss-120b",
 
     # Auto Insights + the voice explainer: the most user-visible output in
@@ -141,6 +146,7 @@ DEFAULT_MODELS: Dict[str, str] = {
     "dta_coder":     "openai/gpt-oss-120b",
     "dta_validator": "openai/gpt-oss-120b",
     "mta":           "openai/gpt-oss-120b",
+    "mta_classifier": "openai/gpt-oss-120b",
     "mta_task_builder": "openai/gpt-oss-120b",
     "memory":           "openai/gpt-oss-20b",
 

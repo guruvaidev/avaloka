@@ -11,7 +11,8 @@ Registered in `pytest.ini`:
 
 | Marker | Meaning |
 | ------ | ------- |
-| `integration` | Exercises real agents / LLMs. |
+| `integration` | Needs something outside the process: a real agent/LLM, a service, a deployment. Deselected by the hermetic gate. |
+| `containers` | The subset of `integration` that needs only the Postgres and object-store containers `scripts/integration.sh` starts. Never skips. |
 | `cluster` | Requires a live Kubernetes cluster. |
 | `kuberay` | Requires the KubeRay CRDs installed in the cluster. |
 | `cloud` | Requires real cloud credentials. |
@@ -56,8 +57,8 @@ which is what CI runs:
 ```
 
 Its exit code is the number of failed stages, and a stage that is skipped says
-so rather than passing silently. Note that the data-science stage is skipped on
-`oss/1.6`, where `tests/datascience/` is deliberately absent.
+so rather than passing silently. Note that the data-science stage is skipped in
+the public tree, where `tests/datascience/` is deliberately absent.
 
 The test tiers, from cheapest to most expensive:
 
@@ -106,6 +107,51 @@ hermetic default excludes it, and it skips itself when none of
 weekly workflow deliberately skips the whole *job* when the key is absent
 rather than letting the suite skip every test and report a green tick that
 measured nothing — worth copying if you wire this into your own CI.
+
+## The container tier
+
+`tests/containers/` runs against a real Postgres and a real S3-compatible store
+(SeaweedFS), at the image versions the Helm chart deploys. It exists because
+the two boundaries it covers had only ever been tested against stand-ins: the
+lineage store against SQLite, and uploads against `FakeBlobStore`, an in-memory
+dict.
+
+```bash
+./scripts/integration.sh                 # tests run in a container on the stack's network
+./scripts/integration.sh --host          # tests run with your python, over published ports
+./scripts/integration.sh -- -k salt -x   # arguments after -- go to pytest
+```
+
+The script generates a database password and an S3 key pair for that run,
+starts `tests/containers/compose.yaml` under a unique project name, runs
+`tests/containers/` **and the Postgres half of `tests/test_lineage.py`**, and
+removes the stack. Nothing is read from `./.env` and no credential is stored in
+the repository. In the default mode the tests sit on an internal Docker network
+with no route out, so the suite cannot reach a deployed endpoint, a cloud API
+or a model provider even by mistake; `--host` does not have that property.
+
+It is not part of the hermetic gate and must not become part of it — it needs
+Docker and takes about a minute. It runs from
+`.github/workflows/container-integration-nightly.yml` (04:15 UTC, plus
+`workflow_dispatch`), with `--host` after the normal installer so the drivers
+under test are the ones a fresh install resolves.
+
+**A skip is a failure here.** The script exits non-zero if Docker is missing, a
+container is unhealthy, a test fails, a test skips, or nothing is collected;
+`tests/containers/conftest.py` turns any skip inside that directory into a
+failure, and its fixtures raise rather than skip when a container is
+unreachable. This is the only place these tests run, so one that skipped ran
+nowhere. `LineageStore` never raises and `S3BlobStore.stat` returns `(0, "")`
+for every error, so each test also checks its result through a connection of
+its own — asking the code under test whether its own write landed cannot tell
+"empty" from "unreachable".
+
+Not covered yet, in the order they would pay back: an upload through the API
+(`POST /api/upload`) into the real store; Redis-backed sessions and the Celery
+scheduler (`tests/test_scheduler_integration.py` needs a broker);
+the MCP onboarding/SSE servers against a seeded database
+(`tests/test_mcp_server_integration.py`); and any boundary that needs a model,
+which would need a stub model server in a container rather than a provider key.
 
 ## Skips, not failures
 
@@ -178,7 +224,7 @@ pytest tests/test_mta_training.py::TestPyTorchTraining -v  # PyTorch training te
 pytest tests/test_mta_training.py::TestONNXExport -v       # ONNX export tests
 
 # MTA v2 tests (Ray + GCP inference)
-pytest tests/test_mta_v2_unit.py tests/test_mta_v2_training.py tests/test_mta_v2_integration.py -v
+pytest tests/test_mta_v2_unit.py tests/test_mta_v2_training.py tests/test_mta_v2_flows_unit.py -v
 
 # Run with coverage
 pytest tests/test_mta_agent.py tests/test_mta_training.py --cov=app.agents.mta -v

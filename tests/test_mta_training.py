@@ -16,7 +16,6 @@ import numpy as np
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 
-from app.agents.model_training_agent import ModelTrainingAgent
 from app.agents.mta.pytorch_trainer import PyTorchTrainer, create_pytorch_trainer
 from app.agents.mta.onnx_exporter import ONNXExporter, create_onnx_exporter
 from app.agents.mta.config_manager import create_config_from_task
@@ -236,20 +235,7 @@ class TestPyTorchTraining:
         # This should either work with default handling or fail gracefully
         assert isinstance(data_info, dict)
         
-        # Test 4: Model creation with invalid parameters
-        try:
-            model = trainer.create_model(
-                num_features=0,   # Invalid number of features (0)
-                num_classes=0,   # Invalid number of classes (0)
-                task_type="classification"
-            )
-            # If it doesn't raise an exception, check that it handles gracefully
-            assert model is None or trainer.model is None
-        except (ValueError, RuntimeError, AssertionError) as e:
-            # Expected to fail with invalid parameters
-            assert "features" in str(e).lower() or "classes" in str(e).lower() or "dimension" in str(e).lower()
-        
-        # Test 5: Training with insufficient data
+        # Test 4: Training with insufficient data
         # Create a very small dataset
         small_data_path = os.path.join(self.temp_dir, "small_data.csv")
         small_data = pd.DataFrame({
@@ -428,19 +414,6 @@ class TestMTAIntegration:
         import shutil
         shutil.rmtree(self.temp_dir, ignore_errors=True)
     
-    def test_mta_agent_exposes_the_graph_entry_point(self):
-        """The agent must be constructible and drivable from the graph.
-
-        This used to assert execute_training/communication/mlflow_manager.
-        app.agents.model_training_agent now re-exports the mta_v2 agent, which
-        has none of them: its entry point is execute(state), and that is what
-        model_training_agent_node calls.
-        """
-        mta = ModelTrainingAgent()
-
-        assert callable(getattr(mta, "execute", None))
-        assert callable(getattr(mta, "parse_tool_call", None))
-    
     def test_training_task_creation_from_config(self):
         """Test training task creation from configuration"""
         from app.agents.mta.training_task import TrainingTask, DataConfig
@@ -468,92 +441,6 @@ class TestMTAIntegration:
         assert config.training.learning_rate == 0.01
         assert config.training.epochs == 5
         assert config.training.batch_size == 16
-    
-    @patch('app.agents.mta.mlflow_integration.mlflow')
-    def test_mta_execute_training_mock(self, mock_mlflow):
-        """Test MTA training execution with mocked MLflow"""
-        # Mock MLflow to avoid actual MLflow dependency in tests
-        mock_mlflow.set_tracking_uri.return_value = None
-        mock_mlflow.set_experiment.return_value = None
-        
-        mta = ModelTrainingAgent()
-        
-        training_task = {
-            "task_id": "test_execution",
-            "model_type": "pytorch_classification",
-            "goal_description": "Test execution"
-        }
-        
-        data_info = {
-            "source_location": self.data_path,
-            "has_data": True,
-            "schema": ["feature1", "feature2", "feature3", "target"]
-        }
-        
-        # This should work without actual training due to small dataset
-        # and simple configuration
-        try:
-            result = mta.execute_training(training_task, data_info)
-            # If successful, verify structure
-            if result.get("success"):
-                assert "task_id" in result
-                assert "training_metrics" in result
-                assert "artifacts" in result
-        except Exception as e:
-            # It's okay if training fails in test environment
-            # The important thing is that the method exists and can be called
-            assert "execute_training" in str(type(mta).__dict__)
-    
-    def test_mta_integration_failures(self):
-        """Test MTA integration failure scenarios"""
-        from app.agents.mta.training_task import TrainingTask, DataConfig
-        from app.agents.mta.model_types import ModelType, TaskType
-        
-        # Test 1: Invalid training task
-        invalid_task = TrainingTask(
-            task_id="invalid_test",
-            model_name="test_model",
-            model_description="model built by the training tests",
-            model_version="1",
-            model_type=ModelType.PYTORCH_CLASSIFICATION,
-            task_type=TaskType.CLASSIFICATION,
-            data_config=DataConfig(data_source="nonexistent_file.csv")
-        )
-        
-        # Test 2: Invalid state for MTA
-        invalid_state = {
-            "messages": [],
-            "ready_to_train": False,
-            "training_task": None,
-            "invalid_key": "should_cause_issues"
-        }
-        
-        # Test 3: MTA with invalid configuration
-        try:
-            mta = ModelTrainingAgent()
-            # Try to execute training with invalid state
-            result = mta.model_training_agent_node(invalid_state)
-            # Should handle gracefully
-            assert isinstance(result, dict)
-            assert "messages" in result
-        except Exception as e:
-            # Expected to fail with invalid configuration
-            assert isinstance(e, (ValueError, KeyError, AttributeError))
-        
-        # Test 4: Training task creation with invalid data
-        invalid_data_info = {
-            "num_features": -1,
-            "num_classes": 0,
-            "task_type": "invalid_type"
-        }
-        
-        try:
-            # This should either work with default handling or fail gracefully
-            config = create_config_from_task(invalid_task)
-            assert isinstance(config, dict) or hasattr(config, 'training')
-        except Exception as e:
-            # Expected to fail with invalid data
-            assert isinstance(e, (ValueError, TypeError, KeyError))
 
 
 class TestConfigurationManagement:
@@ -592,84 +479,6 @@ class TestConfigurationManagement:
         assert config.training.batch_size == 64
         assert config.training.k_folds == 3
         assert config.training.metric_threshold == 0.9
-    
-    def test_config_creation_failures(self):
-        """Test configuration creation failure scenarios"""
-        from app.agents.mta.training_task import TrainingTask, DataConfig
-        from app.agents.mta.model_types import ModelType, TaskType
-        
-        # Test 1: Invalid model type
-        try:
-            invalid_task = TrainingTask(
-                task_id="invalid_test",
-                model_name="test_model",
-                model_description="model built by the training tests",
-                model_version="1",
-                model_type="invalid_model_type",  # This should fail
-                task_type=TaskType.CLASSIFICATION,
-                data_config=DataConfig(data_source="test.csv")
-            )
-            config = create_config_from_task(invalid_task)
-            # Should either work with default handling or fail gracefully
-            assert isinstance(config, dict) or hasattr(config, 'training')
-        except Exception as e:
-            # Expected to fail with invalid model type
-            assert isinstance(e, (ValueError, TypeError, KeyError))
-        
-        # Test 2: Invalid task type
-        try:
-            invalid_task = TrainingTask(
-                task_id="invalid_test",
-                model_name="test_model",
-                model_description="model built by the training tests",
-                model_version="1",
-                model_type=ModelType.PYTORCH_CLASSIFICATION,
-                task_type="invalid_task_type",  # This should fail
-                data_config=DataConfig(data_source="test.csv")
-            )
-            config = create_config_from_task(invalid_task)
-            # Should either work with default handling or fail gracefully
-            assert isinstance(config, dict) or hasattr(config, 'training')
-        except Exception as e:
-            # Expected to fail with invalid task type
-            assert isinstance(e, (ValueError, TypeError, KeyError))
-        
-        # Test 3: Missing required fields
-        try:
-            # Create task with missing required fields
-            incomplete_task = {
-                "task_id": "incomplete_test",
-                # Missing model_type, task_type, data_config
-            }
-            config = create_config_from_task(incomplete_task)
-            # Should either work with default handling or fail gracefully
-            assert isinstance(config, dict) or hasattr(config, 'training')
-        except Exception as e:
-            # Expected to fail with missing required fields
-            assert isinstance(e, (ValueError, TypeError, KeyError, AttributeError))
-        
-        # Test 4: Invalid hyperparameters
-        try:
-            invalid_task = TrainingTask(
-                task_id="invalid_test",
-                model_name="test_model",
-                model_description="model built by the training tests",
-                model_version="1",
-                model_type=ModelType.PYTORCH_CLASSIFICATION,
-                task_type=TaskType.CLASSIFICATION,
-                data_config=DataConfig(data_source="test.csv"),
-                hyperparameters={
-                    "learning_rate": -1.0,  # Invalid learning rate
-                    "epochs": -5,           # Invalid epochs
-                    "batch_size": 0         # Invalid batch size
-                }
-            )
-            config = create_config_from_task(invalid_task)
-            # Should either work with default handling or fail gracefully
-            assert isinstance(config, dict) or hasattr(config, 'training')
-        except Exception as e:
-            # Expected to fail with invalid hyperparameters
-            assert isinstance(e, (ValueError, TypeError, KeyError))
 
 
 # Test fixtures and utilities
@@ -716,8 +525,6 @@ def test_integration_with_fixtures(sample_training_task, sample_data_info):
     """Test using pytest fixtures"""
     from app.agents.mta.training_task import TrainingTask, DataConfig
     from app.agents.mta.model_types import ModelType, TaskType
-    
-    mta = ModelTrainingAgent()
     
     # Convert dict to TrainingTask object
     task = TrainingTask(

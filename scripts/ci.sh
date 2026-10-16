@@ -116,7 +116,7 @@ if [[ "$FAST" -eq 1 ]]; then
 fi
 stage "hermetic tests" "$PY" -m pytest -q -p no:cacheprovider -m "$HERMETIC_MARKERS"
 
-# Optional suites. tests/datascience ships on develop-1.6 and not on oss/1.6 --
+# Optional suites. tests/datascience ships on develop-1.6 and not in the public tree --
 # the data-science suite is deliberately development-only while the code it
 # exercises is synced. Naming it unconditionally meant every open-source CI run
 # called pytest on a path that does not exist, which exits 4 and failed the

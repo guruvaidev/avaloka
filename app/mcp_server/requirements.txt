@@ -10,7 +10,7 @@ psycopg2-binary>=2.9.7
 asyncpg>=0.29.0  # Optional: for async PostgreSQL operations
 
 # Data processing
-pandas>=2.1.0
+pandas>=2.1.0,<3
 numpy>=1.24.0
 pyarrow>=14.0.0  # For better CSV/Parquet performance
 

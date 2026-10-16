@@ -8,12 +8,21 @@ from .excel_connector import ExcelConnector
 from .avro_connector import AvroConnector
 from .json_connector import JSONConnector
 from .parquet_connector import ParquetConnector
+from .orc_connector import OrcConnector
 from .delta_connector import DeltaConnector
 from .iceberg_connector import IcebergConnector
 from .xml_connector import XMLConnector 
 
 
 class FileHandler:
+    # Named in the "not supported" error so it tells the user what to do.
+    # Keep in step with get_connector below -- these are the file_type values
+    # it dispatches, and /api/upload's SUPPORTED_UPLOAD_EXTS is a subset.
+    SUPPORTED_TYPES = (
+        "csv", "tsv", "excel (xlsx/xls)", "json", "xml",
+        "avro", "parquet", "orc", "delta", "iceberg",
+    )
+
     def __init__(self, path: str, file_type: str, *args, **kwargs) -> None:
         if not os.path.exists(path):
             raise FileNotFoundError
@@ -23,8 +32,16 @@ class FileHandler:
             path, file_type, *args, **kwargs
         )
         if self.connector is None:
-            ext = Path(path).stem
-            raise TypeError(f"{ext} files aren't supported")
+            # This used to read Path(path).stem -- the filename without its
+            # extension -- so an ORC upload reported "t files aren't supported"
+            # for /tmp/t.orc, naming the file instead of the format. Fall back
+            # to the requested type for paths with no suffix: delta and iceberg
+            # tables are directories.
+            ext = Path(path).suffix.lstrip(".").lower() or str(file_type)
+            raise TypeError(
+                f"{ext} files aren't supported; supported types: "
+                f"{', '.join(FileHandler.SUPPORTED_TYPES)}"
+            )
 
     @staticmethod
     def get_connector(
@@ -33,7 +50,8 @@ class FileHandler:
         iceberg_properties: dict = None,
         sheet_name: str | int | None = None,
     ) -> BaseConnector | None:
-        if file_type == "csv":
+        if file_type in ("csv", "tsv"):
+            # A TSV rides the CSV connector, which sniffs the delimiter.
             return CSVConnector(path)
         if file_type in ("excel", "xlsx", "xls"):
             return ExcelConnector(path, sheet_name=sheet_name)
@@ -43,6 +61,8 @@ class FileHandler:
             return JSONConnector(path)
         if file_type == "parquet":
             return ParquetConnector(path)
+        if file_type == "orc":
+            return OrcConnector(path)
         if file_type == "delta":
             return DeltaConnector(path)
         if file_type == "iceberg":
@@ -95,5 +115,7 @@ class FileHandler:
             return JSONConnector.write_data(data, output_path)
         if output_type == "parquet":
             return ParquetConnector.write_data(data, output_path)
+        if output_type == "orc":
+            return OrcConnector.write_data(data, output_path)
         if output_type == "delta":
             return DeltaConnector.write_data(data, output_path)

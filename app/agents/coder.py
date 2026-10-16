@@ -1405,6 +1405,14 @@ If fidelity is quick_sample, keep outputs clearly sample-based and avoid claimin
 If fidelity is quick_sample or portfolio_samples, avoid forcing full-dataset scans in generated code.
 Only use full-dataset compute patterns when fidelity is entire_dataset.
 
+SECURITY AND STABILITY (OOM TRAP PREVENTION):
+- NEVER train unconstrained models (e.g. `DecisionTreeClassifier(max_depth=None)`, `RandomForest`) on large or full datasets.
+- NEVER use memory-intensive algorithms like Support Vector Machines (`SVC`) or K-Nearest Neighbors (`KNeighborsClassifier`) on datasets larger than 10,000 rows. These have quadratic/cubic complexity and will cause OOM crashes on full datasets like 1-million-row samples.
+- Always apply constraints like `max_depth=5` or a bounded `n_estimators` before training these machine learning models to prevent Out-of-Memory (OOM) crashes.
+- Where the algorithm itself does not scale, choose a scalable equivalent: `SGDClassifier` or `LinearSVC` in place of `SVC`; an approximate nearest-neighbour approach or a different model family in place of exact `KNeighborsClassifier`.
+- If no suitable alternative fits what was asked, say so to the analyst (raise ValueError with a clear message naming the estimator and why it cannot run at this size) rather than silently reducing the input.
+- This does not relax NEVER RE-SAMPLE THE DATAFRAME above: constrain or replace the model, never shrink the dataframe to make it fit.
+
 Example expected output format:
 ```python
 import pandas as pd

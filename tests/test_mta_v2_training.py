@@ -792,8 +792,10 @@ class TestLocalTrainerTrain:
             trainer = LocalTrainer(user_id="ux", session_id="sx")
             result = trainer.train(plan)
 
-        assert result.get("model_type") in ("classification", "clf", None) or \
-               result.get("num_classes") is not None
+        assert result.get("status") != "error", result.get("error")
+        assert result["model_type"] == "classification"
+        # tmp_csv's target is binary
+        assert result["num_classes"] == 2
 
     def test_train_failure_when_dataset_missing(self, tmp_path):
         from app.agents.mta_v2.local_trainer import LocalTrainer

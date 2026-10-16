@@ -2,6 +2,14 @@
 """
 Integration tests for infra_agent_node and get_service_details.
 
+Needs: nothing to pass most of it, but it is NOT hermetic. infra_agent_node
+runs a real `kubectl get nodes` (app/agents/infra_agent.py) and only three
+tests here stub it, so every other test queries whatever cluster the machine's
+kubeconfig points at, and takes a different path depending on the answer --
+see facts 3 and 8 below. Four tests pass only where that command succeeds.
+The file was briefly renamed test_infra_unit.py and put in the hermetic gate;
+it is back behind the `integration` marker until the kubectl call is stubbed.
+
 Key behavioral facts about current infra_agent.py:
   1. Invalid/missing platform silently falls back to DEFAULT_INFRA_PLATFORM (gcp). No ValueError.
   2. Agent ALWAYS runs — no skip when infrastructure_provisioned already set.

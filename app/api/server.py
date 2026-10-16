@@ -177,7 +177,7 @@ from app.core.settings import Settings
 from app.core.storage import ResourceNotFoundError, IBlobStore, GCSBlobStore, S3BlobStore
 from app.agents.sampling_agent import sample_data_from_source, DEFAULT_SAMPLE_MAX_ROWS
 from app.agents.sampling_agent_daft import sample_with_profiling
-from file_handler.excel_connector import export_workbook_sheets_to_csv
+from file_handler.excel_connector import describe_sheet_choice, export_workbook_sheets_to_csv
 from app.agents.sampling_async import sample_quick
 from app.agents.profiling_agent import profile_full
 from app.agents.sampling_persistence import persist_full_profile, load_portfolio, load_profile, upsert_profile
@@ -206,6 +206,7 @@ from redbeat.schedulers import get_redis
 
 # NEW: shared services
 from app.services import session_service, storage_service
+from app.services import notification_service
 from app.services.session_service import (
     _note_cache_failure,
     _mget_safe,
@@ -469,7 +470,168 @@ def _strip_blank_header_columns(path: Path) -> List[int]:
         tmp.unlink(missing_ok=True)
         return []
 
+
+from collections import Counter  # noqa: E402  (header-row detection below)
+
+# Header-row detection. A file whose column names are not on row 1 (a report
+# title, an "exported on ..." line, blank rows above the table) was read with
+# row 1 as the header, so every column became "Unnamed: 0, 1, ..." and the
+# charts and chat inherited those names.
+HEADER_SCAN_ROWS = 50          # rows read to find the header
+HEADER_MAX_OFFSET = 20         # the header must be within the first 20 rows
+_NUMBERISH_RE = re.compile(
+    r"^[\s$€£₹(+-]*\d[\d,.\s]*%?\)?$"                       # 1,200 / -5.5% / (30)
+    r"|^\d{1,4}[-/.]\d{1,2}([-/.]\d{1,4})?([ T]\d{1,2}:\d{2}(:\d{2})?)?$"   # dates
+)
+
+
+def _sniff_delimiter_by_consistency(lines: List[str]) -> str:
+    """The delimiter that gives the most rows the same number of fields.
+    csv.Sniffer is thrown off by a title line above the table."""
+    best, best_score = ",", (-1, -1)
+    for d in (",", ";", "\t", "|"):
+        widths = [len(r) for r in csv.reader(lines, delimiter=d) if len(r) > 1]
+        if not widths:
+            continue
+        width, freq = Counter(widths).most_common(1)[0]
+        if (freq, width) > best_score:
+            best, best_score = d, (freq, width)
+    return best
+
+
+# pandas writes "Unnamed: 3" for a header cell that was empty. A sheet that was
+# exported with row 1 as the header (a merged title row) arrives with those
+# placeholders already in the file, so they count as empty here.
+_UNNAMED_RE = re.compile(r"^Unnamed: \d+(?:_level_\d+)?$")
+
+
+def _is_blank_cell(c: Optional[str]) -> bool:
+    return not c or not c.strip() or bool(_UNNAMED_RE.match(c.strip()))
+
+
+def _filled(row: List[str]) -> List[str]:
+    return [c.strip() for c in row if not _is_blank_cell(c)]
+
+
+def _looks_like_header(row: List[str], width: int) -> bool:
+    cells = _filled(row)
+    if len(cells) < max(2, int(0.8 * width + 0.5)):
+        return False
+    if len(set(c.lower() for c in cells)) != len(cells):
+        return False                                  # header names are distinct
+    text = [c for c in cells if not _NUMBERISH_RE.match(c)]
+    return len(text) >= 0.6 * len(cells)              # mostly words, not values
+
+
+def _find_header_row(rows: List[List[str]]) -> Optional[int]:
+    """Index of the header row, or None when the file should be left alone.
+
+    The table's width is the most common number of filled cells in the lower
+    part of the scan (the data). The header is the first row that is about as
+    wide, mostly text and has distinct names. Every row above it must be
+    sparse (a title, a note, a blank line); otherwise the guess is not safe."""
+    if len(rows) < 3:
+        return None
+    body = rows[len(rows) // 3:] or rows
+    widths = [len(_filled(r)) for r in body if len(_filled(r)) > 1]
+    if not widths:
+        return None
+    width = Counter(widths).most_common(1)[0][0]
+    if width < 2:
+        return None
+    for i, row in enumerate(rows[: HEADER_MAX_OFFSET + 1]):
+        if _looks_like_header(row, width):
+            above = rows[:i]
+            if all(len(_filled(r)) <= max(1, width // 2) for r in above):
+                # ...and the next non-empty row must look like data of that width.
+                nxt = next((r for r in rows[i + 1:] if _filled(r)), None)
+                if nxt is not None and len(_filled(nxt)) >= max(2, int(0.5 * width)):
+                    return i
+            return None
+    return None
+
+
+def _fix_header_row(path: Path) -> Optional[Dict[str, Any]]:
+    """Make the real header row the first row of a CSV/TSV, in place.
+
+    Also names header cells that are blank but have data under them
+    (column_N), which pandas would call "Unnamed: N" -- e.g. the index column
+    written by DataFrame.to_csv, or a merged cell in an Excel export.
+    Returns {"header_row": n (1-based), "skipped": [...], "named": [...]}
+    when the file was changed, else None. Never raises."""
+    try:
+        with open(path, "r", encoding="utf-8-sig", newline="") as f:
+            head_lines = []
+            for _ in range(HEADER_SCAN_ROWS):
+                line = f.readline()
+                if not line:
+                    break
+                head_lines.append(line)
+    except (UnicodeDecodeError, OSError):
+        return None
+    if not head_lines:
+        return None
+
+    try:
+        delim = _sniff_delimiter_by_consistency(head_lines)
+        rows = list(csv.reader(head_lines, delimiter=delim))
+        h = _find_header_row(rows) or 0
+    except Exception:
+        logger.warning("[upload] header-row scan failed for %s", path, exc_info=True)
+        return None
+    header = rows[h] if h < len(rows) else []
+    blank_named = [i for i, c in enumerate(header) if _is_blank_cell(c)]
+    if h == 0 and not blank_named:
+        return None
+
+    tmp = path.with_name(path.name + ".hdr")
+    named: List[int] = []
+    try:
+        # Blank header cells: only name the ones with data below them; fully
+        # empty columns are left blank for _strip_blank_header_columns to drop.
+        has_data = set()
+        if blank_named:
+            with open(path, "r", encoding="utf-8-sig", newline="") as src:
+                for n, row in enumerate(csv.reader(src, delimiter=delim)):
+                    if n <= h:
+                        continue
+                    for i in blank_named:
+                        if i < len(row) and row[i].strip():
+                            has_data.add(i)
+                    if len(has_data) == len(blank_named):
+                        break
+        new_header = list(header)
+        cleared = False
+        for i in blank_named:
+            if i in has_data:
+                new_header[i] = f"column_{i + 1}"
+                named.append(i + 1)
+            elif new_header[i].strip():
+                new_header[i] = ""        # an "Unnamed: N" over an empty column:
+                cleared = True            # blank it so the strip step drops it
+        if h == 0 and not named and not cleared:
+            return None
+
+        with open(path, "r", encoding="utf-8-sig", newline="") as src, \
+             open(tmp, "w", encoding="utf-8", newline="") as dst:
+            reader = csv.reader(src, delimiter=delim)
+            writer = csv.writer(dst, delimiter=delim, lineterminator="\n")
+            for n, row in enumerate(reader):
+                if n < h:
+                    continue
+                writer.writerow(new_header if n == h else row)
+        os.replace(tmp, path)
+    except Exception:
+        logger.warning("[upload] header-row fix failed for %s; keeping original", path, exc_info=True)
+        tmp.unlink(missing_ok=True)
+        return None
+
+    skipped = [" ".join(_filled(r))[:80] for r in rows[:h] if _filled(r)]
+    return {"header_row": h + 1, "skipped": skipped, "named": named}
+
+
 def _cap_rows(rows: Any, n: int = PREVIEW_RESPONSE_ROWS) -> Any:
+       
     return rows[:n] if isinstance(rows, list) else rows
 
 
@@ -1067,6 +1229,64 @@ def _pending_turn_error(deferred_id: str, message: str):
         }
     return _apply
 
+
+# In-process copy of each thread's pending turn. The session in Redis is the
+# primary store, but when Redis is down (save_session times out) the finished
+# result was lost and the poll said "running" forever. This copy lets
+# GET /threads/{id}/pending-turn still answer from the same API process.
+# It is not shared between replicas and not kept across restarts; the
+# notifications row (D4) is the durable pointer.
+_PENDING_TURN_MEM: Dict[str, Dict[str, Any]] = {}
+_PENDING_TURN_MEM_MAX = 500
+
+
+def _remember_pending_turn(thread_id: str, user_id: Optional[str], mutator) -> None:
+    """Apply a _pending_turn_* mutator to the in-process copy too."""
+    if not thread_id:
+        return
+    try:
+        prev = _PENDING_TURN_MEM.get(thread_id)
+        cur: Dict[str, Any] = {"pending_turn": dict(prev)} if prev else {}
+        mutator(cur)
+        pt = cur.get("pending_turn")
+        if isinstance(pt, dict):
+            _PENDING_TURN_MEM[thread_id] = {**pt, "user_id": user_id}
+            if len(_PENDING_TURN_MEM) > _PENDING_TURN_MEM_MAX:
+                # Drop the oldest entries (dicts keep insertion order).
+                for key in list(_PENDING_TURN_MEM)[: len(_PENDING_TURN_MEM) - _PENDING_TURN_MEM_MAX]:
+                    _PENDING_TURN_MEM.pop(key, None)
+    except Exception:
+        logger.debug("[deferred] could not record pending turn in memory", exc_info=True)
+
+
+async def _notify_deferred_turn(
+    *, user_id: Optional[str], thread_id: str, deferred_id: str, kind: str,
+    ok: bool, question: str, dataset_id: Optional[str], dataset_label: str,
+    error_message: Optional[str] = None,
+) -> None:
+    """D4: tell the user a turn that outlived the sync deadline has finished."""
+    training = kind == "training"
+    if ok:
+        n_type = "training.completed" if training else "analysis.completed"
+        title = "Model training finished" if training else "Analysis completed"
+    else:
+        n_type = "training.failed" if training else "analysis.failed"
+        title = "Model training failed" if training else "Analysis failed"
+    q = " ".join((question or "").split())
+    q = (q[:77] + "…") if len(q) > 80 else q
+    parts = []
+    if q:
+        parts.append(f"\u201c{q}\u201d")
+    if dataset_label:
+        parts.append(f"on {dataset_label}")
+    body_text = " ".join(parts)
+    if not ok and error_message:
+        body_text = (body_text + ". " if body_text else "") + error_message
+    await notification_service.create_notification(
+        user_id, n_type, title, body_text or None,
+        thread_id=thread_id, dataset_id=dataset_id, ref=deferred_id,
+    )
+
 def _resolve_user_id(req: Request) -> Optional[str]:
     auth_header = req.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
@@ -1112,6 +1332,21 @@ def _resolve_user_id(req: Request) -> Optional[str]:
 # FastAPI app + CORS + lifespan
 # -------------------------------------------------------------------
 
+# @asynccontextmanager
+# async def server_lifespan(app: FastAPI):
+#     global small_file_persistence_executor, small_file_persistence_semaphore, small_file_persistence_inflight
+
+#     _validate_auth_config()
+#     # A service-role key for the wrong project answers every request with
+#     # `401 Invalid API key`, which reads like a rotated key rather than a
+#     # mismatch. Say so once at boot instead of once per failed request.
+#     try:
+#         from app.agents.sampling_persistence import warn_on_supabase_credential_mismatch
+#         warn_on_supabase_credential_mismatch()
+#     except Exception as _exc:  # never let a diagnostic stop the server
+#         logger.debug("supabase credential check skipped: %s", _exc)
+
+#     async with config_lifespan(app):
 @asynccontextmanager
 async def server_lifespan(app: FastAPI):
     global small_file_persistence_executor, small_file_persistence_semaphore, small_file_persistence_inflight
@@ -1125,6 +1360,21 @@ async def server_lifespan(app: FastAPI):
         warn_on_supabase_credential_mismatch()
     except Exception as _exc:  # never let a diagnostic stop the server
         logger.debug("supabase credential check skipped: %s", _exc)
+
+    # Load torch + the local embedding model once, on the main thread, at boot.
+    # Loading it lazily inside a request worker thread (memory injection node,
+    # or the OpenAI -> sentence-transformers fallback) crashed the process with
+    # SIGSEGV (exit 139). Set AVALOKA_EMBED_WARMUP=0 to skip.
+    if os.getenv("AVALOKA_EMBED_WARMUP", "1").lower() not in ("0", "false", "no"):
+        try:
+            torch.set_num_threads(int(os.getenv("TORCH_NUM_THREADS", "1")))
+            from app.services.embedding_utils import warmup_local_model
+            _t_warm = time.monotonic()
+            if warmup_local_model():
+                logger.info("[startup] embedding model warmed up in %.2fs",
+                            time.monotonic() - _t_warm)
+        except Exception as _exc:  # a failed warm-up must never stop the server
+            logger.warning("[startup] embedding warm-up skipped: %s", _exc)
 
     async with config_lifespan(app):
         small_file_persistence_executor = concurrent.futures.ThreadPoolExecutor(
@@ -1480,6 +1730,9 @@ async def upload_csv(
     bucket: Optional[str] = Form(None),
     prefix: Optional[str] = Form(None),
     connection_id: Optional[str] = Form(None),
+    # "+ Add" under the chat: add these files to an EXISTING chat instead of
+    # starting a new analysis (no new thread, no new group, cookie unchanged).
+    attach_to_thread_id: Optional[str] = Form(None),
     ):
     _t_handler = time.monotonic()
     user_id = _resolve_user_id(request)
@@ -1559,6 +1812,17 @@ async def upload_csv(
 
     group_session_id: Optional[str] = None
     thread_id: str = ""
+
+    # Attach mode: the new datasets join the chat's existing dataset group.
+    attach_group_sid: Optional[str] = None
+    if attach_to_thread_id:
+        attach_group_sid, _attach_group_sess = await _resolve_thread_group_for_user(
+            attach_to_thread_id, user_id
+        )
+        if not attach_group_sid:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Chat not found for this user")
+        group_session_id = attach_group_sid
+        thread_id = attach_to_thread_id
 
     # for backward-compat UploadResponse (single upload)
     first_schema_any: Union[List[str], Dict[str, str], Dict[str, Any]] = {}
@@ -1649,6 +1913,10 @@ async def upload_csv(
                     )
                 multi_sheet = len(exports) > 1
                 stem = Path(filename).stem
+                # What the reader assumed, said to the person who uploaded the
+                # file. These name their sheets and columns: response only,
+                # never a telemetry or analytics field.
+                workbook_notes = list(sheet_notes) + describe_sheet_choice(exports)
                 for e_idx, exp in enumerate(exports):
                     created_tmp_uploads.append(Path(exp.csv_path))
                     sheet_alias = (
@@ -1662,7 +1930,7 @@ async def upload_csv(
                         "tmp_path": Path(exp.csv_path),
                         "sheet_name": exp.sheet_name,
                         "source_workbook": filename,
-                        "notes": sheet_notes if e_idx == 0 else [],
+                        "notes": (workbook_notes if e_idx == 0 else []) + list(exp.notes),
                     })
                 if multi_sheet or sheet_notes:
                     logger.info(
@@ -1704,9 +1972,8 @@ async def upload_csv(
             object_name = f"{dsid}.{ext}"
             if idx == 0:
                 first_dataset_id = dsid
-
             session_id = _new_id()
-            if idx == 0:
+            if idx == 0 and not attach_group_sid:
                 group_session_id = session_id
             else:
                 assert group_session_id is not None
@@ -1718,6 +1985,33 @@ async def upload_csv(
 
             input_copy = work_dir / f"input_{dsid}.{ext}"
             await asyncio.to_thread(shutil.move, str(tmp_upload), str(input_copy))  # same disk -> rename
+
+            # Column names not on row 1 (a report title, an "exported on" line or
+            # blank rows above the table) made every column "Unnamed: N" on the
+            # chart axes and in chat. Make the real header row the first row, and
+            # name blank header cells that have data under them (column_N).
+            # Runs before the blank-column strip below; Excel sheets arrive here
+            # as CSV too, so they are covered.
+            if ext in ("csv", "tsv"):
+                _hdr = await asyncio.to_thread(_fix_header_row, input_copy)
+                if _hdr:
+                    _hdr_notes = list(item["notes"] or [])
+                    if _hdr["header_row"] > 1:
+                        _hdr_notes.append(
+                            f"Column names were found on row {_hdr['header_row']}; the "
+                            f"{_hdr['header_row'] - 1} row(s) above them (title, notes or "
+                            f"blank lines) were not loaded as data."
+                        )
+                    if _hdr["named"]:
+                        _hdr_notes.append(
+                            f"Named {len(_hdr['named'])} column(s) that had data but no "
+                            f"header: " + ", ".join(f"column_{i}" for i in _hdr["named"]) + "."
+                        )
+                    item["notes"] = _hdr_notes
+                    logger.info(
+                        "[upload] %s header fix: header_row=%s skipped=%s named=%s",
+                        dsid, _hdr["header_row"], _hdr["skipped"], _hdr["named"],
+                    )
 
             # Trailing-comma headers create an empty unnamed column. The sampler
             # drops it, but the executor reads this file directly, so strip it
@@ -1820,7 +2114,16 @@ async def upload_csv(
                     )
                 return (res or {}).get("full_profiling_result")
 
+                        # Auto Insights are written in the dataset's domain terms, so the
+            # viz step waits for the profile (domain, column meanings, red
+            # flags). Profiling takes ~3s on throughput-routed OpenRouter.
+            prof_task = asyncio.ensure_future(_profile())
+
             async def _viz():
+                try:
+                    prof_for_viz = await asyncio.shield(prof_task)
+                except Exception:
+                    prof_for_viz = None  # a failed profile must not cost the charts
                 with _stage("viz", dsid):
                     return await asyncio.to_thread(
                         build_visualization_config_from_sample,
@@ -1831,9 +2134,9 @@ async def upload_csv(
                         full_data_path=str(input_copy) if used_agent else None,
                         full_data_type=ext,
                         total_rows=((sample_statistics or {}).get("data_shape") or {}).get("rows"),
+                        profiling_result=prof_for_viz,
                     )
 
-            #prof_out, viz_out = await asyncio.gather(_profile(), _viz(), return_exceptions=True)
             output_path = work_dir / "output.csv"
             sample_input_path = work_dir / "sample_input.csv"
 
@@ -1842,7 +2145,7 @@ async def upload_csv(
                     await asyncio.to_thread(_write_rows_to_csv, samples, sample_input_path)
 
             prof_out, viz_out, csv_out = await asyncio.gather(
-                _profile(), _viz(), _write_sample(), return_exceptions=True
+                prof_task, _viz(), _write_sample(), return_exceptions=True
             )
             if isinstance(csv_out, Exception):
                 logger.warning("Failed to write sample_input.csv; continuing: %s", csv_out)
@@ -1965,7 +2268,9 @@ async def upload_csv(
                 raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Failed to persist session. Please retry.")
             created_session_ids.append(session_id)
 
-            if idx == 0:
+            # Attach mode keeps the chat's cookie: switching it to the new
+            # session made the next message resolve only the added file.
+            if idx == 0 and not attach_group_sid:
                 secure_cookie_env = os.getenv("COOKIE_SECURE", "").lower()
                 secure_cookie = (
                     True if secure_cookie_env == "true" else
@@ -1981,7 +2286,7 @@ async def upload_csv(
                     max_age=SESSION_TTL_SECONDS,
                 )
 
-            if idx == 0:
+            if idx == 0 and not attach_group_sid:
                 try:
                     payload = {
                         "metadata": {
@@ -2003,7 +2308,7 @@ async def upload_csv(
                 except HTTPException as e:
                     logger.warning("[upload] upstream /threads create failed (soft): %s", e.detail)
 
-            if idx != 0 and thread_id:
+            if (idx != 0 or attach_group_sid) and thread_id:
                 try:
                     session_data["thread_id"] = thread_id
                     await save_session(session_id, session_data)
@@ -2098,10 +2403,16 @@ async def upload_csv(
     try:
         group_sess = await get_session(group_session_id)
         if isinstance(group_sess, dict):
-            group_sess["dataset_ids"] = dataset_ids
-            group_sess["dataset_session_map"] = dataset_session_map
+            # Merge, never replace: in attach mode the group already lists the
+            # chat's earlier datasets.
+            _merge_group_index(group_sess, group_session_id, dataset_session_map)
             group_sess["thread_id"] = thread_id or group_sess.get("thread_id")
             await save_session(group_session_id, group_sess)
+            if attach_group_sid:
+                logger.info(
+                    "[upload] attached %d dataset(s) to thread %s (group %s): %s",
+                    len(dataset_ids), thread_id, group_session_id, dataset_ids,
+                )
     except Exception:
         logger.warning("Failed to persist group dataset index", exc_info=True)
 
@@ -2136,6 +2447,7 @@ async def upload_csv(
                 else (first_available_samples[0] if first_available_samples else None)
             ),
             datasets=datasets_out if len(datasets_out) > 1 else None,
+            notes=(datasets_out[0].notes if datasets_out else None),
         )
 
     return MultiUploadResponse(
@@ -2528,7 +2840,14 @@ async def register_existing(
             )
         return (res or {}).get("full_profiling_result")
 
+        # The viz step waits for the profile so insights use its domain context.
+    prof_task = asyncio.ensure_future(_profile())
+
     async def _viz():
+        try:
+            prof_for_viz = await asyncio.shield(prof_task)
+        except Exception:
+            prof_for_viz = None
         with _stage("viz", dsid):
             return await asyncio.to_thread(
                 build_visualization_config_from_sample,
@@ -2541,9 +2860,10 @@ async def register_existing(
                 full_data_type=ext,
                 total_rows=(((sample_statistics or {}).get("data_shape") or {}).get("rows")
                             if not _is_large_file else None),
+                profiling_result=prof_for_viz,
             )
 
-    prof_out, viz_out = await asyncio.gather(_profile(), _viz(), return_exceptions=True)
+    prof_out, viz_out = await asyncio.gather(prof_task, _viz(), return_exceptions=True)
 
     full_profiling_result: Optional[Dict[str, Any]] = None
     if isinstance(prof_out, Exception):
@@ -2914,6 +3234,7 @@ async def register_existing_folder(
             schema=schema_any,
             task_type="unsupervised",
             target_column=None,
+            profiling_result=full_profiling_result,
         )
         visualization_status = visualization_config.get("visualization_status", "ready")
     except Exception as e:
@@ -3031,6 +3352,187 @@ async def register_existing_folder(
         ),
     )
 
+
+
+
+
+# -------------------------------------------------------------------
+# Datasets attached to a chat ("+ Add" under the chat box)
+# -------------------------------------------------------------------
+
+
+async def _resolve_thread_group_for_user(
+    thread_id: str, user_id: str
+) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+    """The dataset group (session id, session) a chat uses, if the caller owns it.
+
+    send_message binds a thread to its GROUP session, whose dataset_ids /
+    dataset_session_map decide which datasets the chat can see.
+    """
+    if not thread_id:
+        return None, None
+    sid = await get_thread_session(thread_id)
+    sess = await get_session(sid) if sid else None
+    if not isinstance(sess, dict) or sess.get("user_id") != user_id:
+        return None, None
+    gsid = sess.get("group_session_id") or sid
+    if gsid != sid:
+        gsess = await get_session(gsid)
+        if isinstance(gsess, dict) and gsess.get("user_id") == user_id:
+            return gsid, gsess
+    return sid, sess
+
+
+def _merge_group_index(
+    group_sess: Dict[str, Any], group_sid: str, new_map: Dict[str, str]
+) -> List[str]:
+    """Add datasets to a group's index in place, keeping the ones already there.
+
+    A group created by a single upload, a cloud registration or a DB sample may
+    have no dataset_ids yet; its own dataset is then the first member.
+    """
+    ids = _maybe_json_load(group_sess.get("dataset_ids")) or group_sess.get("dataset_ids") or []
+    ids = list(ids) if isinstance(ids, list) else []        # copy: never mutate a shared list
+    smap = (_maybe_json_load(group_sess.get("dataset_session_map"))
+            or group_sess.get("dataset_session_map") or {})
+    smap = dict(smap) if isinstance(smap, dict) else {}
+    own = group_sess.get("dataset_id")
+    if own and own not in ids:
+        ids.insert(0, own)
+    if own:
+        smap.setdefault(own, group_sid)
+    for dsid, ds_sid in new_map.items():
+        if dsid not in ids:
+            ids.append(dsid)
+        smap[dsid] = ds_sid
+    group_sess["dataset_ids"] = ids
+    group_sess["dataset_session_map"] = smap
+    return ids
+
+
+async def _group_datasets_out(group_sess: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The chips for a chat: one entry per dataset in its group."""
+    ids = group_sess.get("dataset_ids") or []
+    smap = group_sess.get("dataset_session_map") or {}
+    out: List[Dict[str, Any]] = []
+    for dsid in ids:
+        ds_sid = smap.get(dsid)
+        ds_sess = await get_session(ds_sid) if ds_sid else None
+        ds_sess = ds_sess if isinstance(ds_sess, dict) else {}
+        out.append({
+            "dataset_id": dsid,
+            "filename": ds_sess.get("filename"),
+            "alias": ds_sess.get("alias"),
+            "sheet_name": ds_sess.get("sheet_name"),
+            "available": bool(ds_sess),
+        })
+    return out
+
+
+class AttachDatasetsIn(BaseModel):
+    # Either list, or both. The "+ Add" picker lists ANALYSES (Supabase
+    # analyses rows), so it sends analysis_ids; every dataset of each picked
+    # analysis is added to this chat.
+    dataset_ids: List[str] = Field(default_factory=list)
+    analysis_ids: List[str] = Field(default_factory=list)
+
+
+async def _datasets_of_analysis(analysis_id: str, user_id: str) -> Dict[str, str]:
+    """dataset_id -> session_id for every dataset of an analysis the caller owns.
+
+    An analysis points at its group session; a multi-file or multi-sheet
+    analysis has several datasets there. A session evicted from Redis is
+    rebuilt from the durable analyses row first.
+    """
+    row = await _resolve_session_from_aid(analysis_id, user_id)   # 503 if Supabase is down
+    if not row or not row.get("session_id"):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"Analysis {analysis_id} not found for this user")
+    sid = row["session_id"]
+    sess = await get_session(sid)
+    if not (isinstance(sess, dict) and sess.get("user_id")):
+        sess = await _rehydrate_session_from_analysis(
+            {"id": analysis_id, "thread_id": row.get("thread_id")}, sid
+        )
+    if not isinstance(sess, dict) or sess.get("user_id") != user_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND,
+                            f"The data for analysis {analysis_id} is no longer available")
+    index = dict(sess)                                # do not modify the other analysis
+    ids = _merge_group_index(index, sid, {})
+    smap = index["dataset_session_map"]
+    out: Dict[str, str] = {}
+    for dsid in ids:
+        ds_sid = smap.get(dsid) or await find_session_by_dataset_for_user(dsid, user_id)
+        if ds_sid:
+            out[dsid] = ds_sid
+    if not out:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"Analysis {analysis_id} has no datasets")
+    return out
+
+
+@app.get("/threads/{thread_id}/datasets", tags=["threads"])
+async def list_thread_datasets(request: Request, thread_id: str):
+    """The datasets this chat can use (the chips under the chat box)."""
+    user_id = _resolve_user_id(request)
+    if not user_id:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing or invalid auth token")
+    gsid, gsess = await _resolve_thread_group_for_user(thread_id, user_id)
+    if not gsid or gsess is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Chat not found for this user")
+    _merge_group_index(gsess, gsid, {})      # read-only normalize of older groups
+    return {"thread_id": thread_id, "datasets": await _group_datasets_out(gsess)}
+
+
+@app.post("/threads/{thread_id}/datasets", tags=["threads"])
+async def attach_datasets_to_thread(request: Request, thread_id: str, body: AttachDatasetsIn):
+    """Add existing datasets / analyses to this chat, keeping the ones it has.
+
+    "+ Add" -> pick an existing analysis or dataset. New files go through
+    /api/upload with attach_to_thread_id instead.
+    """
+    user_id = _resolve_user_id(request)
+    if not user_id:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing or invalid auth token")
+    if not session_service.cache:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
+                            "Session storage (Redis) is not available.")
+
+    gsid, gsess = await _resolve_thread_group_for_user(thread_id, user_id)
+    if not gsid or gsess is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Chat not found for this user")
+
+    requested = [d for d in dict.fromkeys(body.dataset_ids or []) if d]
+    analyses = [a for a in dict.fromkeys(body.analysis_ids or []) if a]
+    if not requested and not analyses:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            "Provide at least one dataset_id or analysis_id.")
+
+    new_map: Dict[str, str] = {}
+    for dsid in requested:
+        ds_sid = await find_session_by_dataset_for_user(dsid, user_id)
+        if not ds_sid:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"Dataset {dsid} not found for this user")
+        new_map[dsid] = ds_sid
+    for aid in analyses:
+        new_map.update(await _datasets_of_analysis(aid, user_id))
+
+    if len(new_map) > MAX_UPLOAD_FILES:
+        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                            f"Too many datasets. Max is {MAX_UPLOAD_FILES}.")
+
+    ids = _merge_group_index(gsess, gsid, new_map)
+    if not await save_session(gsid, gsess):
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            "Failed to save the chat's datasets.")
+    for ds_sid in new_map.values():
+        try:
+            await refresh_session_ttl(ds_sid)
+        except Exception:
+            pass
+
+    logger.info("[attach] thread=%s group=%s added=%s (from analyses=%s) total=%d",
+                thread_id, gsid, list(new_map), analyses, len(ids))
+    return {"thread_id": thread_id, "dataset_ids": ids,
+            "datasets": await _group_datasets_out(gsess)}
 # -------------------------------------------------------------------
 # Threads
 # -------------------------------------------------------------------
@@ -5234,6 +5736,10 @@ async def send_message(
         "hive_partitioning": _truthy_session_value(primary_sess.get("hive_partitioning")),
         "iceberg_metadata_uri": primary_sess.get("iceberg_metadata_uri"),
         "execution_result": {},
+        "execution_stdout": None,
+        "execution_stderr": None,
+        "execution_error": None,
+        "fresh_output_produced": None,
         "output_file_data": None,
         "output_json": None,
         "output_tables": None,
@@ -6304,10 +6810,19 @@ Ready to proceed with model training!"""
         # If this turn overran the sync window, the HTTP response already went
         # back as a "running" handle — stash the finished result for polling.
         if (time.monotonic() - _t0) >= TURN_SYNC_DEADLINE_S:
+            _done_mutator = _pending_turn_done(deferred_id, resp.model_dump())
+            # In-process copy first: it cannot fail, and the poll falls back to it.
+            _remember_pending_turn(thread_id, user_id, _done_mutator)
             try:
-                await update_session(bound_sid, _pending_turn_done(deferred_id, resp.model_dump()))
+                await update_session(bound_sid, _done_mutator)
             except Exception:
                 logger.warning("[deferred] failed to stash finished turn %s", deferred_id, exc_info=True)
+            await _notify_deferred_turn(
+                user_id=user_id, thread_id=thread_id, deferred_id=deferred_id,
+                kind=_turn_holder.get("pending_kind") or "analysis", ok=True,
+                question=body.content or "", dataset_id=primary_dsid,
+                dataset_label=primary_sess.get("alias") or primary_sess.get("filename") or "",
+            )
 
         return resp
 
@@ -6360,12 +6875,17 @@ Ready to proceed with model training!"""
             _deferred_turn_tasks.discard(t)
             if not t.cancelled() and t.exception() is not None:
                 logger.error("[deferred] turn %s failed: %s", _did, t.exception())
-                # asyncio.create_task(
-                #     update_session(bound_sid, _pending_turn_error(_did, "Training failed. Please try again."))
-                # )
-                asyncio.create_task(
-                    update_session(bound_sid, _pending_turn_error(_did, _friendly_turn_error(t.exception())))
-                )
+                _err_text = _friendly_turn_error(t.exception())
+                _err_mutator = _pending_turn_error(_did, _err_text)
+                _remember_pending_turn(thread_id, user_id, _err_mutator)
+                asyncio.create_task(update_session(bound_sid, _err_mutator))
+                asyncio.create_task(_notify_deferred_turn(
+                    user_id=user_id, thread_id=thread_id, deferred_id=_did,
+                    kind=_turn_holder.get("pending_kind") or "analysis", ok=False,
+                    question=body.content or "", dataset_id=primary_dsid,
+                    dataset_label=primary_sess.get("alias") or primary_sess.get("filename") or "",
+                    error_message=_err_text,
+                ))
         _turn_task.add_done_callback(_cleanup)
 
         # Classify the deferred work ONCE, before anything is stored or returned,
@@ -6377,15 +6897,20 @@ Ready to proceed with model training!"""
             or state_in.get("ready_to_train")
         )
         _pending_kind = "training" if _is_training_turn else "analysis"
+        _turn_holder["pending_kind"] = _pending_kind
 
-        await update_session(bound_sid, _pending_turn_running(_deferred_id, _pending_kind))
+        _running_mutator = _pending_turn_running(_deferred_id, _pending_kind)
+        _remember_pending_turn(thread_id, user_id, _running_mutator)
+        await update_session(bound_sid, _running_mutator)
 
         _pending_text = (
             "Model training is running — this can take a few minutes. "
-            "The results will appear here automatically when it's done."
+            "The results will appear here automatically when it's done, "
+            "and you'll get a notification."
             if _is_training_turn else
             "This analysis is taking longer than usual. "
-            "The result will appear here automatically when it's finished."
+            "The result will appear here when it finishes, "
+            "and you'll get a notification."
         )
 
         resp = ChatResponse(
@@ -6440,13 +6965,29 @@ async def get_pending_turn(
     if not user_id:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing or invalid auth token")
 
+    
     sid = await get_thread_session(thread_id)
     sess = await get_session(sid) if sid else None
-    if not sid or not sess or sess.get("user_id") != user_id:
+    mem = _PENDING_TURN_MEM.get(thread_id)
+    mem = mem if (isinstance(mem, dict) and mem.get("user_id") == user_id) else None
+
+    if sid and sess:
+        if sess.get("user_id") != user_id:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown thread_id")
+        pt = sess.get("pending_turn")
+        pt = _maybe_json_load(pt) if isinstance(pt, str) else pt
+        # The finished result may only be in memory, when the Redis write
+        # failed; prefer it over a stale "running" for the same turn.
+        if mem and (not isinstance(pt, dict)
+                    or (pt.get("id") == mem.get("id") and pt.get("status") == "running"
+                        and mem.get("status") in ("done", "error"))):
+            pt = mem
+    elif mem:
+        # Redis unreachable: answer from this process's copy.
+        pt = mem
+    else:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown thread_id")
 
-    pt = sess.get("pending_turn")
-    pt = _maybe_json_load(pt) if isinstance(pt, str) else pt
     if not isinstance(pt, dict):
         return {"status": "none"}
     if deferred_id and pt.get("id") != deferred_id:
@@ -6458,9 +6999,58 @@ async def get_pending_turn(
         return {"status": "done", "kind": kind, "result": pt.get("result") or {}}
     if status_val == "error":
         default_err = ("Training failed. Please try again." if kind == "training"
-                       else "The analysis failed. Please try again.")
+                                              else "The analysis failed. Please try again.")
         return {"status": "error", "kind": kind, "message": pt.get("message") or default_err}
     return {"status": "running", "kind": kind}
+
+# ── Notifications (design doc D4) ────────────────────────────────────
+@app.get("/api/notifications")
+async def get_notifications(
+    request: Request,
+    unread: bool = Query(False),
+    limit: int = Query(20, ge=1, le=100),
+):
+    """The caller's notifications, newest first, plus the unread count for the bell."""
+    user_id = _resolve_user_id(request)
+    if not user_id:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing or invalid auth token")
+    try:
+        items, unread_count = await notification_service.list_notifications(
+            user_id, unread_only=unread, limit=limit,
+        )
+    except Exception as exc:
+        logger.warning("[notify] list failed for %s: %s", user_id[:8], exc)
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Notifications are unavailable")
+    return {"items": items, "unread_count": unread_count}
+
+
+@app.post("/api/notifications/read-all")
+async def read_all_notifications(request: Request):
+    user_id = _resolve_user_id(request)
+    if not user_id:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing or invalid auth token")
+    try:
+        updated = await notification_service.mark_all_read(user_id)
+    except Exception as exc:
+        logger.warning("[notify] read-all failed for %s: %s", user_id[:8], exc)
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Notifications are unavailable")
+    return {"updated": updated}
+
+
+@app.post("/api/notifications/{notification_id}/read")
+async def read_notification(request: Request, notification_id: str):
+    user_id = _resolve_user_id(request)
+    if not user_id:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing or invalid auth token")
+    try:
+        ok = await notification_service.mark_read(user_id, notification_id)
+    except Exception as exc:
+        logger.warning("[notify] read failed for %s: %s", user_id[:8], exc)
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Notifications are unavailable")
+    if not ok:
+        # Someone else's row looks the same as a missing one.
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown notification")
+    return {"ok": True}
 
 @app.get("/threads/{thread_id}/planner-graph")
 async def get_planner_graph_image(request: Request, thread_id: str):

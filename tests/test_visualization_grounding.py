@@ -28,6 +28,14 @@ def _profiles(rows, schema=None):
     return {p["name"]: p for p in va.profile_columns(rows, schema=schema)}
 
 
+@pytest.fixture(autouse=True)
+def _no_real_llm(monkeypatch):
+    """These tests pin the deterministic path. A developer's shell may have a
+    real OPENROUTER/GROQ key; never let a test call the live model. Tests that
+    need a model install a scripted fake, which overrides this."""
+    monkeypatch.setattr(va, "viz_llm", None)
+
+
 def _bar(x, y=None, aggregate=None, ctype="bar", **config):
     enc = {"x": {"field": x}}
     if y or aggregate:
@@ -283,6 +291,9 @@ def test_a_measure_bar_keeps_its_y_encoding():
 
 
 def test_an_existing_insight_is_not_overwritten_by_grounding():
+    """The model's sentence is kept, first. When it quotes no figures of its
+    own, the data's figures follow it: meaning from the model, numbers from
+    the rows."""
     rows = [{"region": "East"}] * 6 + [{"region": "West"}] * 3
     chart = _bar("region")
     chart["insight"] = "written by the model"
@@ -290,9 +301,24 @@ def test_an_existing_insight_is_not_overwritten_by_grounding():
 
     va._ground_chart(chart, rows, _profiles(rows))
 
-    assert chart["insight"] == "written by the model"
+    assert chart["insight"].startswith("written by the model. ")
+    assert "East (6 rows, 66.7%)" in chart["insight"]
     assert chart["insight_source"] == "llm"
+    assert chart["headline"] == "written by the model"
+    assert chart["insight_facts"] in chart["insight"]
     assert chart["derived_data"]["points"]
+
+
+def test_an_existing_insight_with_its_own_right_figures_is_kept_as_written():
+    rows = [{"region": "East"}] * 6 + [{"region": "West"}] * 3
+    chart = _bar("region")
+    chart["insight"] = "East holds two thirds of the records (66.7%)."
+    chart["insight_source"] = "llm"
+
+    va._ground_chart(chart, rows, _profiles(rows))
+
+    assert chart["insight"] == "East holds two thirds of the records (66.7%)."
+    assert chart["insight_source"] == "llm"
 
 
 def test_a_chart_with_nothing_to_plot_is_dropped_and_ranks_are_renumbered():
@@ -473,7 +499,11 @@ def test_a_reasoning_model_gets_token_headroom_and_the_requested_effort(monkeypa
     llm = _ScriptedLLM("answer")
     monkeypatch.setattr(va, "viz_llm", llm)
     monkeypatch.setattr(va, "_VIZ_IS_REASONING", True)
+    # Request options follow the provider the call really goes to, not the
+    # backend label: the default backend "groq" can resolve to OpenRouter.
     monkeypatch.setattr(va, "_VIZ_BACKEND", "groq")
+    monkeypatch.setattr(va, "_VIZ_PROVIDER", "groq")
+    monkeypatch.setattr(va, "_VIZ_SORT_ACTIVE", False)
 
     assert va.invoke_viz_llm("prompt", effort="medium") == "answer"
     assert llm.calls == [{"max_tokens": va._VIZ_MAX_TOKENS, "reasoning_effort": "medium"}]
@@ -484,12 +514,30 @@ def test_openrouter_takes_the_effort_as_a_reasoning_object(monkeypatch):
     monkeypatch.setattr(va, "viz_llm", llm)
     monkeypatch.setattr(va, "_VIZ_IS_REASONING", True)
     monkeypatch.setattr(va, "_VIZ_BACKEND", "openrouter")
+    monkeypatch.setattr(va, "_VIZ_PROVIDER", "openrouter")
+    monkeypatch.setattr(va, "_VIZ_SORT_ACTIVE", False)
 
     va.invoke_viz_llm("prompt", effort="low")
 
     assert llm.calls == [{
         "max_tokens": va._VIZ_MAX_TOKENS,
         "extra_body": {"reasoning": {"effort": "low"}},
+    }]
+
+
+def test_openrouter_is_asked_for_the_fastest_host_when_sorting_is_on(monkeypatch):
+    llm = _ScriptedLLM("answer")
+    monkeypatch.setattr(va, "viz_llm", llm)
+    monkeypatch.setattr(va, "_VIZ_IS_REASONING", True)
+    monkeypatch.setattr(va, "_VIZ_PROVIDER", "openrouter")
+    monkeypatch.setattr(va, "_VIZ_SORT_ACTIVE", True)
+    monkeypatch.setattr(va, "_VIZ_OPENROUTER_SORT", "throughput")
+
+    va.invoke_viz_llm("prompt", effort="low")
+
+    assert llm.calls == [{
+        "max_tokens": va._VIZ_MAX_TOKENS,
+        "extra_body": {"reasoning": {"effort": "low"}, "provider": {"sort": "throughput"}},
     }]
 
 
@@ -763,26 +811,14 @@ def test_a_single_row_summary_returns_no_config_so_the_api_keeps_the_session_cha
     assert not out["visualization_config"] and not out["visualization_status"]
 
 
-@pytest.mark.defect
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEFECT V5 (response time; PRE-EXISTING, not introduced by PR #420 -- "
-        "formerly labelled PR420-V5): invoke_viz_llm retries every non-auth "
-        "failure with a second, untuned call, including a timeout and a 429. "
-        "The retry was written for a provider that rejects max_tokens / "
-        "reasoning_effort; a timed-out call is instead repeated in full. The "
-        "retry-everything logic is identical at #420's parent (a97fb70c), where "
-        "even a 401 was retried; #420 stopped retrying auth errors. What #420 "
-        "did add is the cost of each repeated call: max_tokens 4096 -> 8192 and "
-        "reasoning effort low -> high. Remove this xfail when fixed."
-    ),
-)
 @pytest.mark.parametrize("error", [
     TimeoutError("read timed out"),
     _StatusError("rate limit exceeded", 429),
 ])
 def test_a_timeout_or_rate_limit_is_not_repeated_as_a_plain_call(monkeypatch, error):
+    """Was DEFECT V5 (pre-existing): every non-auth failure was retried with a
+    second, untuned call, so a timeout or a 429 cost the full wait twice. The
+    plain retry is only for a provider that rejects the tuning kwargs."""
     llm = _ScriptedLLM(error, "late answer")
     monkeypatch.setattr(va, "viz_llm", llm)
 

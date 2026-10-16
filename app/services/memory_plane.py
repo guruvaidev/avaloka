@@ -22,6 +22,21 @@
 #                                      (default: 86400)
 #   MILVUS_TOP_K                     – Episodic memory top-k for similarity search
 #                                      (default: 5)
+#   MEMORY_BACKGROUND_LEARNING       – "0" turns off the per-turn LLM learner (kill
+#                                      switch; retrieval keeps working). Default: on.
+#   MEMORY_THREAD_STACK_MB           – Stack size for every thread this module starts
+#                                      (default: 32). glibc gives new threads a small
+#                                      default stack; the learner thread runs deep
+#                                      langchain/groq/torch call chains and was
+#                                      segfaulting (exit 139) in Kubernetes.
+#   MEMORY_MAX_LEARNERS              – Learner threads allowed at once; a turn that
+#                                      finds this many still running skips learning
+#                                      (default: 2)
+#   MEMORY_HINT_MAX_CHARS            – Longest single hint passed on (default: 600)
+#   MEMORY_HINTS_MAX_CHARS           – Total size of the hints handed to the planner
+#                                      (default: 6000)
+#   MEMORY_SESSION_HINTS_MAX         – Learned hints kept per session (default: 30)
+#   MEMORY_PAST_QUERIES_MAX          – Past queries sent to the learner LLM (default: 8)
 #
 # Latency design (why a turn used to take 20s here):
 #   * All four stores were re-connected on every request -> now once per process.
@@ -42,6 +57,7 @@
 
 
 import os
+import re
 import json
 import logging
 import threading
@@ -97,6 +113,102 @@ _MILVUS_TOP_K             = int(os.environ.get("MILVUS_TOP_K", "5"))
 # Defaults to the session lifetime (7 days) so a remembered preference lives at
 # least as long as the session it belongs to.
 _CTX_MEMORY_TTL           = int(os.environ.get("MEMORY_PREFERENCES_TTL_SECONDS", str(7 * 24 * 3600)))
+
+_BACKGROUND_LEARNING      = os.environ.get("MEMORY_BACKGROUND_LEARNING", "1").lower() not in ("0", "false", "no", "off")
+_THREAD_STACK_BYTES       = max(0, int(float(os.environ.get("MEMORY_THREAD_STACK_MB", "32")) * 1024 * 1024))
+_MAX_LEARNERS             = max(1, int(os.environ.get("MEMORY_MAX_LEARNERS", "2")))
+_HINT_MAX_CHARS           = int(os.environ.get("MEMORY_HINT_MAX_CHARS", "600"))
+_HINTS_MAX_CHARS          = int(os.environ.get("MEMORY_HINTS_MAX_CHARS", "6000"))
+_SESSION_HINTS_MAX        = int(os.environ.get("MEMORY_SESSION_HINTS_MAX", "30"))
+_PAST_QUERIES_MAX         = int(os.environ.get("MEMORY_PAST_QUERIES_MAX", "8"))
+_PAST_QUERY_MAX_CHARS     = 500
+
+
+# ---------------------------------------------------------------------------
+# Thread start with an explicit stack size
+# ---------------------------------------------------------------------------
+# threading.stack_size() is process-global and read when a thread STARTS, so it
+# is set and restored under a lock around start(): only this module's threads
+# get the larger stack, and no other code sees the setting change.
+_spawn_lock = threading.Lock()
+
+
+def _spawn(target: Callable[..., Any], name: str, args: Tuple = ()) -> threading.Thread:
+    """Start a daemon thread with a stack of MEMORY_THREAD_STACK_MB."""
+    thread = threading.Thread(target=target, args=args, name=name, daemon=True)
+    with _spawn_lock:
+        previous = None
+        if _THREAD_STACK_BYTES:
+            try:
+                previous = threading.stack_size(_THREAD_STACK_BYTES)
+            except (ValueError, RuntimeError) as exc:  # platform refuses the size
+                logger.debug("[memory] could not set thread stack size: %s", exc)
+        try:
+            thread.start()
+        finally:
+            if previous is not None:
+                try:
+                    threading.stack_size(previous)
+                except (ValueError, RuntimeError):
+                    pass
+    return thread
+
+
+# One embedding at a time. The sentence-transformers / torch model is shared by
+# retrieval, learning and preference writes, which ran concurrently in three
+# threads; serialising them costs milliseconds and removes a crash risk.
+_embed_lock = threading.Lock()
+
+
+# ---------------------------------------------------------------------------
+# Hint size limits
+# ---------------------------------------------------------------------------
+# A prior artifact's metadata can hold the whole output file as a base64 data
+# URI. It was copied into the "[L3] Prior artifact" hint verbatim, and a
+# 55,000-row table made the planner prompt 1.26M tokens (limit 131k): every
+# later turn of that chat failed with "temporary problem while planning".
+_DATA_URI_RE = re.compile(r"data:[\w/+.-]+;base64,[A-Za-z0-9+/=\s]+")
+_BULK_KEYS = {"content", "data", "bytes", "b64", "base64", "rows", "records", "csv", "file_data"}
+
+
+def _compact_value(value: Any, limit: int = 200) -> str:
+    """A short, prompt-safe rendering of one artifact metadata value."""
+    if isinstance(value, dict):
+        light = {k: v for k, v in value.items() if str(k).lower() not in _BULK_KEYS}
+        if not light and value:
+            return "<file content omitted>"
+        value = light
+    elif isinstance(value, (list, tuple)):
+        value = list(value)[:3]
+    text = _DATA_URI_RE.sub("<file content omitted>", str(value))
+    return text if len(text) <= limit else text[:limit] + " …"
+
+
+def _compact_hint(hint: Any) -> str:
+    text = _DATA_URI_RE.sub("<file content omitted>", str(hint))
+    if len(text) > _HINT_MAX_CHARS:
+        text = text[:_HINT_MAX_CHARS] + " …[truncated]"
+    return text
+
+
+def _compact_hints(hints: Any, total: int = None) -> List[str]:
+    """Every hint compacted, duplicates dropped, the list capped in total size.
+    Applied to what leaves this module, so hints stored before this fix (in
+    Redis or in a thread's state) are cut too."""
+    total = _HINTS_MAX_CHARS if total is None else total
+    out: List[str] = []
+    used = 0
+    for hint in hints or []:
+        if not hint:
+            continue
+        text = _compact_hint(hint)
+        if text in out:
+            continue
+        if used + len(text) > total:
+            break
+        out.append(text)
+        used += len(text)
+    return out
 
 
 def _memory_scope(user_id: str, session_id: str) -> str:
@@ -157,8 +269,7 @@ def _call_with_timeout(
         finally:
             done.set()
 
-    thread = threading.Thread(target=_worker, name="memory-stage", daemon=True)
-    thread.start()
+    thread = _spawn(_worker, "memory-stage")
     if not done.wait(timeout):
         return False, None, None, thread
     if "error" in box:
@@ -315,10 +426,7 @@ class MemoryOrchestrator:
         pending = [n for n in self._STORES if not self._store_ready.get(n)]
         threads = []
         for name in pending:
-            t = threading.Thread(target=self._connect_store, args=(name,),
-                                 name=f"memory-connect-{name}", daemon=True)
-            t.start()
-            threads.append(t)
+            threads.append(_spawn(self._connect_store, f"memory-connect-{name}", (name,)))
         deadline = time.monotonic() + timeout
         for t in threads:
             t.join(max(0.0, deadline - time.monotonic()))
@@ -337,8 +445,7 @@ class MemoryOrchestrator:
         each in its own thread, so the first request pays for neither and one
         slow store cannot hold up the rest. Never raises."""
         start = time.monotonic()
-        emb = threading.Thread(target=self._warm_embedding, name="memory-warm-embed", daemon=True)
-        emb.start()
+        emb = _spawn(self._warm_embedding, "memory-warm-embed")
         ready = self._connect_all(timeout=60.0)
         slow = [n for n, ok in ready.items() if not ok]
         if slow:
@@ -426,7 +533,8 @@ class MemoryOrchestrator:
         """
         try:
             from app.services.embedding_utils import embed_text
-            return embed_text(text, target_dim=self.milvus._vector_dim)
+            with _embed_lock:
+                return embed_text(text, target_dim=self.milvus._vector_dim)
         except Exception as e:
             logger.warning(f"Memory embedding failed ({e}); Milvus op will fall back to zero-vector.")
             return None
@@ -443,7 +551,11 @@ Return your findings strictly as a JSON object with two keys:
 {"new_hints": ["string array of discovered facts"], "logic_signature": "a short sentence summarizing technical style preferences"}
 If the query is too simple to extract anything meaningful, return {"new_hints": [], "logic_signature": ""}
 """
-        human_prompt = f"Past Queries: {past_queries}\n\nCurrent Query: {query}\n\nExtract memory context as JSON."
+        # Recent queries only, each cut short: the whole history (including
+        # long pasted prompts) went into every call and grew without limit.
+        recent = [str(q)[:_PAST_QUERY_MAX_CHARS] for q in (past_queries or [])][-_PAST_QUERIES_MAX:]
+        human_prompt = (f"Past Queries: {recent}\n\nCurrent Query: {str(query)[:2000]}"
+                        "\n\nExtract memory context as JSON.")
 
         try:
             response = self.llm.invoke([
@@ -479,24 +591,26 @@ If the query is too simple to extract anything meaningful, return {"new_hints": 
                           "visualization_url", "dashboard_url"):
             val = prior_meta.get(url_field)
             if val:
-                hint_parts.append(f"chart_urls={val[:3]}" if isinstance(val, list) else f"chart_url={val}")
+                hint_parts.append(f"chart_urls={_compact_value(val)}" if isinstance(val, list)
+                                  else f"chart_url={_compact_value(val)}")
                 break
         # Model / evaluation metrics — skip retraining if acceptable
         for metric_field in ("model_metrics", "metrics", "eval_metrics",
                              "accuracy", "f1_score", "rmse", "mape"):
             val = prior_meta.get(metric_field)
             if val:
-                hint_parts.append(f"metrics={val}")
+                hint_parts.append(f"metrics={_compact_value(val)}")
                 break
         # Output artifact path — reuse directly
         for path_field in ("output_path", "output_file", "artifact_path",
                            "file_data", "model_path"):
             val = prior_meta.get(path_field)
             if val:
-                hint_parts.append(f"output={val}")
+                # Name/path only: "file_data" can be the whole file as base64.
+                hint_parts.append(f"output={_compact_value(val)}")
                 break
         if prior_meta.get("session"):
-            hint_parts.append(f"session={prior_meta['session']}")
+            hint_parts.append(f"session={_compact_value(prior_meta['session'], 80)}")
         if hint_parts:
             return True, ("[L3] Prior artifact — reuse to skip redundant work: "
                           + ", ".join(hint_parts))
@@ -539,8 +653,8 @@ If the query is too simple to extract anything meaningful, return {"new_hints": 
         start = time.monotonic()
         try:
             extracted = self._extract_context_with_llm(query, past_queries) or {}
-            new_hints = [h for h in (extracted.get("new_hints") or [])
-                         if isinstance(h, str) and h.strip()]
+            new_hints = [_compact_hint(h.strip()) for h in (extracted.get("new_hints") or [])
+                         if isinstance(h, str) and h.strip()][:10]
             added = False
             for hint in new_hints:
                 with self._store_lock:
@@ -548,6 +662,14 @@ If the query is too simple to extract anything meaningful, return {"new_hints": 
                     if hint not in hints and hint not in already_surfaced:
                         hints.append(hint)
                         added = True
+                    # Learned hints used to accumulate for the life of the
+                    # session (7 days in Redis) and every one went to the
+                    # planner on every turn. Keep the newest; explicit
+                    # preferences live in their own store and are never cut.
+                    if len(hints) > _SESSION_HINTS_MAX:
+                        prefs = set(self._session_preferences_store.get(session_id, []))
+                        old = [h for h in hints[:-_SESSION_HINTS_MAX] if h in prefs]
+                        hints[:] = old + hints[-_SESSION_HINTS_MAX:]
                 if not self._store_ready.get("milvus"):
                     continue  # Milvus not connected: keep the hint in session memory only
                 try:
@@ -655,9 +777,11 @@ If the query is too simple to extract anything meaningful, return {"new_hints": 
 
         with self._store_lock:
             past_queries = list(self._past_queries_store.get(session_id, []))
-            self._past_queries_store[session_id] = past_queries + [query]
+            # Bounded: the list was copied and grown on every turn, forever.
+            self._past_queries_store[session_id] = (past_queries + [query])[-_PAST_QUERIES_MAX * 2:]
 
-        accumulated_hints = list(self._session_hints_store.get(session_id, []))
+        with self._store_lock:
+            accumulated_hints = list(self._session_hints_store.get(session_id, []))
         # Provenance buckets for the top-3 contract (see _compose_top_hints).
         tiered_hints: Dict[str, List[str]] = {"session": list(accumulated_hints)}
 
@@ -721,18 +845,46 @@ If the query is too simple to extract anything meaningful, return {"new_hints": 
         top_3_hints = self._compose_top_hints(session_id, tiered_hints)
 
         # Learning runs after we return; its hints are served from next turn.
-        if self.llm:
-            learner = threading.Thread(
-                target=self._learn_in_background,
-                args=(query, past_queries, session_id, memory_scope,
-                      tuple(accumulated_hints)),
-                name="memory-learn", daemon=True,
-            )
-            # Registered before it starts, so a caller that waits straight
-            # after this returns cannot miss it.
+        if self.llm and _BACKGROUND_LEARNING:
             with self._store_lock:
-                self._learning.add(learner)
-            learner.start()
+                # In place: _learning is the class-level set wait_for_learning reads.
+                for finished in [t for t in self._learning if t.ident and not t.is_alive()]:
+                    self._learning.discard(finished)
+                busy = len(self._learning) >= _MAX_LEARNERS
+            if busy:
+                # A slow LLM must not pile up one thread per turn.
+                logger.info("[memory] background learning skipped: %d learners still running",
+                            _MAX_LEARNERS)
+            else:
+                learner = threading.Thread(
+                    target=self._learn_in_background,
+                    args=(query, past_queries, session_id, memory_scope,
+                          tuple(accumulated_hints)),
+                    name="memory-learn", daemon=True,
+                )
+                # Registered before it starts, so a caller that waits straight
+                # after this returns cannot miss it.
+                with self._store_lock:
+                    self._learning.add(learner)
+                with _spawn_lock:
+                    previous = None
+                    if _THREAD_STACK_BYTES:
+                        try:
+                            previous = threading.stack_size(_THREAD_STACK_BYTES)
+                        except (ValueError, RuntimeError):
+                            previous = None
+                    try:
+                        learner.start()
+                    except RuntimeError as exc:  # cannot start a thread: skip learning
+                        with self._store_lock:
+                            self._learning.discard(learner)
+                        logger.warning("[memory] background learning not started: %s", exc)
+                    finally:
+                        if previous is not None:
+                            try:
+                                threading.stack_size(previous)
+                            except (ValueError, RuntimeError):
+                                pass
 
         logger.info("[memory] retrieval %.2fs stages=%s",
                     time.monotonic() - t_start, timings)
@@ -741,8 +893,8 @@ If the query is too simple to extract anything meaningful, return {"new_hints": 
             # Always empty: hints learned from THIS query are served next turn
             # (see _learn_in_background). Kept so the payload shape is stable.
             "new_hints_this_context": [],
-            "accumulated_memory_hints": accumulated_hints,
-            "memory_hints": top_3_hints,  # Top-3 contract for the planner
+            "accumulated_memory_hints": _compact_hints(accumulated_hints),
+            "memory_hints": _compact_hints(top_3_hints),  # Top-3 contract for the planner
             "prior_artifact_found": prior_artifact_found,
             "session_logic_signature": logic_sig,
             # LL-06: False must mean "memory ran", not "memory was skipped".
@@ -796,11 +948,8 @@ If the query is too simple to extract anything meaningful, return {"new_hints": 
             self._persist_session_memory(session_id)
 
         if is_new:
-            threading.Thread(
-                target=self._persist_preference_to_milvus,
-                args=(scope_id or session_id, preference),
-                daemon=True,
-            ).start()
+            _spawn(self._persist_preference_to_milvus, "memory-pref-milvus",
+                   (scope_id or session_id, preference))
 
         if stored:
             logger.info(f"🧠 AVALOKA CONTEXT MEMORY STORED (session={session_id}): {preference}")
@@ -972,8 +1121,8 @@ If the query is too simple to extract anything meaningful, return {"new_hints": 
                     self._store_lock.release()
             return {
                 "new_hints_this_context": [],
-                "accumulated_memory_hints": held,
-                "memory_hints": top,
+                "accumulated_memory_hints": _compact_hints(held),
+                "memory_hints": _compact_hints(top),
                 "prior_artifact_found": False,
                 "session_logic_signature": _DEFAULT_STYLE_HINT,
                 "memory_context_unavailable": True,
@@ -993,7 +1142,7 @@ If the query is too simple to extract anything meaningful, return {"new_hints": 
             finally:
                 done.set()
 
-        threading.Thread(target=_worker, name="memory-retrieval", daemon=True).start()
+        _spawn(_worker, "memory-retrieval")
 
         if not done.wait(timeout=_CIRCUIT_BREAKER_TIMEOUT):
             logger.error(
@@ -1015,7 +1164,7 @@ If the query is too simple to extract anything meaningful, return {"new_hints": 
             logger.info("==================================================")
             logger.info(f"🧠 AVALOKA CONTEXT MEMORY INJECTED ({len(hints)} items):")
             for h in hints:
-                logger.info(f"  -> {h}")
+                logger.info(f"  -> {_compact_hint(h)[:300]}")
             logger.info("==================================================")
 
         return result
@@ -1028,7 +1177,7 @@ _orchestrator = MemoryOrchestrator(llm_client=None)
 # so the first user request doesn't pay for them. MEMORY_WARMUP=0 disables
 # this (e.g. in tests).
 if os.environ.get("MEMORY_WARMUP", "1") != "0":
-    threading.Thread(target=_orchestrator.warm_up, name="memory-warmup", daemon=True).start()
+    _spawn(_orchestrator.warm_up, "memory-warmup")
 
 
 def retrieve_memory(query: str, state: ETLState) -> Dict:

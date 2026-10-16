@@ -1,3 +1,4 @@
+
 import {
   useCallback,
   useEffect,
@@ -14,6 +15,7 @@ import remarkGfm from "remark-gfm";
 import { analysesKey, useAnalysisMutations } from "@/lib/analyses";
 import { deriveVizFromResultTable, deriveVizFromRows, type ResultTableForViz } from "@/lib/derive-viz";
 import { buildInsightGroups } from "@/lib/insight-groups";
+import { finishAutoInsightsBot } from "@/lib/auto-insights-bot";
 
 
 import { useProjects } from "@/lib/projects";
@@ -317,6 +319,7 @@ type DatasetChip = {
   schema?: unknown;
   samples?: Record<string, unknown>[];
   rowsSampled?: number;
+  totalRows?: number;
   sizeMb?: number;
   visualizationConfig?: unknown;
   visualizationStatus?: string;
@@ -331,6 +334,17 @@ function datasetSizeMb(source: any): number | undefined {
         ? source.file_size_bytes / (1024 * 1024)
         : undefined;
   return mb && mb > 0 ? mb : undefined;
+}
+
+/** Full dataset row count from a response, a chip, or a visualization config. */
+function datasetTotalRows(source: any): number | undefined {
+  const value =
+    source?.total_rows ??
+    source?.dataset?.total_rows ??
+    source?.visualization_config?.dataset?.total_rows ??
+    source?.visualizationConfig?.dataset?.total_rows;
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : undefined;
 }
 
 export function formatDatasetSize(mb?: number): string | null {
@@ -376,6 +390,7 @@ function populatedDatasetFromResponse(response: any, filename: string): Uploaded
     schema: normalizeDatasetSchema(response.schema, response.samples),
     samples: response.samples,
     rows_sampled: response.rows_sampled ?? response.samples.length,
+    total_rows: datasetTotalRows(response),
     size_mb: datasetSizeMb(response),
 
   };
@@ -404,6 +419,7 @@ function datasetChipsFromResponse(response: any, fallbackFilename?: string): Dat
             ? dataset.rows
             : undefined,
         rowsSampled: dataset.rows_sampled,
+        totalRows: datasetTotalRows(dataset),
         sizeMb: datasetSizeMb(dataset) ?? datasetSizeMb(response),
 
         visualizationConfig: dataset.visualization_config ?? dataset.visualization_configs,
@@ -880,6 +896,8 @@ function AnalysisPage() {
   }, [search]);
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  // Composer draft lives here so other surfaces (e.g. Auto Insights) can prefill it.
+  const [chatDraft, setChatDraft] = useState("");
   const [chatOpen, setChatOpen] = useState(true);
   const [chatWidth, setChatWidth] = useState(360);
   const chatAsideRef = useRef<HTMLElement | null>(null);
@@ -1156,6 +1174,7 @@ useEffect(() => {
               schema: cols,
               samples: rows,
               rows_sampled: preview?.rows_sampled ?? rows.length,
+              total_rows: datasetTotalRows(preview) ?? dataset.totalRows,
               size_mb: dataset.sizeMb,
             });
             setAutoInsightsSamples(rows);
@@ -1175,6 +1194,7 @@ useEffect(() => {
         schema,
         samples: dataset.samples,
         rows_sampled: dataset.rowsSampled ?? dataset.samples.length,
+        total_rows: dataset.totalRows ?? datasetTotalRows(dataset.visualizationConfig),
         size_mb: dataset.sizeMb,
 
       });
@@ -1210,6 +1230,8 @@ useEffect(() => {
         samples: dataset.samples,
         rows_sampled:
           dataset.rowsSampled ?? dataset.samples.length,
+        total_rows:
+          dataset.totalRows ?? datasetTotalRows(dataset.visualizationConfig),
         size_mb: dataset.sizeMb,
       });
 
@@ -1257,6 +1279,8 @@ useEffect(() => {
         preview?.visualization_configs ??
         deriveVizFromRows(rows);
 
+      const totalRows = datasetTotalRows(preview) ?? dataset.totalRows;
+
       // Cache the preview on THIS dataset only.
       setDatasetChips((chips) =>
         chips.map((chip) =>
@@ -1271,6 +1295,7 @@ useEffect(() => {
                   : undefined,
                 rowsSampled:
                   preview?.rows_sampled ?? rows.length,
+                totalRows,
               }
             : chip,
         ),
@@ -1282,6 +1307,7 @@ useEffect(() => {
         samples: rows,
         rows_sampled:
           preview?.rows_sampled ?? rows.length,
+        total_rows: totalRows,
         size_mb: dataset.sizeMb,
       });
 
@@ -1406,7 +1432,10 @@ useEffect(() => {
           console.warn("[auto-insights] could not persist viz_config", err),
         );
       } finally {
-        if (!cancelled) setInsightsGenerating(false);
+        if (!cancelled) {
+          setInsightsGenerating(false);
+          if (!cfg) finishAutoInsightsBot();
+        }
       }
     })();
     return () => {
@@ -1424,6 +1453,14 @@ useEffect(() => {
     chartSamples,
     sessionId,
   ]);
+
+  // Dismiss the Auto Insights bot once charts are actually on screen.
+  useEffect(() => {
+    const chartsReady = Boolean(autoInsightsConfig || analysisVizConfig || userInsightsList.length);
+    if (hydrating || insightsGenerating || !chartsReady) return;
+    const frame = window.requestAnimationFrame(() => finishAutoInsightsBot());
+    return () => window.cancelAnimationFrame(frame);
+  }, [analysisVizConfig, autoInsightsConfig, hydrating, insightsGenerating, userInsightsList.length]);
 
 
 
@@ -1537,25 +1574,7 @@ useEffect(() => {
     setMotherAnalysisName("");
     setChildAnalyses([]);
     setActiveAnalysisId(null);
-    // // Explain the data right away, built only from the upload response.
-    // const summaryText = buildUploadSummaryMessage(up, navState?.filename);
-    // if (summaryText) {
-    //   setMessages([
-    //     {
-    //       id: `upload-summary-${key}`,
-    //       role: "ai",
-    //       content: summaryText,
-    //       time: new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }),
-    //     } as any,
-    //   ]);
-    //   if (freshAid) {
-    //     persistMessage({ analysis_id: freshAid, role: "assistant", content: summaryText }).catch((err) =>
-    //       console.warn("Failed to save upload summary message", err),
-    //     );
-    //   }
-    // } else {
-    //   setMessages([]);
-    // }
+    // Explain the data right away, built only from the upload response.
     let summaryText: string | null = null;
     try {
       summaryText = buildUploadSummaryMessage(up, navState?.filename);
@@ -2366,6 +2385,9 @@ useEffect(() => {
         );
 
       }
+
+      // Never leave the chat empty: if this thread has no chat messages yet,
+      // rebuild the upload summary from the persisted dataset context.
       const hasChat = rows.some((r) => {
         const o = r.output as { pasted_analysis?: unknown; pasted_analyses?: unknown } | null;
         return !o?.pasted_analysis && !o?.pasted_analyses;
@@ -2517,6 +2539,7 @@ useEffect(() => {
           schema,
           samples: resolvedSamples,
           rows_sampled: resolvedSamples.length,
+          total_rows: datasetTotalRows(row.viz_config),
         });
       } else {
         setPersistedDataset(null);
@@ -2553,6 +2576,7 @@ useEffect(() => {
                 schema,
                 samples,
                 rows_sampled: preview?.rows_sampled ?? samples.length,
+                total_rows: datasetTotalRows(preview) ?? datasetTotalRows(row.viz_config),
               });
               setAutoInsightsSamples((cur) => cur ?? samples);
             } catch {
@@ -2609,6 +2633,7 @@ useEffect(() => {
           schema: row.schema,
           samples: row.samples,
           visualization_config: row.viz_config,
+          total_rows: datasetTotalRows(row.viz_config),
           visualization_status: row.viz_config ? "ready" : undefined,
         };
         sessionStorage.setItem("analysis:session", JSON.stringify(sessionPayload));
@@ -5030,6 +5055,8 @@ useEffect(() => {
                   )}
                   <TypingIndicator users={typingUsers} />
                   <ChatComposer
+                    draft={chatDraft}
+                    onDraftChange={setChatDraft}
                     isSending={isSending}
                     avatarMode={avatarMode}
                     onAvatarModeChange={() => setAvatarMode((value) => !value)}
@@ -5250,6 +5277,10 @@ useEffect(() => {
           datasets={autoInsightsDatasets}
           primaryDatasetId={selectedDatasetIds[selectedDatasetIds.length - 1] ?? datasetChips[0]?.id ?? null}
           aid={aidFromUrl}
+          onPrefillChat={(text) => {
+            setChatDraft(text);
+            setChatOpen(true);
+          }}
         />
 
         {plannerGraphUrl ? (
@@ -6192,6 +6223,8 @@ function VoicePanel({
 
 
 function ChatComposer({
+  draft,
+  onDraftChange,
   isSending,
   avatarMode,
   onAvatarModeChange,
@@ -6202,6 +6235,8 @@ function ChatComposer({
   speaking,
   onStopSpeaking,
 }: {
+  draft: string;
+  onDraftChange: (value: string) => void;
   isSending: boolean;
   avatarMode: boolean;
   onAvatarModeChange: () => void;
@@ -6212,7 +6247,6 @@ function ChatComposer({
   speaking?: boolean;
   onStopSpeaking?: () => void;
 }) {
-  const [draft, setDraft] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const disabled = isSending || isSubmitting;
@@ -6221,12 +6255,13 @@ function ChatComposer({
     const content = raw.trim();
     if (!content || disabled) return;
 
-    setDraft("");
+    onDraftChange("");
     onStopTyping?.();
     setIsSubmitting(true);
     try {
       const accepted = await onSend(content);
-      if (!accepted) setDraft((current) => current || content);
+      // Put the text back if the send was rejected so nothing is lost.
+      if (!accepted) onDraftChange(content);
     } finally {
       setIsSubmitting(false);
     }
@@ -6243,8 +6278,8 @@ function ChatComposer({
   }, [voice.listening, onListeningChange]);
 
   useEffect(() => {
-    if (voice.listening) setDraft(voice.transcript);
-  }, [voice.listening, voice.transcript]);
+    if (voice.listening) onDraftChange(voice.transcript);
+  }, [voice.listening, voice.transcript, onDraftChange]);
 
   const holdStart = () => {
     if (!voice.supported) {
@@ -6277,7 +6312,7 @@ function ChatComposer({
           ref={textareaRef}
           value={draft}
           onChange={(event) => {
-            setDraft(event.target.value);
+            onDraftChange(event.target.value);
             if (event.target.value.trim()) onTyping?.();
             else onStopTyping?.();
           }}
@@ -7077,6 +7112,7 @@ type UploadedDataset = {
   schema: string[];
   samples: Record<string, unknown>[];
   rows_sampled: number;
+  total_rows?: number;
   size_mb?: number;
 };
 
@@ -7284,7 +7320,8 @@ function DataTableView({
   const safePage = Math.min(page, totalPages);
   const start = (safePage - 1) * pageSize;
   const pageRows = rows.slice(start, start + pageSize);
-  const totalRows = usingReal ? dataset!.rows_sampled : rows.length;
+  // Full-file row count when the backend reports it; otherwise undefined.
+  const totalRows = usingReal ? dataset!.total_rows : rows.length;
 
   if (reportRow && !rawTable) {
     return (
@@ -7381,7 +7418,11 @@ function DataTableView({
           <p className="text-xs text-tertiary">
             Showing {rows.length === 0 ? 0 : start + 1}-{Math.min(start + pageSize, rows.length)} of{" "}
             {rows.length.toLocaleString()}
-            {usingReal && totalRows > rows.length ? ` (preview · ${totalRows.toLocaleString()} rows total)` : ""}
+            {usingReal && totalRows && totalRows > rows.length
+              ? ` (preview · ${totalRows.toLocaleString()} rows total)`
+              : usingReal
+                ? ` in a sample of ${dataset!.rows_sampled.toLocaleString()} rows`
+                : ""}
           </p>
           <div className="flex items-center gap-1">
             <button

@@ -11,10 +11,15 @@ import pandas as pd
 from .base_connector import BaseConnector, OutputData
 from .null_policy import blank_null_words, null_word_cells
 from .table_shape import (
+    changes_the_table,
+    describe_shape,
     extract_tables_with_positions,
     keep_null_word_labels,
+    may_hide_structure,
+    needs_reshaping,
     reinfer_dtypes,
     reshape_with_positions,
+    without_aggregate_rows,
 )
 from .utils import convert_type
 
@@ -191,6 +196,15 @@ class ExcelConnector(BaseConnector):
         self._load_df()
         return getattr(self, "_shape_report", {})
 
+    @property
+    def shape_notes(self) -> list[str]:
+        """What was assumed in reading the sheet, in words for the user.
+
+        Names the user's own columns, so it belongs on their screen and never
+        in telemetry (see table_shape.describe_shape).
+        """
+        return describe_shape(self.shape_report, self.get_columns())
+
     def load_dataframe(self, normalize: bool = True) -> pd.DataFrame:
         """Return the sheet as a typed DataFrame (dtypes preserved).
 
@@ -275,6 +289,9 @@ class SheetCsvExport:
     sheet_name: str
     csv_path: str
     n_rows: int
+    #: What the reader assumed about this sheet, for the person who uploaded
+    #: it (table_shape.describe_shape). Empty when the sheet was read as is.
+    notes: tuple[str, ...] = ()
 
 
 def export_workbook_sheets_to_csv(
@@ -289,6 +306,25 @@ def export_workbook_sheets_to_csv(
     written to a CSV under ``out_dir``, so everything downstream (sampling,
     codegen, execution) runs on the CSV-native path instead of silently
     analyzing only the first sheet of the workbook.
+
+    This is the function every workbook uploaded through the UI goes through.
+    A sheet whose default-header read shows the symptom ``_load_df`` describes
+    -- columns pandas could only name ``Unnamed: N`` -- is read again with
+    ``header=None`` and its table located the way ``_load_df`` locates it.
+    Without that the CSV every later step reads has ``Unnamed: N`` for column
+    names and the real header as a data row, which makes every column text.
+
+    A default read can also look fine and be wrong: a header written on two
+    rows, a block of footnotes under the table, a second table further down.
+    Where the frame shows a trace of one (``may_hide_structure``) the sheet is
+    read again too, and the located table is used only if locating it found
+    one of those (``changes_the_table``).
+
+    Any other sheet -- one that starts at A1 under a usable one-row header --
+    is written as it always was, so nothing changes for the uploads that
+    already worked. Still one CSV per sheet: a sheet holding several tables is
+    not split the way ``load_all_tables`` splits it, and when the first table
+    stops at a second one the export's ``notes`` say the rest was left out.
 
     Returns ``(exports, notes)``. Exports are ordered largest sheet first, so
     callers can treat ``exports[0]`` as the primary dataset. Empty or unreadable
@@ -305,9 +341,33 @@ def export_workbook_sheets_to_csv(
     for i, sheet in enumerate(xl.sheet_names):
         try:
             df, words = _read_sheet(xl, sheet)
+            # Once pandas has taken a title or a blank row as the header that
+            # row is gone, and only a re-read gets it back (needs_reshaping).
+            unusable = needs_reshaping(df)
+            reread = (_read_sheet(xl, sheet, header=None)
+                      if unusable or may_hide_structure(df) else None)
         except Exception as e:
             notes.append(f"Sheet '{sheet}' could not be read and was skipped ({e}).")
             continue
+        shape_notes: list[str] = []
+        located_table = False
+        if reread is not None:
+            raw, raw_words = reread
+            located, report, rows, columns = reshape_with_positions(raw)
+            if unusable or changes_the_table(report):
+                df, words = located, _aligned_words(raw_words, rows, columns, located)
+                shape_notes = describe_shape(report, [str(c) for c in df.columns])
+                located_table = True
+        if not located_table:
+            # The default read stands. A totals row under it leaves no trace at
+            # all -- right names, right types, every sum doubled -- so it is
+            # looked for here, where there was nothing to repair. The header
+            # is sheet row 1, so the frame's first record is sheet row 2.
+            totals: dict = {}
+            df, kept = without_aggregate_rows(
+                df, totals, sheet_rows=list(range(2, len(df) + 2)))
+            words = words.iloc[kept]
+            shape_notes = describe_shape(totals)
         df = keep_null_word_labels(df, words)
         if df.empty or len(df.columns) == 0:
             notes.append(f"Sheet '{sheet}' is empty and was skipped.")
@@ -315,7 +375,8 @@ def export_workbook_sheets_to_csv(
         df = _normalize_dataframe(df)
         csv_path = out_dir / f"sheetcsv_{uuid.uuid4().hex[:12]}_{i}.csv"
         df.to_csv(csv_path, index=False)
-        exports.append(SheetCsvExport(sheet_name=str(sheet), csv_path=str(csv_path), n_rows=len(df)))
+        exports.append(SheetCsvExport(sheet_name=str(sheet), csv_path=str(csv_path), n_rows=len(df),
+                                      notes=tuple(shape_notes)))
         del df
 
     # Largest sheet first: it is almost always the real dataset, and callers
@@ -337,3 +398,23 @@ def export_workbook_sheets_to_csv(
         )
 
     return exports, notes
+
+
+def describe_sheet_choice(exports: list[SheetCsvExport]) -> list[str]:
+    """Tell the user which sheet leads a multi-sheet upload, and on what basis.
+
+    Every sheet is its own dataset, so nothing is lost -- but one of them is
+    the primary, and it is chosen by row count because the reader has not seen
+    the question. That is a guess, and the longest sheet is often a lookup
+    table rather than the one being asked about, so it is said rather than
+    left to be discovered. Names the user's sheets: for their screen only.
+    """
+    if len(exports) < 2:
+        return []
+    first, others = exports[0], [e.sheet_name for e in exports[1:]]
+    return [
+        f"This workbook has {len(exports)} sheets with data, and each was imported as "
+        f"its own dataset. '{first.sheet_name}' is listed first only because it has the "
+        f"most rows ({first.n_rows}); the reader has not seen your question, so this is a "
+        f"guess. Also available: {others}."
+    ]

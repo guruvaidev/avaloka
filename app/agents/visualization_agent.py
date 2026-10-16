@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 import concurrent.futures
@@ -11,11 +12,12 @@ import numbers
 import os
 import re
 import statistics
+import threading
 import time
 from collections import Counter, defaultdict
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from app.core.inference import build_chat_model
+from app.core.inference import build_chat_model, resolve_provider
 
 from app.graph.etl_state import ETLState
 from app.core.model_config import backend_for, resolve as resolve_model
@@ -31,11 +33,19 @@ Numeric = Union[int, float]
 # -------------------------------------------------------------------
 #
 # Backend is chosen per agent by AVALOKA_VISUALIZATION_BACKEND:
-#   groq        (default) -> build_chat_model / ChatGroq
+#   groq        (default) -> build_chat_model, which picks the real provider
+#                            (INFERENCE_PROVIDER / OpenRouter when its key is
+#                            set). The model then comes from
+#                            AVALOKA_VIZ_MODEL_OPENROUTER on OpenRouter.
 #   openrouter            -> OpenAI-compatible client at openrouter.ai
 #   local                 -> OpenAI-compatible client at AVALOKA_LOCAL_LLM_BASE_URL
 #                            (Ollama, vLLM, LM Studio; e.g. Gemma for local runs)
 # Model comes from AVALOKA_VISUALIZATION_MODEL (default in model_config.py).
+#
+# NOTE: "backend=groq" does NOT mean the request goes to Groq. build_chat_model
+# resolves the actual provider, which is OpenRouter whenever OPENROUTER_API_KEY
+# is set and INFERENCE_PROVIDER is not. _VIZ_PROVIDER below is that real
+# provider, and every request option is chosen from it, not from the backend.
 
 _VIZ_BACKEND = backend_for("visualization")
 _VIZ_MODEL = resolve_model("visualization", backend=_VIZ_BACKEND)
@@ -55,7 +65,14 @@ _EFFORT_STEP_DOWN = {"high": "medium", "medium": "low"}
 # provider default (2048) it thought for the whole budget and returned an empty
 # answer ("finish=length ... content=''"), so every chart came from the fallback.
 _VIZ_MAX_TOKENS = int(os.getenv("AVALOKA_VIZ_MAX_TOKENS", "8192"))
-_VIZ_IS_REASONING = "gpt-oss" in (_VIZ_MODEL or "").lower()
+
+# OpenRouter host routing. With default routing OpenRouter picks a host per
+# request; measured on gpt-oss-120b that was 15-48s per call (AkashML,
+# DekaLLM, CoreWeave, DeepInfra) against 1.2-1.7s on throughput-sorted hosts.
+# "throughput" is what the ":nitro" model suffix does, so this works with or
+# without AVALOKA_VIZ_MODEL_OPENROUTER=openai/gpt-oss-120b:nitro.
+# Set to "none" for OpenRouter's default routing, or "price" / "latency".
+_VIZ_OPENROUTER_SORT = (os.getenv("AVALOKA_VIZ_OPENROUTER_SORT", "throughput") or "").strip().lower()
 
 # -------------------------------------------------------------------
 # Leela's wide-table rules: prompt size control
@@ -92,6 +109,27 @@ _OUTCOME_NAME_RE = re.compile(
 # (apache_4a_hospital_death_prob predicts the outcome, so of course it
 # "explains" it) and coded values whose bands mean nothing (diagnosis codes).
 _NOT_A_DRIVER_RE = re.compile(r"(prob|pred|score|risk|diagnosis|code)", re.IGNORECASE)
+
+
+def _resolve_viz_provider() -> str:
+    """The provider requests actually go to: groq, openrouter, local, ...
+
+    With the default backend ("groq") the model is built by build_chat_model,
+    which resolves the provider from INFERENCE_PROVIDER_VIZ / INFERENCE_PROVIDER
+    and the available keys. Mirror that here so request options (reasoning
+    format, host routing) match the provider, not the backend label.
+    """
+    if _VIZ_BACKEND != "groq":
+        return _VIZ_BACKEND
+    try:
+        return resolve_provider(
+            role="viz", agent="VIZ", groq_api_key=os.environ.get("GROQ_API_KEY")
+        )
+    except Exception:  # noqa: BLE001 - never fail module import over a log/option detail
+        return "groq"
+
+
+_VIZ_PROVIDER = _resolve_viz_provider()
 
 
 def _build_viz_llm() -> Optional[Any]:
@@ -140,18 +178,41 @@ def _build_viz_llm() -> Optional[Any]:
     )
 
 
+def _llm_model_name(llm: Any) -> Optional[str]:
+    """The model id the client will really call (ChatOpenAI / ChatGroq, or the
+    primary of a RunnableWithFallbacks)."""
+    for obj in (llm, getattr(llm, "runnable", None)):
+        if obj is None:
+            continue
+        name = getattr(obj, "model_name", None) or getattr(obj, "model", None)
+        if isinstance(name, str) and name:
+            return name
+    return None
+
+
 viz_llm: Optional[Any] = _build_viz_llm()
+
+# What is really called. On OpenRouter this is AVALOKA_VIZ_MODEL_OPENROUTER
+# (e.g. openai/gpt-oss-120b:nitro), which _VIZ_MODEL knows nothing about.
+_VIZ_ACTIVE_MODEL: str = _llm_model_name(viz_llm) or _VIZ_MODEL or ""
+_VIZ_IS_REASONING = "gpt-oss" in _VIZ_ACTIVE_MODEL.lower()
+_VIZ_SORT_ACTIVE = (
+    _VIZ_PROVIDER == "openrouter" and _VIZ_OPENROUTER_SORT not in ("", "none", "default")
+)
 
 if viz_llm is not None:
     logger.info(
-        "Visualization LLM enabled: backend=%s model=%s effort(insights=%s, explain=%s) max_tokens=%d",
-        _VIZ_BACKEND, _VIZ_MODEL, INSIGHT_EFFORT, EXPLAIN_EFFORT, _VIZ_MAX_TOKENS,
+        "Visualization LLM enabled: backend=%s provider=%s model=%s openrouter_sort=%s "
+        "effort(insights=%s, explain=%s) max_tokens=%d",
+        _VIZ_BACKEND, _VIZ_PROVIDER, _VIZ_ACTIVE_MODEL,
+        _VIZ_OPENROUTER_SORT if _VIZ_SORT_ACTIVE else "off",
+        INSIGHT_EFFORT, EXPLAIN_EFFORT, _VIZ_MAX_TOKENS,
     )
 else:
     logger.warning(
-        "Visualization LLM disabled (backend=%s); Auto Insights will use data-grounded "
-        "heuristic charts only. Check the API key / base URL for that backend.",
-        _VIZ_BACKEND,
+        "Visualization LLM disabled (backend=%s, provider=%s); Auto Insights will use "
+        "data-grounded heuristic charts only. Check the API key / base URL for that backend.",
+        _VIZ_BACKEND, _VIZ_PROVIDER,
     )
 
 
@@ -169,6 +230,46 @@ def _is_auth_error(exc: BaseException) -> bool:
     )
 
 
+def _is_timeout(exc: BaseException) -> bool:
+    """A timed-out call fails the same way without the kwargs: don't retry it."""
+    return isinstance(exc, TimeoutError) or "timeout" in type(exc).__name__.lower()
+
+
+def _is_rate_limit(exc: BaseException) -> bool:
+    """A 429 is the provider asking us to slow down; an immediate second call
+    only gets refused again (or adds to the queue)."""
+    status = getattr(exc, "status_code", None)
+    if status is None:
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+    if status == 429:
+        return True
+    name = type(exc).__name__.lower()
+    text = str(exc).lower()
+    return "ratelimit" in name or "rate limit" in text or "rate_limit" in text
+
+
+def _viz_request_kwargs(effort: str) -> Dict[str, Any]:
+    """Per-call options in the format the REAL provider understands.
+
+    OpenRouter: reasoning goes in a `reasoning` object and host routing in a
+    `provider` object, both via extra_body. Before this, the default backend
+    ("groq") sent Groq's top-level `reasoning_effort` to OpenRouter and no
+    routing preference, so every call landed on whichever host OpenRouter chose.
+    """
+    kwargs: Dict[str, Any] = {"max_tokens": _VIZ_MAX_TOKENS}
+    if _VIZ_PROVIDER == "openrouter":
+        extra: Dict[str, Any] = {}
+        if _VIZ_IS_REASONING:
+            extra["reasoning"] = {"effort": effort}
+        if _VIZ_SORT_ACTIVE:
+            extra["provider"] = {"sort": _VIZ_OPENROUTER_SORT}
+        if extra:
+            kwargs["extra_body"] = extra
+    elif _VIZ_IS_REASONING:
+        kwargs["reasoning_effort"] = effort
+    return kwargs
+
+
 def invoke_viz_llm(prompt: str, effort: str = INSIGHT_EFFORT):
     """Call the viz model with token headroom and the requested reasoning effort.
 
@@ -178,19 +279,14 @@ def invoke_viz_llm(prompt: str, effort: str = INSIGHT_EFFORT):
     if viz_llm is None:
         raise RuntimeError("Visualization LLM is not configured")
 
-    kwargs: Dict[str, Any] = {"max_tokens": _VIZ_MAX_TOKENS}
-    if _VIZ_IS_REASONING:
-        if _VIZ_BACKEND == "openrouter":
-            # OpenRouter takes reasoning settings as a `reasoning` object.
-            kwargs["extra_body"] = {"reasoning": {"effort": effort}}
-        else:
-            kwargs["reasoning_effort"] = effort
+    kwargs = _viz_request_kwargs(effort)
     try:
         return viz_llm.invoke(prompt, **kwargs)
     except Exception as exc:
-        if _is_auth_error(exc):
-            # A rejected key fails identically without the kwargs; retrying
-            # only doubles the latency and the log noise.
+        if _is_auth_error(exc) or _is_timeout(exc) or _is_rate_limit(exc):
+            # A rejected key, a timeout or a rate limit fails identically
+            # without the kwargs; retrying only doubles the latency and the
+            # log noise.
             raise
         # A provider that rejects these kwargs must not cost us the chart.
         logger.warning("Viz LLM rejected tuning kwargs (%s); retrying plain.", exc)
@@ -211,11 +307,19 @@ _DATE_RE = re.compile(
     r"^\s*(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:[ T]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?)?\s*$"
 )
 # Column names that label an identifier, not a measure: "Room Number",
-# "Patient ID", "zip_code", "Policy No".
+# "Patient ID", "zip_code", "Policy No", and geographic codes ("census_tract",
+# "state_fips", "geoid", "msamd", "cbsa"): a census tract read as a number was
+# histogrammed and shown as "60B".
 _ID_NAME_RE = re.compile(
-    r"(?:^|[\s_\-])(id|no|num|number|code|uuid|key|phone|zip|zipcode|postcode|pin|pincode)$",
+    r"(?:^|[\s_\-])(id|no|num|number|code|uuid|key|phone|zip|zipcode|postcode|pin|pincode"
+    r"|tract|census[\s_\-]?tract|fips|geoid|geo[\s_\-]?id|msamd|msa|cbsa)$",
     re.IGNORECASE,
 )
+# A whole-number column holding calendar years (activity_year: 2018..2024).
+# Charted as a measure it put 2018-2024 at the far right of a 0-2200 axis.
+_YEAR_NAME_RE = re.compile(r"(?:^|[\s_\-])(year|yr|fy|fiscal[\s_\-]?year)(?:$|[\s_\-])", re.IGNORECASE)
+YEAR_MIN, YEAR_MAX = 1900, 2100
+YEAR_MAX_DISTINCT = 60
 DATE_MATCH_RATIO = 0.8
 # A table this small is a computed result (top 20 niches, top 15 countries):
 # a column with one distinct value per row is that row's LABEL, not an ID.
@@ -390,6 +494,33 @@ def profile_columns(
                 and (stats["max"] - stats["min"] + 1) <= 1.1 * n_unique
             )
             role = "identifier" if (name_is_id or is_sequence) else "measure"
+            is_year = (
+                role == "measure"
+                and all_int
+                and YEAR_MIN <= stats["min"] and stats["max"] <= YEAR_MAX
+                and (bool(_YEAR_NAME_RE.search(str(col).strip())) or n_unique <= YEAR_MAX_DISTINCT)
+            )
+            if is_year:
+                # A year is a point in time, not an amount: count rows per
+                # year (in calendar order) instead of a histogram or scatter.
+                year_counts = Counter(_category_label(v) for v in numeric_vals)
+                profiles.append(
+                    {
+                        "name": col,
+                        "dtype": "categorical",
+                        "role": "dimension",
+                        "is_year": True,
+                        "missing_ratio": missing_ratio,
+                        "n_unique": len(year_counts),
+                        "stats": {
+                            "top_k": [{"value": v, "count": c}
+                                      for v, c in year_counts.most_common(15)],
+                            "min": int(stats["min"]),
+                            "max": int(stats["max"]),
+                        },
+                    }
+                )
+                continue
         else:
             dtype = "categorical"
 
@@ -525,6 +656,45 @@ def _pearson(pairs: List[Tuple[float, float]]) -> Optional[float]:
     return sxy / math.sqrt(sxx * syy)
 
 
+# Pairwise correlation over many columns (redundant measures, scatter
+# candidates, dataset summary) used to convert every cell with _to_float once
+# per PAIR: 84 columns x 7,000 rows took ~5 s. Each column is now converted
+# once per row set and correlated with numpy; results are identical.
+# Per thread: two uploads build their charts at the same time in different
+# threads, and must never read each other's columns.
+_CORR_CACHE = threading.local()
+
+
+def _float_column(rows: List[Dict[str, Any]], name: str):
+    import numpy as np
+    cache = getattr(_CORR_CACHE, "state", None)
+    if cache is None or cache["rows"] is not rows or cache["n"] != len(rows):
+        cache = {"rows": rows, "n": len(rows), "cols": {}}
+        _CORR_CACHE.state = cache
+    col = cache["cols"].get(name)
+    if col is None:
+        vals = [_to_float(r.get(name)) for r in rows]
+        col = np.array([np.nan if v is None else v for v in vals], dtype=float)
+        cache["cols"][name] = col
+    return col
+
+
+def _corr(rows: List[Dict[str, Any]], xf: str, yf: str) -> Optional[float]:
+    """Same result as _pearson(_paired(rows, xf, yf)), much faster in loops."""
+    import numpy as np
+    x, y = _float_column(rows, xf), _float_column(rows, yf)
+    ok = ~(np.isnan(x) | np.isnan(y))
+    n = int(ok.sum())
+    if n < 3:
+        return None
+    xs, ys = x[ok], y[ok]
+    dx, dy = xs - xs.mean(), ys - ys.mean()
+    sxx, syy = float(dx @ dx), float(dy @ dy)
+    if sxx <= 0 or syy <= 0:
+        return None
+    return float(dx @ dy) / math.sqrt(sxx * syy)
+
+
 def _is_binary_01(profile: Optional[Dict[str, Any]]) -> bool:
     """A numeric column whose only values are 0 and 1: a yes/no outcome
     (hospital_death, churn). Its meaningful summary is a rate, not a sum,
@@ -630,7 +800,7 @@ def select_charts(
         for col in important_numeric:
             twin = None
             for k in kept:
-                r = _pearson(_paired(sample_rows, k["name"], col["name"]))
+                r = _corr(sample_rows, k["name"], col["name"])
                 if r is not None and abs(r) >= REDUNDANT_CORRELATION:
                     twin = (k["name"], r)
                     break
@@ -735,7 +905,7 @@ def select_charts(
             names = [c["name"] for c in important_numeric]
             for i, xa in enumerate(names):
                 for yb in names[i + 1:]:
-                    r = _pearson(_paired(sample_rows, xa, yb))
+                    r = _corr(sample_rows, xa, yb)
                     if r is not None and abs(r) >= MIN_SCATTER_CORRELATION:
                         pairs_scored.append((abs(r), xa, yb))
             pairs_scored.sort(reverse=True)
@@ -1019,6 +1189,55 @@ def _build_extra_pie_chart(
 # -------------------------------------------------------------------
 
 SCATTER_MAX_POINTS = 500
+# Heavy skew (|skewness| >= this) on a column with enough rows: the 1% long
+# tail is folded into one bar (histogram) or left off the plot (scatter).
+SKEW_CAP_THRESHOLD = 2.0
+SKEW_CAP_TAIL = 0.01
+SKEW_CAP_MIN_ROWS = 50
+
+
+def _quantile(sorted_vals: List[float], q: float) -> float:
+    """q-th quantile (0..1) of an already-sorted list, linear interpolation."""
+    if not sorted_vals:
+        return float("nan")
+    pos = (len(sorted_vals) - 1) * q
+    i = int(pos)
+    j = min(i + 1, len(sorted_vals) - 1)
+    return sorted_vals[i] + (sorted_vals[j] - sorted_vals[i]) * (pos - i)
+
+
+def _skewness(vals: List[float]) -> float:
+    n = len(vals)
+    if n < 3:
+        return 0.0
+    mean = statistics.fmean(vals)
+    std = statistics.pstdev(vals)
+    if std <= 0:
+        return 0.0
+    return sum((x - mean) ** 3 for x in vals) / n / std ** 3
+
+
+def _tail_caps(vals: List[float]) -> Tuple[Optional[float], Optional[float]]:
+    """(low_cap, high_cap) for a heavily skewed column: the 1st / 99th
+    percentile on the long side, None on a side that is not long. A handful of
+    extreme values otherwise squash every other row into one bar or blob."""
+    if len(vals) < SKEW_CAP_MIN_ROWS:
+        return None, None
+    skew = _skewness(vals)
+    if abs(skew) < SKEW_CAP_THRESHOLD:
+        return None, None
+    sv = sorted(vals)
+    lo, hi = sv[0], sv[-1]
+    low_cap = high_cap = None
+    if skew > 0:
+        p = _quantile(sv, 1 - SKEW_CAP_TAIL)
+        if lo < p < hi:
+            high_cap = p
+    else:
+        p = _quantile(sv, SKEW_CAP_TAIL)
+        if lo < p < hi:
+            low_cap = p
+    return low_cap, high_cap
 
 
 def _ground_histogram(
@@ -1031,23 +1250,36 @@ def _ground_histogram(
     lo, hi = min(vals), max(vals)
     nbins = max(5, min(int(nbins or 30), 50))
 
+    # Heavy skew: bin the body of the data and fold the long tail into one
+    # end bar ("1.2M+"), so the bulk of the rows is readable.
+    low_cap, high_cap = _tail_caps(vals)
+    b_lo = low_cap if low_cap is not None else lo
+    b_hi = high_cap if high_cap is not None else hi
+
     counts: List[int] = []
     if hi == lo:
         points = [{"x": _fmt_num(lo), "x0": lo, "x1": hi, "y": n}]
     else:
-        width = (hi - lo) / nbins
+        width = (b_hi - b_lo) / nbins
         counts = [0] * nbins
         for v in vals:
-            counts[min(int((v - lo) / width), nbins - 1)] += 1
+            i = int((min(max(v, b_lo), b_hi) - b_lo) / width)
+            counts[min(max(i, 0), nbins - 1)] += 1
         points = [
             {
-                "x": f"{_fmt_num(lo + i * width)}–{_fmt_num(lo + (i + 1) * width)}",
-                "x0": round(lo + i * width, 6),
-                "x1": round(lo + (i + 1) * width, 6),
+                "x": f"{_fmt_num(b_lo + i * width)}–{_fmt_num(b_lo + (i + 1) * width)}",
+                "x0": round(b_lo + i * width, 6),
+                "x1": round(b_lo + (i + 1) * width, 6),
                 "y": c,
             }
             for i, c in enumerate(counts)
         ]
+        if high_cap is not None:
+            points[-1]["x"] = f"{_fmt_num(points[-1]['x0'])}+"
+            points[-1]["x1"] = hi
+        if low_cap is not None:
+            points[0]["x"] = f"≤{_fmt_num(points[0]['x1'])}"
+            points[0]["x0"] = lo
 
     med = statistics.median(vals)
     mean = statistics.fmean(vals)
@@ -1080,6 +1312,19 @@ def _ground_histogram(
             i = counts.index(max(counts))
             parts.append(f"The most common range is {points[i]['x']} ({counts[i]:,} rows).")
 
+    if high_cap is not None:
+        n_tail = sum(1 for v in vals if v > high_cap)
+        parts.append(
+            f"The top {n_tail:,} values (above {_fmt_num(high_cap)}, up to {_fmt_num(hi)}) "
+            f"are grouped in the last bar so the rest of the distribution is readable."
+        )
+    if low_cap is not None:
+        n_tail = sum(1 for v in vals if v < low_cap)
+        parts.append(
+            f"The lowest {n_tail:,} values (below {_fmt_num(low_cap)}, down to {_fmt_num(lo)}) "
+            f"are grouped in the first bar so the rest of the distribution is readable."
+        )
+
     neg = sum(1 for v in vals if v < 0)
     if 0 < neg <= 0.05 * n:
         parts.append(f"{neg:,} values are negative, which may be data-entry errors worth checking.")
@@ -1089,6 +1334,8 @@ def _ground_histogram(
         parts.append(f"{missing:,} rows ({missing / len(rows):.1%}) have no value.")
 
     meta = {"n": n, "min": lo, "max": hi, "median": med, "mean": mean, "skewness": skew}
+    if low_cap is not None or high_cap is not None:
+        meta["capped"] = {"low": low_cap, "high": high_cap}
     return points, meta, " ".join(parts)
 
 
@@ -1099,9 +1346,19 @@ def _ground_scatter(
     if len(pairs) < 3:
         return None
     n = len(pairs)
-    r = _pearson(pairs)
-    step = max(1, n // SCATTER_MAX_POINTS)
-    points = [{"x": x, "y": y} for x, y in pairs[::step]][:SCATTER_MAX_POINTS]
+    r = _pearson(pairs)   # measured on every pair, extremes included
+    # Heavy skew on either axis: draw the body of the data and say how many
+    # extreme points are left off, instead of one blob in a corner.
+    xl, xh = _tail_caps([x for x, _ in pairs])
+    yl, yh = _tail_caps([y for _, y in pairs])
+    drawn = [
+        (x, y) for x, y in pairs
+        if (xl is None or x >= xl) and (xh is None or x <= xh)
+        and (yl is None or y >= yl) and (yh is None or y <= yh)
+    ]
+    n_hidden = n - len(drawn)
+    step = max(1, len(drawn) // SCATTER_MAX_POINTS)
+    points = [{"x": x, "y": y} for x, y in drawn[::step]][:SCATTER_MAX_POINTS]
 
     if r is None:
         text = (
@@ -1124,7 +1381,12 @@ def _ground_scatter(
                 f"(r = {r:.2f}) across {n:,} rows in the sample."
             )
 
-    meta = {"n": n, "r": r, "points_shown": len(points)}
+    if n_hidden:
+        text += (
+            f" {n_hidden:,} extreme points are left off the plot so the rest is "
+            f"readable; the correlation uses every row."
+        )
+    meta = {"n": n, "r": r, "points_shown": len(points), "points_hidden": n_hidden}
     return points, meta, text
 
 
@@ -1151,6 +1413,27 @@ def _agg_label(agg: str, yf: Optional[str]) -> str:
     }.get(agg, agg.capitalize()) + f" {yf}"
 
 
+def _is_year_keys(values: Dict[str, Any]) -> bool:
+    """Every category is a calendar year (2018, 2019, ...)."""
+    if len(values) < 2:
+        return False
+    for k in values:
+        if not re.fullmatch(r"\d{4}", str(k)) or not (YEAR_MIN <= int(k) <= YEAR_MAX):
+            return False
+    return True
+
+
+def _category_label(raw: Any) -> str:
+    """A category's label. A whole-number float (a year read as 1970.0) is
+    shown as 1970."""
+    if isinstance(raw, float) and raw.is_integer():
+        return str(int(raw))
+    text = str(raw).strip()
+    if re.fullmatch(r"-?\d+\.0+", text):
+        return text.split(".")[0]
+    return text
+
+
 def _ground_categories(
     rows: List[Dict[str, Any]],
     xf: str,
@@ -1163,7 +1446,7 @@ def _ground_categories(
     groups: Dict[str, List[float]] = defaultdict(list)
     for r in rows:
         raw = r.get(xf)
-        key = "(missing)" if _is_missing(raw) else str(raw).strip()
+        key = "(missing)" if _is_missing(raw) else _category_label(raw)
         if yf is None or agg == "count":
             counts[key] += 1
         else:
@@ -1195,7 +1478,12 @@ def _ground_categories(
     rest = ordered[top_k:]
     additive = (yf is None or agg in ("count", "sum")) and not signed
     is_binary_count = (yf is None or agg == "count") and _is_binary_keys(values)
-    points = [{"x": k, "y": round(v, 2)} for k, v in shown]
+    if not is_pie and _is_year_keys(values):
+        # Years read left to right in time: the most recent top_k years.
+        by_year = sorted(values.items(), key=lambda kv: int(kv[0]))
+        points = [{"x": k, "y": round(v, 2)} for k, v in by_year[-top_k:]]
+    else:
+        points = [{"x": k, "y": round(v, 2)} for k, v in shown]
     if is_binary_count:
         # Readable labels for a yes/no column ("hospital_death = 1").
         for p in points:
@@ -1225,8 +1513,13 @@ def _ground_categories(
             for k, v in listed
         )
         noun = "largest groups" if len(ordered) > 3 else "groups"
-        scope = (f" (out of the {_fmt_num(total)} rows with a value for {xf})"
-                 if missing_val else "")
+        if not missing_val:
+            scope = ""
+        elif unit == "rows":
+            scope = f" (out of the {_fmt_num(total)} rows with a value for {xf})"
+        else:
+            # "out of the 10679.70B rows" was a sum of video views, not rows.
+            scope = f" (out of a total of {_fmt_num(total)} across rows with a value for {xf})"
         parts.append(f"{label} by {xf}: the {noun} are {desc}{scope} in the sample.")
 
         if len(ordered) > 4:
@@ -1435,7 +1728,8 @@ def _ground_rate_by_bins(
             continue
         a = lo + i * width
         b = hi if i == n_bins - 1 else (a + width - 1 if all_int else a + width)
-        label = f"{_fmt_num(a)}–{_fmt_num(b)}"
+        # A band of one value (a 1-6 score) reads "1", not "1–1".
+        label = _fmt_num(a) if _fmt_num(a) == _fmt_num(b) else f"{_fmt_num(a)}–{_fmt_num(b)}"
         rate = k / n
         points.append({"x": label, "y": round(rate * 100, 1), "n": n, "rate": round(rate, 4)})
         bands.append((label, rate, n))
@@ -1482,6 +1776,10 @@ def _ground_rate_by_group(
         g[1] += int(y)
     if len(groups) < 2:
         return None
+    if _is_binary_keys(groups):
+        # A yes/no driver (arf_apache, intubated_apache): "highest for 1.0,
+        # lowest for 0.0" means nothing to a reader.
+        groups = {("Yes" if key.startswith("1") else "No"): v for key, v in groups.items()}
     total_n = sum(n for n, _ in groups.values())
     overall = sum(k for _, k in groups.values()) / total_n
     ordered = sorted(((key, ones / n, n) for key, (n, ones) in groups.items()),
@@ -1688,6 +1986,7 @@ def _ground_chart(
         return False
 
     points, meta, text = result
+    raw_points = list(points)
     on_full_file = scope != "in the sample"
     if on_full_file:
         text = text.replace("in the sample", scope)
@@ -1702,21 +2001,82 @@ def _ground_chart(
     # The chart's numbers are computed here. An LLM sentence that disagrees with
     # them (other denominator, sample vs full file) is replaced, so the user never
     # sees 33.5% in the text and 34.2% in the chart.
-    llm_text = chart.get("insight")
-    if llm_text and chart.get("insight_source") == "llm":
-        why = _llm_text_conflict(str(llm_text), ctype, meta, on_full_file)
+    # The exact, data-written numbers are always available on their own, so the
+    # UI can show them under the finding.
+    chart["insight_facts"] = text
+    label_col = _enc_field(enc, "color") if ctype == "pie" else _enc_field(enc, "x")
+    col_top = ((profiles.get(label_col or "") or {}).get("stats") or {}).get("top_k") or []
+    other_labels = [str(t.get("value")) for t in col_top if t.get("value") not in (None, "nan")]
+    llm_text = None
+    if chart.get("insight_source") == "llm":
+        llm_text = chart.get("llm_insight") or chart.get("insight")
+    if llm_text:
+        llm_text = str(llm_text).strip()
+        why = (_llm_text_conflict(llm_text, ctype, meta, on_full_file)
+               or _llm_claim_conflict(llm_text, ctype, raw_points, text,
+                                      shares=meta.get("shares"), other_labels=other_labels,
+                                      x_field=label_col))
         if why:
             logger.info("Visualization agent: replacing LLM insight for %r (%s)", chart.get("title"), why)
             derived["llm_insight_replaced"] = llm_text
             derived["llm_insight_replaced_because"] = why
             chart["insight"] = None
             chart["reason"] = None
+            chart["insight_source"] = None
+        elif not _has_measurements(llm_text):
+            # Meaning from the model, numbers from the rows (all rows of the
+            # file when it was re-read, else the sample). A small file that
+            # is never re-read must still show its numbers.
+            combined = llm_text.rstrip(". ") + ". " + text
+            chart["insight"] = combined
+            chart["reason"] = combined
+        else:
+            chart["insight"] = llm_text
+            chart["reason"] = llm_text
 
     if not chart.get("insight"):
         chart["insight"] = text
         chart["reason"] = text
         chart["insight_source"] = "data"
+    # The finding on its own (short, no numbers) for a UI that shows the
+    # numbers separately from `insight_facts`; None when no finding survived.
+    chart["headline"] = llm_text if (llm_text and chart.get("insight_source") == "llm") else None
+
+    # The model's title states a finding too ("Cancer cases drive higher bills"
+    # over a chart where Cancer is LOWEST). Keep it only when its sentence
+    # survived and the title passes the same checks; else a neutral title.
+    llm_title = chart.get("llm_title")
+    if llm_title:
+        title_why = None
+        if chart.get("insight_source") != "llm":
+            title_why = "its finding was replaced"
+        else:
+            title_why = (_llm_text_conflict(str(llm_title), ctype, meta, on_full_file)
+                         or _llm_claim_conflict(str(llm_title), ctype, raw_points, text,
+                                                shares=meta.get("shares"), other_labels=other_labels,
+                                                x_field=label_col))
+        if title_why:
+            neutral = _neutral_title(text, ctype, enc)
+            logger.info("Visualization agent: title %r -> %r (%s)", llm_title, neutral, title_why)
+            derived["llm_title_replaced"] = llm_title
+            chart["title"] = neutral
+        else:
+            chart["title"] = llm_title
     return True
+
+
+def _neutral_title(text: str, ctype: str, enc: Dict[str, Any]) -> str:
+    """A title that only names what is plotted: the data sentence's lead-in
+    ("Average Billing Amount by Medical Condition"), or the axes."""
+    head = text.split(":", 1)[0].strip() if ":" in text[:90] else ""
+    if head and len(head) <= 80:
+        return head
+    xf, yf = _enc_field(enc, "x") or _enc_field(enc, "color"), _enc_field(enc, "y")
+    if ctype == "histogram" and xf:
+        return f"Distribution of {xf}"
+    if ctype == "scatter" and xf and yf:
+        return f"{yf} vs {xf}"
+    return f"{yf} by {xf}" if (xf and yf) else (f"Records by {xf}" if xf else "Chart")
 
 
 def _ground_all(
@@ -1844,6 +2204,304 @@ _INSIGHT_SYSTEM_PROMPT = (
 )
 
 
+# When the whole file is re-read after this call, every chart's exact numbers
+# are recomputed from all rows. Numbers the model copies from the sample
+# profile then never match, and the old rule ("say 'in the sample'") made every
+# such sentence fail the full-file check, so each one was replaced by the
+# data-written "Records by X: the largest groups are..." template. Here the
+# model writes what the finding MEANS; the data adds the exact numbers.
+_FULL_FILE_INSIGHT_RULES = (
+    "\n\nIMPORTANT, this overrides the rules above about numbers and 'in the sample': "
+    "after you answer, every chart's exact numbers are computed from ALL rows of the "
+    "file and appended to your sentence automatically. So in `insight`:\n"
+    "- Use NO digits at all: no counts, percentages, averages or ratios, and never "
+    "the word 'sample'. Words such as 'about a third', 'most', 'several times higher', "
+    "'the highest' and 'the lowest' are fine.\n"
+    "- Say what the finding means for this domain and why it matters: what it suggests, "
+    "what risk or opportunity it points to, or what to check next. Name the groups and "
+    "columns involved.\n"
+    "- Do not just restate a distribution (\"X is the largest group\"). Prefer relationships "
+    "between columns, differences between groups, outcomes, trends and data-quality risks."
+)
+
+# Added when the profiling step's results are available (upload path).
+_DATASET_CONTEXT_RULES = (
+    "\n\ndataset_context comes from the profiling step: the dataset's domain, what "
+    "each column means (column_meanings) and data issues already found (known_issues). "
+    "Use it:\n"
+    "- Write every finding in that domain's terms and say why it matters to someone "
+    "working in it (a risk, a cost, an opportunity, or what to check next).\n"
+    "- A category column whose groups are about the same size is NOT a finding. Never "
+    "rank such groups or call one of them higher or lower; at most one finding may say "
+    "that the data is evenly split, and only when nothing stronger exists.\n"
+    "- Prefer, in this order: an outcome's rate across groups; a measure compared "
+    "across groups (y_field set, e.g. average amount per category); a relationship "
+    "between two measures; a trend over time; an outlier, skew or data-quality issue "
+    "(known_issues).\n"
+    "- A plain count of rows per category is the weakest kind of finding; use it only "
+    "when one group clearly dominates."
+)
+
+_DIGIT_RE = re.compile(r"\d")
+
+# Number-free sentences pass the number check by construction, so their CLAIMS
+# are checked against the chart instead: which group is highest or lowest, and
+# which way a trend goes. ("Emergency admissions generate the highest billing"
+# on a chart where Elective is highest and the gap is 0% must not be shown.)
+_HIGH_WORDS_RE = re.compile(
+    r"\b(highest|most|largest|biggest|greatest|top|leading|dominat\w*|higher|more|larger|bigger|"
+    r"stand(?:s|ing)?\s+out|outperform\w*|far\s+ahead)\b",
+    re.IGNORECASE)
+_LOW_WORDS_RE = re.compile(r"\b(lowest|least|smallest|fewest|lower|less|fewer)\b", re.IGNORECASE)
+_UP_WORDS_RE = re.compile(r"\b(climb\w*|ris(?:e|es|ing)|increas\w*|grow\w*|upward|surg\w*)\b", re.IGNORECASE)
+_DOWN_WORDS_RE = re.compile(r"\b(declin\w*|fall(?:s|ing)?|decreas\w*|drop\w*|downward|shrink\w*)\b", re.IGNORECASE)
+_CLAUSE_END_RE = re.compile(r"[.,;:]|\b(?:while|whereas|but|although|though)\b", re.IGNORECASE)
+_NEARLY_EQUAL_RATIO = 1.05
+# "Some conditions generate higher billing" / "billing differs across insurers"
+# over groups 3% / 1% apart: a difference claimed without naming a group.
+_DIFFERENCE_RE = re.compile(
+    r"\b(differ\w*|vary|varies|varying|variation|driv(?:e|es|en|er|ers|ing)|higher|lower|"
+    r"stand(?:s|ing)?\s+out|significant\w*|substantial\w*|marked\w*)\b", re.IGNORECASE)
+_SAMENESS_RE = re.compile(
+    r"\b(not|no|little|barely|hardly|similar\w*|equal\w*|balanced|even\w*|uniform\w*|comparable)\b",
+    re.IGNORECASE)
+_MAJORITY_RE = re.compile(r"\b(majority|most of|bulk of|the bulk|overwhelming|lion'?s share)\b", re.IGNORECASE)
+_STRONG_RE = re.compile(r"\b(strong\w*|closely|tight\w*|substantial\w*|marked\w*)\b", re.IGNORECASE)
+_WEAK_RE = re.compile(r"\b(weak\w*|no (?:clear |real )?(?:relationship|link|correlation)|little relationship)\b",
+                      re.IGNORECASE)
+
+
+def _has_measurements(text: str) -> bool:
+    """True when a sentence quotes its own figures (a %, or a number that is
+    not small wording like 'Day-1', '3 groups' or a year). Such a sentence is
+    checked number by number; one without figures gets the data's figures."""
+    if "%" in text:
+        return True
+    for m in _NUM_RE.finditer(text):
+        try:
+            n, _ = _parse_num(m.group(1))
+        except ValueError:
+            continue
+        if not (n.is_integer() and (abs(n) < 10 or 1900 <= n <= 2100)):
+            return True
+    return False
+
+
+def _rate_chart_insight(insight: Optional[str]) -> Dict[str, Any]:
+    """Fields for a chart the agent turned into a 0/1 outcome RATE chart.
+
+    Its numbers (rates per group or band) are always written by the data. The
+    model's sentence is kept only when it carries no figures of its own: its
+    claims (which group is highest, which way the rate goes) are then checked
+    against the rates in _ground_chart. Dropping it outright left datasets with
+    an outcome column (hospital_death) with nothing but data templates."""
+    if (
+        insight
+        and not _has_measurements(insight)
+        and len(insight.split()) >= _MIN_FINDING_WORDS
+        and not _COUNT_CLAIM_RE.search(insight)
+    ):
+        return {"insight": insight, "reason": insight, "insight_source": "llm", "llm_insight": insight}
+    return {"insight": None, "reason": None, "insight_source": None, "llm_insight": None}
+
+
+# A rate chart's finding must be about the RATE. "Older patients show higher
+# death counts" only says there are more older patients, so it is dropped and
+# the data writes the sentence. A two-word stub ("x", "see chart") is no finding.
+_MIN_FINDING_WORDS = 3
+_COUNT_CLAIM_RE = re.compile(
+    r"\b(counts?|number of|how many|frequenc(?:y|ies)|volumes?|totals?)\b", re.IGNORECASE
+)
+
+
+def _claim_clause(text: str, start: int, end: int, limit: int = 90) -> str:
+    """The whole clause around a group name, both sides:
+    'with conditions like cancer and hypertension standing out'."""
+    before = text[max(0, start - limit):start]
+    cut = None
+    for m in _CLAUSE_END_RE.finditer(before):
+        cut = m.end()
+    before = before[cut:] if cut is not None else before
+    after = text[end:end + limit]
+    m = _CLAUSE_END_RE.search(after)
+    after = after[: m.start()] if m else after
+    return before + " " + after
+
+
+def _label_spans(label: str, text: str):
+    """Where a group name appears in a sentence, ignoring spacing and
+    punctuation between its words: the label "Operating Room / Recovery"
+    matches "operating room/recovery" (exact matching missed it, so a wrong
+    claim about that group went through)."""
+    words = re.findall(r"[A-Za-z0-9]+", str(label))
+    if not words:
+        return iter(())
+    pattern = r"[\s/&,.\-]*".join(re.escape(w) for w in words)
+    # A plural is the same group: "MICUs" is MICU, "Med-Surg ICUs" is Med-Surg ICU
+    # (missed before, so "Med-Surg ICUs higher than MICUs" went through).
+    return re.finditer(r"(?<![\w-])" + pattern + r"(?:s|es|'s)?(?![\w-])", text, re.IGNORECASE)
+
+
+_COMPARE_RE = re.compile(
+    r"\b(?P<dir>higher|greater|more|larger|bigger|worse|lower|less|fewer|smaller|better)\b"
+    r"[^.;]{0,80}?\b(?:than|compared (?:with|to)|versus|vs\.?)\b", re.IGNORECASE)
+_HIGH_DIR = {"higher", "greater", "more", "larger", "bigger", "worse"}
+# Name parts that say nothing about what a yes/no column means.
+_GENERIC_NAME_WORDS = {"apache", "d1", "h1", "is", "has", "flag", "ind", "yn", "bool"}
+_NEGATION_RE = re.compile(r"\b(non|not|no|without|never)\W*$", re.IGNORECASE)
+
+
+def _comparison_conflict(text: str, groups: List[Tuple[str, Any]]) -> Tuple[bool, Optional[str]]:
+    """'A ... higher ... than B': (handled, conflict reason or None).
+
+    handled=True means the sentence is a comparison of two of the chart's
+    groups and was checked here, so the one-group rules must not run (they
+    would read 'higher' next to B and call B high)."""
+    m = _COMPARE_RE.search(text)
+    if not m:
+        return False, None
+    values = {g[0]: g[1] for g in groups}
+    before = [(sp.start(), lab) for lab in values for sp in _label_spans(lab, text[:m.start()])
+              if len(lab) >= 3]
+    after = [(sp.start(), lab) for lab in values for sp in _label_spans(lab, text[m.end():])
+             if len(lab) >= 3]
+    if not before or not after:
+        return False, None
+    a = max(before)[1]            # the group named closest before the comparison word
+    b = min(after)[1]             # the first group named after "than"
+    if a == b:
+        return False, None
+    says_higher = m.group("dir").lower() in _HIGH_DIR
+    if (says_higher and values[a] < values[b]) or (not says_higher and values[a] > values[b]):
+        word = "higher" if says_higher else "lower"
+        return True, (f"it says {a!r} is {word} than {b!r}, but {a} is {values[a]:g} "
+                      f"and {b} is {values[b]:g}")
+    return True, None
+
+
+def _yes_no_conflict(text: str, groups: List[Tuple[str, Any]], x_field: Optional[str]) -> Optional[str]:
+    """For a yes/no column ('Post-operative admissions carry a higher risk'):
+    the sentence names the column's meaning, not 'Yes', so check its
+    direction against the Yes and No groups."""
+    values = {g[0]: g[1] for g in groups}
+    if set(values) != {"Yes", "No"} or not x_field:
+        return None
+    words = [w for w in re.findall(r"[a-z0-9]+", str(x_field).lower()) if w not in _GENERIC_NAME_WORDS]
+    if not words:
+        return None
+    norm = " " + re.sub(r"[^a-z0-9]+", " ", text.lower()) + " "
+    m = re.search(r"(?<= )" + r" ".join(re.escape(w) for w in words) + r"(?= )", norm)
+    if not m:
+        return None
+    negated = bool(_NEGATION_RE.search(norm[:m.start()][-20:]))
+    high = bool(re.search(r"\b(higher|greater|more|increas\w*|elevated|worse|raises?)\b", text, re.IGNORECASE))
+    low = bool(re.search(r"\b(lower|less|fewer|reduc\w*|decreas\w*|protective|better)\b", text, re.IGNORECASE))
+    if high == low:
+        return None
+    yes_higher_claimed = high != negated
+    if yes_higher_claimed and values["Yes"] < values["No"]:
+        return (f"it says {x_field} = Yes is higher, but Yes is {values['Yes']:g} "
+                f"and No is {values['No']:g}")
+    if not yes_higher_claimed and values["Yes"] > values["No"]:
+        return (f"it says {x_field} = Yes is lower, but Yes is {values['Yes']:g} "
+                f"and No is {values['No']:g}")
+    return None
+
+
+def _llm_claim_conflict(
+    text: str,
+    ctype: str,
+    points: List[Dict[str, Any]],
+    data_text: str,
+    shares: Optional[Dict[str, float]] = None,
+    other_labels: Optional[List[str]] = None,
+    x_field: Optional[str] = None,
+) -> Optional[str]:
+    """Why a sentence's claims contradict the chart, or None.
+
+    other_labels: values of the category column that are NOT among the chart's
+    groups. A bar shows the top groups, so such a value can never be "the
+    highest" (US and India "enjoy far higher average views" when the chart's
+    highest is Turkey)."""
+    if ctype in ("bar", "pie"):
+        groups = [(str(p.get("x")), p.get("y")) for p in points
+                  if isinstance(p.get("y"), (int, float)) and str(p.get("x")) != "Other"]
+        if len(groups) >= 2:
+            top = max(groups, key=lambda g: g[1])
+            bottom = min(groups, key=lambda g: g[1])
+            nearly_equal = bottom[1] > 0 and top[1] / bottom[1] < _NEARLY_EQUAL_RATIO
+            if nearly_equal and _DIFFERENCE_RE.search(text) and not _SAMENESS_RE.search(text):
+                return (f"it claims the groups differ, but they are nearly equal "
+                        f"({top[0]} {top[1]:g} vs {bottom[0]} {bottom[1]:g})")
+            why = _yes_no_conflict(text, groups, x_field)
+            if why:
+                return why
+            handled, why = _comparison_conflict(text, groups)
+            if why:
+                return why
+            for label, _ in ([] if handled else groups):
+                if len(label) < 3:
+                    continue
+                for m in _label_spans(label, text):
+                    clause = _claim_clause(text, m.start(), m.end())
+                    says_high = bool(_HIGH_WORDS_RE.search(clause))
+                    says_low = bool(_LOW_WORDS_RE.search(clause))
+                    if (says_high or says_low) and nearly_equal:
+                        return (f"it ranks {label!r}, but the groups are nearly equal "
+                                f"({top[0]} {top[1]:g} vs {bottom[0]} {bottom[1]:g})")
+                    if says_high and not says_low and label.lower() != top[0].lower():
+                        return f"it calls {label!r} high, but the highest group is {top[0]!r}"
+                    if says_low and not says_high and label.lower() != bottom[0].lower():
+                        return f"it calls {label!r} low, but the lowest group is {bottom[0]!r}"
+            shown = {g[0].lower() for g in groups}
+            for label in other_labels or []:
+                if len(label) < 3 or label.lower() in shown:
+                    continue
+                for m in _label_spans(label, text):
+                    clause = _claim_clause(text, m.start(), m.end())
+                    if _HIGH_WORDS_RE.search(clause) and not _LOW_WORDS_RE.search(clause):
+                        return (f"it calls {label!r} high, but it is not among the chart's "
+                                f"top groups (highest is {top[0]!r})")
+
+        # "Entertainment and Music ... the vast majority" when they are 47%.
+        if shares and _MAJORITY_RE.search(text):
+            named = {k for k in shares if len(k) >= 3 and re.search(
+                r"(?<![\w-])" + re.escape(k) + r"(?![\w-])", text, re.IGNORECASE)}
+            if named:
+                combined = sum(shares[k] for k in named)
+                if combined < 0.5:
+                    return (f"it calls {', '.join(sorted(named))} a majority, but together "
+                            f"they are {combined:.0%}")
+
+    if ctype == "scatter":
+        m = re.search(r"\(r = (-?\d+(?:\.\d+)?)\)", data_text)
+        if m:
+            r = float(m.group(1))
+            if _STRONG_RE.search(text) and abs(r) < 0.5:
+                return f"it calls the relationship strong, but r = {r:.2f}"
+            if _WEAK_RE.search(text) and abs(r) >= 0.5:
+                return f"it calls the relationship weak, but r = {r:.2f}"
+            if re.search(r"\bnegative|inverse|opposite", text, re.IGNORECASE) and r > 0:
+                return f"it calls the relationship negative, but r = {r:.2f}"
+            if re.search(r"\bpositive\b", text, re.IGNORECASE) and r < 0:
+                return f"it calls the relationship positive, but r = {r:.2f}"
+
+    if ctype in ("line", "bar"):
+        if "level is flat" in data_text:
+            direction = "flat"
+        elif re.search(r"averages \+\d", data_text) or "rate rises" in data_text:
+            direction = "up"
+        elif re.search(r"averages [-\u2212]\d", data_text) or "rate falls" in data_text:
+            direction = "down"
+        else:
+            return None
+        if _UP_WORDS_RE.search(text) and direction != "up":
+            return f"it describes a rise, but the data is {direction}"
+        if _DOWN_WORDS_RE.search(text) and direction != "down":
+            return f"it describes a fall, but the data is {direction}"
+    return None
+
+
 def _split_instructions(split: Optional[Dict[str, Any]]) -> str:
     if not split:
         return ""
@@ -1869,6 +2527,8 @@ def _insight_payload(viz_profile: Dict[str, Any], user_context: Optional[Dict[st
         "user_context": user_context or {},
         "max_charts": MAX_TOTAL_CHARTS,
     }
+    if viz_profile.get("dataset_context"):
+        payload["dataset_context"] = viz_profile["dataset_context"]
     if viz_profile.get("example_rows"):
         payload["example_rows"] = viz_profile["example_rows"]
     if viz_profile.get("split"):
@@ -1877,8 +2537,11 @@ def _insight_payload(viz_profile: Dict[str, Any], user_context: Optional[Dict[st
 
 
 def _insight_prompt(viz_profile: Dict[str, Any], user_context: Optional[Dict[str, Any]]) -> str:
+    full_file = (viz_profile.get("dataset") or {}).get("chart_numbers") == "full_file"
     return (
         _INSIGHT_SYSTEM_PROMPT
+        + (_DATASET_CONTEXT_RULES if viz_profile.get("dataset_context") else "")
+        + (_FULL_FILE_INSIGHT_RULES if full_file else "")
         + _split_instructions(viz_profile.get("split"))
         + "\n\nDataset profile JSON:\n"
         + _prompt_json(_insight_payload(viz_profile, user_context))
@@ -2015,6 +2678,10 @@ def _plan_insight_requests(
             "columns": cols,
             "feature_ranking": fr,
         }
+        ctx = _context_for_columns(viz_profile.get("dataset_context"),
+                                   [c.get("name") for c in cols])
+        if ctx:
+            v["dataset_context"] = ctx
         if rows:
             v["example_rows"] = rows
         if split:
@@ -2260,6 +2927,24 @@ def _llm_suggest_chart_specs(
     return out, (None if out else "empty suggestion list")
 
 
+# Names a model uses for "number of rows per category" instead of a column.
+_ROW_COUNT_FIELDS = frozenset({
+    "count", "counts", "row_count", "rows", "n", "num_rows", "frequency",
+    "freq", "number_of_rows", "record_count", "records", "total_count",
+})
+
+
+def _is_scatter_measure(profile: Optional[Dict[str, Any]]) -> bool:
+    """A column a scatter axis can show: a real numeric measure, not a code,
+    a year or a 0/1 flag."""
+    return bool(
+        profile
+        and (profile.get("dtype") or "").lower() in NUMERIC_DTYPES
+        and profile.get("role") == "measure"
+        and not _is_binary_01(profile)
+    )
+
+
 def _charts_from_llm_suggestions(
     suggestions: List[Dict[str, Any]],
     viz_profile: Dict[str, Any],
@@ -2301,6 +2986,13 @@ def _charts_from_llm_suggestions(
             # we need at least an x_field to do anything sensible
             continue
 
+        # "count" / "rows" / "frequency" is how the model names the row count
+        # per category, not a column: chart it as a count (no y_field) instead
+        # of dropping it. A real column with that name still wins.
+        if (y_field and str(y_field) not in known_fields
+                and str(y_field).strip().lower() in _ROW_COUNT_FIELDS):
+            y_field = None
+
         # y_field is legitimately absent for a histogram, or when the chart does
         # not need one -- only a field that IS named has to be real.
         named = [f for f in (x_field, y_field) if f]
@@ -2323,6 +3015,8 @@ def _charts_from_llm_suggestions(
         base = {
             "id": f"llm_{idx}",
             "title": title,
+            # The model's own title, checked against the data like its sentence.
+            "llm_title": title,
             "type": ctype,
             "intent": intent,
             "rank": idx + 1,
@@ -2333,6 +3027,9 @@ def _charts_from_llm_suggestions(
             "insight": insight,
             "reason": insight,
             "insight_source": "llm" if insight else None,
+            # The model's own sentence, kept apart from `insight` so grounding
+            # on the full file can recombine it with the full-file numbers.
+            "llm_insight": insight,
         }
 
         # A 0/1 outcome (hospital_death) is a rate. A scatter of it is two lines
@@ -2362,13 +3059,13 @@ def _charts_from_llm_suggestions(
             base.update(
                 type="bar",
                 intent="comparison",
-                title=f"{y_field} rate by {x_field}",
+                title=f"{y_field} rate by {x_field}", llm_title=None,
                 encodings={
                     "x": {"field": x_field, "type": "ordinal"},
                     "y": {"field": y_field, "type": "quantitative", "aggregate": "mean"},
                 },
                 config={"bin_x": True, "nbins": RATE_BINS, "y_format": "percent"},
-                insight=None, reason=None, insight_source=None,
+                **_rate_chart_insight(insight),
             )
             logger.info("Visualization agent: %r is a 0/1 outcome; charted as its rate by %s bands",
                         y_field, x_field)
@@ -2378,7 +3075,35 @@ def _charts_from_llm_suggestions(
             # Categorical x: a bar of the outcome's mean per group is its rate.
             ctype = "bar"
             extra_cfg = {**extra_cfg, "aggregate": "mean"}
-            base.update(insight=None, reason=None, insight_source=None)
+            base.update(**_rate_chart_insight(insight))
+
+        if ctype == "scatter" and not (_is_scatter_measure(x_prof) and _is_scatter_measure(y_prof)):
+            # A scatter shows how two measures move together. With a year, a
+            # code or a category on an axis it is a few vertical lines of dots
+            # (activity_year vs census_tract). Category + measure is a bar of
+            # the measure's mean per category; anything else is not drawable.
+            x_cat = (x_prof.get("dtype") or "").lower() not in NUMERIC_DTYPES
+            y_cat = bool(y_prof) and (y_prof.get("dtype") or "").lower() not in NUMERIC_DTYPES
+            if x_cat and _is_scatter_measure(y_prof):
+                pass
+            elif y_cat and _is_scatter_measure(x_prof):
+                x_field, y_field = y_field, x_field
+                x_prof, y_prof = (y_prof or {}), x_prof
+            else:
+                logger.info("Visualization agent: dropping suggested scatter %r -- %r vs %r "
+                            "is not two numeric measures", title, x_field, y_field)
+                continue
+            ctype = "bar"
+            extra_cfg = {**extra_cfg, "aggregate": "mean"}
+            base["title"] = f"Average {y_field} by {x_field}"
+            # The model's sentence was about a correlation; the data writes this one.
+            base.update(llm_title=None, insight=None, reason=None,
+                        insight_source=None, llm_insight=None)
+            logger.info("Visualization agent: scatter %r has a category on one axis; "
+                        "charted as the average %s by %s", title, y_field, x_field)
+        if ctype == "histogram" and (x_prof.get("dtype") or "").lower() not in NUMERIC_DTYPES:
+            # A histogram of a year or a category is a count per value.
+            ctype, y_field = "bar", None
 
         if ctype == "histogram":
             base["type"] = "histogram"
@@ -2414,7 +3139,8 @@ def _charts_from_llm_suggestions(
                 # 0/1 outcome per category: its rate, in percent.
                 base["config"].update(rate_by_group=True, y_format="percent")
                 base["title"] = f"{y_field} rate by {x_field}"
-                base.update(insight=None, reason=None, insight_source=None)
+                base["llm_title"] = None
+                base.update(**_rate_chart_insight(insight))
         elif ctype == "pie":
             base["type"] = "pie"
             # If y_field is given, use as numeric measure; otherwise count categories
@@ -2704,6 +3430,84 @@ def _best_rate_driver(
     return best
 
 
+def _share_chart_field(chart: Dict[str, Any]) -> Optional[str]:
+    """The category column of a count/share chart (bar of row counts, or a
+    count pie); None for any other chart."""
+    enc = chart.get("encodings") or {}
+    ctype = chart.get("type")
+    if ctype == "pie":
+        theta = enc.get("theta") if isinstance(enc.get("theta"), dict) else {}
+        field = _enc_field(enc, "color") or _enc_field(enc, "x")
+        if theta.get("field") in (None, "count", field):
+            return field
+        return None
+    if ctype == "bar":
+        y = enc.get("y") if isinstance(enc.get("y"), dict) else {}
+        dd = chart.get("derived_data") or {}
+        if not y.get("field") or dd.get("y_key") == "count" or y.get("aggregate") == "count":
+            return _enc_field(enc, "x")
+    return None
+
+
+def _shares_to_outcome_rates(
+    charts: List[Dict[str, Any]],
+    column_profiles: List[Dict[str, Any]],
+    profiles_by_name: Dict[str, Dict[str, Any]],
+    rows: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Replace "records by <category>" charts with "<outcome> rate by
+    <category>" when the data has a yes/no outcome (hospital_death, churn).
+
+    A share chart repeats what the column statistics already show; the
+    outcome's rate per group is the finding. A share chart whose category is
+    already in a rate chart is dropped instead of shown twice. Datasets with
+    no outcome column are returned unchanged."""
+    outcomes = _outcome_columns(column_profiles)
+    if not outcomes or not rows:
+        return charts
+    names = [o["name"] for o in outcomes]
+    used = [(_enc_field(c.get("encodings") or {}, "y") or "") for c in charts]
+    outcome = next((n for n in names if n in used), names[0])
+    rate_fields = {
+        _enc_field(c.get("encodings") or {}, "x")
+        for c in charts
+        if c.get("type") == "bar" and _enc_field(c.get("encodings") or {}, "y") == outcome
+    }
+
+    out: List[Dict[str, Any]] = []
+    for ch in charts:
+        field = _share_chart_field(ch)
+        prof = profiles_by_name.get(field or "") or {}
+        convertible = (
+            field and field != outcome
+            and (prof.get("dtype") or "").lower() == "categorical"
+            and prof.get("role") not in ("identifier", "label")
+            and 2 <= (prof.get("n_unique") or 0) <= 15
+            and not _NOT_A_DRIVER_RE.search(str(field))
+        )
+        if not convertible:
+            out.append(ch)
+            continue
+        if field in rate_fields:
+            logger.info("Visualization agent: dropped %r, %s rate by %s is already charted",
+                        ch.get("title"), outcome, field)
+            continue
+        grounded = _ground_all([_rate_chart(outcome, field, "categorical")], rows, profiles_by_name)
+        if not grounded:
+            out.append(ch)
+            continue
+        rate = grounded[0]
+        rate["rank"] = ch.get("rank")
+        rate["replaced_share_chart"] = ch.get("title")
+        out.append(rate)
+        rate_fields.add(field)
+        logger.info("Visualization agent: %r -> %r (data has the outcome %s)",
+                    ch.get("title"), rate.get("title"), outcome)
+    for i, ch in enumerate(out, start=1):
+        ch["rank"] = i
+    return out
+
+
 def _rate_chart(outcome: str, driver: str, kind: str) -> Dict[str, Any]:
     numeric = kind == "numeric"
     return {
@@ -2748,14 +3552,24 @@ def _load_full_rows(
     path: Optional[str], source_type: Optional[str], columns: List[str]
 ) -> Optional[List[Dict[str, Any]]]:
     """Every row of the uploaded file, only the given columns. None = keep the sample."""
+    df = _read_full_frame(path, source_type, columns, _FULL_GROUND_MAX_BYTES)
+    return None if df is None else df.to_dict("records")
+
+
+def _read_full_frame(
+    path: Optional[str], source_type: Optional[str], columns: List[str], max_bytes: int
+):
+    """The uploaded file as a DataFrame with only the given columns, or None
+    (no file, too big, unreadable, or a column is missing)."""
     if not path or not columns:
         return None
     try:
         size = os.path.getsize(path)
     except OSError:
         return None
-    if size > _FULL_GROUND_MAX_BYTES:
-        logger.info("[viz-full] %s is %d bytes; keeping sample-based charts", path, size)
+    if size > max_bytes:
+        logger.info("[viz-full] %s is %d bytes (limit %d); keeping sample-based numbers",
+                    path, size, max_bytes)
         return None
     kind = (source_type or os.path.splitext(path)[1].lstrip(".")).lower()
     try:
@@ -2784,12 +3598,659 @@ def _load_full_rows(
         logger.warning("[viz-full] columns %s not found in %s; keeping sample-based charts",
                        missing[:5], path)
         return None
-    return df.to_dict("records")
+    return df
 
 
 # -------------------------------------------------------------------
 # Top-level API: build_visualization_config_from_sample
 # -------------------------------------------------------------------
+
+
+# -------------------------------------------------------------------
+# Column statistics and dataset summary (deterministic, sample-based)
+# -------------------------------------------------------------------
+
+_SUMMARY_MAX_CORR_COLUMNS = 20      # measures compared pairwise (190 pairs at most)
+_SUMMARY_MIN_CORR = 0.5             # weaker links are not worth a headline
+_SUMMARY_MISSING_RATIO = 0.2
+_SUMMARY_SKEW = 2.0
+
+
+def _round_stat(x: Any, digits: int = 4) -> Any:
+    if isinstance(x, float):
+        if math.isnan(x) or math.isinf(x):
+            return None
+        return round(x, digits)
+    return x
+
+
+def build_column_stats(column_profiles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """One compact row per column for a column-statistics table:
+    type, role, missing %, distinct values, and the numbers that describe it
+    (numeric: min/max/mean/median/std/skewness; categorical: top values with
+    their share; dates: first/last date and months covered)."""
+    out: List[Dict[str, Any]] = []
+    for c in column_profiles:
+        stats = c.get("stats") or {}
+        row: Dict[str, Any] = {
+            "name": c.get("name"),
+            "dtype": c.get("dtype"),
+            "role": c.get("role"),
+            "missing_pct": _round_stat(100.0 * float(c.get("missing_ratio") or 0.0), 2),
+            "n_unique": c.get("n_unique"),
+        }
+        if c.get("dtype") == "numeric":
+            for k in ("min", "max", "mean", "median", "std", "skewness"):
+                row[k] = _round_stat(stats.get(k))
+        elif c.get("dtype") == "datetime":
+            row.update(min=stats.get("min"), max=stats.get("max"), n_months=stats.get("n_months"))
+        else:
+            top = [t for t in (stats.get("top_k") or []) if str(t.get("value")) != "nan"]
+            total = sum(int(t.get("count") or 0) for t in top) or 0
+            row["top_values"] = [
+                {"value": t.get("value"), "count": t.get("count"),
+                 "pct": _round_stat(100.0 * (t.get("count") or 0) / total, 1) if total else None}
+                for t in top[:5]
+            ]
+        out.append(row)
+    return out
+
+
+# Column statistics are recomputed on the whole file (every column, read once
+# with pandas) so the table agrees with the chart numbers. Wide or large files
+# above this size keep the sample's statistics and say so.
+_FULL_STATS_MAX_BYTES = int(os.getenv("AVALOKA_VIZ_FULL_STATS_MAX_BYTES", str(300 * 1024 ** 2)))
+_MISSING_TOKENS = {"", "na", "nan", "null", "none"}
+
+
+def build_column_stats_full(
+    path: Optional[str],
+    source_type: Optional[str],
+    column_profiles: List[Dict[str, Any]],
+) -> Optional[List[Dict[str, Any]]]:
+    """build_column_stats, with every number computed on all rows of the file.
+
+    The column's type and role come from the sample profile, so the table
+    describes the same columns the charts use; only the numbers change.
+    Returns None (caller keeps the sample statistics) when the file cannot be
+    read in full."""
+    names = [c.get("name") for c in column_profiles if c.get("name") is not None]
+    df = _read_full_frame(path, source_type, names, _FULL_STATS_MAX_BYTES)
+    if df is None or df.empty:
+        return None
+    try:
+        import pandas as pd
+        n_rows = len(df)
+        out: List[Dict[str, Any]] = []
+        for c in column_profiles:
+            name = c.get("name")
+            s = df[name]
+            is_num_col = pd.api.types.is_numeric_dtype(s) and not pd.api.types.is_bool_dtype(s)
+            # Missing exactly as _is_missing: NaN/None, and blank/na/nan/null/none
+            # text. A numeric column holds no text, so isna() is enough (and
+            # converting 90k numbers to text per column is what made this slow).
+            if is_num_col:
+                missing = s.isna()
+            else:
+                as_text = s.astype("string").str.strip().str.lower()
+                missing = s.isna() | as_text.isin(_MISSING_TOKENS).fillna(False)
+            present = s[~missing]
+            dtype = c.get("dtype")
+            row: Dict[str, Any] = {
+                "name": name,
+                "dtype": dtype,
+                "role": c.get("role"),
+                "missing_pct": _round_stat(100.0 * float(missing.sum()) / n_rows, 2),
+            }
+            if dtype == "numeric":
+                nums = present if is_num_col \
+                    else pd.to_numeric(present.astype("string").str.replace(",", "", regex=False), errors="coerce")
+                nums = nums.dropna().astype(float)
+                row["n_unique"] = int(nums.nunique())
+                if len(nums):
+                    mean = float(nums.mean())
+                    std = float(nums.std(ddof=0)) if len(nums) > 1 else 0.0
+                    skew = (float(((nums - mean) ** 3).mean()) / std ** 3) if (len(nums) > 2 and std > 0) else 0.0
+                    row.update(min=_round_stat(float(nums.min())), max=_round_stat(float(nums.max())),
+                               mean=_round_stat(mean), median=_round_stat(float(nums.median())),
+                               std=_round_stat(std), skewness=_round_stat(skew))
+            elif dtype == "datetime":
+                parts = present.astype("string").str.extract(_DATE_RE.pattern).dropna()
+                if len(parts):
+                    y, m, d = (parts[i].astype(int) for i in (0, 1, 2))
+                    ok = m.between(1, 12) & d.between(1, 31)
+                    keys = (y[ok].map("{:04d}".format) + "-" + m[ok].map("{:02d}".format)
+                            + "-" + d[ok].map("{:02d}".format))
+                    row["n_unique"] = int(keys.nunique())
+                    if len(keys):
+                        row.update(min=str(keys.min()), max=str(keys.max()),
+                                   n_months=int(keys.str.slice(0, 7).nunique()))
+                else:
+                    row["n_unique"] = 0
+            else:
+                # Count the raw values (fast for numeric codes like 0/1), then
+                # label only the top 5; 1.0 reads as "1" like in the sample.
+                counts = present.value_counts()
+                row["n_unique"] = int(len(counts))
+                total = int(len(present))
+
+                def _label(v: Any) -> str:
+                    if isinstance(v, float) and v.is_integer():
+                        return str(int(v))
+                    return str(v)
+
+                row["top_values"] = [
+                    {"value": _label(v), "count": int(k),
+                     "pct": _round_stat(100.0 * int(k) / total, 1) if total else None}
+                    for v, k in counts.head(5).items()
+                ]
+            out.append(row)
+        return out
+    except Exception:  # noqa: BLE001 - the sample table is a fine fallback
+        logger.warning("[viz-full] full-file column stats failed; keeping sample stats", exc_info=True)
+        return None
+
+
+def _strongest_correlations(
+    rows: List[Dict[str, Any]], measures: List[Dict[str, Any]]
+) -> List[Tuple[float, str, str]]:
+    cols = sorted(measures, key=lambda c: c.get("missing_ratio") or 0.0)[:_SUMMARY_MAX_CORR_COLUMNS]
+    found: List[Tuple[float, str, str]] = []
+    for i, a in enumerate(cols):
+        for b in cols[i + 1:]:
+            r = _corr(rows, a["name"], b["name"])
+            if r is not None and _SUMMARY_MIN_CORR <= abs(r) < REDUNDANT_CORRELATION:
+                found.append((r, a["name"], b["name"]))
+    found.sort(key=lambda t: abs(t[0]), reverse=True)
+    return found
+
+
+def build_dataset_summary(
+    column_profiles: List[Dict[str, Any]],
+    sample_rows: List[Dict[str, Any]],
+    bias_diag: Optional[Dict[str, Any]] = None,
+    total_rows: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Dataset-level findings about the columns themselves: shape and types,
+    missing data, strongest relationships between measures, heavy skew and
+    columns that carry no information. Every number is computed here from the
+    sample, and each sentence says so."""
+    n = len(sample_rows)
+    insights: List[str] = []
+    if not column_profiles or not n:
+        return {"scope": "sample", "rows_sampled": n, "insights": insights}
+
+    def nm(c: Dict[str, Any]) -> str:
+        return str(c.get("name"))
+
+    measures = [c for c in column_profiles if c.get("dtype") == "numeric" and c.get("role") == "measure"
+                and not _is_binary_01(c)]
+    outcomes = [c for c in column_profiles if _is_binary_01(c)]
+    categoricals = [c for c in column_profiles if c.get("dtype") == "categorical"
+                    and c.get("role") in ("dimension", "label")]
+    dates = [c for c in column_profiles if c.get("dtype") == "datetime"]
+    identifiers = [c for c in column_profiles if c.get("role") == "identifier"]
+
+    # 1) Shape and column types
+    scope = f"{_fmt_num(n)} sampled rows"
+    if total_rows and int(total_rows) > n:
+        scope += f" (of {_fmt_num(int(total_rows))} in the file)"
+    kinds = [f"{len(measures)} numeric measures"]
+    if outcomes:
+        # "yes/no columns": elective_surgery and arf_apache are flags, not outcomes;
+        # calling all 15 "outcomes" contradicted hospital_death being THE outcome.
+        kinds.append(f"{len(outcomes)} yes/no column{'s' if len(outcomes) != 1 else ''} "
+                     f"({', '.join(nm(c) for c in sorted(outcomes, key=lambda c: not _OUTCOME_NAME_RE.search(nm(c)))[:3])})")
+    kinds.append(f"{len(categoricals)} categories")
+    if dates:
+        kinds.append(f"{len(dates)} date column{'s' if len(dates) != 1 else ''}")
+    if identifiers:
+        kinds.append(f"{len(identifiers)} ID or free-text column{'s' if len(identifiers) != 1 else ''} "
+                     f"that {'are' if len(identifiers) != 1 else 'is'} not charted")
+    insights.append(f"{len(column_profiles)} columns profiled on {scope}: " + ", ".join(kinds) + ".")
+
+    # 2) Missing data
+    gappy = sorted((c for c in column_profiles if (c.get("missing_ratio") or 0) > _SUMMARY_MISSING_RATIO),
+                   key=lambda c: c.get("missing_ratio") or 0, reverse=True)
+    cells = n * len(column_profiles)
+    missing_cells = sum((c.get("missing_ratio") or 0) * n for c in column_profiles)
+    overall = missing_cells / cells if cells else 0.0
+    if gappy:
+        worst = ", ".join(f"{nm(c)} ({(c.get('missing_ratio') or 0):.0%})" for c in gappy[:3])
+        insights.append(
+            f"{len(gappy)} column{'s are' if len(gappy) != 1 else ' is'} more than "
+            f"{_SUMMARY_MISSING_RATIO:.0%} empty in the sample; the emptiest "
+            f"{'are' if len(gappy) > 1 else 'is'} {worst}. Analyses using "
+            f"{'these columns' if len(gappy) > 1 else 'it'} will drop or need to fill many rows."
+        )
+    elif overall > 0:
+        insights.append(f"Data is largely complete: {overall:.1%} of cells are empty in the sample, "
+                        f"and no column is more than {_SUMMARY_MISSING_RATIO:.0%} empty.")
+    else:
+        insights.append("No empty values in the sampled rows.")
+
+    # 3) Strongest relationships between measures
+    corr = _strongest_correlations(sample_rows, measures)
+    if corr:
+        parts = []
+        for r, a, b in corr[:2]:
+            how = "rise together" if r > 0 else "move in opposite directions"
+            parts.append(f"{a} and {b} {how} (r = {r:.2f})")
+        insights.append("Strongest relationships between numeric columns in the sample: "
+                        + "; ".join(parts) + ".")
+
+    # 4) Heavy skew: averages misrepresent a typical row
+    skewed = sorted((c for c in measures
+                     if abs(float((c.get("stats") or {}).get("skewness") or 0.0)) >= _SUMMARY_SKEW),
+                    key=lambda c: abs(float((c.get("stats") or {}).get("skewness") or 0.0)), reverse=True)
+    if skewed:
+        c = skewed[0]
+        st = c.get("stats") or {}
+        side = "right" if float(st.get("skewness") or 0) > 0 else "left"
+        msg = (f"{nm(c)} is heavily {side}-skewed in the sample (skewness {float(st['skewness']):.1f}): "
+               f"median {_fmt_num(float(st['median']))} vs mean {_fmt_num(float(st['mean']))}, "
+               f"so use the median for a typical value.")
+        if len(skewed) > 1:
+            others = ", ".join(nm(x) for x in skewed[1:4])
+            msg += f" Also strongly skewed: {others}."
+        insights.append(msg)
+
+    # 5) Columns that carry no information
+    constant = [i.get("column") for i in ((bias_diag or {}).get("issues") or []) if i.get("type") == "constant"]
+    if constant:
+        insights.append(
+            f"{len(constant)} column{'s hold' if len(constant) != 1 else ' holds'} a single value in the "
+            f"sample and {'add' if len(constant) != 1 else 'adds'} no information: "
+            f"{', '.join(str(x) for x in constant[:5])}."
+        )
+
+    return {"scope": "sample", "rows_sampled": n, "insights": insights}
+
+
+def _drop_mirror_charts(charts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Drop a count chart whose groups have exactly the same row counts as an
+    earlier count chart's: two columns that encode the same thing (Country and
+    its Abbreviation) would otherwise give two identical findings."""
+    kept: List[Dict[str, Any]] = []
+    seen: List[Tuple[str, Tuple[float, ...]]] = []
+    for ch in charts:
+        dd = ch.get("derived_data") or {}
+        sig: Optional[Tuple[str, Tuple[float, ...]]] = None
+        if ch.get("type") in ("bar", "pie") and dd.get("y_key") == "count":
+            ys = tuple(sorted((float(p.get("count") or 0) for p in dd.get("points") or []
+                               if str(p.get(dd.get("x_key") or "", "")) != "Other"), reverse=True))
+            if len(ys) >= 2:
+                sig = (str(ch.get("type")), ys)
+        if sig is not None and sig in seen:
+            logger.info("Visualization agent: dropping %r, it repeats an earlier chart's groups",
+                        ch.get("title"))
+            continue
+        if sig is not None:
+            seen.append(sig)
+        kept.append(ch)
+    for i, ch in enumerate(kept, start=1):
+        ch["rank"] = i
+    return kept
+
+
+
+# -------------------------------------------------------------------
+# Profiling context: the profiling agent's domain, column meanings and data
+# issues, used to write domain-aware insights and the upload summary.
+# -------------------------------------------------------------------
+
+_CONTEXT_MEANING_CHARS = 120
+_CONTEXT_MAX_ISSUES = 5
+
+
+def _clip(text: Any, limit: int) -> str:
+    t = " ".join(str(text or "").split())
+    return t if len(t) <= limit else t[: limit - 1].rstrip() + "…"
+
+
+def _str_list(value: Any, limit: int) -> List[str]:
+    if not isinstance(value, list):
+        return []
+    return [_clip(v, 200) for v in value if isinstance(v, str) and v.strip()][:limit]
+
+
+def _dataset_context(profiling_result: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The parts of the profiling result the insight prompt needs, kept short."""
+    if not isinstance(profiling_result, dict) or profiling_result.get("status") in ("error", "skipped"):
+        return None
+    domain = profiling_result.get("domain") or {}
+    quick = profiling_result.get("quick_insights") or {}
+    dq = profiling_result.get("data_quality_insights") or {}
+    meanings = {
+        str(k): _clip(v, _CONTEXT_MEANING_CHARS)
+        for k, v in (profiling_result.get("column_explanations") or {}).items()
+        if isinstance(v, str) and v.strip()
+    }
+    ctx: Dict[str, Any] = {}
+    if isinstance(domain, dict) and domain.get("category") and domain.get("category") != "Unknown":
+        ctx["domain"] = str(domain["category"])
+        if domain.get("reasoning"):
+            ctx["domain_reasoning"] = _clip(domain["reasoning"], 240)
+    if meanings:
+        ctx["column_meanings"] = meanings
+    issues = _str_list(quick.get("red_flags"), _CONTEXT_MAX_ISSUES)
+    issues += [c for c in _str_list(dq.get("concerns"), _CONTEXT_MAX_ISSUES) if c not in issues]
+    if issues:
+        ctx["known_issues"] = issues[:_CONTEXT_MAX_ISSUES]
+    return ctx or None
+
+
+def _context_for_columns(ctx: Optional[Dict[str, Any]], names: List[Any]) -> Optional[Dict[str, Any]]:
+    """The context with column meanings only for the columns in one request,
+    so a split part does not carry every column's meaning."""
+    if not ctx:
+        return None
+    out = {k: v for k, v in ctx.items() if k != "column_meanings"}
+    meanings = ctx.get("column_meanings") or {}
+    wanted = {str(n) for n in names if n is not None}
+    picked = {k: v for k, v in meanings.items() if k in wanted}
+    if picked:
+        out["column_meanings"] = picked
+    return out or None
+
+
+_EVEN_SPLIT_MARK = "nearly equal in size"
+
+
+def _merge_even_count_charts(charts: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """Keep one data-written count chart whose groups are nearly equal, drop the
+    others, and return the dropped columns. Three bullets of "the groups are
+    nearly equal" read as three findings when they are one: the column does not
+    separate the data. Never drops below 3 charts."""
+    even = [c for c in charts
+            if c.get("insight_source") == "data"
+            and c.get("type") in ("bar", "pie")
+            and (c.get("derived_data") or {}).get("y_key") == "count"
+            and _EVEN_SPLIT_MARK in str(c.get("insight") or "")]
+    if len(even) < 2:
+        return charts, []
+    droppable = even[1:]
+    room = max(0, len(charts) - 3)
+    drop = droppable[:room]
+    if not drop:
+        return charts, []
+    dropped_ids = {id(c) for c in drop}
+    kept = [c for c in charts if id(c) not in dropped_ids]
+    for i, ch in enumerate(kept, start=1):
+        ch["rank"] = i
+    cols = []
+    for c in drop:
+        enc = c.get("encodings") or {}
+        col = _enc_field(enc, "color") if c.get("type") == "pie" else _enc_field(enc, "x")
+        if col:
+            cols.append(col)
+    logger.info("Visualization agent: merged evenly split count charts %s into one note", cols)
+    return kept, cols
+
+
+def _enrich_column_stats(column_stats: List[Dict[str, Any]],
+                         profiling_result: Optional[Dict[str, Any]]) -> None:
+    """Add the profiling agent's meaning and predictive value to each column row."""
+    if not isinstance(profiling_result, dict):
+        return
+    meanings = profiling_result.get("column_explanations") or {}
+    predictive = profiling_result.get("predictive_values") or {}
+    for row in column_stats:
+        name = row.get("name")
+        if meanings.get(name):
+            row["meaning"] = meanings[name]
+        if predictive.get(name):
+            row["predictive_value"] = predictive[name]
+
+
+def build_profile_overview(profiling_result: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Domain, readiness, red flags and next steps from the profiling agent,
+    shaped for the UI (Key Insights header and the upload chat message)."""
+    if not isinstance(profiling_result, dict) or profiling_result.get("status") in ("error", "skipped"):
+        return None
+    domain = profiling_result.get("domain") or {}
+    quick = profiling_result.get("quick_insights") or {}
+    dq = profiling_result.get("data_quality_insights") or {}
+    score = quick.get("data_readiness_score")
+    try:
+        score = round(float(score)) if score is not None else None
+    except (TypeError, ValueError):
+        score = None
+    return {
+        "domain": domain.get("category") if domain.get("category") != "Unknown" else None,
+        "domain_reasoning": domain.get("reasoning"),
+        "readiness_score": score,
+        "readiness_reasoning": quick.get("readiness_reasoning"),
+        "red_flags": _str_list(quick.get("red_flags"), 5),
+        "quick_wins": _str_list(quick.get("quick_wins"), 5),
+        "strengths": _str_list(dq.get("strengths"), 5),
+        "concerns": _str_list(dq.get("concerns"), 5),
+        "analysis_suggestions": _str_list(profiling_result.get("analysis_suggestions"), 5),
+        "high_value_columns": [c for c, v in (profiling_result.get("predictive_values") or {}).items()
+                               if v == "high"][:8],
+        "incomplete_sections": profiling_result.get("incomplete_sections") or [],
+    }
+
+
+# -------------------------------------------------------------------
+# Profile claims checked against the data
+# -------------------------------------------------------------------
+# The profiling agent writes its warnings from a short summary, and its
+# numbers can be wrong ("Ethnicity >90% Caucasian" when the file says 78.3%).
+# Every percentage or extreme value in a warning that names a column is
+# checked against the column statistics and corrected when it disagrees.
+# Sentences without a checkable number are kept as written.
+
+_CLAIM_PCT_RE = re.compile(
+    r"(?P<cmp>(?:>|<|~|≈|≥|≤)\s*|(?:over|under|about|around|nearly|almost|roughly|approximately|"
+    r"approx\.?|more than|less than|at least|at most|above|below)\s+)?"
+    r"(?P<num>\d+(?:\.\d+)?)\s*%", re.IGNORECASE)
+_CLAIM_EXTREME_RE = re.compile(
+    r"(?P<kind>as low as|as high as|minimum(?: value)?(?: of)?|maximum(?: value)?(?: of)?|"
+    r"lowest(?: value)?(?: of)?|highest(?: value)?(?: of)?|up to)\s+"
+    r"(?P<num>-?\d[\d,]*(?:\.\d+)?)", re.IGNORECASE)
+_MISSING_WORDS_RE = re.compile(r"\b(missing|null|nulls|empty|blank|incomplete|absent)\b", re.IGNORECASE)
+# A rounded claim is still right ("78%" for 78.3%, "about 4.6%" for 4.61%);
+# "~2%" for 3.7% or ">90%" for 78.3% is not.
+_NO_OUTCOME_RE = re.compile(
+    # "No explicit outcome column", "lacks a clear target"; not "no missing
+    # values in the outcome column" (a real strength) or "missing outcome values".
+    # Up to 4 words between ("No mortality or discharge outcome column"), but
+    # never across words that make it a data-quality remark instead.
+    r"\b(no|lacks?|without|absent)\s+(?:(?!(?:missing|null|nulls|empty|blank|values?|nan)\b)[a-z-]+\s+){0,4}"
+    r"(outcome|target|label|response)\b",
+    re.IGNORECASE)
+_PCT_TOL_POINTS = 1.0
+_PCT_TOL_RELATIVE = 0.10
+_EXTREME_TOL_RELATIVE = 0.05
+
+
+def _norm_words(text: str) -> str:
+    return " " + re.sub(r"[^a-z0-9.%]+", " ", str(text).lower()) + " "
+
+
+def _columns_named(text: str, stats_by_name: Dict[str, Dict[str, Any]]) -> List[str]:
+    """Columns a sentence names: the full name ("bmi", "icu_admit_source" or
+    "icu admit source"), or the first word of the name when no other column
+    starts with it ("MAP" -> map_apache)."""
+    t = _norm_words(text)
+    found: List[str] = []
+    first_words: Dict[str, List[str]] = defaultdict(list)
+    for name in stats_by_name:
+        w = _norm_words(name).split()
+        if w:
+            first_words[w[0]].append(name)
+    for name in sorted(stats_by_name, key=lambda n: -len(str(n))):
+        phrase = _norm_words(name)
+        if phrase.strip() and phrase in t and not any(phrase in _norm_words(f) for f in found):
+            found.append(name)
+    for word, names in first_words.items():
+        if len(names) == 1 and len(word) >= 3 and f" {word} " in t and names[0] not in found:
+            found.append(names[0])
+    return found
+
+
+def _pct_holds(cmp: str, claimed: float, actual: float) -> bool:
+    c = (cmp or "").strip().lower()
+    if c in (">", "≥", "over", "more than", "at least", "above"):
+        return actual >= claimed - 1.0
+    if c in ("<", "≤", "under", "less than", "at most", "below"):
+        return actual <= claimed + 1.0
+    return abs(actual - claimed) <= max(_PCT_TOL_POINTS, _PCT_TOL_RELATIVE * abs(actual))
+
+
+def _fmt_pct(x: float) -> str:
+    return f"{x:.1f}%"
+
+
+def _verify_claim(text: str, stats_by_name: Dict[str, Dict[str, Any]]) -> Tuple[str, List[str]]:
+    """(text with wrong numbers corrected, notes on what was corrected)."""
+    cols = _columns_named(text, stats_by_name)
+    if not cols:
+        return text, []
+    notes: List[str] = []
+    is_missing_claim = bool(_MISSING_WORDS_RE.search(text))
+
+    def fix_pct(m: "re.Match[str]") -> str:
+        claimed = float(m.group("num"))
+        actuals: List[float] = []
+        if is_missing_claim:
+            actuals = [float(stats_by_name[c].get("missing_pct") or 0.0) for c in cols
+                       if stats_by_name[c].get("missing_pct") is not None]
+        else:
+            low = _norm_words(text)
+            for c in cols:
+                for tv in stats_by_name[c].get("top_values") or []:
+                    val = _norm_words(tv.get("value")).strip()
+                    if val and len(val) >= 2 and f" {val} " in low and tv.get("pct") is not None:
+                        actuals.append(float(tv["pct"]))
+                        break
+        if not actuals:
+            return m.group(0)                      # nothing in the data to check it against
+        if all(_pct_holds(m.group("cmp"), claimed, a) for a in actuals):
+            return m.group(0)
+        lo, hi = min(actuals), max(actuals)
+        fixed = _fmt_pct(lo) if abs(hi - lo) < 0.05 else f"{_fmt_pct(lo)[:-1]}–{_fmt_pct(hi)}"
+        notes.append(f"{m.group(0).strip()} -> {fixed}")
+        return fixed
+
+    def fix_extreme(m: "re.Match[str]") -> str:
+        numeric = [c for c in cols if stats_by_name[c].get("dtype") == "numeric"]
+        if len(numeric) != 1:
+            return m.group(0)
+        st = stats_by_name[numeric[0]]
+        kind = m.group("kind").lower()
+        actual = st.get("min") if ("low" in kind or "minimum" in kind) else st.get("max")
+        if actual is None:
+            return m.group(0)
+        claimed = float(m.group("num").replace(",", ""))
+        if abs(claimed - actual) <= max(1.0, _EXTREME_TOL_RELATIVE * abs(actual)):
+            return m.group(0)
+        notes.append(f"{m.group(0)} -> {m.group('kind')} {_fmt_num(float(actual))}")
+        return f"{m.group('kind')} {_fmt_num(float(actual))}"
+
+    out = _CLAIM_PCT_RE.sub(fix_pct, text)
+    out = _CLAIM_EXTREME_RE.sub(fix_extreme, out)
+    return out, notes
+
+
+def verify_profile_claims(
+    overview: Optional[Dict[str, Any]],
+    column_stats: List[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """The profile overview with every checkable number corrected from the
+    column statistics. Adds overview["corrections"] listing what changed."""
+    if not overview or not column_stats:
+        return overview
+    stats_by_name = {str(r.get("name")): r for r in column_stats if r.get("name") is not None}
+    outcomes = [n for n, r in stats_by_name.items()
+                if r.get("dtype") == "numeric" and r.get("min") == 0 and r.get("max") == 1
+                and _OUTCOME_NAME_RE.search(n)]
+    corrections: List[Dict[str, str]] = []
+    for key in ("red_flags", "concerns", "strengths", "quick_wins", "analysis_suggestions"):
+        items = overview.get(key)
+        if not isinstance(items, list):
+            continue
+        fixed_items = []
+        for item in items:
+            if outcomes and _NO_OUTCOME_RE.search(str(item)):
+                # "No explicit outcome column" when hospital_death is one.
+                corrections.append({"field": key, "original": item, "corrected": "",
+                                    "reason": f"{outcomes[0]} is a yes/no outcome column"})
+                logger.info("Visualization agent: dropped profile %s %r (%s is an outcome column)",
+                            key, item, outcomes[0])
+                continue
+            fixed, notes = _verify_claim(item, stats_by_name)
+            if notes:
+                corrections.append({"field": key, "original": item, "corrected": fixed})
+                logger.info("Visualization agent: corrected profile %s %r -> %r (%s)",
+                            key, item, fixed, "; ".join(notes))
+            fixed_items.append(fixed)
+        overview[key] = fixed_items
+    for key in ("readiness_reasoning", "domain_reasoning"):
+        if isinstance(overview.get(key), str):
+            fixed, notes = _verify_claim(overview[key], stats_by_name)
+            if notes:
+                corrections.append({"field": key, "original": overview[key], "corrected": fixed})
+                overview[key] = fixed
+    overview["corrections"] = corrections
+    return overview
+
+
+def verify_known_issues(ctx: Optional[Dict[str, Any]],
+                        column_stats: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Same check for the issues sent to the insight model, so it is never
+    told a wrong number."""
+    if not ctx or not ctx.get("known_issues"):
+        return ctx
+    stats_by_name = {str(r.get("name")): r for r in column_stats if r.get("name") is not None}
+    ctx["known_issues"] = [_verify_claim(i, stats_by_name)[0] for i in ctx["known_issues"]]
+    return ctx
+
+
+def build_upload_message(
+    overview: Optional[Dict[str, Any]],
+    charts: List[Dict[str, Any]],
+    total_rows: Optional[int],
+    n_columns: int,
+    dataset_summary: Optional[Dict[str, Any]] = None,
+) -> str:
+    """The chat message shown after an upload, as markdown: what the data is,
+    how ready it is, the top findings, what to watch out for, what to ask next.
+    Every number comes from the profile or the charts; nothing is invented."""
+    ov = overview or {}
+    lines: List[str] = []
+    size = (f"{_fmt_num(int(total_rows))} rows × {n_columns} columns" if total_rows
+            else f"{n_columns} columns")
+    if ov.get("domain"):
+        lines.append(f"**{ov['domain']}** dataset · {size}.")
+        if ov.get("domain_reasoning"):
+            lines.append(_clip(ov["domain_reasoning"], 300))
+    else:
+        lines.append(f"Dataset · {size}.")
+
+    if ov.get("readiness_score") is not None:
+        r = f"**Data readiness: {ov['readiness_score']}/100.**"
+        if ov.get("readiness_reasoning"):
+            r += " " + _clip(ov["readiness_reasoning"], 240)
+        lines += ["", r]
+
+    findings: List[str] = []
+    for ch in charts[:3]:
+        text = ch.get("headline") or ch.get("insight")
+        if text:
+            findings.append(_clip(text, 260))
+    if findings:
+        lines += ["", "**Key findings**"] + [f"- {f}" for f in findings]
+
+    watch = (ov.get("red_flags") or ov.get("concerns") or [])[:3]
+    if watch:
+        lines += ["", "**Watch out for**"] + [f"- {w}" for w in watch]
+
+    nxt = (ov.get("analysis_suggestions") or ov.get("quick_wins") or [])[:3]
+    if nxt:
+        lines += ["", "**Try asking**"] + [f"- {n}" for n in nxt]
+    return "\n".join(lines)
 
 
 def build_visualization_config_from_sample(
@@ -2803,6 +4264,7 @@ def build_visualization_config_from_sample(
     full_data_path: Optional[str] = None,
     full_data_type: Optional[str] = None,
     total_rows: Optional[int] = None,
+    profiling_result: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Main entry-point for the Viz Agent.
@@ -2820,6 +4282,9 @@ def build_visualization_config_from_sample(
         sample still chooses the charts, but every chart's numbers and text are
         computed on all rows of the file.
       - total_rows: rows in the whole file (reported in dataset.total_rows)
+      - profiling_result: the profiling agent's full_profiling_result (domain,
+        column meanings, red flags). When given, insights are written in the
+        domain's terms and the result carries profile_overview + upload_message.
 
     Output matches your visualization_config structure (plus visualization_status).
     Every chart (histograms included) carries derived_data.points; the frontend
@@ -2828,6 +4293,16 @@ def build_visualization_config_from_sample(
     # 1) Profile columns (basic "feature agent" behavior)
     column_profiles = profile_columns(sample_rows, schema=schema)
     profiles_by_name = {c["name"]: c for c in column_profiles}
+
+    # 1b) Full-file column statistics do not depend on the charts, so they are
+    #     computed in the background while the insight model runs.
+    stats_pool: Optional[concurrent.futures.ThreadPoolExecutor] = None
+    stats_future: Optional[concurrent.futures.Future] = None
+    _t_stats = time.monotonic()
+    if full_data_path:
+        stats_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="viz-stats")
+        stats_future = stats_pool.submit(build_column_stats_full, full_data_path,
+                                         full_data_type, column_profiles)
 
     # 2) Unsupervised feature ranking
     feature_ranking = compute_unsupervised_feature_ranking(column_profiles)
@@ -2857,6 +4332,17 @@ def build_visualization_config_from_sample(
             "status": "computed",
         },
     }
+
+    # Issues from the profile are checked against the sample's statistics
+    # before the insight model sees them.
+    dataset_context = verify_known_issues(_dataset_context(profiling_result),
+                                          build_column_stats(column_profiles))
+    if dataset_context:
+        viz_profile["dataset_context"] = dataset_context
+
+    if full_data_path:
+        # Charts are re-grounded on every row below; see _FULL_FILE_INSIGHT_RULES.
+        viz_profile["dataset"]["chart_numbers"] = "full_file"
 
     # 3) Primary path: LLM finds the insights and picks a chart for each.
     #    The request is planned first (Leela's rules): all columns with as
@@ -2968,6 +4454,7 @@ def build_visualization_config_from_sample(
                 "insight": bar.get("insight") if bar.get("insight_source") == "llm" else None,
                 "reason": bar.get("insight") if bar.get("insight_source") == "llm" else None,
                 "insight_source": "llm" if bar.get("insight_source") == "llm" else None,
+                "llm_insight": bar.get("llm_insight") if bar.get("insight_source") == "llm" else None,
             }
             charts = [c for c in charts if c is not bar]
             logger.info("Visualization agent: turned the %r bar into the pie insight", field)
@@ -2975,6 +4462,10 @@ def build_visualization_config_from_sample(
         charts = charts + _ground_all([pie_chart], sample_rows, profiles_by_name)
         for i, ch in enumerate(charts, start=1):
             ch["rank"] = i
+
+    # With a yes/no outcome in the data, "Records by ethnicity" (shares) says
+    # little; "hospital_death rate by ethnicity" says what matters.
+    charts = _shares_to_outcome_rates(charts, column_profiles, profiles_by_name, sample_rows)
 
     # Full-file numbers: the sample chose WHAT to chart; every number shown is
     # computed from all rows, so Auto Insights and chat answers agree.
@@ -3004,6 +4495,9 @@ def build_visualization_config_from_sample(
     if total_rows:
         viz_profile["dataset"]["total_rows"] = int(total_rows)
 
+    charts = _drop_mirror_charts(charts)
+    charts, even_columns = _merge_even_count_charts(charts)
+
     # Last resort only: a chart whose grounding raised still gets some text.
     _attach_chart_reasons(charts, feature_ranking, target_column)
 
@@ -3018,6 +4512,37 @@ def build_visualization_config_from_sample(
         bias_diag["warnings"].append(msg)
         bias_diag["issues"].append({"column": item["column"], "type": "redundant", "message": msg})
 
+    # 5b) Column statistics and dataset-level findings, computed (no LLM, no
+    #     extra tokens). What older Auto Insights showed besides the charts.
+    full_stats = None
+    if stats_future is not None:
+        _t_wait = time.monotonic()
+        try:
+            full_stats = stats_future.result()
+        except Exception:  # noqa: BLE001 - build_column_stats_full already logs; keep the sample table
+            full_stats = None
+        finally:
+            stats_pool.shutdown(wait=False)
+        logger.info("[viz-full] dataset=%s column_stats on %s: %.2fs since start, waited %.2fs",
+                    dataset_id, "full file" if full_stats is not None else "sample (fallback)",
+                    time.monotonic() - _t_stats, time.monotonic() - _t_wait)
+    viz_profile["column_stats"] = full_stats if full_stats is not None else build_column_stats(column_profiles)
+    # Tells the UI whether to label the table "in a sample of N rows".
+    viz_profile["column_stats_scope"] = "full_file" if full_stats is not None else "sample"
+    viz_profile["dataset_summary"] = build_dataset_summary(
+        column_profiles, sample_rows, bias_diag, total_rows=total_rows,
+    )
+    if even_columns:
+        viz_profile["dataset_summary"]["insights"].append(
+            f"{', '.join(even_columns)} {'are' if len(even_columns) > 1 else 'is'} also split "
+            f"into groups of nearly equal size, so {'they do' if len(even_columns) > 1 else 'it does'} "
+            f"not separate the data on {'their' if len(even_columns) > 1 else 'its'} own."
+        )
+    _enrich_column_stats(viz_profile["column_stats"], profiling_result)
+    overview = verify_profile_claims(build_profile_overview(profiling_result),
+                                     viz_profile["column_stats"])
+    viz_profile["profile_overview"] = overview
+
     # 6) Attach diagnostics & status
     viz_profile["charts"] = charts
     viz_profile["model_diagnostics"] = {
@@ -3028,10 +4553,18 @@ def build_visualization_config_from_sample(
     viz_profile["warnings"] = bias_diag.get("warnings", [])
     viz_profile["visualization_status"] = "ready"
     viz_profile["llm_selection_reason"] = llm_reason
+    viz_profile["upload_message"] = build_upload_message(
+        overview, charts, total_rows or None, len(column_profiles),
+        viz_profile.get("dataset_summary"),
+    )
     # Lets anyone answer "which model made these insights, and if not, why?"
     viz_profile["insight_model"] = {
         "backend": _VIZ_BACKEND,
-        "model": _VIZ_MODEL,
+        # The provider and model that actually answered (backend "groq" can
+        # resolve to OpenRouter in build_chat_model).
+        "provider": _VIZ_PROVIDER,
+        "model": _VIZ_ACTIVE_MODEL,
+        "openrouter_sort": _VIZ_OPENROUTER_SORT if _VIZ_SORT_ACTIVE else None,
         "effort": insight_effort,
         "used": llm_used,
         "error": llm_error,

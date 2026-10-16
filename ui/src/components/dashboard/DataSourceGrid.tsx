@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Button } from "@/components/base/buttons/button";
-
+import { ArrowRight } from "@untitledui/icons";
 const mysql = { url: "/assets/logos/Logo_Type_MySQL.png" };
 const postgres = { url: "/assets/logos/Logo_Type_PostgreSQL.png" };
 const sqlserver = { url: "/assets/logos/Logo_Type_Microsoft_SQL.png" };
@@ -9,7 +9,6 @@ const mongodb = { url: "/assets/logos/Logo_Type_Mongodb.png" };
 const gcs = { url: "/assets/logos/Logo_Type_GCS.png" };
 const s3 = { url: "/assets/logos/Logo_Type_S3.png" };
 const azure = { url: "/assets/logos/Logo_Type_Azure.png" };
-
 import type {
   StorageConnection,
   StorageProvider,
@@ -24,7 +23,6 @@ export type DataSource = {
   id: string;
   name: string;
   logoUrl: string;
-  darkLogoUrl?: string;
   storageProvider?: StorageProvider;
   dbType?: DbType;
   comingSoon?: boolean;
@@ -36,13 +34,7 @@ const initialSources: DataSource[] = [
   { id: "postgres", name: "PostgreSQL", logoUrl: postgres.url, dbType: "postgresql" },
   { id: "sqlserver", name: "SQL Server", logoUrl: sqlserver.url, dbType: "mssql" },
   { id: "mariadb", name: "MariaDB", logoUrl: mariadb.url, dbType: "mariadb" },
-  {
-    id: "mongodb",
-    name: "MongoDB",
-    logoUrl: mongodb.url,
-    darkLogoUrl: "/assets/logos/Logo_Type_Mongo.png",
-    dbType: "mongodb",
-  },
+  { id: "mongodb", name: "MongoDB", logoUrl: mongodb.url, dbType: "mongodb" },
 ];
 
 const moreSources: DataSource[] = [
@@ -51,13 +43,7 @@ const moreSources: DataSource[] = [
   { id: "azure", name: "Azure Blob Storage", logoUrl: azure.url, storageProvider: "azure" },
 ];
 
-export function DataSourceGrid({
-  onSelect,
-  disabled = false,
-}: {
-  onSelect?: (id: string) => void;
-  disabled?: boolean;
-}) {
+export function DataSourceGrid({ onSelect, disabled = false }: { onSelect?: (id: string) => void; disabled?: boolean }) {
   const [expanded, setExpanded] = useState(false);
   const [connectProvider, setConnectProvider] = useState<StorageProvider | null>(null);
   const [browseConnection, setBrowseConnection] = useState<StorageConnection | null>(null);
@@ -79,7 +65,7 @@ export function DataSourceGrid({
   };
 
   return (
-    <div className={cn("grid grid-cols-4 gap-3", disabled && "opacity-60")}>
+    <div className={cn("grid grid-cols-2 gap-3 sm:grid-cols-4", disabled && "opacity-60")}>
       {sources.map((s) => (
         <div
           key={s.id}
@@ -102,18 +88,7 @@ export function DataSourceGrid({
               (s.comingSoon || disabled) && "cursor-not-allowed opacity-60",
             )}
           >
-            {s.darkLogoUrl ? (
-              <>
-                <img src={s.logoUrl} alt={s.name} className="max-w-[100%] object-contain dark:hidden" />
-                <img
-                  src={s.darkLogoUrl}
-                  alt={s.name}
-                  className="ml-4 hidden max-w-[80%] object-contain dark:block"
-                />
-              </>
-            ) : (
-              <img src={s.logoUrl} alt={s.name} className="max-w-[100%] object-contain dark:invert" />
-            )}
+            <img src={s.logoUrl} alt={s.name} className="h-10 w-full max-w-[112px] shrink-0 object-contain object-center" />
           </Button>
           {s.comingSoon && (
             <span className="pointer-events-none absolute -right-1 -top-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-medium text-amber-700 shadow">
@@ -124,18 +99,17 @@ export function DataSourceGrid({
       ))}
       {!expanded && (
         <Button
-          color="secondary"
-          size="lg"
+          color="link-gray"
+          size="sm"
+          iconTrailing={ArrowRight}
           isDisabled={disabled}
           onPress={() => setExpanded(true)}
-          className={cn(
-            "h-[72px] w-full justify-center rounded-xl",
-            disabled && "cursor-not-allowed opacity-60",
-          )}
+          className="col-span-full mt-1 justify-self-end"
         >
           View More
         </Button>
       )}
+
 
       {connectProvider && (
         <CloudStorageConnectionsListModal

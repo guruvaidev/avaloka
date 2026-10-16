@@ -13,7 +13,7 @@ export function DashboardShell({
 }) {
   return (
     <div className="flex h-screen w-full bg-primary text-primary">
-      <IconRail active="chat" onItemClick={onRailItemClick} />
+      <IconRail onItemClick={onRailItemClick} />
       <AnalysisSidebar analyses={analyses} />
       <main className="relative flex flex-1 flex-col overflow-hidden">
         <div className="pointer-events-none absolute inset-x-0 bottom-0 h-full bg-[radial-gradient(150%_100%_at_42.83%_20.65%,#4680e400_43.87%,#1565EF_150%,#fff)]" />

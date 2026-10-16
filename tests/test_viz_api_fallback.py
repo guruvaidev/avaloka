@@ -14,9 +14,10 @@ node test stays green while the user's charts vanish from the reply.
 
 These tests drive the real handler through TestClient with a fake graph, so
 they fail when that fallback is broken. The fixtures come from
-tests/test_server_integration.py; this file is separate because that one is
-auto-marked ``integration`` by its filename (tests/conftest.py) and so never
-runs in the hermetic gate. No LLM, no store, no network.
+tests/test_server_unit.py. This file was split out when that one was named
+test_server_integration.py and auto-marked ``integration`` by its filename
+(tests/conftest.py); both run in the hermetic gate now. No LLM, no store, no
+network.
 """
 
 from __future__ import annotations
@@ -26,7 +27,7 @@ from typing import Any, Dict, Optional
 import pytest
 
 import app.api.server as server
-from tests.test_server_integration import (  # noqa: F401  (client is a fixture)
+from tests.test_server_unit import (  # noqa: F401  (client is a fixture)
     FakeGraph,
     _do_upload,
     _quiet_send,

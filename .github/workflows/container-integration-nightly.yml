@@ -1,0 +1,59 @@
+# Nightly container-backed integration tests: a real Postgres and a real
+# S3-compatible store, started on the runner by scripts/integration.sh.
+#
+# Why this is its own scheduled workflow and not a step in ci.yml: the pull
+# request gate is hermetic by design (-m "not cluster and not cloud and not
+# integration"), so anything needing a service is deselected there. Before this
+# file existed nothing ran those tests at all -- the Postgres half of
+# tests/test_lineage.py was written, reviewed and merged without once executing
+# against Postgres. A suite nobody schedules is a suite that does not run.
+#
+# No secrets. The runner script generates the database password and the S3 key
+# pair for each run and throws them away; there is nothing to configure in the
+# repository settings and nothing here a fork could exfiltrate. No model, no
+# provider key, no deployed endpoint.
+#
+# It cannot skip its way to green: scripts/integration.sh exits non-zero when
+# docker is missing, when a container is unhealthy, when any test fails, and
+# when any test skips.
+name: container integration (nightly)
+
+on:
+  schedule:
+    # 04:15 UTC daily -- after the local-model nightly, so the two do not
+    # compete for the same hour of runner minutes.
+    - cron: "15 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  containers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: System packages
+        run: sudo apt-get update && sudo apt-get install -y graphviz
+
+      - name: Install Avaloka
+        # The same installer a user runs: these tests then exercise the
+        # database driver and boto3 a fresh install actually resolves, not the
+        # older pins baked into a prebuilt image.
+        run: PYTHON=python ./scripts/install.sh --no-venv
+
+      - name: Resolved drivers
+        # Recorded every run. Which DBAPI a bare postgresql:// URL selects
+        # changed between SQLAlchemy 2.0 and 2.1; when this job goes red, the
+        # first question is which pair it ran with.
+        run: python -m pip list 2>/dev/null | grep -iE '^(sqlalchemy|psycopg|psycopg2-binary|psycopg-binary|boto3|botocore) '
+
+      - name: Container integration tests
+        run: PYTHON=python ./scripts/integration.sh --host

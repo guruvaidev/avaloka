@@ -159,7 +159,8 @@ def csv_text_columns(head: pd.DataFrame) -> list:
     text = []
     for position in range(len(head.columns)):
         series = head.iloc[:, position]
-        reader_typed = series.dtype != object
+        # object on pandas 2, its own str dtype on pandas 3: both are untyped.
+        reader_typed = not (series.dtype == object or isinstance(series.dtype, pd.StringDtype))
         if keeps_null_words(series.dropna().tolist(), reader_typed):
             text.append(head.columns[position])
     return text

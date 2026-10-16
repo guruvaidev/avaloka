@@ -473,6 +473,9 @@ def sample_data_from_source(
                     f"Sheets not analyzed: {skipped}. "
                     f"Pass sheet_name to analyze a specific sheet."
                 )
+            # What was assumed in finding the table: which row was the header,
+            # what was skipped, what was left out. Empty for a sheet read as is.
+            warnings.extend(xl_conn.shape_notes)
 
         elif source_fmt == "xml":
             # pandas reads XML directly; FileHandler has no XML reader.
