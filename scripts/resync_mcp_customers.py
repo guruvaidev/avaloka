@@ -11,6 +11,8 @@ read the file.
 Env:
   MCP_SERVER_URL   MCP server base URL (default http://127.0.0.1:8010)
   CUSTOMERS_FILE   path to customers.json (default ./customers.json)
+  MCP_SERVICE_TOKEN  shared service secret; /admin/customers refuses requests
+                     without it
 """
 
 import json
@@ -55,7 +57,13 @@ def main() -> int:
     print(f"[resync] {len(customers)} customer(s) in '{CUSTOMERS_FILE}'.")
 
     ok, skipped, failed = 0, 0, 0
-    with httpx.Client(timeout=30.0) as client:
+    token = os.getenv("MCP_SERVICE_TOKEN", "")
+    if not token:
+        print("[resync] ERROR: MCP_SERVICE_TOKEN is not set; /admin/customers would refuse every request.")
+        return 1
+    headers = {"X-Avaloka-Service-Token": token}
+
+    with httpx.Client(timeout=30.0, headers=headers) as client:
         for customer_id, record in customers.items():
             if record.get("status") == "inactive":
                 print(f"  - {customer_id}: SKIP (inactive)")

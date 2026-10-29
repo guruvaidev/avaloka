@@ -4,6 +4,9 @@ import { useMemo, useState } from "react";
 import { Loader2, BarChart3, Eye } from "lucide-react";
 import { backendApi } from "@/lib/api/backendApi";
 import { DatasetPreviewModal } from "@/components/database/DatasetPreviewModal";
+import { CloudStorageBrowserModal } from "@/components/database/CloudStorageBrowserModal";
+import type { StorageConnection } from "@/components/database/CloudStorageConnectModal";
+import { storageConnectionFromSource } from "@/lib/connection-card";
 
 import {
   AlertDialog,
@@ -84,6 +87,7 @@ function DatabasePage() {
   const { update, remove } = useDataSourceMutations();
   const [connectOpen, setConnectOpen] = useState(false);
   const [disconnect, setDisconnect] = useState<DataSource | null>(null);
+  const [browseConnection, setBrowseConnection] = useState<StorageConnection | null>(null);
   const [openingAnalysisId, setOpeningAnalysisId] = useState<string | null>(null);
   const [section, setSection] = useState<Section>("cloud");
   const [tab, setTab] = useState<Tab>("all");
@@ -396,6 +400,10 @@ function DatabasePage() {
                       source={s}
                       openingAnalysis={openingAnalysisId === s.id}
                       onOpenAnalysis={() => handleOpenAnalysis(s)}
+                      onBrowse={() => {
+                        const conn = storageConnectionFromSource(s);
+                        if (conn) setBrowseConnection(conn);
+                      }}
                       onDisconnect={() => {
                         setDisconnect(s);
                       }}
@@ -427,6 +435,13 @@ function DatabasePage() {
       </main>
 
       <ConnectCloudModal open={connectOpen} onOpenChange={setConnectOpen} />
+      <CloudStorageBrowserModal
+        open={!!browseConnection}
+        connection={browseConnection}
+        onOpenChange={(o) => {
+          if (!o) setBrowseConnection(null);
+        }}
+      />
       <DisconnectConfirmModal
         open={!!disconnect}
         name={disconnect?.name ?? ""}
@@ -489,6 +504,7 @@ function DatasetCard({
   source,
   openingAnalysis,
   onOpenAnalysis,
+  onBrowse,
   onDisconnect,
   onReconnect,
   onDelete,
@@ -496,6 +512,8 @@ function DatasetCard({
   source: DataSource;
   openingAnalysis?: boolean;
   onOpenAnalysis?: () => void;
+  /** Cloud storage cards: open this connection's own bucket browser. */
+  onBrowse?: () => void;
   onDisconnect: () => void;
   onReconnect: () => void;
   onDelete: () => void;
@@ -510,8 +528,9 @@ function DatasetCard({
     : PROVIDER_LOGOS[source.provider];
   const live = source.status === "connected";
   const selectedFiles = (source.config.selected_files as string[]) ?? [];
-  const canOpenAnalysis =
-    live && selectedFiles.length > 0 && (isStorage || source.provider === "bigquery");
+  // Cloud storage cards always open their own bucket browser; only BigQuery opens saved tables directly.
+  const canBrowse = isStorage && live && !!onBrowse;
+  const canOpenAnalysis = !isStorage && live && selectedFiles.length > 0 && source.provider === "bigquery";
 
   return (
     <div className="group flex flex-col rounded-xl border border-border bg-card text-card-foreground p-4 transition hover:shadow-md dark:hover:border-[#1565EF]/50">
@@ -553,7 +572,15 @@ function DatasetCard({
         </div>
       </div>
 
-      {canOpenAnalysis ? (
+      {canBrowse ? (
+        <button
+          type="button"
+          onClick={onBrowse}
+          className="mt-3 text-left text-sm font-semibold text-foreground transition hover:text-primary hover:underline"
+        >
+          {source.name}
+        </button>
+      ) : canOpenAnalysis ? (
         <button
           type="button"
           onClick={onOpenAnalysis}

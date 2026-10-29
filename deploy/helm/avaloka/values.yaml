@@ -944,6 +944,14 @@ celery:
       limits:
         cpu: "1"
         memory: 512Mi
+  executor:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 512Mi
+      limits:
+        cpu: "2"
+        memory: 4Gi
 
 # Internal MLflow tracking server. It is enabled by default and proxies artifacts
 # to the chart-managed MinIO, so API/Ray clients need only its HTTP endpoint.
@@ -994,6 +1002,12 @@ secrets:
   stripeSecretKey: ""
   stripeWebhookSecret: ""
   paypalWebhookId: ""
+  # Shared API <-> MCP service secret (MCP_SERVICE_TOKEN). Required for DB
+  # registration and DB-to-DB transfers; with it empty the MCP server releases no
+  # password. Generate one per install and pass it with
+  #   --set-string secrets.mcpServiceToken="$(openssl rand -hex 32)"
+  # With existingSecret, add the key MCP_SERVICE_TOKEN to that Secret instead.
+  mcpServiceToken: ""
   # Optional OpenRouter key. Arms the Planner's fallback for Groq 429 (the
   # org-wide token-per-minute ceiling), 404 and 5xx. Empty = no backup, which
   # is the pre-existing behaviour.

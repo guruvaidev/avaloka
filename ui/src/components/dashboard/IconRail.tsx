@@ -33,6 +33,8 @@ import { ConfigurationsIcon } from "./icons/ConfigurationsIcon";
 import { NotificationsPopover } from "./NotificationsPopover";
 import { getCachedAuthUser } from "@/lib/auth-user";
 import { SUPPORT_ADMIN_EMAIL } from "@/lib/support-admin";
+import { Server } from "lucide-react";
+import { canUseRayJobs, rayLimitsOptions } from "@/lib/ray-jobs";
 
 type RailItem = { id: string; icon: FC<{ className?: string }>; label: string };
 
@@ -59,6 +61,13 @@ const bottomItems: RailItem[] = [
 
 const FREE_LOCKED_IDS = new Set(["projects", "reports", "sources", "settings"]);
 
+/** Ray jobs stays visible but locked unless limits confirm data transfer (loading/error = locked). */
+export function railLockedIds(isFree: boolean, dataTransferUnlocked: boolean): Set<string> {
+  const ids = new Set<string>(isFree ? FREE_LOCKED_IDS : []);
+  if (!dataTransferUnlocked) ids.add("ray-jobs");
+  return ids;
+}
+
 // Default destinations for rail items. Keeps every page's behavior consistent.
 const DEFAULT_NAV: Record<string, string> = {
   chat: "/proanalysis",
@@ -70,9 +79,11 @@ const DEFAULT_NAV: Record<string, string> = {
   settings: "/configurations",
   upgrade: "/settings",
   "db-config": "/db-tables",
+  "ray-jobs": "/ray-jobs",
 };
 
 function activeFromPath(pathname: string): string | undefined {
+  if (pathname.startsWith("/ray-jobs")) return "ray-jobs";
   if (pathname.startsWith("/scheduled-analysis") || pathname.startsWith("/proanalysis/scheduled-analysis")) return "history";
   if (pathname.startsWith("/proanalysis")) return "chat";
   if (pathname.startsWith("/analysis")) return "chat";
@@ -104,6 +115,11 @@ export function IconRail({
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const resolvedActive = active ?? activeFromPath(pathname);
   const isAnalysisProject = variant === "analysis-project";
+  const rayLimits = useQuery({ ...rayLimitsOptions, enabled: !isAnalysisProject });
+  const planQ = useActivePlan();
+  // Professional/Enterprise unlock Ray jobs; otherwise the limits flag decides (loading/error = locked).
+  const rayUnlocked = canUseRayJobs(planQ.data?.plan, rayLimits.data?.data);
+  const workspaceItems: RailItem[] = [...middleItems, { id: "ray-jobs", icon: Server, label: "Ray jobs" }];
   const projectsPerms = useProjectsPerms();
   const dashboardPerms = useDashboardPerms();
   const visibleAnalysisProjectItems = analysisProjectItems.filter(
@@ -113,7 +129,6 @@ export function IconRail({
       dashboardPerms.canView,
   );
 
-  const planQ = useActivePlan();
   const tier = planQ.data?.plan ?? "free";
   const isFree = tier === "free";
   const isEnterprise = tier === "enterprise";
@@ -130,7 +145,7 @@ export function IconRail({
     return true;
   });
 
-  const lockedIds = isFree ? FREE_LOCKED_IDS : new Set<string>();
+  const lockedIds = railLockedIds(isFree, rayUnlocked);
 
   const handleClick = (id: string) => {
     // Free users can now OPEN premium sections (the diamond badge still shows);
@@ -177,7 +192,7 @@ export function IconRail({
           <>
             <RailGroup items={visibleTopItems} active={resolvedActive} onItemClick={handleClick} lockedIds={lockedIds} />
             <div className="my-3 h-px w-8 shrink-0 bg-border-secondary" />
-            <RailGroup items={middleItems} active={resolvedActive} onItemClick={handleClick} lockedIds={lockedIds} />
+            <RailGroup items={workspaceItems} active={resolvedActive} onItemClick={handleClick} lockedIds={lockedIds} />
           </>
         )}
       </div>
@@ -292,7 +307,7 @@ export function ProfileAvatarMenu() {
   );
 }
 
-function RailGroup({
+export function RailGroup({
   items,
   active,
   onItemClick,
@@ -309,13 +324,13 @@ function RailGroup({
         const isActive = active === item.id;
         const isLocked = lockedIds?.has(item.id) ?? false;
         return (
-          <div key={item.id} className="relative">
+          <div key={item.id} className="relative" data-rail-item={item.id} data-locked={isLocked || undefined}>
             <ButtonUtility
               size="sm"
               color="tertiary"
               icon={item.icon}
               aria-current={isActive ? "page" : undefined}
-              tooltip={isLocked ? `${item.label} — Upgrade to unlock` : item.label}
+              tooltip={isLocked ? `${item.label} — Available on Professional` : item.label}
               tooltipPlacement="right"
               onClick={() => onItemClick?.(item.id)}
               className={cx("size-10 *:data-icon:size-[18px]", isActive && "bg-brand-primary_alt text-brand-secondary ring-1 ring-brand ring-inset hover:bg-brand-primary_alt hover:text-brand-secondary")}
@@ -326,7 +341,7 @@ function RailGroup({
             {isLocked ? (
               <span
                 aria-hidden="true"
-                className="pointer-events-none absolute -right-0.5 -top-0.5 flex size-3.5 items-center justify-center rounded-full bg-brand-solid text-white ring-2 ring-primary"
+                className="pointer-events-none absolute -right-1 -top-1 flex size-3.5 items-center justify-center rounded-full bg-brand-solid text-primary_on-brand ring-2 ring-bg-primary"
               >
                 <Diamond01 className="size-2.5" />
               </span>

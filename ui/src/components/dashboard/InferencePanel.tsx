@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { Loader2 } from "lucide-react";
+import { Loader2, Play } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
 import { backendApi } from "@/lib/api/backendApi";
 import { useUploadedDatasets } from "@/lib/uploaded-datasets";
 
@@ -140,6 +141,40 @@ function formatPrediction(p: unknown): string {
   return String(p);
 }
 
+function parseInputs(value: string): Record<string, unknown> {
+  const parsed: unknown = JSON.parse(value);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Input must be a JSON object of feature values.");
+  }
+  return parsed as Record<string, unknown>;
+}
+
+function probabilityEntries(value: unknown): Array<[string, unknown]> {
+  if (Array.isArray(value)) return value.map((v, i) => [String(i), v]);
+  if (value && typeof value === "object") return Object.entries(value);
+  return [];
+}
+
+const SAMPLES = [
+  { label: "Sample 1 – 1st class female, 29", values: { Pclass: 1, Sex: "female", Age: 29, SibSp: 0, Parch: 0, Fare: 211.34, Embarked: "S" } },
+  { label: "Sample 2 – 3rd class girl, 12", values: { Pclass: 3, Sex: "female", Age: 12, SibSp: 0, Parch: 0, Fare: 7.85, Embarked: "S" } },
+] as const;
+
+function formPayload(fields: Record<string, string>, schema: FeatureSpec[]): Record<string, unknown> {
+  return Object.fromEntries(schema.flatMap((feature) => {
+    const value = fields[feature.name]?.trim();
+    if (!value) return [];
+    const numeric = feature.kind === "number" ? Number(value) : NaN;
+    return [[feature.name, Number.isFinite(numeric) ? numeric : value]];
+  }));
+}
+
+function predictedClass(prediction: unknown, reply: string): unknown {
+  if (prediction !== null && prediction !== undefined) return prediction;
+  const match = reply.match(/(?:predicted\s+class|prediction|predicted\s+label)\s*(?:is|:|=)\s*["']?([^\n.,"']+)/i);
+  return match?.[1]?.trim() || null;
+}
+
 export function InferencePanel({ runId, raw }: Props) {
   const schema = useMemo(() => {
     const specs = extractFeatures(raw);
@@ -154,127 +189,146 @@ export function InferencePanel({ runId, raw }: Props) {
   }, [raw]);
 
   const [fields, setFields] = useState<Record<string, string>>({});
-  const [json, setJson] = useState("{\n  \n}");
+  const [json, setJson] = useState("");
+  const [runHovered, setRunHovered] = useState(false);
+  const [mode, setMode] = useState<"form" | "json">("form");
+  const [jsonError, setJsonError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<{ prediction: unknown; reply: string } | null>(null);
-
-  const { data: datasets = [], isLoading: datasetsLoading } = useUploadedDatasets();
-  const modelDatasetId = useMemo(() => pickDatasetId(raw), [raw]);
-  const [datasetId, setDatasetId] = useState<string>("");
+  const [requestError, setRequestError] = useState<string | null>(null);
+  const [result, setResult] = useState<Awaited<ReturnType<typeof backendApi.runInferenceViaThread>> | null>(null);
+  const activeMode = schema.length === 0 ? "json" : mode;
 
   useEffect(() => {
-    if (datasetId && (datasetId === modelDatasetId || datasets.some((d) => d.dataset_id === datasetId))) return;
-    const preferred =
-      (modelDatasetId && datasets.some((d) => d.dataset_id === modelDatasetId)
-        ? modelDatasetId
-        : null) ??
-      datasets[0]?.dataset_id ??
-      "";
-    setDatasetId(preferred);
-  }, [datasets, modelDatasetId, datasetId]);
+    try {
+      if (window.sessionStorage.getItem("inference-input-mode") === "json") setMode("json");
+    } catch { /* session storage may be unavailable */ }
+  }, []);
 
-  const selectedDataset = datasets.find((d) => d.dataset_id === datasetId);
+  useEffect(() => {
+    if (!loading) {
+      setStarting(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setStarting(true), 3000);
+    return () => window.clearTimeout(timer);
+  }, [loading]);
 
+  const { data: datasets = [] } = useUploadedDatasets();
+  const modelDatasetId = useMemo(() => pickDatasetId(raw), [raw]);
+  const trainingDataset = useMemo(
+    () => datasets.find((d) => d.dataset_id === modelDatasetId),
+    [datasets, modelDatasetId],
+  );
+  const targetName = useMemo(() => {
+    if (!raw) return "";
+    const config = asRecord(raw.config ?? raw.model_config);
+    const value = raw.target_column ?? raw.target ?? raw.label_column ?? config.target_column ?? config.target;
+    return typeof value === "string" ? value : "";
+  }, [raw]);
   useEffect(() => {
     setFields(Object.fromEntries(schema.map((f) => [f.name, ""])));
     setResult(null);
     setError(null);
+    setRequestError(null);
+    setJsonError(null);
+    setJson("");
   }, [schema]);
 
-  const run = async () => {
-    setError(null);
-    if (!datasetId) {
-      setError("Select a dataset to run inference under.");
-      return;
+  useEffect(() => {
+    if (activeMode === "json") {
+      setJson((current) => current || JSON.stringify(SAMPLES[0].values, null, 2));
     }
-    let features: Record<string, unknown>;
+  }, [activeMode]);
 
-    if (schema.length > 0) {
-        const missing = schema.find((f) => (fields[f.name] ?? "").trim() === "");
-        if (missing) {
-          setError(`Enter a value for "${missing.name}".`);
-          return;
-        }
-        features = Object.fromEntries(
-          schema.map((f) => {
-            const v = (fields[f.name] ?? "").trim();
-            return [f.name, v];
-          }),
-        );
-      }
-
-    else {
+  const switchMode = (next: "form" | "json") => {
+    if (next === activeMode) return;
+    if (next === "json") {
+      const values = formPayload(fields, schema);
+      setJson(JSON.stringify(Object.keys(values).length ? values : SAMPLES[0].values, null, 2));
+      setJsonError(null);
+    } else {
       try {
-        const parsed = JSON.parse(json);
-        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-          setError("Input must be a JSON object of feature values.");
-          return;
-        }
-        features = parsed as Record<string, unknown>;
-      } catch {
-        setError("Invalid JSON — check for missing commas or quotes.");
+        const parsed = parseInputs(json);
+        setFields(Object.fromEntries(schema.map((f) => [f.name, parsed[f.name] == null ? "" : String(parsed[f.name])])));
+        setJsonError(null);
+      } catch (e) {
+        setJsonError(`Invalid JSON: ${e instanceof Error ? e.message : "Check your input."}`);
         return;
       }
     }
+    setError(null);
+    setMode(next);
+    try { window.sessionStorage.setItem("inference-input-mode", next); } catch { /* unavailable */ }
+  };
 
+  const run = async () => {
+    setError(null);
+    setJsonError(null);
+    setRequestError(null);
+    let features: Record<string, unknown>;
+    if (activeMode === "json") {
+      try {
+        features = parseInputs(json);
+      } catch (e) {
+        setJsonError(`Invalid JSON: ${e instanceof Error ? e.message : "Check your input."}`);
+        return;
+      }
+    } else {
+      const missing = schema.find((f) => (fields[f.name] ?? "").trim() === "");
+      if (missing) {
+        setError(`Enter a value for "${missing.name}".`);
+        return;
+      }
+      features = Object.fromEntries(schema.map((f) => [f.name, (fields[f.name] ?? "").trim()]));
+    }
+    if (!modelDatasetId) {
+      setError("This model has no linked training dataset, so inference can't run.");
+      return;
+    }
+    console.debug("[Inference] resolved dataset/session", {
+      datasetId: modelDatasetId,
+      sessionId: trainingDataset?.sessionId ?? null,
+    });
     setLoading(true);
     setResult(null);
     try {
       const res = await backendApi.runInferenceViaThread(
         runId,
         features,
-        datasetId || null,
-        selectedDataset?.sessionId ?? null,
+        modelDatasetId || null,
+        trainingDataset?.sessionId ?? null,
       );
       setResult(res);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Inference request failed.");
+      setRequestError(e instanceof Error ? e.message : "Inference request failed.");
     } finally {
       setLoading(false);
     }
   };
 
+  const displayedPrediction = result ? predictedClass(result.prediction, result.reply) : null;
   const modelName = raw ? (raw.name ?? raw.model_name ?? raw.run_name) : undefined;
   const modelVersion = raw ? (raw.version ?? raw.model_version ?? raw.latest_version) : undefined;
   const modelType = raw ? (raw.model_type ?? raw.task_type ?? raw.type) : undefined;
-  const targetName = useMemo(() => {
-    if (!raw) return "";
-    const config = asRecord(raw.config ?? raw.model_config);
-    const value =
-      raw.target_column ?? raw.target ?? raw.label_column ?? config.target_column ?? config.target;
-    return typeof value === "string" ? value : "";
-  }, [raw]);
-
-
   return (
-    <div className="rounded-2xl border border-border bg-white p-6 shadow-sm">
-      <h2 className="text-base font-semibold text-foreground">Inference</h2>
-      <p className="mt-1 text-xs text-muted-foreground">
-        Runs against the live model service. The first request can take several seconds while the
-        model is downloaded.
-      </p>
-
-      <div className="mt-4">
-        <label className="text-xs text-muted-foreground" htmlFor="inf-dataset">
-          Run under dataset / session
-        </label>
-        <select
-          id="inf-dataset"
-          value={datasetId}
-          onChange={(e) => setDatasetId(e.target.value)}
-          className="mt-1.5 w-full max-w-sm rounded-xl border border-border bg-muted/40 px-3 py-2 text-sm text-foreground outline-none transition-colors focus:border-primary focus:ring-1 focus:ring-primary"
-        >
-          <option value="">{datasetsLoading ? "Loading datasets…" : "Select a dataset"}</option>
-          {datasets.map((d) => (
-            <option key={d.dataset_id} value={d.dataset_id}>
-              {d.name}
-            </option>
-          ))}
-        </select>
+    <div className="rounded-2xl border border-border bg-card p-6 shadow-sm">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h2 className="text-base font-semibold text-foreground">Inference</h2>
+          <p className="mt-1 text-xs text-muted-foreground">
+            The model service starts automatically on your first run. The first request may take several seconds while the model loads.
+          </p>
+        </div>
+        <div className="inline-flex shrink-0 rounded-lg border border-border bg-muted/40 p-0.5" role="group" aria-label="Inference input mode">
+          <Button type="button" size="sm" variant="ghost" onClick={() => switchMode("form")} aria-pressed={activeMode === "form"} disabled={schema.length === 0} className="min-w-20 shadow-none disabled:opacity-100" style={{ backgroundColor: activeMode === "form" ? "var(--primary)" : "transparent", color: activeMode === "form" ? "var(--primary-foreground)" : "var(--foreground)" }}>Form</Button>
+          <Button type="button" size="sm" variant="ghost" onClick={() => switchMode("json")} aria-pressed={activeMode === "json"} className="min-w-20 shadow-none" style={{ backgroundColor: activeMode === "json" ? "var(--primary)" : "transparent", color: activeMode === "json" ? "var(--primary-foreground)" : "var(--foreground)" }}>JSON</Button>
+        </div>
       </div>
 
-      {schema.length > 0 ? (
+
+      {activeMode === "form" ? (
         <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {schema.map((f) => (
             <div key={f.name}>
@@ -296,7 +350,6 @@ export function InferencePanel({ runId, raw }: Props) {
                   ))}
                 </select>
               ) : (
-                
                 <input
                   id={`inf-${f.name}`}
                   type="text"
@@ -304,59 +357,72 @@ export function InferencePanel({ runId, raw }: Props) {
                   onChange={(e) => setFields((p) => ({ ...p, [f.name]: e.target.value }))}
                   className="mt-1.5 w-full rounded-xl border border-border bg-muted/40 px-3 py-2 text-sm text-foreground outline-none transition-colors focus:border-primary focus:ring-1 focus:ring-primary"
                 />
-
               )}
             </div>
           ))}
         </div>
       ) : (
         <div className="mt-5">
-          <label className="text-xs text-muted-foreground" htmlFor="inf-json">
-            Input payload (JSON) — no feature schema was returned for this model
-          </label>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <label className="text-xs text-muted-foreground" htmlFor="inf-json">
+              Input payload (JSON){schema.length === 0 ? " — no feature schema was returned for this model" : ""}
+            </label>
+            <select aria-label="Load sample" value="" onChange={(e) => {
+              const sample = SAMPLES[Number(e.target.value)];
+              if (sample) { setJson(JSON.stringify(sample.values, null, 2)); setJsonError(null); }
+            }} className="rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground">
+              <option value="" disabled>Load sample</option>
+              {SAMPLES.map((sample, index) => <option key={index} value={index}>{sample.label}</option>)}
+            </select>
+          </div>
           <textarea
             id="inf-json"
             value={json}
-            onChange={(e) => setJson(e.target.value)}
+            onChange={(e) => { setJson(e.target.value); setJsonError(null); }}
             spellCheck={false}
-            rows={10}
+            rows={12}
             className="mt-1.5 w-full rounded-xl border border-border bg-muted/40 p-3 font-mono text-xs leading-relaxed text-foreground outline-none transition-colors focus:border-primary focus:ring-1 focus:ring-primary"
           />
+          {jsonError && <p className="mt-2 text-xs text-destructive" role="alert">{jsonError}</p>}
         </div>
       )}
 
       {error && (
-        <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-medium text-red-600">
-          {error}
-        </div>
+        <p className="mt-4 text-xs font-medium text-destructive" role="alert">{error}</p>
       )}
 
       <div className="mt-5 flex items-center gap-3">
-        <button
+        <Button
           type="button"
+          variant="ghost"
           onClick={run}
+          onMouseEnter={() => setRunHovered(true)}
+          onMouseLeave={() => setRunHovered(false)}
           disabled={loading}
-          style={{ backgroundColor: "#1565ef", color: "#ffffff" }}
-          className="inline-flex h-10 min-w-44 shrink-0 items-center justify-center gap-2 rounded-lg px-5 text-sm font-semibold shadow-sm transition hover:opacity-90 disabled:opacity-60"
+          className="h-10 min-w-44"
+          style={{ backgroundColor: runHovered ? "color-mix(in oklch, var(--primary) 85%, black)" : "var(--primary)", color: "var(--primary-foreground)" }}
         >
-          {loading && <Loader2 className="h-4 w-4 animate-spin" />}
-          {loading ? "Running inference…" : "Run Inference"}
-        </button>
+          {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+          {loading ? "Running…" : "Run Inference"}
+        </Button>
       </div>
+      {loading && starting && <p className="mt-2 text-xs text-muted-foreground" role="status">Starting model service…</p>}
 
 
-      {result && !loading && (
+      {(result || requestError) && !loading && (
         <div className="mt-6 rounded-xl border border-border bg-muted/40 p-5">
+          {requestError && <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{requestError}</div>}
+          {result && <>
           <div className="text-xs text-muted-foreground">Prediction</div>
-          {result.prediction === null || result.prediction === undefined ? (
+          {displayedPrediction === null ? (
             <div className="mt-1 text-sm text-muted-foreground">
-              The model responded, but no numeric prediction could be parsed. See the full response
+               The model responded, but no prediction could be parsed. See the full response
               below.
             </div>
           ) : (
             <div className="mt-1 text-3xl font-bold text-foreground">
               {targetName ? `${targetName} = ` : ""}
-              {formatPrediction(result.prediction)}
+               {formatPrediction(displayedPrediction)}
             </div>
           )}
 
@@ -368,21 +434,39 @@ export function InferencePanel({ runId, raw }: Props) {
             ]
               .filter((t) => t.value !== undefined && t.value !== null && t.value !== "")
               .map((t) => (
-                <div key={t.label} className="rounded-lg border border-border bg-white p-3">
+                <div key={t.label} className="rounded-lg border border-border bg-muted p-3">
                   <div className="text-xs text-muted-foreground">{t.label}</div>
                   <div className="mt-0.5 text-sm font-semibold text-foreground">{String(t.value)}</div>
                 </div>
               ))}
           </div>
 
-          {result.reply && (
+           {probabilityEntries(result.probabilities).length > 0 && (
+             <div className="mt-5">
+               <div className="text-xs text-muted-foreground">Class probabilities</div>
+               <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                 {probabilityEntries(result.probabilities).map(([label, value]) => (
+                   <div key={label} className="flex justify-between gap-3 rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground">
+                     <span>{label}</span><span className="font-semibold">{typeof value === "number" ? `${(value * 100).toFixed(2)}%` : String(value)}</span>
+                   </div>
+                 ))}
+               </div>
+             </div>
+           )}
+
+           {result.reply && (
             <div className="mt-5">
               <div className="text-xs text-muted-foreground">Assistant response</div>
-              <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border bg-white p-3 text-xs text-foreground">
+              <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border bg-card p-3 text-xs text-foreground">
                 {result.reply}
               </pre>
             </div>
           )}
+           <details className="mt-5 border-t border-border pt-4">
+             <summary className="cursor-pointer text-sm font-medium text-foreground">Raw response</summary>
+             <pre className="mt-3 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border bg-background p-3 font-mono text-xs text-foreground">{JSON.stringify(result.rawResponse, null, 2)}</pre>
+           </details>
+           </>}
         </div>
       )}
 

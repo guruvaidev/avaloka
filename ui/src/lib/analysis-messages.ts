@@ -136,16 +136,22 @@ export type GroupDataset = {
   name: string;
   session_id: string | null;
   thread_id: string | null;
+  viz_config: unknown | null;
+  samples: unknown[] | null;
+  schema: unknown | null;
 };
 
 /**
  * Every dataset belonging to a multi-file analysis group (parent + children),
  * in upload order. Accepts any member id (parent or child).
  */
+const GROUP_ROW_COLUMNS =
+  "id,name,parent_analysis_id,dataset_id,filename,session_id,thread_id,created_at,viz_config,samples,schema";
+
 export async function loadAnalysisGroupDatasets(analysisId: string): Promise<GroupDataset[]> {
   const { data: self, error: selfErr } = await supabase
     .from("analyses")
-    .select("id,name,parent_analysis_id,dataset_id,filename,session_id,thread_id,created_at")
+    .select(GROUP_ROW_COLUMNS)
     .eq("id", analysisId)
     .maybeSingle();
   if (selfErr) throw selfErr;
@@ -158,12 +164,12 @@ export async function loadAnalysisGroupDatasets(analysisId: string): Promise<Gro
       ? Promise.resolve({ data: self as any })
       : supabase
           .from("analyses")
-          .select("id,name,parent_analysis_id,dataset_id,filename,session_id,thread_id,created_at")
+          .select(GROUP_ROW_COLUMNS)
           .eq("id", parentId)
           .maybeSingle(),
     supabase
       .from("analyses")
-      .select("id,name,parent_analysis_id,dataset_id,filename,session_id,thread_id,created_at")
+      .select(GROUP_ROW_COLUMNS)
       .eq("parent_analysis_id", parentId)
       .order("created_at", { ascending: true }),
   ]);
@@ -180,9 +186,92 @@ export async function loadAnalysisGroupDatasets(analysisId: string): Promise<Gro
       name: r.filename || r.name || "Dataset",
       session_id: r.session_id ?? null,
       thread_id: r.thread_id ?? null,
+      viz_config: r.viz_config ?? null,
+      samples: Array.isArray(r.samples) ? r.samples : null,
+      schema: r.schema ?? null,
     });
   }
   return out;
+}
+
+/** Newest saved viz_config for a dataset_id from the current user's analyses rows. */
+export async function findSavedDatasetViz(
+  datasetId: string,
+): Promise<{ viz_config: unknown; samples: unknown[] | null; schema: unknown | null; filename: string | null } | null> {
+  const ownerId = await requireCurrentProfileId().catch(() => null);
+  let q = supabase
+    .from("analyses")
+    .select("dataset_id,viz_config,samples,schema,filename")
+    .eq("dataset_id", datasetId)
+    .not("viz_config", "is", null);
+  if (ownerId) q = q.eq("owner_id", ownerId);
+  const { data, error } = await q.order("created_at", { ascending: false }).limit(1).maybeSingle();
+  if (error || !data) return null;
+  const r = data as any;
+  return {
+    viz_config: r.viz_config,
+    samples: Array.isArray(r.samples) ? r.samples : null,
+    schema: r.schema ?? null,
+    filename: r.filename ?? null,
+  };
+}
+
+/**
+ * Save a dataset's own context under a mother analysis: updates the mother row
+ * when it owns this dataset and has no viz_config, otherwise updates the
+ * existing child row (same parent_analysis_id + dataset_id) or inserts one.
+ */
+export async function upsertGroupDatasetRow(
+  motherId: string,
+  input: {
+    dataset_id: string;
+    filename?: string | null;
+    schema?: unknown;
+    samples?: unknown;
+    viz_config: unknown;
+  },
+): Promise<void> {
+  const { data: mother } = await supabase
+    .from("analyses")
+    .select("id,project_id,dataset_id,thread_id,session_id,viz_config")
+    .eq("id", motherId)
+    .maybeSingle();
+  if (!mother) return;
+  const m = mother as any;
+  if (m.dataset_id === input.dataset_id) {
+    if (!m.viz_config) await updateAnalysisContext(motherId, { viz_config: input.viz_config });
+    return;
+  }
+  const { data: child } = await supabase
+    .from("analyses")
+    .select("id,viz_config")
+    .eq("parent_analysis_id", motherId)
+    .eq("dataset_id", input.dataset_id)
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (child) {
+    if (!(child as any).viz_config) {
+      await updateAnalysisContext((child as any).id, {
+        viz_config: input.viz_config,
+        samples: input.samples ?? undefined,
+        schema: input.schema ?? undefined,
+      });
+    }
+    return;
+  }
+  await createAnalysis({
+    project_id: m.project_id ?? null,
+    parent_analysis_id: motherId,
+    name: String(input.filename || input.dataset_id).replace(/\.[^.]+$/, ""),
+    dataset_id: input.dataset_id,
+    thread_id: m.thread_id ?? null,
+    session_id: m.session_id ?? null,
+    filename: input.filename ?? null,
+    schema: input.schema ?? null,
+    samples: input.samples ?? null,
+    viz_config: input.viz_config ?? null,
+  });
 }
 
 /** Resolve the root (mother) analysis id for any analysis row. */

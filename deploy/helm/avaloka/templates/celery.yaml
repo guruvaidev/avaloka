@@ -21,7 +21,7 @@ spec:
         {{- include "avaloka.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: celery
     spec:
-      serviceAccountName: {{ include "avaloka.serviceAccountName" . }}
+      serviceAccountName: {{ include "avaloka.celeryServiceAccountName" . }}
       containers:
         - name: celery
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
@@ -116,4 +116,39 @@ spec:
                 name: {{ include "avaloka.secretName" . }}
           resources:
             {{- toYaml .Values.celery.redbeat.resources | nindent 12 }}
+
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ printf "%s-celery-executor" (include "avaloka.fullname" .) }}
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: celery-executor
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "avaloka.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: celery-executor
+  template:
+    metadata:
+      labels:
+        {{- include "avaloka.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: celery-executor
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: executor
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["python", "-c", "import signal,sys,time; signal.signal(signal.SIGTERM, lambda *_: sys.exit(0)); time.sleep(10**9)"]
+          resources:
+            {{- toYaml .Values.celery.executor.resources | nindent 12 }}
+          readinessProbe:
+            exec:
+              command: ["python", "-c", "import os; os.kill(1, 0)"]
+            periodSeconds: 10
+            timeoutSeconds: 3
 {{- end }}

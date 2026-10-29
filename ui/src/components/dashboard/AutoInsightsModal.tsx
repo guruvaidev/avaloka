@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { AlertTriangle, ChevronRight } from "lucide-react";
 import { ArrowLeft, ArrowRight, ChevronDown, X, Stars02, Table } from "@untitledui/icons";
 import { Code02, Copy01, ThumbsDown, ThumbsUp } from "@untitledui/icons";
 import { toast } from "sonner";
@@ -11,6 +12,8 @@ import { InsightsAvatarProvider, useInsightsAvatar, HIGHLIGHT_CLASS } from "@/co
 import { Button } from "@/components/base/buttons/button";
 import { Badge } from "@/components/base/badges/badges";
 import { Toggle } from "@/components/base/toggle/toggle";
+import { AutoInsightsHeader, InsightNavigator, ChartStatsRail, ColumnStatisticsTab, ChartNavigation, type InsightView } from "./auto-insights/AutoInsightsPanels";
+import { ChartScopeStrip } from "./auto-insights/ChartScopeStrip";
 
 function chartIdOf(slide: Slide, groupId: string, si: number) {
   return slide.id ?? `${groupId}-${si}`;
@@ -106,40 +109,83 @@ function columnSummary(column: ColumnStat) {
     .join(" · ");
 }
 
-function DatasetOverview({ config, onPrefillChat }: { config: any; onPrefillChat?: (text: string) => void }) {
+export function overviewMetrics(config: any) {
+  const dataset = config?.dataset ?? {};
+  const columns = Array.isArray(config?.column_stats) ? config.column_stats : Array.isArray(config?.columns) ? config.columns : [];
+  const rows = finiteNumber(dataset.total_rows ?? dataset.rows_sampled);
+  const count = finiteNumber(dataset.column_count) ?? (Array.isArray(dataset.columns) ? dataset.columns.length : columns.length || null);
+  const types: { num: number; cat: number; date: number } = columns.reduce((result: { num: number; cat: number; date: number }, column: any) => {
+    const dtype = String(column.dtype ?? column.type ?? "").toLowerCase();
+    if (/date|time/.test(dtype) || column.role === "time") result.date++;
+    else if (/int|float|double|decimal|number|numeric/.test(dtype)) result.num++;
+    else if (dtype || column.role) result.cat++;
+    return result;
+  }, { num: 0, cat: 0, date: 0 });
+  const missingCount = finiteNumber(dataset.missing_cells ?? config?.profile_overview?.missing_cells);
+  const missingPct = finiteNumber(dataset.missing_pct ?? config?.profile_overview?.missing_pct) ?? (missingCount != null && rows != null && count != null && rows * count > 0 ? missingCount / (rows * count) * 100 : null);
+  const allRowsUsed = dataset.total_rows != null && Number(dataset.rows_sampled) === Number(dataset.total_rows);
+  return { rows, count, types, missingCount, missingPct, allRowsUsed };
+}
+
+/** Shared, read-only profile data for the Overview summary cards. */
+function overviewSummaryData(config: any) {
   const profile = config?.profile_overview;
   if (!profile || typeof profile !== "object") return null;
   const score = finiteNumber(profile.readiness_score);
-  const warnings = (Array.isArray(profile.red_flags) && profile.red_flags.length ? profile.red_flags : profile.concerns) ?? [];
-  const suggestions = [...(Array.isArray(profile.analysis_suggestions) ? profile.analysis_suggestions : []), ...(Array.isArray(profile.quick_wins) ? profile.quick_wins : [])].filter((value) => typeof value === "string" && value.trim()).slice(0, 5);
-  const scoreTone = score == null ? "bg-tertiary" : score >= 80 ? "bg-utility-success-500" : score >= 50 ? "bg-utility-warning-500" : "bg-utility-error-500";
+  const metrics = overviewMetrics(config);
+  const warnings = (Array.isArray(profile.red_flags) && profile.red_flags.length ? profile.red_flags : Array.isArray(profile.concerns) ? profile.concerns : []).map((item: any) => typeof item === "string" ? item : item?.text ?? item?.message).filter(Boolean);
+  const suggestions = [
+    ...(Array.isArray(profile.analysis_suggestions) ? profile.analysis_suggestions : []).map((text: any) => ({ text: typeof text === "string" ? text : text?.text ?? text?.question, type: "Q" })),
+    ...(Array.isArray(profile.quick_wins) ? profile.quick_wins : []).map((text: any) => ({ text: typeof text === "string" ? text : text?.text ?? text?.message, type: "C" })),
+  ].filter((item) => typeof item.text === "string" && item.text.trim());
+  const readiness = score == null ? null : Math.max(0, Math.min(100, score));
+  return { profile, metrics, warnings, suggestions, readiness };
+}
 
-  return (
-    <section className="rounded-2xl border border-[#eaecf0] bg-white p-5 shadow-[0_12px_28px_-12px_rgba(16,24,40,0.18)]">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h3 className="text-[15px] font-semibold text-[#101828]">Dataset overview</h3>
-          {profile.domain && <Badge className="mt-2" size="sm" color="blue">{profile.domain}</Badge>}
-        </div>
-        {score != null && (
-          <div className="w-full max-w-[240px]">
-            <p className="text-xs font-semibold text-[#344054]">Data readiness {Math.max(0, Math.min(100, score))}/100</p>
-            <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-[#eaecf0]">
-              <div className={`h-full rounded-full ${scoreTone}`} style={{ width: `${Math.max(0, Math.min(100, score))}%` }} />
-            </div>
-            {profile.readiness_reasoning && <p className="mt-1 line-clamp-1 text-xs text-[#667085]">{profile.readiness_reasoning}</p>}
-          </div>
-        )}
-      </div>
-      {profile.domain_reasoning && <p className="mt-3 text-sm leading-6 text-[#475467]">{profile.domain_reasoning}</p>}
-      {(warnings.length > 0 || suggestions.length > 0) && (
-        <div className="mt-4 grid gap-5 md:grid-cols-2">
-          {warnings.length > 0 && <div><h4 className="text-sm font-semibold text-[#101828]">Watch out for</h4><ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-[#475467]">{warnings.map((item: string, index: number) => <li key={`${item}-${index}`}>{item}</li>)}</ul></div>}
-          {suggestions.length > 0 && <div><h4 className="text-sm font-semibold text-[#101828]">Suggested next steps</h4><div className="mt-2 flex flex-col items-start gap-1">{suggestions.map((item: string, index: number) => <Button key={`${item}-${index}`} color="link-gray" size="sm" onPress={() => onPrefillChat?.(item)} className="h-auto justify-start whitespace-normal text-left">{item}</Button>)}</div></div>}
-        </div>
-      )}
-    </section>
-  );
+/** Domain tag, description and the readiness / rows / columns tiles. */
+function DatasetOverviewCard({ config }: { config: any }) {
+  const data = overviewSummaryData(config);
+  if (!data) return null;
+  const { profile, metrics, readiness } = data;
+  return <section className="ai-surface ai-overview-dataset">
+    <div className="ai-overview-description"><h3>Dataset overview</h3>{profile.domain && <span className="ai-overview-domain">{profile.domain}</span>}{profile.domain_reasoning && <p>{profile.domain_reasoning}</p>}</div>
+    <div className="ai-overview-tiles">
+      {readiness != null && <div className="ai-overview-tile ai-overview-readiness"><div className="ai-readiness-ring" role="progressbar" aria-label="Data readiness" aria-valuemin={0} aria-valuemax={100} aria-valuenow={readiness}><svg viewBox="0 0 72 72" aria-hidden="true"><circle cx="36" cy="36" r="32" className="ai-ring-track"/><circle cx="36" cy="36" r="32" className="ai-ring-progress" pathLength="100" strokeDasharray={`${readiness} 100`} transform="rotate(-90 36 36)"/></svg><strong>{readiness}</strong></div><span>Data readiness</span></div>}
+      {metrics.rows != null && <div className="ai-overview-tile"><span>Rows</span><strong>{formatStatNumber(metrics.rows)}</strong>{metrics.allRowsUsed && <small>all rows used</small>}{config?.dataset?.total_rows == null && <small>sample rows</small>}</div>}
+      {metrics.count != null && <div className="ai-overview-tile"><span>Columns</span><strong>{metrics.count}</strong>{Object.values(metrics.types).some(Boolean) && <small>{Object.entries(metrics.types).filter(([, value]) => value > 0).map(([type, value]) => `${value} ${type}`).join(" · ")}</small>}</div>}
+      {(metrics.missingPct != null || metrics.missingCount != null) && <div className="ai-overview-tile"><span>Missing</span>{metrics.missingPct != null && <strong>{formatStatNumber(metrics.missingPct)}%</strong>}{metrics.missingCount != null && <small>{metrics.missingCount === 0 ? "no empty cells" : `${formatStatNumber(metrics.missingCount)} empty cells`}</small>}</div>}
+    </div>
+  </section>;
+}
+
+/** "Watch out for" and "Suggested next steps", side by side. */
+function DatasetOverviewActions({ config, onPrefillChat }: { config: any; onPrefillChat?: (text: string) => void }) {
+  const data = overviewSummaryData(config);
+  if (!data) return null;
+  const { profile, warnings, suggestions } = data;
+  if (!(warnings.length > 0 || profile.readiness_reasoning || suggestions.length > 0)) return null;
+  return <div className="ai-overview-actions">
+    {(warnings.length > 0 || profile.readiness_reasoning) && <section className="ai-surface ai-overview-action"><header><h3>Watch out for</h3><span className="ai-issues-count">{warnings.length} issues</span></header>{profile.readiness_reasoning && <p className="ai-overview-reason">{profile.readiness_reasoning}</p>}<ul>{warnings.map((item: string, i: number) => <li className="ai-issue-row" key={i}><AlertTriangle size={16}/><span>{item}</span></li>)}</ul></section>}
+    {suggestions.length > 0 && <section className="ai-surface ai-overview-action"><header><h3>Suggested next steps</h3><span className="ai-overview-reason">Click to ask in chat</span></header><div className="ai-suggestion-list">{suggestions.map((item, i) => <Button key={i} color="tertiary" className="ai-suggestion-row" onPress={() => onPrefillChat?.(item.text)}><span className={`ai-step-tag ai-step-${item.type}`}>{item.type}</span><span className="ai-step-text">{item.text}</span><ChevronRight size={16}/></Button>)}</div></section>}
+  </div>;
+}
+
+/** Dataset overview card, followed by the action cards. */
+export function DatasetOverview({ config, onPrefillChat }: { config: any; onPrefillChat?: (text: string) => void }) {
+  if (!overviewSummaryData(config)) return null;
+  return <div className="ai-overview-summary">
+    <DatasetOverviewCard config={config} />
+    <DatasetOverviewActions config={config} onPrefillChat={onPrefillChat} />
+  </div>;
+}
+
+
+function OverviewInsight({ slide }: { slide: Slide }) {
+  const [expanded, setExpanded] = useState(false);
+  const [overflow, setOverflow] = useState(false);
+  const insights = slide.insights.filter((text) => text?.trim());
+  const text = insights.length ? insights.map((text) => stripMarkdown(text.trim())).join("\n") : chartPoint(slide);
+  return <div className="ai-overview-insight" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}><p ref={(node) => { if (node && !expanded) { const next = node.scrollHeight > node.clientHeight + 1; if (next !== overflow) setOverflow(next); } }} className={expanded ? "" : "ai-insight-clamped"}>{text}</p>{(overflow || expanded) && <Button color="link-gray" className="ai-insight-more" onPress={() => setExpanded(!expanded)}>{expanded ? "Show less" : "Show more"}</Button>}</div>;
 }
 
 function ColumnStatistics({ config }: { config: any }) {
@@ -153,16 +199,16 @@ function ColumnStatistics({ config }: { config: any }) {
   const badgeColor = (value: ColumnStat["predictive_value"]) => value === "high" ? "success" : value === "medium" ? "gray" : "slate";
 
   return (
-    <details className="group mt-3 rounded-lg border border-[#eaecf0] bg-white">
-      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3.5 py-3 text-[13px] font-semibold text-[#101828]">
-        Column statistics <ChevronDown className="size-4 text-[#667085] transition-transform group-open:rotate-180" />
+    <details className="group mt-3 rounded-lg border border-[var(--color-ai-line)] bg-[var(--color-ai-surface)]">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3.5 py-3 text-[13px] font-semibold text-[var(--color-ai-heading)]">
+        Column statistics <ChevronDown className="size-4 text-[var(--color-ai-subtle)] transition-transform group-open:rotate-180" />
       </summary>
-      <div className="border-t border-[#eaecf0] p-3.5">
+      <div className="border-t border-[var(--color-ai-line)] p-3.5">
         {hasIds && <div className="mb-3"><Toggle slim size="sm" label="Show ID columns" isSelected={showIds} onChange={setShowIds} /></div>}
-        <div className="overflow-x-auto rounded-lg border border-[#eaecf0]">
+        <div className="overflow-x-auto rounded-lg border border-[var(--color-ai-line)]">
           <table className="w-full min-w-[900px] text-left text-xs">
-            <thead className="bg-[#f9fafb] text-[#667085]"><tr>{["Column", "Type", "Meaning", "Predictive value", "Missing %", "Distinct", "Summary"].map((heading) => <th key={heading} className="whitespace-nowrap px-3 py-2 font-medium">{heading}</th>)}</tr></thead>
-            <tbody>{visible.map((column, index) => <tr key={`${column.name}-${index}`} className="border-t border-[#eaecf0] text-[#475467]"><td className="px-3 py-2 font-medium text-[#101828]">{column.name ?? "—"}</td><td className="px-3 py-2">{column.dtype ?? "—"}</td><td className="max-w-[220px] px-3 py-2">{column.meaning ?? ""}</td><td className="px-3 py-2">{column.predictive_value ? <Badge size="sm" color={badgeColor(column.predictive_value)}>{column.predictive_value}</Badge> : null}</td><td className="px-3 py-2">{formatStatNumber(column.missing_pct)}</td><td className="px-3 py-2">{formatStatNumber(column.n_unique)}</td><td className="max-w-[320px] px-3 py-2">{columnSummary(column)}</td></tr>)}</tbody>
+            <thead className="bg-[var(--color-ai-thead)] text-[var(--color-ai-subtle)]"><tr>{["Column", "Type", "Meaning", "Predictive value", "Missing %", "Distinct", "Summary"].map((heading) => <th key={heading} className="whitespace-nowrap px-3 py-2 font-medium">{heading}</th>)}</tr></thead>
+            <tbody>{visible.map((column, index) => <tr key={`${column.name}-${index}`} className="border-t border-[var(--color-ai-line)] text-[var(--color-ai-body)]"><td className="px-3 py-2 font-medium text-[var(--color-ai-heading)]">{column.name ?? "—"}</td><td className="px-3 py-2">{column.dtype ?? "—"}</td><td className="max-w-[220px] px-3 py-2">{column.meaning ?? ""}</td><td className="px-3 py-2">{column.predictive_value ? <Badge size="sm" color={badgeColor(column.predictive_value)}>{column.predictive_value}</Badge> : null}</td><td className="px-3 py-2">{formatStatNumber(column.missing_pct)}</td><td className="px-3 py-2">{formatStatNumber(column.n_unique)}</td><td className="max-w-[320px] px-3 py-2">{columnSummary(column)}</td></tr>)}</tbody>
           </table>
         </div>
       </div>
@@ -223,176 +269,47 @@ const FALLBACK_SLIDES: Slide[] = [
   },
 ];
 
-function InsightCard({
-  slide,
-  datasetName,
-  aid,
-  insightId,
-  outputRows,
-  samples,
-  defaultView = "chart",
-  onOpenCode,
-  chartId,
-  config,
-}: {
-  slide: Slide;
-  datasetName?: string;
-  aid?: string | null;
-  insightId: string;
-  outputRows?: Record<string, unknown>[] | null;
-  samples?: any[];
-  defaultView?: "table" | "chart";
-  onOpenCode: () => void;
-  chartId: string;
-  config?: any;
+function InsightCard({ slide, config, outputRows, samples, defaultView = "chart", chartId, index, total, onSelect }: {
+  slide: Slide; config?: any; outputRows?: Record<string, unknown>[] | null; samples?: any[];
+  defaultView?: "table" | "chart"; chartId: string; index: number; total: number; onSelect: (index: number) => void;
 }) {
   const avatar = useInsightsAvatar();
   const [view, setView] = useState<"table" | "chart">(defaultView);
-  const [feedback, setFeedback] = useState<"positive" | "negative" | null>(null);
-  const [submitting, setSubmitting] = useState<"positive" | "negative" | null>(null);
-  const [note, setNote] = useState("");
-  const [savingNote, setSavingNote] = useState(false);
-  const [savedAt, setSavedAt] = useState<number | null>(null);
-  const disabled = !aid;
-
-  // Prefer per-insight output rows, then the uploaded dataset samples. Some
-  // persisted analyses only retain the chart's derived rows, so use those as
-  // the final fallback rather than leaving the Data table control disabled.
+  const [expanded, setExpanded] = useState(false);
+  const [plotHeight, setPlotHeight] = useState(360);
+  const [plotNode, setPlotNode] = useState<HTMLDivElement | null>(null);
   const tableRows = useMemo<Record<string, unknown>[] | null>(() => {
     if (Array.isArray(outputRows) && outputRows.length > 0) return outputRows;
     const sourceRows = Array.isArray(samples) && samples.length > 0 ? samples : slide.data;
-    if (Array.isArray(sourceRows) && sourceRows.length > 0) {
-      const first = sourceRows[0];
-      if (first && typeof first === "object" && !Array.isArray(first)) {
-        return sourceRows as Record<string, unknown>[];
-      }
-      if (Array.isArray(first)) {
-        const cols = (first as unknown[]).map((_, i) => `col_${i + 1}`);
-        return (sourceRows as unknown[][]).map((row) => {
-          const obj: Record<string, unknown> = {};
-          cols.forEach((c, i) => { obj[c] = row[i]; });
-          return obj;
-        });
-      }
+    if (!Array.isArray(sourceRows) || !sourceRows.length) return null;
+    const first = sourceRows[0];
+    if (first && typeof first === "object" && !Array.isArray(first)) return sourceRows;
+    if (Array.isArray(first)) {
+      const cols = first.map((_, i) => `col_${i + 1}`);
+      return sourceRows.map((row) => Object.fromEntries(cols.map((column, i) => [column, row[i]])));
     }
     return null;
   }, [outputRows, samples, slide.data]);
-  const hasOutputRows = !!tableRows && tableRows.length > 0;
-
+  useEffect(() => { setView(defaultView); setExpanded(false); }, [defaultView, chartId]);
   useEffect(() => {
-    setView(defaultView);
-  }, [defaultView, insightId]);
-
-  const sendThumb = async (type: "positive" | "negative") => {
-    if (!aid || submitting) return;
-    setSubmitting(type);
-    try {
-      await backendApi.sendInsightFeedback(aid, {
-        insight_id: insightId,
-        feedback_type: type,
-        comment: null,
-      });
-      setFeedback(type);
-    } catch (err: any) {
-      toast.error(err?.message || "Failed to submit feedback");
-    } finally {
-      setSubmitting(null);
-    }
-  };
-
-  const saveNote = async () => {
-    if (!aid || savingNote || !note.trim()) return;
-    setSavingNote(true);
-    try {
-      await backendApi.sendInsightFeedback(aid, {
-        insight_id: insightId,
-        feedback_type: "positive",
-        comment: note.trim(),
-      });
-      setSavedAt(Date.now());
-      setTimeout(() => setSavedAt((t) => (t && Date.now() - t >= 1900 ? null : t)), 2000);
-    } catch (err: any) {
-      toast.error(err?.message || "Failed to save note");
-    } finally {
-      setSavingNote(false);
-    }
-  };
-
-  return (
-    <div
-      {...avatar.bindChart(chartId)}
-      className={"flex h-full flex-col overflow-y-auto rounded-2xl border border-[#eaecf0] bg-white p-5 shadow-[0_24px_48px_-12px_rgba(16,24,40,0.18)] transition-shadow " + (avatar.isHighlighted(chartId) ? HIGHLIGHT_CLASS : "")}
-    >
-      <div className="flex items-center gap-2">
-        <Table className="size-4 text-[#344054]" />
-        <h3 className="text-[15px] font-semibold text-[#101828]">{slide.title}</h3>
-        <ExplainChartButton chartId={chartId} />
-      </div>
-      {(slide.subtitle || datasetName) && (
-        <p className="mt-0.5 text-xs text-[#667085]">
-          {slide.subtitle ? stripMarkdown(slide.subtitle) : datasetName}
-        </p>
-      )}
-
-      <div className="mt-3">
-        <div className="flex items-center justify-end">
-          <div className="inline-flex rounded-lg border border-[#eaecf0] bg-white p-0.5 text-xs">
-            <button
-              type="button"
-              onClick={() => setView("table")}
-              disabled={!hasOutputRows}
-              className={
-                "rounded-md px-2.5 py-1 disabled:opacity-50 " +
-                (view === "table"
-                  ? "bg-white font-medium text-[#101828] shadow-sm ring-1 ring-[#eaecf0]"
-                  : "text-[#475467]")
-              }
-            >
-              Data table
-            </button>
-            <button
-              type="button"
-              onClick={() => setView("chart")}
-              className={
-                "rounded-md px-2.5 py-1 " +
-                (view === "chart"
-                  ? "bg-white font-medium text-[#101828] shadow-sm ring-1 ring-[#eaecf0]"
-                  : "text-[#475467]")
-              }
-            >
-              Chart
-            </button>
-          </div>
-        </div>
-        <p className="mt-1 text-right text-[11px] text-[#667085]">Auto-generated</p>
-        <div className="mt-1">
-          {view === "table" && hasOutputRows ? (
-            <AnalysisOutputTable
-              rows={tableRows!}
-              title="Output"
-              filename={`${slugify(slide.title || "output")}.csv`}
-            />
-          ) : (
-            <DynamicChart slide={slide} />
-          )}
-        </div>
-      </div>
-
-      {(slide.insights.length > 0 || slide.headline || slide.insightFacts || config?.dataset_summary?.insights?.length > 0) && (
-        <div className="mt-3 rounded-lg border border-[#eaecf0] bg-white p-3.5">
-          <p className="text-[13px] font-semibold text-[#101828]">Key Insights</p>
-          <ul className="mt-1.5 list-disc space-y-0.5 pl-5 text-[13px] text-[#475467]">
-            {slide.headline ? <li><strong className="block text-[#101828]">{slide.headline}</strong>{slide.insightFacts && <span className="mt-0.5 block">{slide.insightFacts}</span>}</li> : slide.insights.map((line, i) => <li key={i}>{line}</li>)}
-          </ul>
-          {Array.isArray(config?.dataset_summary?.insights) && config.dataset_summary.insights.length > 0 && <div className="mt-3 border-t border-[#eaecf0] pt-3"><p className="text-[13px] font-semibold text-[#101828]">About this dataset</p><ul className="mt-1.5 list-disc space-y-0.5 pl-5 text-[13px] text-[#475467]">{config.dataset_summary.insights.map((line: string, index: number) => <li key={`${line}-${index}`}>{line}</li>)}</ul></div>}
-        </div>
-      )}
-
-      <ColumnStatistics config={config} />
-
+    if (!plotNode) return;
+    const measure = () => setPlotHeight(Math.max(320, Math.floor(plotNode.getBoundingClientRect().height) - (slide.type === "line" || slide.type === "area" ? 24 : 0)));
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(plotNode);
+    return () => observer.disconnect();
+  }, [plotNode, slide.type, chartId]);
+  const takeaway = stripMarkdown(slide.headline || slide.subtitle || slide.insights[0] || "");
+  return <section {...avatar.bindChart(chartId)} className={"ai-chart-card ai-surface " + (avatar.isHighlighted(chartId) ? HIGHLIGHT_CLASS : "")}>
+    <div className="ai-card-heading"><div className="ai-chart-title"><h3>{slide.title}</h3>{takeaway && <div className="ai-takeaway"><p className={expanded ? "" : "line-clamp-2"}>{takeaway}</p>{takeaway.length > 100 && <Button color="link-gray" className="ai-more" onPress={() => setExpanded((value) => !value)}>{expanded ? "Less" : "More"}</Button>}</div>}</div>
+      <div className="ai-card-tools"><div className="ai-view-toggle">{(['table', 'chart'] as const).map((mode) => <Button key={mode} color="tertiary" className={`ai-control ${view === mode ? 'ai-view-active' : ''}`} isDisabled={mode === 'table' && !tableRows?.length} onPress={() => setView(mode)}>{mode === 'table' ? 'Data table' : 'Chart'}</Button>)}</div><ExplainChartButton chartId={chartId} /></div>
     </div>
-  );
+    <ChartScopeStrip dataset={config?.dataset} />
+    <div ref={setPlotNode} className="ai-plot">{view === 'table' && tableRows?.length ? <div className="ai-data-table"><AnalysisOutputTable rows={tableRows} title="Output" filename={`${slugify(slide.title || 'output')}.csv`} /></div> : <DynamicChart key={chartId} slide={slide} height={plotHeight} stackPresentation chartKey={chartId} />}</div>
+    <ChartNavigation index={index} total={total} onSelect={onSelect} />
+  </section>;
 }
+
 
 function CodeViewerModal({
   open,
@@ -416,15 +333,15 @@ function CodeViewerModal({
   };
   return (
     <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true">
-      <div className="flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-[#eaecf0] bg-white shadow-2xl">
-        <div className="flex items-center justify-between border-b border-[#eaecf0] px-5 py-3">
-          <h3 className="text-[15px] font-semibold text-[#101828]">Analysis code</h3>
+      <div className="flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-[var(--color-ai-line)] bg-[var(--color-ai-surface)] shadow-2xl">
+        <div className="flex items-center justify-between border-b border-[var(--color-ai-line)] px-5 py-3">
+          <h3 className="text-[15px] font-semibold text-[var(--color-ai-heading)]">Analysis code</h3>
           <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={copy}
               disabled={loading || !code}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-[#eaecf0] bg-white px-2.5 py-1.5 text-[12px] font-semibold text-[#344054] hover:bg-[#f9fafb] disabled:opacity-50"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--color-ai-line)] bg-[var(--color-ai-surface)] px-2.5 py-1.5 text-[12px] font-semibold text-[var(--color-ai-body)] hover:bg-[var(--color-ai-thead)] disabled:opacity-50"
             >
               <Copy01 className="size-3.5" />
               Copy
@@ -433,7 +350,7 @@ function CodeViewerModal({
               type="button"
               onClick={onClose}
               aria-label="Close"
-              className="grid size-8 place-items-center rounded-lg border border-[#eaecf0] bg-white text-[#475467] hover:bg-[#f9fafb]"
+              className="grid size-8 place-items-center rounded-lg border border-[var(--color-ai-line)] bg-[var(--color-ai-surface)] text-[var(--color-ai-body)] hover:bg-[var(--color-ai-thead)]"
             >
               <X className="size-4" />
             </button>
@@ -454,7 +371,7 @@ function CodeViewerModal({
 
 function AutoInsightsModalInner({ open, onOpenChange, config, status, datasetName, samples, outputRows, defaultView = "chart", title, subtitle, aid, datasets, primaryDatasetId, onPrefillChat }: AutoInsightsModalProps) {
   const [index, setIndex] = useState(0);
-  const [layout, setLayout] = useState<"stack" | "grid">("stack");
+  const [layout, setLayout] = useState<InsightView>("stack");
   const [codeOpen, setCodeOpen] = useState(false);
   const [codeText, setCodeText] = useState("");
   const [codeLoading, setCodeLoading] = useState(false);
@@ -566,8 +483,16 @@ function AutoInsightsModalInner({ open, onOpenChange, config, status, datasetNam
 
 
   const total = flat.length;
-  const isPending = groups.some((g) => g.pending) && totalAll === 0;
+  const isPending = Boolean(activeGroup?.pending);
   const noInsights = !isPending && total === 0;
+
+  const overviewScrollRef = useRef<HTMLDivElement>(null);
+
+  // Opening the Overview tab always starts at the top, where the charts are.
+  useEffect(() => {
+    if (!open || layout !== "grid") return;
+    overviewScrollRef.current?.scrollTo({ top: 0 });
+  }, [open, layout, activeDatasetId]);
 
   useEffect(() => {
     setIndex(0);
@@ -584,15 +509,17 @@ function AutoInsightsModalInner({ open, onOpenChange, config, status, datasetNam
   }, [open]);
 
   useEffect(() => {
-    if (!open || total === 0) return;
+    if (!open) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onOpenChange(false);
-      else if (e.key === "ArrowRight") setIndex((i) => (i + 1) % total);
-      else if (e.key === "ArrowLeft") setIndex((i) => (i - 1 + total) % total);
+      else if (layout === "stack" && total > 0 && !(e.target instanceof HTMLElement && (e.target.closest('input, textarea, select, [contenteditable="true"]')))) {
+        if (e.key === "ArrowRight") { e.preventDefault(); setIndex((i) => Math.min(i + 1, total - 1)); }
+        else if (e.key === "ArrowLeft") { e.preventDefault(); setIndex((i) => Math.max(i - 1, 0)); }
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, onOpenChange, total]);
+  }, [open, onOpenChange, total, layout]);
 
   if (!open) return null;
 
@@ -600,150 +527,54 @@ function AutoInsightsModalInner({ open, onOpenChange, config, status, datasetNam
   const avatarDatasetId = activeGroup ? (activeGroup.id === "__single__" ? primaryDatasetId ?? null : activeGroup.id) : null;
   const avatarDatasetName = activeGroup?.name || datasetName || null;
 
-  const prev = () => setIndex((i) => (i - 1 + total) % total);
-  const next = () => setIndex((i) => (i + 1) % total);
-
   const activeEntry = total ? flat[Math.min(index, total - 1)] : null;
   const activeSlide = activeEntry?.slide;
-  const back1 = total ? flat[(index + 1) % total].slide : null;
-  const back2 = total ? flat[(index + 2) % total].slide : null;
-  const headerName = multi ? "" : groups[0]?.name;
-
 
   return (
-    <div
-      className="fixed inset-0 z-[100] flex flex-col overflow-hidden animate-in fade-in duration-200"
-      style={{
-        background:
-          "linear-gradient(180deg, #ffffff 0%, #ffffff 40%, #dfe8fa 100%)",
-      }}
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="auto-insights-title"
-    >
-      <button
-        type="button"
-        onClick={() => { onOpenChange(false); setIndex(0); }}
-        aria-label="Close"
-        className="absolute right-8 top-8 z-30 grid size-9 place-items-center rounded-lg border border-[#eaecf0] bg-white text-[#475467] shadow-xs transition hover:bg-[#f9fafb]"
-      >
-        <X className="size-4" />
-      </button>
-
-      <div className="pt-12 pb-2 text-center">
-        <h2 id="auto-insights-title" className="text-3xl font-bold text-[#101828]">{title ?? "Auto Insights"}</h2>
-        <p className="mt-1.5 text-sm text-[#475467]">
-          {subtitle ?? "Showing selected insights from the dataset"}
-        </p>
-      </div>
-
-      <div className="flex justify-center pb-2">
-        <div className="inline-flex rounded-lg border border-[#eaecf0] bg-white p-0.5 text-xs shadow-xs">
-          <button
-            type="button"
-            onClick={() => setLayout("grid")}
-            className={
-              "rounded-md px-3 py-1.5 " +
-              (layout === "grid" ? "bg-[#1565ef] font-semibold text-white" : "text-[#475467]")
-            }
-          >
-            Overview
-          </button>
-          <button
-            type="button"
-            onClick={() => setLayout("stack")}
-            className={
-              "rounded-md px-3 py-1.5 " +
-              (layout === "stack" ? "bg-[#1565ef] font-semibold text-white" : "text-[#475467]")
-            }
-          >
-            Stack
-          </button>
-        </div>
-      </div>
-
-      {multi && (
-        <div className="flex justify-center px-8 pb-2">
-          <div className="flex max-w-full gap-1 overflow-x-auto rounded-xl border border-[#eaecf0] bg-white p-1 shadow-xs" role="tablist" aria-label="Datasets">
-            {groups.map((g) => {
-              const active = activeDatasetId === g.id;
-              return (
-                <button
-                  key={g.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={active}
-                  onClick={() => { setActiveDatasetId(g.id); setIndex(0); }}
-                  title={g.name}
-                  className={
-                    "max-w-[220px] truncate rounded-lg px-3 py-1.5 text-xs transition " +
-                    (active
-                      ? "bg-[#eff8ff] font-semibold text-[#175cd3] ring-1 ring-[#1565ef]/30"
-                      : "text-[#475467] hover:bg-[#f9fafb]")
-                  }
-                >
-                  {g.name} · {g.slides.length}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
+    <div className="ai-modal fixed inset-0 z-[100] flex flex-col overflow-hidden" role="dialog" aria-modal="true" aria-labelledby="auto-insights-title">
+      <AutoInsightsHeader groups={groups} active={activeGroup} view={layout} onDataset={(id) => { setActiveDatasetId(id); setIndex(0); }} onView={setLayout} onClose={() => onOpenChange(false)} />
 
       {layout === "grid" ? (
-        <div className="flex-1 overflow-y-auto px-8 pb-8">
+        <div className="ai-overview-scroll" ref={overviewScrollRef}>
           {isPending ? (
-            <div className="grid h-full place-items-center text-sm text-[#475467]">Generating insights…</div>
+            <div className="grid h-full place-items-center text-sm text-[var(--color-ai-body)]">Generating insights…</div>
           ) : (
-            <div className="mx-auto max-w-[1200px] space-y-8">
-              <DatasetOverview config={activeGroup?.config} onPrefillChat={onPrefillChat} />
+            <div className="ai-overview-content">
               {visibleGroups.map((g) => {
                 const offset = flat.findIndex((f) => f.group.id === g.id);
                 return (
                   <section key={g.id}>
-                    <div className="mb-3 flex items-center gap-3">
-                      <h3 className="truncate text-[15px] font-semibold text-[#101828]" title={g.name}>
-                        {g.name}
-                      </h3>
-                      <span className="rounded-full bg-[#eff8ff] px-2 py-0.5 text-[11px] font-semibold text-[#175cd3]">
-                        {g.slides.length} chart{g.slides.length === 1 ? "" : "s"}
-                      </span>
-                      <span className="h-px flex-1 bg-[#eaecf0]" />
-                    </div>
+                    <div className="ai-overview-charts-heading"><h3 title={g.name}>{visibleGroups.length > 1 ? g.name : "Charts"}</h3><span className="ai-overview-chart-count">{g.slides.length}</span><Button color="link-gray" className="ai-open-stack" onPress={() => { setIndex(Math.max(0, offset)); setLayout("stack"); }}>Open in Stack view →</Button></div>
                     {g.slides.length === 0 ? (
-                      <div className="rounded-2xl border border-dashed border-[#eaecf0] bg-white px-6 py-6 text-center text-sm text-[#475467]">
+                      <div className="rounded-2xl border border-dashed border-[var(--color-ai-line)] bg-[var(--color-ai-surface)] px-6 py-6 text-center text-sm text-[var(--color-ai-body)]">
                         {g.pending ? "Generating insights…" : "No auto-insights available for this dataset"}
                       </div>
                     ) : (
-                      <div className="grid grid-cols-1 items-start gap-5 sm:grid-cols-2 lg:grid-cols-3">
+                      <div className="ai-overview-chart-grid">
                         {g.slides.map((slide, si) => {
                           const globalIdx = offset + si;
                           const cid = chartIdOf(slide, g.id, si);
                           const lit = avatar.isHighlighted(cid);
                           return (
-                            <button
+                            <div
                               {...avatar.bindChart(cid)}
                               key={`grid-${g.id}-${si}-${slugify(slide.title || String(si))}`}
-                              type="button"
+                              role="button"
+                              tabIndex={0}
+                              onKeyDown={(event) => { if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); setIndex(globalIdx); setLayout("stack"); } }}
                               onClick={() => { setIndex(globalIdx); setLayout("stack"); }}
                               className={
-                                "group flex flex-col overflow-hidden rounded-2xl border bg-white p-4 text-left shadow-[0_12px_28px_-12px_rgba(16,24,40,0.18)] transition hover:-translate-y-1 hover:shadow-[0_24px_48px_-12px_rgba(16,24,40,0.28)] " +
-                                (lit ? HIGHLIGHT_CLASS : globalIdx === index ? "border-[#1565ef] ring-2 ring-[#1565ef]/25" : "border-[#eaecf0]")
+                                "group flex flex-col overflow-hidden rounded-2xl border bg-[var(--color-ai-surface)] p-4 text-left shadow-[0_12px_28px_-12px_rgba(16,24,40,0.18)] transition hover:-translate-y-1 hover:shadow-[0_24px_48px_-12px_rgba(16,24,40,0.28)] " +
+                                (lit ? HIGHLIGHT_CLASS : globalIdx === index ? "border-[#1565ef] ring-2 ring-[#1565ef]/25" : "border-[var(--color-ai-line)]")
                               }
                             >
-                              <div className="flex items-center gap-2">
-                                <Table className="size-4 text-[#344054]" />
-                                <span className="truncate text-[13px] font-semibold text-[#101828]">{slide.title}</span>
-                                <ExplainChartButton chartId={cid} />
+                              {slide.type !== "scatter" && <div className="ai-overview-chart-header"><Table className="size-4 shrink-0"/><span>{slide.title}</span><ExplainChartButton chartId={cid}/></div>}
+                              <div className="ai-overview-chart-body">
+                                <DynamicChart slide={slide} height={slide.type === "scatter" ? 320 : 290} chartKey={`${g.id}-${si}`} header={slide.type === "scatter" ? <div className="ai-overview-chart-header"><span>{slide.title}</span><ExplainChartButton chartId={cid}/></div> : undefined}/>
                               </div>
-                              <div className={slide.type === "pie" || slide.type === "donut" ? "pointer-events-none mt-2 h-auto min-h-[180px] overflow-visible" : "pointer-events-none mt-2 h-[180px] overflow-hidden"}>
-                                <DynamicChart slide={slide} chartKey={`${g.id}-${si}`} />
-                              </div>
-                              <p className="mt-2 flex gap-1.5 text-[12px] leading-5 text-[#667085]">
-                                <span className="mt-[7px] size-1 shrink-0 rounded-full bg-[#1565ef]" />
-                                <span className="line-clamp-2">{chartPoint(slide)}</span>
-                              </p>
-                            </button>
+                              <OverviewInsight slide={slide}/>
+
+                            </div>
                           );
                         })}
                       </div>
@@ -751,114 +582,21 @@ function AutoInsightsModalInner({ open, onOpenChange, config, status, datasetNam
                   </section>
                 );
               })}
+              <DatasetOverview config={activeGroup?.config} onPrefillChat={onPrefillChat} />
             </div>
           )}
         </div>
-      ) : noInsights ? (
-        <div className="flex flex-1 items-center justify-center px-8 pb-8">
-          <div className="rounded-2xl border border-[#eaecf0] bg-white px-6 py-8 text-center text-sm text-[#475467] shadow-[0_12px_28px_-12px_rgba(16,24,40,0.18)]">
-            No auto-insights available for this dataset
-          </div>
-        </div>
+      ) : layout === "columns" ? (
+        <ColumnStatisticsTab key={activeGroup?.id} config={activeGroup?.config} slides={activeGroup?.slides ?? []} onChart={(position) => { setIndex(position); setLayout("stack"); }} />
       ) : (
-      <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6">
-        <div className="mx-auto mb-5 max-w-[720px]"><DatasetOverview config={activeGroup?.config} onPrefillChat={onPrefillChat} /></div>
-      <div className="relative flex min-h-[560px] items-center justify-center">
-        {total > 1 && (
-          <button
-            type="button"
-            onClick={prev}
-            aria-label="Previous"
-            className="absolute left-10 top-1/2 z-30 grid size-10 -translate-y-1/2 place-items-center rounded-lg border border-[#eaecf0] bg-white text-[#98a2b3] shadow-xs transition hover:text-[#475467]"
-          >
-            <ArrowLeft className="size-5" />
-          </button>
-        )}
-
-        <div className="relative h-[560px] w-full max-w-[720px]">
-          {total > 1 && back1 && back2 && (
-            <>
-              <div
-                className="absolute inset-0 origin-center transition-all duration-500 ease-out"
-                style={{
-                  transform: "translateX(-64px) translateY(10px) scale(0.94) rotate(-5deg)",
-                  zIndex: 1,
-                }}
-                aria-hidden
-              >
-                <div className="h-full rounded-2xl border border-[#eaecf0] bg-white shadow-[0_16px_32px_-12px_rgba(16,24,40,0.12)]">
-                  <div className="flex items-center gap-2 p-5">
-                    <Table className="size-4 text-[#d0d5dd]" />
-                    <span className="text-[15px] font-semibold text-[#d0d5dd]">{back2.title}</span>
-                  </div>
-                </div>
-              </div>
-
-              <div
-                className="absolute inset-0 origin-center transition-all duration-500 ease-out"
-                style={{
-                  transform: "translateX(-34px) translateY(5px) scale(0.97) rotate(-2.5deg)",
-                  zIndex: 2,
-                }}
-                aria-hidden
-              >
-                <div className="h-full rounded-2xl border border-[#eaecf0] bg-white shadow-[0_18px_36px_-12px_rgba(16,24,40,0.14)]">
-                  <div className="flex items-center gap-2 p-5">
-                    <Table className="size-4 text-[#98a2b3]" />
-                    <span className="text-[15px] font-semibold text-[#98a2b3]">{back1.title}</span>
-                  </div>
-                </div>
-              </div>
-            </>
-          )}
-
-          <div
-            key={`active-${index}`}
-            className="absolute inset-0 transition-all duration-500 ease-out animate-in fade-in slide-in-from-right-6"
-            style={{ zIndex: 10 }}
-          >
-            {isPending || !activeEntry || !activeSlide ? (
-              <div className="flex h-full items-center justify-center rounded-2xl border border-[#eaecf0] bg-white text-sm text-[#475467] shadow-[0_24px_48px_-12px_rgba(16,24,40,0.18)]">
-                Generating insights…
-              </div>
-            ) : (
-              <InsightCard
-                slide={activeSlide}
-                datasetName={activeEntry.group.name}
-                aid={aid}
-                insightId={`${activeEntry.group.id}-${activeEntry.si}-${slugify(activeSlide.title || `insight-${index}`)}`}
-                outputRows={activeEntry.group.outputRows}
-                samples={activeEntry.group.samples}
-                defaultView={defaultView}
-                onOpenCode={handleOpenCode}
-                chartId={chartIdOf(activeSlide, activeEntry.group.id, activeEntry.si)}
-                config={activeEntry.group.config}
-              />
-
-            )}
-          </div>
-        </div>
-
-        {total > 1 && (
-          <button
-            type="button"
-            onClick={next}
-            aria-label="Next"
-            className="absolute right-10 top-1/2 z-30 grid size-10 -translate-y-1/2 place-items-center rounded-lg bg-[#1565ef] text-white shadow-md transition hover:bg-[#1257d6]"
-          >
-            <ArrowRight className="size-5" />
-          </button>
-        )}
-      </div>
-      </div>
-      )}
-
-      {layout === "stack" && !noInsights && (
-        <div className="pb-8 text-center text-sm font-medium text-[#475467]">
-          {index + 1} / {total}
+        <div className="ai-stack-grid">
+          <InsightNavigator slides={activeGroup?.slides ?? []} index={index} config={activeGroup?.config} onSelect={setIndex} />
+          {isPending || !activeEntry || !activeSlide ? <div className="ai-surface ai-empty-card">{isPending ? "Generating insights…" : "No auto-insights available for this dataset"}</div> : <>
+            <InsightCard slide={activeSlide} config={activeEntry.group.config} outputRows={activeEntry.group.outputRows} samples={activeEntry.group.samples} defaultView={defaultView} chartId={chartIdOf(activeSlide, activeEntry.group.id, activeEntry.si)} index={index} total={total} onSelect={setIndex} />
+            <ChartStatsRail config={activeEntry.group.config} slide={activeSlide} onAllColumns={() => setLayout("columns")} />
+          </>}
         </div>
       )}
-
 
       <InsightsAvatar
         aid={aid ?? null}

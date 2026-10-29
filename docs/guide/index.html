@@ -1,0 +1,1161 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Avaloka Developer Guide</title>
+<meta name="description" content="User guide and SDK reference for Avaloka 1.6: the CLI, the Python SDK, the HTTP API and the generated model service, with examples you can run.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,650&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<style>
+/* Layout: a docs workbench. A fixed left rail of sections, one reading column,
+   code set on a dark slab so commands and outputs read as the terminal they came from. */
+:root {
+  --bg: #fafbfd;
+  --surface: #f1f3f8;
+  --ink: #151821;
+  --muted: #5a6172;
+  --line: #dde2ea;
+  --accent: #2e5bd8;
+  --accent-soft: #e7edfc;
+  --pass: #17794a; --pass-bg: #e3f4ea;
+  --warn: #9a6400; --warn-bg: #fbf0d9;
+  --fail: #b3261e; --fail-bg: #fbe5e3;
+  /* the code slab is dark in both themes, so its colours are fixed on purpose */
+  --slab: #11151f; --slab-line: #262c3b; --slab-ink: #dfe4ee; --slab-muted: #8a93a6;
+  --tok-key: #8fb3ff; --tok-str: #a8d8a0; --tok-num: #f2c46d; --tok-com: #6f7891; --tok-fn: #e7a6f0; --tok-lit: #ff9e8a;
+
+  --f-display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --f-body: "IBM Plex Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --rail: 16.5rem;
+  --measure: 46rem;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0d1017; --surface: #151a24; --ink: #e4e8f0; --muted: #98a1b3; --line: #252c3a;
+    --accent: #84a6ff; --accent-soft: #1a2440;
+    --pass: #6fd49c; --pass-bg: #10291c; --warn: #f1c46a; --warn-bg: #2d2310; --fail: #ff8f86; --fail-bg: #331614;
+    --slab: #080b11; --slab-line: #1f2533;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0d1017; --surface: #151a24; --ink: #e4e8f0; --muted: #98a1b3; --line: #252c3a;
+  --accent: #84a6ff; --accent-soft: #1a2440;
+  --pass: #6fd49c; --pass-bg: #10291c; --warn: #f1c46a; --warn-bg: #2d2310; --fail: #ff8f86; --fail-bg: #331614;
+  --slab: #080b11; --slab-line: #1f2533;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; scroll-padding-top: 1.5rem; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font: 400 1rem/1.65 var(--f-body);
+  -webkit-font-smoothing: antialiased;
+}
+a { color: var(--accent); text-underline-offset: .18em; }
+a:hover { text-decoration-thickness: 2px; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+
+/* ---------- shell ---------- */
+.shell { display: grid; grid-template-columns: var(--rail) minmax(0, 1fr); min-height: 100vh; }
+.rail {
+  position: sticky; top: 0; height: 100vh; overflow-y: auto;
+  border-right: 1px solid var(--line); background: var(--surface);
+  padding: calc(1.5rem + env(safe-area-inset-top, 0px)) 1.25rem 2rem;
+  display: flex; flex-direction: column; gap: 1.25rem;
+}
+.brand { display: flex; flex-direction: column; gap: .15rem; text-decoration: none; color: var(--ink); }
+.brand b { font: 650 1.35rem/1.1 var(--f-display); letter-spacing: -.01em; }
+.brand span { font: 500 .72rem/1.3 var(--f-mono); color: var(--muted); letter-spacing: .04em; text-transform: uppercase; }
+.search { position: relative; }
+.search input {
+  width: 100%; font: inherit; font-size: .9rem; padding: .5rem .7rem;
+  border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--ink);
+}
+.nav { display: flex; flex-direction: column; gap: 1.1rem; }
+.nav h4 { margin: 0 0 .35rem; font: 600 .7rem/1 var(--f-body); letter-spacing: .09em; text-transform: uppercase; color: var(--muted); }
+.nav ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
+.nav a {
+  display: block; padding: .3rem .6rem; border-radius: 6px; text-decoration: none;
+  color: var(--ink); font-size: .92rem; line-height: 1.35;
+}
+.nav a:hover { background: var(--bg); }
+.nav a.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.nav ul ul { padding-left: .7rem; }
+.nav ul ul a { font-size: .84rem; color: var(--muted); padding-block: .2rem; }
+.rail-foot { margin-top: auto; font-size: .82rem; color: var(--muted); display: flex; flex-direction: column; gap: .3rem; }
+.theme-btn {
+  align-self: flex-start; font: 500 .8rem var(--f-body); color: var(--muted);
+  background: none; border: 1px solid var(--line); border-radius: 6px; padding: .3rem .6rem; cursor: pointer;
+}
+.menu-btn { display: none; }
+
+main { min-width: 0; padding: 2.5rem clamp(1rem, 4vw, 3.5rem) 6rem; }
+.page { max-width: var(--measure); }
+.page.wide { max-width: 58rem; }
+
+/* ---------- type ---------- */
+h1, h2, h3 { font-family: var(--f-display); text-wrap: balance; letter-spacing: -.015em; }
+h1 { font-size: clamp(2.1rem, 4.5vw, 3rem); line-height: 1.05; font-weight: 650; margin: 0 0 1rem; }
+h2 { font-size: 1.75rem; line-height: 1.15; font-weight: 650; margin: 0 0 .75rem; }
+h3 { font-size: 1.2rem; line-height: 1.25; font-weight: 650; margin: 2.25rem 0 .5rem; }
+h4 { font: 600 1rem/1.3 var(--f-body); margin: 1.5rem 0 .35rem; }
+p { margin: 0 0 1rem; }
+.lede { font-size: 1.15rem; color: var(--muted); max-width: 40rem; }
+.eyebrow { font: 600 .72rem/1 var(--f-mono); letter-spacing: .1em; text-transform: uppercase; color: var(--accent); margin: 0 0 .7rem; }
+section.doc { padding-top: 3.5rem; margin-top: 3.5rem; border-top: 1px solid var(--line); }
+section.doc:first-of-type { border-top: 0; margin-top: 0; padding-top: 0; }
+ul.plain, ol.plain { padding-left: 1.2rem; margin: 0 0 1rem; display: flex; flex-direction: column; gap: .35rem; }
+code { font-family: var(--f-mono); font-size: .86em; background: var(--surface); border: 1px solid var(--line); border-radius: 4px; padding: .05em .32em; overflow-wrap: anywhere; }
+kbd { font-family: var(--f-mono); font-size: .8em; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 .3em; }
+strong { font-weight: 600; }
+
+/* ---------- code slabs ---------- */
+.code { position: relative; margin: 0 0 1.25rem; border-radius: 9px; background: var(--slab); border: 1px solid var(--slab-line); min-width: 0; }
+.code-head {
+  display: flex; align-items: center; justify-content: space-between; gap: .5rem;
+  padding: .45rem .5rem .45rem .9rem; border-bottom: 1px solid var(--slab-line);
+  font: 500 .72rem/1 var(--f-mono); color: var(--slab-muted); letter-spacing: .04em;
+}
+.code pre { margin: 0; padding: .9rem 1rem 1rem; overflow-x: auto; }
+.code pre code {
+  background: none; border: 0; padding: 0; font-size: .82rem; line-height: 1.6;
+  color: var(--slab-ink); white-space: pre; overflow-wrap: normal; display: block;
+}
+.copy {
+  font: 500 .72rem var(--f-mono); color: var(--slab-muted); background: transparent;
+  border: 1px solid var(--slab-line); border-radius: 5px; padding: .25rem .55rem; cursor: pointer;
+}
+.copy:hover { color: var(--slab-ink); }
+.code.out { background: var(--surface); border-color: var(--line); }
+.code.out .code-head { color: var(--muted); border-color: var(--line); }
+.code.out pre code { color: var(--ink); }
+.code.out .copy { display: none; }
+.hljs-keyword, .hljs-built_in, .hljs-selector-tag { color: var(--tok-key); }
+.hljs-string, .hljs-attr + .hljs-string { color: var(--tok-str); }
+.hljs-number, .hljs-literal { color: var(--tok-num); }
+.hljs-comment, .hljs-meta { color: var(--tok-com); font-style: italic; }
+.hljs-title, .hljs-title.function_ { color: var(--tok-fn); }
+.hljs-attr, .hljs-variable, .hljs-template-variable, .hljs-params { color: var(--tok-key); }
+.hljs-subst { color: var(--slab-ink); }
+.code.out .hljs-attr { color: var(--accent); }
+.code.out .hljs-string { color: var(--pass); }
+.code.out .hljs-number, .code.out .hljs-literal { color: var(--warn); }
+
+/* tabs */
+.tabs { margin: 0 0 1.25rem; }
+.tabs .code { margin: 0; border-top-left-radius: 0; }
+.tab-row { display: flex; gap: 2px; flex-wrap: wrap; }
+.tab-row button {
+  font: 500 .78rem var(--f-mono); padding: .45rem .85rem; cursor: pointer;
+  background: var(--surface); color: var(--muted); border: 1px solid var(--line); border-bottom: 0;
+  border-radius: 7px 7px 0 0;
+}
+.tab-row button[aria-selected="true"] { background: var(--slab); color: var(--slab-ink); border-color: var(--slab-line); }
+
+/* ---------- tables ---------- */
+.table { overflow-x: auto; margin: 0 0 1.25rem; border: 1px solid var(--line); border-radius: 9px; }
+table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+th, td { text-align: left; vertical-align: top; padding: .55rem .8rem; border-bottom: 1px solid var(--line); }
+th { font: 600 .74rem/1.2 var(--f-body); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); background: var(--surface); }
+tr:last-child td { border-bottom: 0; }
+td code { white-space: nowrap; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* ---------- callouts, pills ---------- */
+.note { border-left: 3px solid var(--accent); background: var(--accent-soft); padding: .8rem 1rem; border-radius: 0 8px 8px 0; margin: 0 0 1.25rem; font-size: .94rem; }
+.note.warn { border-color: var(--warn); background: var(--warn-bg); }
+.note p:last-child { margin: 0; }
+.note b:first-child { display: block; margin-bottom: .15rem; }
+.pill { display: inline-block; font: 600 .72rem/1 var(--f-mono); letter-spacing: .05em; padding: .3em .55em; border-radius: 99px; white-space: nowrap; }
+.pill.pass { color: var(--pass); background: var(--pass-bg); }
+.pill.warn { color: var(--warn); background: var(--warn-bg); }
+.pill.fail { color: var(--fail); background: var(--fail-bg); }
+.pill.neutral { color: var(--accent); background: var(--accent-soft); }
+.method { font: 600 .72rem/1 var(--f-mono); padding: .25em .45em; border-radius: 4px; background: var(--accent-soft); color: var(--accent); }
+.method.post { background: var(--pass-bg); color: var(--pass); }
+.method.del { background: var(--fail-bg); color: var(--fail); }
+
+/* surfaces grid on the overview */
+.surfaces { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: .75rem; margin: 1.5rem 0 2rem; }
+.surface {
+  display: flex; flex-direction: column; gap: .35rem; padding: 1rem 1.1rem;
+  border: 1px solid var(--line); border-radius: 10px; text-decoration: none; color: var(--ink); background: var(--bg);
+  transition: border-color .15s, transform .15s;
+}
+.surface:hover { border-color: var(--accent); transform: translateY(-1px); }
+.surface b { font: 650 1.05rem/1.2 var(--f-display); }
+.surface code { align-self: flex-start; }
+.surface span { color: var(--muted); font-size: .88rem; line-height: 1.45; }
+@media (prefers-reduced-motion: reduce) { .surface { transition: none; } .surface:hover { transform: none; } }
+
+/* the team strip */
+.team { display: grid; grid-template-columns: repeat(auto-fit, minmax(10.5rem, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; margin: 1rem 0 1.5rem; }
+.team div { background: var(--bg); padding: .85rem .95rem; display: flex; flex-direction: column; gap: .2rem; min-width: 0; }
+.team b { font: 650 .98rem/1.2 var(--f-display); }
+.team em { font: 500 .68rem/1 var(--f-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--accent); font-style: normal; }
+.team span { font-size: .84rem; color: var(--muted); line-height: 1.4; }
+.team .lead { background: var(--accent-soft); grid-column: 1 / -1; }
+
+/* deployment ladder */
+.ladder { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .5rem; margin: 1rem 0 1.5rem; }
+.rung { border: 1px solid var(--line); border-radius: 9px; padding: .75rem .8rem; display: flex; flex-direction: column; gap: .25rem; min-width: 0; }
+.rung .lvl { font: 650 1.6rem/1 var(--f-display); color: var(--accent); font-variant-numeric: tabular-nums; }
+.rung b { font-size: .9rem; line-height: 1.25; }
+.rung span { font-size: .8rem; color: var(--muted); line-height: 1.35; }
+.rung.gate { border-color: var(--warn); background: var(--warn-bg); }
+.rung.gate .lvl { color: var(--warn); }
+
+/* file tree */
+.tree { font: 400 .84rem/1.75 var(--f-mono); margin: 0 0 1.25rem; border: 1px solid var(--line); border-radius: 9px; overflow-x: auto; }
+.tree div { display: grid; grid-template-columns: minmax(14rem, max-content) 1fr; gap: 1rem; padding: 0 1rem; border-bottom: 1px solid var(--line); }
+.tree div:last-child { border-bottom: 0; }
+.tree div span:last-child { font-family: var(--f-body); color: var(--muted); font-size: .86rem; line-height: 1.75; }
+.tree .grp { background: var(--surface); font: 600 .72rem/2.2 var(--f-body); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); display: block; }
+
+.steps { counter-reset: s; list-style: none; padding: 0; margin: 0 0 1.25rem; display: flex; flex-direction: column; gap: 1.25rem; }
+.steps > li { counter-increment: s; display: grid; grid-template-columns: 2rem minmax(0, 1fr); gap: .75rem; }
+.steps > li::before {
+  content: counter(s); font: 650 .95rem/2rem var(--f-display); text-align: center;
+  width: 2rem; height: 2rem; border-radius: 50%; background: var(--accent-soft); color: var(--accent);
+}
+.steps > li > div { min-width: 0; }
+.steps h4 { margin-top: .2rem; }
+
+.endpoint { display: flex; align-items: baseline; gap: .6rem; flex-wrap: wrap; margin: 1.75rem 0 .5rem; }
+.endpoint code { font-size: .95rem; background: none; border: 0; padding: 0; font-weight: 500; }
+
+.hero { padding: 1rem 0 .5rem; }
+.hero-meta { display: flex; gap: .5rem; flex-wrap: wrap; margin-bottom: 1.25rem; }
+
+footer.site { margin-top: 5rem; padding-top: 1.5rem; border-top: 1px solid var(--line); color: var(--muted); font-size: .88rem; display: flex; flex-wrap: wrap; gap: .5rem 1.5rem; }
+
+mark.hit { background: var(--warn-bg); color: inherit; }
+
+/* ---------- narrow ---------- */
+@media (max-width: 880px) {
+  .shell { grid-template-columns: minmax(0, 1fr); }
+  .rail { position: sticky; top: 0; height: auto; max-height: 100vh; z-index: 5; padding: calc(.75rem + env(safe-area-inset-top, 0px)) 1rem .75rem; border-right: 0; border-bottom: 1px solid var(--line); gap: .75rem; }
+  .rail-top { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
+  .menu-btn { display: inline-block; font: 600 .82rem var(--f-body); background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 7px; padding: .4rem .75rem; cursor: pointer; }
+  .rail:not(.open) .search, .rail:not(.open) .nav, .rail:not(.open) .rail-foot { display: none; }
+  .rail.open { overflow-y: auto; }
+  main { padding: 1.75rem 1rem 4rem; }
+  .ladder { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .tree div { grid-template-columns: 1fr; gap: 0; padding-block: .3rem; }
+}
+</style>
+</head>
+<body>
+<div class="shell">
+
+<aside class="rail" id="rail">
+  <div class="rail-top">
+    <a class="brand" href="#overview"><b>Avaloka</b><span>Developer Guide · 1.6</span></a>
+    <button class="menu-btn" id="menu-btn" aria-expanded="false" aria-controls="rail">Contents</button>
+  </div>
+  <div class="search">
+    <input id="nav-filter" aria-label="Filter sections" type="search" placeholder="Filter sections  ( / )" autocomplete="off">
+  </div>
+  <nav class="nav" id="nav" aria-label="Sections">
+    <div>
+      <h4>User guide</h4>
+      <ul>
+        <li><a href="#overview">Overview</a></li>
+        <li><a href="#quickstart">Quickstart</a></li>
+        <li><a href="#concepts">How Avaloka works</a>
+          <ul>
+            <li><a href="#missions">Missions</a></li>
+            <li><a href="#team">The team</a></li>
+            <li><a href="#lanes">Workload lanes</a></li>
+            <li><a href="#evidence">The evidence layer</a></li>
+            <li><a href="#verdicts">Verdicts and levels</a></li>
+          </ul>
+        </li>
+        <li><a href="#data">Working with data</a></li>
+        <li><a href="#results">Reading results</a></li>
+        <li><a href="#recipes">Recipes</a></li>
+      </ul>
+    </div>
+    <div>
+      <h4>SDK reference</h4>
+      <ul>
+        <li><a href="#cli">CLI</a></li>
+        <li><a href="#python">Python SDK</a></li>
+        <li><a href="#http">HTTP API</a></li>
+        <li><a href="#serving">Model service</a></li>
+        <li><a href="#troubleshooting">Troubleshooting</a></li>
+      </ul>
+    </div>
+  </nav>
+  <div class="rail-foot">
+    <button class="theme-btn" id="theme-btn" type="button">Theme: system</button>
+    <a href="https://avaloka.ai/blog">Avaloka blog</a>
+    <a href="../../README.md">Repository README</a>
+  </div>
+</aside>
+
+<main id="main">
+
+<!-- ============================================================ OVERVIEW -->
+<section class="doc page wide" id="overview">
+  <div class="hero">
+    <p class="eyebrow">Avaloka 1.6 · Apache-2.0</p>
+    <h1>Build on an AI data scientist that checks its own work.</h1>
+    <p class="lede">Avaloka turns a dataset and a question into an answer you can defend: the analysis, the code that produced it, a validated model when you need one, and the evidence behind every number. This guide shows you how to use it, and how to build it into your own tools.</p>
+    <div class="hero-meta">
+      <span class="pill neutral">Python 3.11 · 3.12</span>
+      <span class="pill neutral">Runs locally, no API key</span>
+      <span class="pill neutral">Ray &amp; Kubernetes when you scale</span>
+    </div>
+  </div>
+
+  <h3 style="margin-top:1rem">Four ways in</h3>
+  <p>Every surface drives the same engine. Pick the one that matches where your work happens.</p>
+  <div class="surfaces">
+    <a class="surface" href="#cli"><b>Command line</b><code>avaloka analyze</code><span>Point it at a file and ask a question. The fastest way to a real answer.</span></a>
+    <a class="surface" href="#python"><b>Python SDK</b><code>run_analyze(ctx)</code><span>Run missions from scripts, notebooks and pipelines and get structured results back.</span></a>
+    <a class="surface" href="#http"><b>HTTP API</b><code>POST /threads/…/messages</code><span>Put the conversational agent team behind your own product or UI.</span></a>
+    <a class="surface" href="#serving"><b>Model service</b><code>POST /predict</code><span>Every trained model ships with a typed REST service you can run anywhere.</span></a>
+  </div>
+
+  <h3>What you can rely on</h3>
+  <ul class="plain">
+    <li><strong>Numbers come from code, not from a language model.</strong> Every figure is computed by Python you can read, rerun and hand to someone else.</li>
+    <li><strong>It says when it can't answer.</strong> If your question names a column that isn't there, you get <span class="pill warn">LIMITED</span> and the reason, not a confident guess.</li>
+    <li><strong>Models have to earn trust.</strong> A model is compared against a trivial baseline, and production deployment always needs a human to approve it.</li>
+    <li><strong>Your data stays where you put it.</strong> The CLI and the SDK run on your machine. Nothing leaves it unless you configure a hosted model provider.</li>
+  </ul>
+</section>
+
+<!-- ============================================================ QUICKSTART -->
+<section class="doc page" id="quickstart">
+  <p class="eyebrow">Five minutes</p>
+  <h2>Quickstart</h2>
+  <p>You need Python 3.11 or 3.12 on macOS or Linux. No API key and no services.</p>
+  <ol class="steps">
+    <li><div>
+      <h4>Install</h4>
+      <div class="code" data-lang="bash"><pre><code class="language-bash">git clone https://github.com/guruvaidev/avaloka.git &amp;&amp; cd avaloka
+./scripts/install.sh &amp;&amp; source .venv/bin/activate</code></pre></div>
+      <p>The installer creates <code>.venv</code>, installs everything, and finishes by checking your environment. It takes 5–10 minutes and ends with <em>Everything checks out.</em></p>
+    </div></li>
+    <li><div>
+      <h4>Ask your first question</h4>
+      <div class="code" data-lang="bash"><pre><code class="language-bash">avaloka analyze app/sample_data/healthcare_dataset.csv \
+        --goal "average billing amount by medical condition"</code></pre></div>
+      <div class="code out" data-lang="output"><pre><code class="language-plaintext">What I found
+  • Medical Condition=Obesity: mean Billing Amount=2.58e+04.
+  • Medical Condition=Diabetes: mean Billing Amount=2.56e+04.
+  • Medical Condition=Asthma: mean Billing Amount=2.56e+04.
+  • Medical Condition=Arthritis: mean Billing Amount=2.55e+04.
+  • Medical Condition=Hypertension: mean Billing Amount=2.55e+04.
+
+Validation verdict: PASS; max safe deployment level 1/4
+Deliverables → avaloka-analysis/acec94262892
+  open avaloka-analysis/acec94262892/executive_report.html   the decision summary
+  cat  avaloka-analysis/acec94262892/README.md               findings and limitations
+  python avaloka-analysis/acec94262892/analysis.py           reproduce this run</code></pre></div>
+    </div></li>
+    <li><div>
+      <h4>Train a model, or talk it through</h4>
+      <div class="code" data-lang="bash"><pre><code class="language-bash">avaloka train app/sample_data/yellow_tripdata_2015-01_dataset_50k.csv --target payment_type
+avaloka chat  app/sample_data/healthcare_dataset.csv</code></pre></div>
+      <p><code>train</code> fits several candidate models, keeps the one that beats the baseline by more than fold noise, and writes a deployable package. It takes about 2 minutes. <code>chat</code> reads the file, says what it notices, and offers numbered next steps you answer with a number.</p>
+    </div></li>
+  </ol>
+  <div class="note"><b>Optional: add a model key</b><p>The CLI and SDK need no key. Set <code>OPENROUTER_API_KEY</code>, <code>GROQ_API_KEY</code> or <code>OPENAI_API_KEY</code>, or use a local Ollama with <code>INFERENCE_PROVIDER=local</code>, when you want the conversational agent team behind the <a href="#http">HTTP API</a>.</p></div>
+</section>
+
+<!-- ============================================================ CONCEPTS -->
+<section class="doc page" id="concepts">
+  <p class="eyebrow">Concepts</p>
+  <h2>How Avaloka works</h2>
+  <p>Five ideas explain almost everything you'll see: missions, the team that runs them, the lane a job runs in, the checks a result must pass, and the verdict it ends with.</p>
+
+  <h3 id="missions">Missions</h3>
+  <p>A <strong>mission</strong> is one unit of work with a goal, a dataset, a budget and an output folder. Avaloka doesn't hand you a chat reply. It hands you a finished bundle: a report, the code, the data it actually used, and a record of every check.</p>
+  <div class="table"><table>
+    <thead><tr><th>Mission</th><th>You give it</th><th>You get back</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Analyze</strong></td><td>a dataset and a goal</td><td>findings, an executive report, reproducible code and a notebook</td></tr>
+      <tr><td><strong>Train</strong></td><td>a dataset and a target column</td><td>everything above, plus a validated model, a model card and a deployment package</td></tr>
+      <tr><td><strong>Deploy</strong></td><td>a trained package and a level</td><td>a gate check and the exact commands to ship it</td></tr>
+    </tbody>
+  </table></div>
+  <p>Every mission carries a <strong>budget</strong>. It's a hard ceiling: when the next step would cross it, Avaloka stops and tells you, instead of overspending.</p>
+
+  <h3 id="team">The team</h3>
+  <p>Work is done by a small team of specialists. The <strong>Planner</strong> leads it. You talk to the Planner, and it decides who does what.</p>
+  <div class="team">
+    <div class="lead"><em>Lead</em><b>Planner</b><span>Understands your request in the context of your data, asks when something is ambiguous, proposes a plan, and asks for your go-ahead before anything expensive such as training or a cluster job. Then it hands each step to the right specialist and brings the results back to you.</span></div>
+    <div><em>Look</em><b>Sampling · Profiling</b><span>Read the schema, profile every column, flag quality problems.</span></div>
+    <div><em>Write</em><b>Coder</b><span>Plans the steps in plain language, then writes Python that follows them.</span></div>
+    <div><em>Check</em><b>Validator</b><span>Checks syntax, schema and logic before any code runs.</span></div>
+    <div><em>Run</em><b>Execution</b><span>Runs on your machine, as a Kubernetes Job, or on Ray.</span></div>
+    <div><em>Learn</em><b>Model Training</b><span>Trains candidates and tracks them in MLflow.</span></div>
+    <div><em>Show</em><b>Visualization</b><span>Turns results into charts and a report.</span></div>
+  </div>
+  <p>What this means for you:</p>
+  <ul class="plain">
+    <li><strong>You can be vague, and it will ask.</strong> A request it can't act on safely gets a clarifying question, not a guess.</li>
+    <li><strong>Expensive steps wait for you.</strong> Ask to train a model and the first reply is a <em>plan</em>, with the target, features, excluded identifier columns and settings. Training starts only when you confirm.</li>
+    <li><strong>You can see the plan.</strong> The plan, the code and the execution context come back in every API response, so your UI can show the user what's about to happen.</li>
+  </ul>
+
+  <h3 id="lanes">Workload lanes</h3>
+  <p>Before touching the data, Avaloka sizes the job by reading the file size and estimating the row count. It then chooses a lane and tells you which one it picked.</p>
+  <div class="table"><table>
+    <thead><tr><th>Lane</th><th>When</th><th>What happens</th></tr></thead>
+    <tbody>
+      <tr><td><span class="pill pass">online</span></td><td>up to 100k rows / 50 MB</td><td>The whole dataset is analysed live.</td></tr>
+      <tr><td><span class="pill warn">sampled_online</span></td><td>up to 5M rows / 1 GB</td><td>A statistically sound sample now, plus an offer to run the full pass.</td></tr>
+      <tr><td><span class="pill neutral">batch</span></td><td>larger than that</td><td>A full pass as a Ray job, locally or on Kubernetes, with exact results and no sampling error.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3 id="evidence">The evidence layer</h3>
+  <p>Three checks stand between a result and you:</p>
+  <ul class="plain">
+    <li><strong>Integrity</strong> refuses to train on leaked targets or on train/test splits that share rows. Identifier-like columns such as <code>customer_id</code> are left out of the features.</li>
+    <li><strong>Evaluation</strong> compares every model with a trivial baseline, such as always predicting the most common class. A model that doesn't beat it is reported as such.</li>
+    <li><strong>Claim verification</strong> checks the written summary against the computed numbers. It's deterministic and uses no language model.</li>
+  </ul>
+  <div class="note warn"><b>Check the evidence fields, not just the prose</b><p>The CLI and SDK refuse to call a model trustworthy unless it beats its baseline. Over the HTTP API, read <code>evaluation_beats_baseline</code> and <code>verification_safe_to_present</code> in the response before you present a model or a narrative to your users. Treat the fields as the source of truth.</p></div>
+
+  <h3 id="verdicts">Verdicts and deployment levels</h3>
+  <p>Every mission ends with a validation verdict and the highest deployment level its result can safely claim.</p>
+  <p><span class="pill pass">PASS</span> all checks passed &nbsp; <span class="pill warn">WARN</span> usable, with caveats it lists &nbsp; <span class="pill fail">FAIL</span> don't rely on it</p>
+  <div class="ladder">
+    <div class="rung"><span class="lvl">1</span><b>Research artifact</b><span>model file and model card</span></div>
+    <div class="rung"><span class="lvl">2</span><b>Deployment package</b><span>API, container, schema, tests, lock file</span></div>
+    <div class="rung"><span class="lvl">3</span><b>Staging-ready</b><span>manifest, monitoring, registry descriptor</span></div>
+    <div class="rung gate"><span class="lvl">4</span><b>Production candidate</b><span>clean validation <strong>and</strong> human approval</span></div>
+  </div>
+  <p>Analysis missions stop at level 1. The validator caps the level a model can claim, and level 4 always needs an explicit approval. Avaloka never promotes a model to production on its own.</p>
+</section>
+
+<!-- ============================================================ DATA -->
+<section class="doc page" id="data">
+  <p class="eyebrow">Inputs</p>
+  <h2>Working with data</h2>
+
+  <h3>Formats</h3>
+  <div class="table"><table>
+    <thead><tr><th>Format</th><th>Extensions</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td>Delimited text</td><td><code>.csv</code> <code>.tsv</code> <code>.txt</code></td><td>Delimiter and encoding are detected. A TSV that parses as one column is re-read.</td></tr>
+      <tr><td>Columnar</td><td><code>.parquet</code> <code>.orc</code> <code>.avro</code></td><td>Types are kept as stored.</td></tr>
+      <tr><td>Spreadsheets</td><td><code>.xlsx</code> <code>.xlsm</code> <code>.xls</code></td><td>The header is found below title rows; see below.</td></tr>
+      <tr><td>Documents</td><td><code>.json</code> <code>.xml</code></td><td>Read when there's one sensible table. XML with a DTD is refused.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Spreadsheets as people make them</h3>
+  <ul class="plain">
+    <li>Title rows, blank rows and notes above the table are skipped. The real header row is found.</li>
+    <li>A header split over two rows, such as a <em>Q1 / Q2</em> band above <em>Revenue / Cost</em>, becomes one set of column names.</li>
+    <li>Subtotal and grand-total rows aren't counted as data. If a statement's totals are kept as rows, the result says so.</li>
+  </ul>
+  <div class="note warn"><b>Multi-sheet workbooks</b><p>In 1.6 the upload path reads the longest sheet, which may not be the one your question is about. Upload the sheet you mean on its own.</p></div>
+
+  <h3>Missing values</h3>
+  <p>Words like <code>None</code>, <code>NA</code> and <code>N/A</code> mean <em>missing</em> in a numeric column, but in a text column they're kept as categories. A category literally called "None" stays a category. The exact rule that was applied is recorded with every read, so you can always see which values were treated as missing.</p>
+
+  <h3 id="sources">Where data can live</h3>
+  <p>The CLI accepts a path or a source URI. In the Python SDK, resolve the URI with <code>materialize()</code> first (see <a href="#py-sources">Sources</a>).</p>
+  <div class="table"><table>
+    <thead><tr><th>URI</th><th>Source</th></tr></thead>
+    <tbody>
+      <tr><td><code>/path/data.csv</code></td><td>a local file</td></tr>
+      <tr><td><code>sqlite:///abs/app.db#customers</code></td><td>a SQLite table</td></tr>
+      <tr><td><code>sqlite:///abs/app.db#query=SELECT …</code></td><td>the result of a query</td></tr>
+      <tr><td><code>postgresql://user:pw@host/db#table</code></td><td>any SQLAlchemy database</td></tr>
+      <tr><td><code>s3://</code> · <code>gs://</code> · <code>az://</code></td><td>object storage (install <code>s3fs</code>, <code>gcsfs</code> or <code>adlfs</code>)</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- ============================================================ RESULTS -->
+<section class="doc page wide" id="results">
+  <p class="eyebrow">Outputs</p>
+  <h2>Reading results</h2>
+  <p>Each run writes its own folder, under <code>./avaloka-analysis/</code> by default. Copy the path the command prints, or choose one with <code>--output</code>.</p>
+
+  <div class="tree" role="table" aria-label="Deliverable bundle">
+    <span class="grp">Read first</span>
+    <div><span>executive_report.html</span><span>The decision summary. Open it in a browser.</span></div>
+    <div><span>README.md</span><span>Findings, assumptions and limitations in plain text.</span></div>
+    <span class="grp">Reproduce</span>
+    <div><span>analysis.py · analysis.ipynb</span><span>Code that reproduces the run from the original file.</span></div>
+    <div><span>transformed_dataset.parquet</span><span>The exact data the analysis used, after documented transformations.</span></div>
+    <div><span>environment.lock</span><span>Python version, platform and mission id.</span></div>
+    <span class="grp">Machine-readable</span>
+    <div><span>mission.json</span><span>The summary: verdict, level, task, goal status, model, economics.</span></div>
+    <div><span>goal_analysis.json</span><span>The calculation behind the answer, with its status and row scope.</span></div>
+    <div><span>validation_report.json</span><span>Every check that ran and its result.</span></div>
+    <div><span>lineage.json · data_quality.json</span><span>Where every number came from, and what was wrong with the input.</span></div>
+    <span class="grp">Train missions add</span>
+    <div><span>model/ · model_card.md</span><span>The selected model and its card.</span></div>
+    <div><span>service.py · Dockerfile · inference_schema.json</span><span>A typed REST service for the model. See <a href="#serving">Model service</a>.</span></div>
+    <div><span>deployment/</span><span>Manifests for Kubernetes, Ray Serve and Docker Compose.</span></div>
+  </div>
+
+  <h3>Answered or limited</h3>
+  <p><code>goal_analysis.json</code> says whether your question was actually answered. The same goal can go either way depending on whether it names something the data has. The churn example has a <code>monthly_charges</code> column but no <code>monthly_spend</code>:</p>
+  <div class="tabs" data-tabs="goal">
+    <div class="tab-row" role="tablist"><button role="tab" data-tab="answered">“average monthly_charges by region”</button><button role="tab" data-tab="limited">“average monthly_spend by region”</button></div>
+    <div class="code out" data-panel="answered" data-lang="goal_analysis.json"><pre><code class="language-json">{
+  "status": "answered",
+  "kind": "group_comparison",
+  "scope": "All 1,200 working rows",
+  "findings": [
+    "region=south: mean monthly_charges=71.2.",
+    "region=east: mean monthly_charges=68.8.",
+    "region=west: mean monthly_charges=68.1.",
+    "region=north: mean monthly_charges=67.7."
+  ]
+}</code></pre></div>
+    <div class="code out" data-panel="limited" data-lang="goal_analysis.json" hidden><pre><code class="language-json">{
+  "status": "limited",
+  "kind": "group_comparison",
+  "scope": "All 1,200 working rows",
+  "metrics": {
+    "group_column": "region",
+    "value_column": null,
+    "unresolved_measure": { "statistics": ["mean"], "measure": null, "candidates": [] }
+  },
+  "findings": [
+    "The goal asks for mean, but names no numeric column to calculate it from. Name the column in the goal to get a figure."
+  ]
+}</code></pre></div>
+  </div>
+  <p>Treat <span class="pill warn">LIMITED</span> as a prompt to rephrase, not a failure. When several columns could match (<code>gross_revenue</code>, <code>net_revenue</code>), they're listed in <code>candidates</code> so you can pick one.</p>
+
+  <h3>Economics</h3>
+  <p>Each mission closes with an economic summary in <code>economics.json</code>: duration, compute and model cost, the estimated manual effort it replaced, and the human review it still needs. Local missions cost nothing. The effort estimate is a conservative heuristic, so read it as a rough guide, not a measurement.</p>
+</section>
+
+<!-- ============================================================ RECIPES -->
+<section class="doc page wide" id="recipes">
+  <p class="eyebrow">End to end</p>
+  <h2>Recipes</h2>
+
+  <h3>From a CSV to a live prediction</h3>
+  <p>Train a churn model, check its gates, run its service, and call it. Every output below is from a real run.</p>
+  <ol class="steps">
+    <li><div><h4>Train and package</h4>
+      <div class="code" data-lang="bash"><pre><code class="language-bash">avaloka train avaloka/examples/churn.csv --target churned --metric roc_auc --deployable --output ./churn-model</code></pre></div>
+      <div class="code out" data-lang="output"><pre><code class="language-plaintext">The model I trust most is logistic_regression (roc_auc 0.8061).
+That beats the trivial baseline (0.5000) by more than fold noise.
+Validation verdict: PASS; max safe deployment level 4/4</code></pre></div></div></li>
+    <li><div><h4>Check the deployment gates</h4>
+      <div class="code" data-lang="bash"><pre><code class="language-bash">avaloka deploy ./churn-model --target kubernetes --level 3</code></pre></div>
+      <div class="code out" data-lang="output"><pre><code class="language-plaintext">Level  Name                  Status   Missing
+1      Research artifact     pass     —
+2      Deployment package    pass     —
+3      Staging-ready         pass     —
+4      Production candidate  blocked  human approval (--approve)
+
+Validator cap: Level 4/4  (Production candidate)
+Requested: Level 3  →  Achieved: Level 3 (Staging-ready)</code></pre></div></div></li>
+    <li><div><h4>Run the service and predict</h4>
+      <div class="code" data-lang="bash"><pre><code class="language-bash">cd churn-model &amp;&amp; python service.py        # serves on :8080
+
+curl -s localhost:8080/predict -H "Content-Type: application/json" -d '{
+  "instances": [
+    {"tenure_months": 3,  "monthly_charges": 105.5, "support_tickets": 4, "contract": "month-to-month", "region": "west"},
+    {"tenure_months": 60, "monthly_charges": 55.0,  "support_tickets": 0, "contract": "two-year",       "region": "east"}
+  ]}'</code></pre></div>
+      <div class="code out" data-lang="response"><pre><code class="language-json">{"predictions": [1, 0], "model_version": "46f6dfcc2c31", "probabilities": [0.913, 0.062]}</code></pre></div></div></li>
+  </ol>
+
+  <h3>Analyse a database table</h3>
+  <div class="code" data-lang="bash"><pre><code class="language-bash">avaloka analyze 'sqlite:////data/app.db#customers' --goal "average monthly_charges by region"
+avaloka analyze 'sqlite:////data/app.db#query=SELECT * FROM customers WHERE churned = 1' --goal "average monthly_charges by contract"</code></pre></div>
+  <p>The table, or the query result, is copied to a local Parquet file and analysed like any other file. Any SQLAlchemy URL works the same way; install its driver first.</p>
+
+  <h3>Keep a run inside a budget</h3>
+  <div class="code" data-lang="bash"><pre><code class="language-bash">avaloka train customers.csv --target churned --max-cost 25 --deployment-latency-ms 100</code></pre></div>
+  <p>The budget decides how many candidate models are tried. The run also writes <code>cost_quality.json</code>, with Economical, Balanced and Maximum-quality options, their serving costs, and a recommendation.</p>
+
+  <h3>A file too big to analyse live</h3>
+  <div class="code" data-lang="bash"><pre><code class="language-bash">avaloka batch app/sample_data/yellow_tripdata_2015-01_dataset_50k.csv --partitions 4
+avaloka batch transactions.parquet --target kubernetes --apply     # submit as a KubeRay RayJob</code></pre></div>
+  <div class="code out" data-lang="output"><pre><code class="language-plaintext">Exact rows analysed: 50,426 (no sampling — partial sums combined losslessly).
+Batch artifacts → avaloka-batch   (batch_profile.json, rayjob.yaml, ray_batch_driver.py)</code></pre></div>
+</section>
+
+<!-- ============================================================ CLI -->
+<section class="doc page wide" id="cli">
+  <p class="eyebrow">Reference</p>
+  <h2>CLI</h2>
+  <p>Installed by <code>./scripts/install.sh</code>. Inside a container image without the entry point, use <code>python -m avaloka</code>. Every command accepts <code>--help</code>, <code>--quiet</code> for machine-only output, and <code>--llm</code> to phrase narration with Claude (needs <code>ANTHROPIC_API_KEY</code> and <code>pip install -e ".[llm]"</code>). The numbers never come from the model.</p>
+
+  <div class="table"><table>
+    <thead><tr><th>Command</th><th>Does</th></tr></thead>
+    <tbody>
+      <tr><td><code>analyze</code></td><td>Turns a dataset and a question into an analysis bundle.</td></tr>
+      <tr><td><code>train</code></td><td>Trains, validates and optionally packages a model for one column.</td></tr>
+      <tr><td><code>chat</code></td><td>Explores a dataset conversationally, one turn at a time.</td></tr>
+      <tr><td><code>batch</code></td><td>Runs the full, unsampled analysis as a Ray job.</td></tr>
+      <tr><td><code>coordinate</code></td><td>Runs a fleet of sub-missions over shards of one dataset and merges the results.</td></tr>
+      <tr><td><code>deploy</code></td><td>Checks a trained package against the deployment gates.</td></tr>
+      <tr><td><code>infer</code></td><td>Builds and deploys the model's REST service on Kubernetes.</td></tr>
+      <tr><td><code>benchmark</code></td><td>Runs the deterministic regression benchmark against this CLI.</td></tr>
+      <tr><td><code>version</code></td><td>Prints the version.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3 id="cli-analyze"><code>avaloka analyze &lt;data&gt; --goal "…"</code></h3>
+  <div class="table"><table>
+    <thead><tr><th>Option</th><th>Default</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td><code>--goal, -g</code></td><td>required</td><td>The decision the analysis should inform. Name columns to get figures.</td></tr>
+      <tr><td><code>--budget, -b</code></td><td>none</td><td>Hard cost ceiling in USD.</td></tr>
+      <tr><td><code>--output, -o</code></td><td>new folder under <code>avaloka-analysis/</code></td><td>Where to write the bundle.</td></tr>
+      <tr><td><code>--local / --managed</code>, <code>--execution</code></td><td><code>local</code></td><td><code>local</code>, <code>byoc</code> (your compute) or <code>managed</code>.</td></tr>
+      <tr><td><code>--tier</code>, <code>--hourly-rate</code></td><td><code>community</code>, <code>80.0</code></td><td>Inputs to the economics summary.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3 id="cli-train"><code>avaloka train &lt;data&gt; --target &lt;column&gt;</code></h3>
+  <div class="table"><table>
+    <thead><tr><th>Option</th><th>Default</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td><code>--target, -t</code></td><td>required</td><td>The column to predict. A typo gets a "did you mean" suggestion.</td></tr>
+      <tr><td><code>--metric, -m</code></td><td>by task</td><td><code>roc_auc</code>, <code>f1</code>, <code>f1_macro</code>, <code>accuracy</code>, <code>r2</code>, <code>rmse</code>, <code>mae</code></td></tr>
+      <tr><td><code>--max-cost</code></td><td>none</td><td>Cost ceiling. It decides how many candidates are tried.</td></tr>
+      <tr><td><code>--deployment-latency-ms</code></td><td>none</td><td>A latency target that informs the cost/quality options.</td></tr>
+      <tr><td><code>--deployable</code></td><td>off</td><td>Also write the service, container and manifests.</td></tr>
+      <tr><td><code>--output, -o</code></td><td><code>avaloka-model</code></td><td>Where to write the package.</td></tr>
+      <tr><td><code>--goal</code>, <code>--objective</code></td><td></td><td>Free-text context recorded with the mission.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3 id="cli-chat"><code>avaloka chat [data]</code></h3>
+  <p>Inside a session, type a <strong>number</strong> to take a suggestion, <code>analyze &lt;goal&gt;</code>, <code>train &lt;column&gt;</code>, <code>columns</code>, <code>suggest</code>, <code>status</code>, <code>help</code> or <code>quit</code>. Or just say what you want to find out.</p>
+
+  <h3 id="cli-scale"><code>batch</code> · <code>coordinate</code></h3>
+  <div class="table"><table>
+    <thead><tr><th>Option</th><th>Applies to</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td><code>--partitions, -p</code></td><td>batch</td><td>Number of Ray partitions (default 8).</td></tr>
+      <tr><td><code>--target</code></td><td>batch</td><td><code>local</code> runs a real local Ray job; <code>kubernetes</code> writes a KubeRay RayJob.</td></tr>
+      <tr><td><code>--image</code>, <code>--apply</code></td><td>batch</td><td>Worker image, and actually submit the RayJob.</td></tr>
+      <tr><td><code>--workers, -w</code></td><td>coordinate</td><td>Number of sub-missions in the fleet.</td></tr>
+      <tr><td><code>--kind</code></td><td>coordinate</td><td><code>analyze</code> or <code>train</code> (with <code>--target</code>).</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3 id="cli-ship"><code>deploy</code> · <code>infer</code></h3>
+  <div class="table"><table>
+    <thead><tr><th>Option</th><th>Applies to</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td><code>--target</code></td><td>deploy</td><td><code>local</code>, <code>docker</code>, <code>kubernetes</code> or <code>ray</code>.</td></tr>
+      <tr><td><code>--level</code></td><td>deploy</td><td>Requested level, 1–4 (default 2).</td></tr>
+      <tr><td><code>--approve</code></td><td>deploy</td><td>Human approval. Required for level 4.</td></tr>
+      <tr><td><code>--scale-to-zero</code>, <code>--max-monthly-cost</code></td><td>deploy</td><td>Serving cost controls.</td></tr>
+      <tr><td><code>--registry</code>, <code>--push</code></td><td>infer</td><td>Push the built image to your registry.</td></tr>
+      <tr><td><code>--mlflow-uri</code></td><td>infer</td><td>Register and resolve the model in MLflow.</td></tr>
+      <tr><td><code>--apply</code></td><td>infer</td><td>Build, apply and print the live endpoint. Without it you get a plan.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3 id="cli-benchmark"><code>avaloka benchmark</code></h3>
+  <p>Deterministic tasks with known answers and no language model. Use <code>--family</code> to run one family, <code>--json</code> / <code>--html</code> to save the scorecard, and <code>avaloka benchmark serve</code> to browse it. Known defects are declared in the scorecard, and any new failure makes the command exit 1.</p>
+</section>
+
+<!-- ============================================================ PYTHON -->
+<section class="doc page wide" id="python">
+  <p class="eyebrow">Reference</p>
+  <h2>Python SDK</h2>
+  <p>The CLI is a thin layer over a Python API you can call directly. Missions run in-process, on your machine, and return structured results.</p>
+
+  <h3 id="py-first">Run a mission</h3>
+  <div class="code" data-lang="python"><pre><code class="language-python">from pathlib import Path
+from avaloka.mission.budget import Budget
+from avaloka.mission.context import MissionContext, MissionKind
+from avaloka.missions import run_analyze
+
+ctx = MissionContext(
+    kind=MissionKind.ANALYZE,
+    goal="average monthly_charges by region",
+    data_source="avaloka/examples/churn.csv",   # a local path, as str
+    output_dir=Path("out/churn-analysis"),
+    budget=Budget(limit_usd=5.0),
+)
+
+result = run_analyze(ctx, on_progress=lambda event, detail: print(f"[{event}] {detail}"))
+
+print(result.summary["verdict"])                  # 'pass'
+print(result.summary["goal_analysis"]["status"])  # 'answered'</code></pre></div>
+  <div class="code out" data-lang="output"><pre><code class="language-plaintext">[start] data_scout
+[done] data_scout: Profiled 7 columns x 1200 rows; quality score 100/100 with 0 issues flagged.
+[start] sampling_specialist
+[done] sampling_specialist: Working sample: 1,200 rows. 1,200 rows fits the live full-analysis lane.
+[start] data_engineer
+[done] data_engineer: Applied 1 documented transformations; wrote transformed_dataset.parquet (1200x7) + analysis.py / analysis.ipynb.
+[start] analysis_planner
+[done] analysis_planner: Planned task='exploratory_analysis'; split='none'; 1 human approval gate(s).
+[start] validator
+[done] validator: Validation verdict='pass'; 1 checks; max safe deployment level 1.
+[start] reporter
+[done] reporter: Wrote executive &amp; technical reports, assumptions, lineage, environment lock and README.
+pass
+answered</code></pre></div>
+
+  <h3 id="py-train">Train a model</h3>
+  <div class="code" data-lang="python"><pre><code class="language-python">from avaloka.missions import run_train
+
+ctx = MissionContext(
+    kind=MissionKind.TRAIN, goal="predict churn",
+    data_source="avaloka/examples/churn.csv", output_dir=Path("out/churn-model"),
+    budget=Budget(), target="churned", metric="roc_auc", deployable=True,
+)
+result = run_train(ctx)
+
+model = result.summary["model"]
+if not model["beats_baseline"]:
+    raise SystemExit("No model beat the baseline. Don't ship this.")
+print(model)</code></pre></div>
+  <div class="code out" data-lang="output"><pre><code class="language-json">{
+  "selected": "logistic_regression",
+  "metric": "roc_auc",
+  "score": 0.8061,
+  "baseline_score": 0.5,
+  "baseline_strategy": "prior",
+  "beats_baseline": true
+}</code></pre></div>
+
+  <h3 id="py-context"><code>MissionContext</code></h3>
+  <p><code>avaloka.mission.context.MissionContext</code> is a dataclass describing one mission.</p>
+  <div class="table"><table>
+    <thead><tr><th>Field</th><th>Type</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td><code>kind</code></td><td><code>MissionKind</code></td><td><code>ANALYZE</code>, <code>TRAIN</code> or <code>DEPLOY</code>. <code>run_analyze</code> / <code>run_train</code> set it for you.</td></tr>
+      <tr><td><code>goal</code></td><td><code>str</code></td><td>The question or decision. Name columns to get figures.</td></tr>
+      <tr><td><code>data_source</code></td><td><code>str</code></td><td>A <strong>local file path, as a string</strong>. Resolve URIs with <a href="#py-sources"><code>materialize()</code></a> first.</td></tr>
+      <tr><td><code>output_dir</code></td><td><code>Path</code></td><td>Where the bundle is written. Created if missing.</td></tr>
+      <tr><td><code>budget</code></td><td><code>Budget</code></td><td>Cost ceiling. <code>Budget()</code> means unlimited, though spend is still tracked.</td></tr>
+      <tr><td><code>target</code>, <code>metric</code></td><td><code>str | None</code></td><td>Train missions: the column to predict, and the metric to optimise.</td></tr>
+      <tr><td><code>deployable</code></td><td><code>bool</code></td><td>Also write the service, container and manifests.</td></tr>
+      <tr><td><code>deployment_latency_ms</code></td><td><code>float | None</code></td><td>Latency target for the cost/quality options.</td></tr>
+      <tr><td><code>execution_mode</code></td><td><code>ExecutionMode</code></td><td><code>LOCAL</code> (default), <code>BYOC</code> or <code>MANAGED</code>.</td></tr>
+      <tr><td><code>mission_id</code></td><td><code>str</code></td><td>Generated. It appears in every artifact.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3 id="py-result"><code>MissionResult</code></h3>
+  <p><code>run_analyze</code> and <code>run_train</code> return a <code>MissionResult</code> with <code>.context</code>, <code>.economics</code> (an <code>EconomicReport</code>; call <code>.as_dict()</code>) and <code>.summary</code>, a dict that's also saved as <code>mission.json</code>:</p>
+  <div class="table"><table>
+    <thead><tr><th>Key</th><th>Contains</th></tr></thead>
+    <tbody>
+      <tr><td><code>verdict</code></td><td><code>"pass"</code>, <code>"warn"</code> or <code>"fail"</code></td></tr>
+      <tr><td><code>max_safe_deployment_level</code></td><td>1–4</td></tr>
+      <tr><td><code>task</code></td><td>e.g. <code>exploratory_analysis</code>, <code>binary_classification</code>, <code>regression</code></td></tr>
+      <tr><td><code>goal_analysis</code></td><td><code>kind</code>, <code>status</code> (<code>answered</code> / <code>limited</code>) and <code>scope</code>. Details are in <code>goal_analysis.json</code>.</td></tr>
+      <tr><td><code>model</code></td><td>Train only: <code>selected</code>, <code>metric</code>, <code>score</code>, <code>baseline_score</code>, <code>beats_baseline</code></td></tr>
+      <tr><td><code>workload</code></td><td>The lane chosen and why</td></tr>
+      <tr><td><code>economics</code>, <code>budget</code>, <code>fireflies</code></td><td>Cost, effort and the specialists that ran</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3 id="py-budget">Budgets</h3>
+  <div class="code" data-lang="python"><pre><code class="language-python">from avaloka.mission.budget import Budget, BudgetExceeded
+
+budget = Budget(limit_usd=1.0)
+try:
+    budget.spend(2.5, "hyper-parameter search")
+except BudgetExceeded as err:
+    print(err)</code></pre></div>
+  <div class="code out" data-lang="output"><pre><code class="language-plaintext">Action 'hyper-parameter search' costs $2.50 but only $1.00 of the $1.00 budget remains. Avaloka refuses to proceed rather than overrun the declared budget.</code></pre></div>
+
+  <h3 id="py-load">Load a dataset the way Avaloka does</h3>
+  <div class="code" data-lang="python"><pre><code class="language-python">from avaloka.io.loader import load_dataset
+
+handle = load_dataset("avaloka/examples/churn.csv")
+handle.frame          # the pandas DataFrame
+handle.fmt, handle.n_rows, handle.n_cols    # ('csv', 1200, 7)
+handle.sha256         # fingerprint recorded in the lineage
+handle.read           # exactly how it was read: delimiter, encoding, missing-value rule per column</code></pre></div>
+
+  <h3 id="py-sources">Sources</h3>
+  <p><code>avaloka.io.sources</code> turns a URI into a local file and records where it came from. <code>route()</code> also sizes the workload.</p>
+  <div class="code" data-lang="python"><pre><code class="language-python">from avaloka.io.sources import materialize, route
+
+src = materialize("sqlite:////data/app.db#customers")
+src.kind, src.local_path, src.detail
+# ('database', PosixPath('/tmp/avaloka-src-…/db_customers.parquet'),
+#  {'backend': 'sqlite', 'selector': 'customers', 'n_rows': 1200, 'n_cols': 7})
+
+src, plan = route("sqlite:////data/app.db#query=SELECT region, monthly_charges FROM customers WHERE churned = 1")
+plan.lane, plan.n_rows, plan.rationale
+# (Lane.ONLINE, 431, '431 rows / 0.0 MB fits the live full-analysis budget.')
+
+ctx = MissionContext(kind=MissionKind.ANALYZE, goal="average monthly_charges by region",
+                     data_source=str(src.local_path), output_dir=Path("out/db"), budget=Budget())</code></pre></div>
+
+  <h3 id="py-deploy">Deployment gates and serving</h3>
+  <div class="code" data-lang="python"><pre><code class="language-python">from avaloka.deploy import plan_deployment
+from avaloka import serving
+
+plan = plan_deployment("out/churn-model", "kubernetes", requested_level=3)
+plan.achieved_level, plan.validator_cap, plan.blocked_reason   # (3, 4, None)
+plan.commands     # ['docker build -t avaloka-inference:latest .', 'kubectl apply -f deployment/kubernetes.yaml', …]
+
+level4 = plan_deployment("out/churn-model", "kubernetes", requested_level=4, approved=True)
+
+inference = serving.prepare("out/churn-model", target="kubernetes", registry="ghcr.io/acme")
+inference.commands  # the build / apply / rollout plan; nothing has run yet
+# serving.apply(inference, push=True) builds, applies, and fills inference.endpoint</code></pre></div>
+</section>
+
+<!-- ============================================================ HTTP -->
+<section class="doc page wide" id="http">
+  <p class="eyebrow">Reference</p>
+  <h2>HTTP API</h2>
+  <p>The API puts the conversational agent team behind your own product: upload data, open a thread, send messages, and collect the code, results and models it produces. It's what the Avaloka web app uses.</p>
+
+  <h3 id="http-run">Run it</h3>
+  <p>The API needs Redis for session storage and the LangGraph server for the agent graph. The Helm chart deploys both. To run them locally:</p>
+  <div class="code" data-lang="bash"><pre><code class="language-bash">docker compose -f deploy/compose/docker-compose.redis.yml up -d
+export REDIS_URL=redis://127.0.0.1:6379
+export OPENROUTER_API_KEY=…                       # or GROQ_API_KEY / OPENAI_API_KEY
+export MLFLOW_TRACKING_URI=sqlite:///$PWD/mlflow.db   # needed for training
+export SUPABASE_JWT_SECRET=$(openssl rand -hex 32)
+
+langgraph dev --no-browser --port 2024 &amp;
+uvicorn app.api.server:app --port 9000</code></pre></div>
+  <div class="code out" data-lang="GET /health"><pre><code class="language-json">{"status": "ok", "graph_ready": true, "upstream_reachable": true, "redis_connected": true, "redis_mode": "single"}</code></pre></div>
+  <div class="note"><b>Readiness is in the body</b><p><code>/health</code> returns 200 even when Redis or the graph server is down. Check <code>redis_connected</code> and <code>upstream_reachable</code>. Interactive docs are served at <code>/docs</code>.</p></div>
+
+  <h3 id="http-auth">Authentication</h3>
+  <p>Every route except <code>/health</code> and <code>/version</code> needs <code>Authorization: Bearer &lt;jwt&gt;</code>. The token's <code>sub</code> is the user id; make it a UUID.</p>
+  <ul class="plain">
+    <li><strong>With Supabase Auth</strong> (the web app): send the signed-in user's access token. RS256/ES256 tokens are verified against <code>SUPABASE_URL</code>'s key set.</li>
+    <li><strong>Server to server</strong>: sign an HS256 token with the same <code>SUPABASE_JWT_SECRET</code> the server reads. The server refuses to start without that secret.</li>
+  </ul>
+  <div class="tabs" data-tabs="lang">
+    <div class="tab-row" role="tablist"><button role="tab" data-tab="python">Python</button><button role="tab" data-tab="js">JavaScript</button><button role="tab" data-tab="curl">curl</button></div>
+    <div class="code" data-panel="python" data-lang="python"><pre><code class="language-python">import os, time, uuid, jwt   # PyJWT
+
+token = jwt.encode({"sub": str(uuid.uuid4()), "iat": int(time.time())},
+                   os.environ["SUPABASE_JWT_SECRET"], algorithm="HS256")
+auth = {"Authorization": f"Bearer {token}"}</code></pre></div>
+    <div class="code" data-panel="js" data-lang="javascript" hidden><pre><code class="language-javascript">// In the browser, use the Supabase session's access token:
+const { data: { session } } = await supabase.auth.getSession();
+const auth = { Authorization: `Bearer ${session.access_token}` };</code></pre></div>
+    <div class="code" data-panel="curl" data-lang="bash" hidden><pre><code class="language-bash">export JWT=$(python -c 'import jwt,os,time,uuid; print(jwt.encode({"sub": str(uuid.uuid4()), "iat": int(time.time())}, os.environ["SUPABASE_JWT_SECRET"], algorithm="HS256"))')
+curl -s localhost:9000/debug/whoami -H "Authorization: Bearer $JWT"   # {"user_id": "8c6943d7-…"}</code></pre></div>
+  </div>
+
+  <h3 id="http-upload">Upload a dataset</h3>
+  <div class="endpoint"><span class="method post">POST</span><code>/api/upload</code></div>
+  <p>Multipart form with one or more <code>file</code> fields. The response includes the dataset, a thread already opened for it, the inferred schema and sample rows.</p>
+  <div class="tabs" data-tabs="lang">
+    <div class="tab-row" role="tablist"><button role="tab" data-tab="python">Python</button><button role="tab" data-tab="js">JavaScript</button><button role="tab" data-tab="curl">curl</button></div>
+    <div class="code" data-panel="python" data-lang="python"><pre><code class="language-python">import requests
+BASE = "http://localhost:9000"
+
+with open("avaloka/examples/churn.csv", "rb") as fh:
+    up = requests.post(f"{BASE}/api/upload", headers=auth,
+                       files={"file": ("churn.csv", fh, "text/csv")}).json()
+
+thread, dataset = up["thread_id"], up["dataset_id"]</code></pre></div>
+    <div class="code" data-panel="js" data-lang="javascript" hidden><pre><code class="language-javascript">const form = new FormData();
+form.append("file", fileInput.files[0]);          // or new Blob([...]) in Node 18+
+
+const up = await (await fetch(`${BASE}/api/upload`, {
+  method: "POST", headers: auth, body: form,
+})).json();</code></pre></div>
+    <div class="code" data-panel="curl" data-lang="bash" hidden><pre><code class="language-bash">curl -s -X POST localhost:9000/api/upload -H "Authorization: Bearer $JWT" \
+     -F "file=@avaloka/examples/churn.csv;type=text/csv"</code></pre></div>
+  </div>
+  <div class="code out" data-lang="200 OK"><pre><code class="language-json">{
+  "dataset_id": "8ef99bcb-a88a-43d9-ab52-44ad0dcf6d60",
+  "session_id": "ad018ffd-6825-4f8e-8790-53c483f66b96",
+  "thread_id":  "5ed9d4af-bfe9-4a3b-84ea-bb5db500b44d",
+  "schema": {"customer_id": "String", "tenure_months": "Int64", "monthly_charges": "Float64",
+             "support_tickets": "Int64", "contract": "String", "region": "String", "churned": "Int64"},
+  "samples": [{"customer_id": "C00000", "tenure_months": 7, "monthly_charges": 101.2, "...": "..."}]
+}</code></pre></div>
+  <p>Limits: 10 files, 100 MB per file and 200 MB per request by default (<code>AVALOKA_MAX_UPLOAD_FILES</code>, <code>AVALOKA_MAX_UPLOAD_FILE_BYTES</code>, <code>AVALOKA_MAX_UPLOAD_TOTAL_BYTES</code>). For data that shouldn't move, register it where it lives with <code>POST /api/register-existing-folder</code> or <code>/api/register-existing-storage</code>.</p>
+
+  <h3 id="http-messages">Ask a question</h3>
+  <div class="endpoint"><span class="method post">POST</span><code>/threads/{thread_id}/messages</code></div>
+  <p>Send a message in a thread. The call returns when the turn finishes, typically in 10–40 seconds for an analysis question.</p>
+  <div class="tabs" data-tabs="lang">
+    <div class="tab-row" role="tablist"><button role="tab" data-tab="python">Python</button><button role="tab" data-tab="js">JavaScript</button><button role="tab" data-tab="curl">curl</button></div>
+    <div class="code" data-panel="python" data-lang="python"><pre><code class="language-python">reply = requests.post(
+    f"{BASE}/threads/{thread}/messages", headers=auth, timeout=600,
+    json={"role": "user",
+          "content": "What is the average monthly_charges by region?",
+          "metadata": {"dataset_id": dataset}},
+).json()
+
+print(reply["messages"][-1]["content"])          # the answer
+print(reply["coder_definition"]["code"])         # the code that produced it</code></pre></div>
+    <div class="code" data-panel="js" data-lang="javascript" hidden><pre><code class="language-javascript">const res = await fetch(`${BASE}/threads/${up.thread_id}/messages`, {
+  method: "POST",
+  headers: { ...auth, "Content-Type": "application/json" },
+  body: JSON.stringify({
+    role: "user",
+    content: "Which contract type has the highest churn rate?",
+    metadata: { dataset_id: up.dataset_id },
+  }),
+});
+const reply = await res.json();
+console.log(reply.messages.at(-1).content);
+// → The month-to-month contract has the highest churn rate, at 0.47.</code></pre></div>
+    <div class="code" data-panel="curl" data-lang="bash" hidden><pre><code class="language-bash">curl -s -X POST localhost:9000/threads/$THREAD/messages \
+     -H "Authorization: Bearer $JWT" -H "Content-Type: application/json" \
+     -d '{"role": "user", "content": "What is the average monthly_charges by region?",
+          "metadata": {"dataset_id": "'$DATASET'"}}'</code></pre></div>
+  </div>
+  <div class="code out" data-lang="200 OK (excerpt)"><pre><code class="language-json">{
+  "messages": [
+    {"role": "user", "content": "What is the average monthly_charges by region?"},
+    {"role": "assistant", "content": "The South region has the highest average monthly charges at about 71.17, while the North is the lowest at roughly 67.73.\n\n- East: 68.78\n- West: 68.12\n- South: 71.17 (leader)\n- North: 67.73 (laggard)"}
+  ],
+  "coder_definition": {"code": "import pandas as pd\n\ndef main(df):\n    ...\n    result = temp_df.groupby('region', as_index=False).agg(avg_monthly_charges=('monthly_charges', 'mean'))\n    return result\n"},
+  "output_file_data": {"filename": "2026-10-17_02_45_29_output.csv", "content": "data:text/csv;base64,cmVnaW9u…", "size": 120},
+  "visualization_config": {"version": "1.0", "columns": ["region", "avg_monthly_charges"], "...": "..."},
+  "verification_safe_to_present": true
+}</code></pre></div>
+
+  <h4>What comes back</h4>
+  <p>Every turn returns the full state of the conversation. These are the fields most integrations use:</p>
+  <div class="table"><table>
+    <thead><tr><th>Field</th><th>Use it to</th></tr></thead>
+    <tbody>
+      <tr><td><code>messages</code></td><td>Show the conversation. The last message is the reply.</td></tr>
+      <tr><td><code>coder_definition.code</code></td><td>Show or store the Python that produced the answer.</td></tr>
+      <tr><td><code>output_file_data</code></td><td>Offer the result table as a download (base64 data URL).</td></tr>
+      <tr><td><code>visualization_config</code></td><td>Render charts of the result.</td></tr>
+      <tr><td><code>planner_definition</code>, <code>execution_context</code></td><td>Show what the team planned and how it ran: locally, on a sample or the full file, or on a cluster.</td></tr>
+      <tr><td><code>verification_safe_to_present</code></td><td>Decide whether to present the narrative as is.</td></tr>
+      <tr><td><code>training_status</code>, <code>training_completed</code>, <code>mlflow_run_id</code></td><td>Follow a training run.</td></tr>
+      <tr><td><code>evaluation_beats_baseline</code>, <code>integrity_safe_to_train</code></td><td>Decide whether a trained model is worth using.</td></tr>
+      <tr><td><code>agent_errors</code></td><td>Show what went wrong when a turn fails.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h4>Training is a two-step conversation</h4>
+  <p>Asking to train returns a plan first, and nothing has started yet. Send a confirmation to begin:</p>
+  <div class="code out" data-lang="assistant · “Train a model to predict churned”"><pre><code class="language-plaintext">## Training Plan Ready
+Model: Classification (my_model, v1.0)
+Target: churned
+Features: 5 selected columns
+Excluded identifier columns: customer_id
+Training has not started.
+Start training with this plan, or describe any changes you want to make.</code></pre></div>
+  <div class="code" data-lang="python"><pre><code class="language-python">done = requests.post(f"{BASE}/threads/{thread}/messages", headers=auth, timeout=1200,
+                     json={"role": "user", "content": "Start training with this plan",
+                           "metadata": {"dataset_id": dataset}}).json()
+
+if done["training_completed"] and not done["evaluation_beats_baseline"]:
+    print("Trained, but it does not beat the baseline. Don't use it for decisions.")</code></pre></div>
+
+  <h3 id="http-routes">Endpoint map</h3>
+  <div class="table"><table>
+    <thead><tr><th>Area</th><th>Routes</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Threads</strong></td><td><span class="method post">POST</span> <code>/threads</code> · <span class="method">GET</span> <code>/threads</code> · <span class="method del">DELETE</span> <code>/threads/{id}</code><br><span class="method">GET</span> <code>/threads/{id}/messages</code> · <code>/code</code> · <code>/datasets</code> · <code>/pending-turn</code> · <code>/planner-graph</code></td></tr>
+      <tr><td><strong>Datasets</strong></td><td><span class="method post">POST</span> <code>/api/upload</code> · <span class="method">GET</span> <code>/datasets</code> · <code>/datasets/{id}</code> · <code>/datasets/{id}/preview</code> · <span class="method del">DELETE</span> <code>/datasets/{id}</code><br><span class="method">GET</span> <code>/api/datasets/{id}/background-task-status</code></td></tr>
+      <tr><td><strong>Analyses</strong></td><td><span class="method">GET</span> <code>/analysis/{id}/code</code> · <code>/versions</code> · <span class="method post">POST</span> <code>/restore</code> · <code>/refresh</code> · <code>/save-and-execute</code> · <code>/feedback</code> · <code>/insights/explain</code></td></tr>
+      <tr><td><strong>Tasks &amp; assets</strong></td><td><span class="method">GET</span> <code>/tasks</code> · <code>/tasks/{id}/status</code> · <code>/info</code> · <code>/runs</code> · <code>/result/{index}</code> · <span class="method">GET</span> <code>/api/assets/{session_id}</code> (+ <code>/code</code>, <code>/output</code>, <code>/job</code>)</td></tr>
+      <tr><td><strong>Models</strong></td><td><span class="method">GET</span> <code>/api/models</code> · <code>/api/models/{run_id}</code> · <span class="method post">POST</span> <code>/inference</code> · <code>/configure-inference-service</code> · <code>/stop-inference-service</code></td></tr>
+      <tr><td><strong>Databases</strong></td><td><span class="method post">POST</span> <code>/api/database/connect</code> · <code>/api/v1/database/query</code> · <code>/api/database/tables-to-analysis</code></td></tr>
+      <tr><td><strong>Account</strong></td><td><span class="method">GET</span> <code>/api/notifications</code> · <code>/api/limits</code> · <code>/api/integrations</code> · <span class="method">GET</span> <code>/health</code> · <code>/version</code> · <code>/debug/whoami</code></td></tr>
+    </tbody>
+  </table></div>
+  <p>Request and response schemas for all 56 routes are in the interactive docs at <code>/docs</code> and in <code>/openapi.json</code>.</p>
+</section>
+
+<!-- ============================================================ SERVING -->
+<section class="doc page" id="serving">
+  <p class="eyebrow">Reference</p>
+  <h2>Model service</h2>
+  <p>A train mission run with <code>--deployable</code> writes <code>service.py</code>, a small FastAPI app that loads the validated model, plus a <code>Dockerfile</code> and manifests. It's yours to run anywhere and safe to edit.</p>
+
+  <div class="endpoint"><span class="method">GET</span><code>/health</code></div>
+  <div class="code out" data-lang="200 OK"><pre><code class="language-json">{"status": "ok", "model_version": "46f6dfcc2c31", "task": "binary_classification"}</code></pre></div>
+
+  <div class="endpoint"><span class="method post">POST</span><code>/predict</code></div>
+  <p>Send rows as <code>instances</code>. <code>inference_schema.json</code> in the package lists the exact features and types the model expects.</p>
+  <div class="code" data-lang="request"><pre><code class="language-json">{
+  "instances": [
+    {"tenure_months": 3, "monthly_charges": 105.5, "support_tickets": 4, "contract": "month-to-month", "region": "west"}
+  ]
+}</code></pre></div>
+  <div class="code out" data-lang="200 OK"><pre><code class="language-json">{"predictions": [1], "model_version": "46f6dfcc2c31", "probabilities": [0.913]}</code></pre></div>
+  <p><code>probabilities</code> is the positive-class probability and is returned for binary classifiers.</p>
+
+  <h3>Run it</h3>
+  <div class="table"><table>
+    <thead><tr><th>Where</th><th>How</th></tr></thead>
+    <tbody>
+      <tr><td>Your machine</td><td><code>python service.py</code> (port 8080)</td></tr>
+      <tr><td>Docker</td><td><code>docker build -t churn . &amp;&amp; docker run -p 8080:8080 churn</code></td></tr>
+      <tr><td>Kubernetes</td><td><code>avaloka infer ./churn-model --target kubernetes --registry ghcr.io/acme --apply --push</code></td></tr>
+      <tr><td>Ray Serve</td><td><code>deployment/rayservice.yaml</code></td></tr>
+    </tbody>
+  </table></div>
+  <p>The package also contains <code>tests/test_service.py</code>, <code>monitoring_config.yaml</code>, <code>feature_contract.yaml</code> and an MLflow descriptor under <code>mlflow/</code>, so the model can go into your registry as is.</p>
+</section>
+
+<!-- ============================================================ TROUBLESHOOTING -->
+<section class="doc page wide" id="troubleshooting">
+  <p class="eyebrow">When something goes wrong</p>
+  <h2>Troubleshooting</h2>
+  <p>Start with <code>python scripts/doctor.py</code>. It checks the environment and names what's missing. Set <code>AVALOKA_TRACEBACK=1</code> to see full traces from the CLI.</p>
+  <div class="table"><table>
+    <thead><tr><th>You see</th><th>Why</th><th>Do this</th></tr></thead>
+    <tbody>
+      <tr><td><em>There is no column named 'churnd'. Did you mean: churned?</em></td><td>A typo in <code>--target</code></td><td>Use the suggested name. <code>columns</code> in <code>chat</code> lists them all.</td></tr>
+      <tr><td><span class="pill warn">LIMITED</span> on an analysis</td><td>The goal doesn't name a column the data has</td><td>Name the column, or pick one from <code>candidates</code>.</td></tr>
+      <tr><td><em>Data source not found: 'sqlite:///…'</em> from the SDK</td><td><code>MissionContext</code> takes a local path</td><td><code>data_source=str(materialize(uri).local_path)</code></td></tr>
+      <tr><td><code>401</code> <em>Missing or invalid auth token</em></td><td>The token wasn't signed with the server's <code>SUPABASE_JWT_SECRET</code></td><td>Check with <code>GET /debug/whoami</code>; it returns <code>null</code> for a bad token.</td></tr>
+      <tr><td><code>503</code> <em>Session storage (Redis) is not available.</em></td><td>Redis isn't running or <code>REDIS_URL</code> is wrong</td><td>Start Redis; <code>/health</code> should show <code>"redis_connected": true</code>.</td></tr>
+      <tr><td><code>502</code> <em>LangGraph network error contacting /threads</em></td><td>The graph server isn't running</td><td>Run <code>langgraph dev --port 2024</code>, or set <code>LANGGRAPH_API_URL</code>.</td></tr>
+      <tr><td>Training reply: <em>something went wrong</em>; <code>/api/models</code> returns 500</td><td>MLflow's default file store is refused</td><td>Set <code>MLFLOW_TRACKING_URI=sqlite:///…/mlflow.db</code>, or point it at an MLflow server.</td></tr>
+      <tr><td>Can't reach the API on port 8000</td><td>Avaloka serves on 9000</td><td>Pass <code>--port 9000</code> to uvicorn.</td></tr>
+      <tr><td>A model "trained successfully" but <code>evaluation_beats_baseline</code> is false</td><td>It doesn't outperform a trivial predictor</td><td>Don't use it for decisions. Add features, or check the target.</td></tr>
+    </tbody>
+  </table></div>
+
+  <footer class="site">
+    <span>Avaloka 1.6 · Apache License 2.0</span>
+    <a href="https://avaloka.ai/blog">Blog</a>
+    <a href="../INSTALL.md">Install Guide</a>
+    <a href="../../README_CLI.md">CLI Guide</a>
+    <a href="../api.md">HTTP API notes</a>
+    <a href="../benchmarks.md">Benchmarks</a>
+  </footer>
+</section>
+
+</main>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script>
+(function () {
+  "use strict";
+  var store = {
+    get: function (k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+    set: function (k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+  };
+
+  // Syntax highlighting is a nicety; the page reads fine without it.
+  if (window.hljs) { document.querySelectorAll("pre code").forEach(function (el) { window.hljs.highlightElement(el); }); }
+
+  // Code headers with a language label and a copy button.
+  document.querySelectorAll(".code").forEach(function (box) {
+    var head = document.createElement("div");
+    head.className = "code-head";
+    var label = document.createElement("span");
+    label.textContent = box.getAttribute("data-lang") || "";
+    head.appendChild(label);
+    if (!box.classList.contains("out")) {
+      var btn = document.createElement("button");
+      btn.className = "copy"; btn.type = "button"; btn.textContent = "Copy";
+      btn.addEventListener("click", function () {
+        var text = box.querySelector("code").innerText;
+        var done = function () { btn.textContent = "Copied"; setTimeout(function () { btn.textContent = "Copy"; }, 1400); };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(done, function () { selectText(box); btn.textContent = "Press ⌘C"; });
+        } else { selectText(box); btn.textContent = "Press ⌘C"; }
+      });
+      head.appendChild(btn);
+    }
+    box.insertBefore(head, box.firstChild);
+  });
+  function selectText(box) {
+    var r = document.createRange(); r.selectNodeContents(box.querySelector("code"));
+    var s = window.getSelection(); s.removeAllRanges(); s.addRange(r);
+  }
+
+  // Tabs. Language tabs share one choice across the page and remember it.
+  function selectTab(group, name) {
+    group.querySelectorAll("[data-tab]").forEach(function (b) { b.setAttribute("aria-selected", String(b.getAttribute("data-tab") === name)); });
+    group.querySelectorAll("[data-panel]").forEach(function (p) { p.hidden = p.getAttribute("data-panel") !== name; });
+  }
+  var langChoice = store.get("avaloka-guide-lang") || "python";
+  document.querySelectorAll(".tabs").forEach(function (group) {
+    var key = group.getAttribute("data-tabs");
+    var first = group.querySelector("[data-tab]").getAttribute("data-tab");
+    selectTab(group, key === "lang" && group.querySelector('[data-tab="' + langChoice + '"]') ? langChoice : first);
+    group.querySelectorAll("[data-tab]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var name = b.getAttribute("data-tab");
+        if (key === "lang") {
+          store.set("avaloka-guide-lang", name);
+          document.querySelectorAll('.tabs[data-tabs="lang"]').forEach(function (g) { selectTab(g, name); });
+        } else { selectTab(group, name); }
+      });
+    });
+  });
+
+  // Section filter.
+  var filter = document.getElementById("nav-filter");
+  var links = Array.prototype.slice.call(document.querySelectorAll("#nav a"));
+  filter.addEventListener("input", function () {
+    var q = filter.value.trim().toLowerCase();
+    links.forEach(function (a) {
+      var target = document.querySelector(a.getAttribute("href"));
+      var hay = (a.textContent + " " + (target ? target.textContent : "")).toLowerCase();
+      a.parentElement.hidden = q !== "" && hay.indexOf(q) === -1;
+    });
+  });
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "/" && document.activeElement !== filter && !/input|textarea/i.test(document.activeElement.tagName)) {
+      e.preventDefault(); openRail(true); filter.focus();
+    }
+  });
+
+  // Mobile contents toggle.
+  var rail = document.getElementById("rail"), menuBtn = document.getElementById("menu-btn");
+  function openRail(open) { rail.classList.toggle("open", open); menuBtn.setAttribute("aria-expanded", String(open)); }
+  menuBtn.addEventListener("click", function () { openRail(!rail.classList.contains("open")); });
+  links.forEach(function (a) { a.addEventListener("click", function () { openRail(false); }); });
+
+  // Highlight the section in view.
+  var byId = {};
+  links.forEach(function (a) { byId[a.getAttribute("href").slice(1)] = a; });
+  if ("IntersectionObserver" in window) {
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (en) {
+        if (en.isIntersecting && byId[en.target.id]) {
+          links.forEach(function (a) { a.classList.remove("active"); });
+          byId[en.target.id].classList.add("active");
+        }
+      });
+    }, { rootMargin: "0px 0px -70% 0px" });
+    Object.keys(byId).forEach(function (id) { var el = document.getElementById(id); if (el) io.observe(el); });
+  }
+
+  // Theme: system → light → dark.
+  var themeBtn = document.getElementById("theme-btn"), order = ["system", "light", "dark"];
+  function applyTheme(t) {
+    if (t === "system") document.documentElement.removeAttribute("data-theme");
+    else document.documentElement.setAttribute("data-theme", t);
+    themeBtn.textContent = "Theme: " + t;
+  }
+  var theme = store.get("avaloka-guide-theme") || "system";
+  applyTheme(theme);
+  themeBtn.addEventListener("click", function () {
+    theme = order[(order.indexOf(theme) + 1) % order.length];
+    store.set("avaloka-guide-theme", theme); applyTheme(theme);
+  });
+})();
+</script>
+</body>
+</html>

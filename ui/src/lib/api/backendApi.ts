@@ -27,6 +27,7 @@ const isTransientGatewayFailure = (status: number) =>
 const describesUnavailableUpstream = (message: string) =>
   /(bad gateway|service unavailable|upstream|langgraph (?:network error|timeout)|connection refused)/i.test(message);
 
+
 // Single dataset upload response (legacy format)
 interface UploadResponse {
   dataset_id: string;
@@ -48,6 +49,18 @@ interface UploadResponse {
 }
 
 // Multi-dataset upload response format
+/** One entry of GET /threads/{id}/datasets. */
+export interface ThreadDatasetItem {
+  dataset_id: string;
+  filename?: string | null;
+  alias?: string | null;
+  sheet_name?: string | null;
+  source_workbook?: string | null;
+  rows?: number | null;
+  selected?: boolean;
+  available?: boolean;
+}
+
 export interface DatasetItem {
   dataset_id: string;
   filename: string;
@@ -204,9 +217,10 @@ export interface PendingTurnResponse {
 export function isDeferredTurn(res: any): boolean {
   if (!res || typeof res !== "object") return false;
   if (res.fallback === true && res.error === "UPSTREAM_TIMEOUT") return true;
+  if (String(res.pending_status ?? "").toLowerCase() === "running" && res.analysis_task_id) return true;
   const hasRows = Array.isArray(res.output_json) && res.output_json.length > 0;
   return (
-        (String(res.training_status ?? "").toLowerCase() === "running" ||
+    (String(res.training_status ?? "").toLowerCase() === "running" ||
       String(res.pending_status ?? "").toLowerCase() === "running") &&
     res.training_completed !== true &&
     !hasRows
@@ -487,12 +501,19 @@ export const backendApi = {
     return response.json();
   },
 
-  async uploadFile(file: File, sessionId?: string, backend?: string, connectionId?: string): Promise<UploadResponse> {
+  async uploadFile(
+    file: File,
+    sessionId?: string,
+    backend?: string,
+    connectionId?: string,
+    attachToThreadId?: string,
+  ): Promise<UploadResponse> {
     const formData = new FormData();
     formData.append("file", file);
     if (sessionId) formData.append("session_id", sessionId);
     if (backend) formData.append("backend", backend);
     if (connectionId) formData.append("connection_id", connectionId);
+    if (attachToThreadId) formData.append("attach_to_thread_id", attachToThreadId);
 
     const accessToken = await getAccessToken();
     const response = await proxyFetch(`/api/upload`, {
@@ -511,16 +532,102 @@ export const backendApi = {
     return response.json();
   },
 
+  /** Attach already-uploaded datasets to an existing chat thread. */
+  async attachDatasetsToThread(threadId: string, datasetIds: string[]): Promise<void> {
+    const accessToken = await getAccessToken();
+    const response = await proxyFetch(`/threads/${threadId}/datasets`, {
+      method: "POST",
+      headers: {
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ dataset_ids: datasetIds }),
+    });
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}) as any);
+      const err: any = new Error(
+        errorData.detail ||
+          (response.status === 404 ? "Chat or dataset not found" : `Attach failed: ${response.statusText}`),
+      );
+      err.status = response.status;
+      throw err;
+    }
+  },
+
+  /** Attach every dataset of the given analyses to a chat thread. */
+  async attachAnalysesToThread(
+    threadId: string,
+    analysisIds: string[],
+  ): Promise<{ thread_id?: string; dataset_ids?: string[]; datasets?: unknown[] }> {
+    const accessToken = await getAccessToken();
+    const response = await proxyFetch(`/threads/${threadId}/datasets`, {
+      method: "POST",
+      headers: {
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ analysis_ids: analysisIds }),
+    });
+    const data = await response.json().catch(() => ({}) as any);
+    if (!response.ok) {
+      const detail = (data as any)?.detail;
+      const err: any = new Error(
+        typeof detail === "string" ? detail : typeof detail?.message === "string" ? detail.message : `Request failed (${response.status})`,
+      );
+      err.status = response.status;
+      err.detail = detail;
+      throw err;
+    }
+    return data;
+  },
+
+  /** List datasets attached to a chat thread (for the chips under the chat). */
+  async listThreadDatasets(threadId: string): Promise<ThreadDatasetItem[]> {
+    const accessToken = await getAccessToken();
+    const response = await proxyFetch(`/threads/${threadId}/datasets`, {
+      headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
+    });
+    if (!response.ok) {
+      const err: any = new Error(`Failed to load thread datasets: ${response.statusText}`);
+      err.status = response.status;
+      throw err;
+    }
+    const data = await response.json().catch(() => [] as any);
+    return Array.isArray(data) ? data : (data?.datasets ?? []);
+  },
+
+  /** Save which datasets the chat uses (PUT /threads/{id}/selected-datasets, at least one id). */
+  async setSelectedDatasets(threadId: string, datasetIds: string[]): Promise<ThreadDatasetItem[]> {
+    const accessToken = await getAccessToken();
+    const response = await proxyFetch(`/threads/${threadId}/selected-datasets`, {
+      method: "PUT",
+      headers: {
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ dataset_ids: datasetIds }),
+    });
+    const data = await response.json().catch(() => ({}) as any);
+    if (!response.ok) {
+      const err: any = new Error(typeof data?.detail === "string" ? data.detail : `Saving selection failed (${response.status})`);
+      err.status = response.status;
+      throw err;
+    }
+    return Array.isArray(data) ? data : (data?.datasets ?? []);
+  },
+
   async uploadFiles(
     files: File[],
     backend?: string,
     connectionId?: string,
     onProgress?: (p: UploadProgressInfo) => void,
+    attachToThreadId?: string,
   ): Promise<MultiUploadResponse> {
     const formData = new FormData();
     files.forEach((file) => formData.append("files", file));
     if (backend) formData.append("backend", backend);
     if (connectionId) formData.append("connection_id", connectionId);
+    if (attachToThreadId) formData.append("attach_to_thread_id", attachToThreadId);
 
     const accessToken = await getAccessToken();
     const totalBytes = files.reduce((s, f) => s + f.size, 0);
@@ -574,10 +681,7 @@ export const backendApi = {
         else armStall();
       };
       xhr.upload.onload = () => startProcessing();
-      xhr.onerror = () =>
-        fail("The server didn't respond. Your request may still be running — please retry in a moment.", {
-          network: true,
-        });
+      xhr.onerror = () => fail("The server didn't respond. Your request may still be running — please retry in a moment.", { network: true });
       xhr.onload = () => {
         clearTimers();
         let json: any = null;
@@ -701,7 +805,6 @@ export const backendApi = {
    * Poll the backend for the result of a long-running (deferred) chat turn.
    * Returns the raw envelope: { status: "running" | "done" | "error" | "superseded" | "none", ... }
    */
-
   async listNotifications(opts: { limit?: number; unread?: boolean } = {}): Promise<AppNotificationsResponse> {
     const accessToken = await getAccessToken();
     const params = new URLSearchParams({ limit: String(opts.limit ?? 20) });
@@ -899,8 +1002,8 @@ export const backendApi = {
     });
   },
 
-  async getDatasetPreview(datasetId: string, sessionId: string, forceRefresh = false): Promise<any> {
-    const previewKey = `${datasetId}:${sessionId}`;
+  async getDatasetPreview(datasetId: string, sessionId: string, forceRefresh = false, threadId?: string | null): Promise<any> {
+    const previewKey = `${datasetId}:${sessionId}:${threadId ?? ""}`;
     if (!forceRefresh && _previewInflight.has(previewKey)) return _previewInflight.get(previewKey)!;
     if (forceRefresh) this.abortPreview(datasetId);
 
@@ -912,6 +1015,7 @@ export const backendApi = {
       try {
         const accessToken = await getAccessToken();
         const query = new URLSearchParams({ session_id: sessionId });
+        if (threadId) query.set("thread_id", threadId);
         if (forceRefresh) query.set("_", String(Date.now()));
         const path = `/datasets/${encodeURIComponent(datasetId)}/preview?${query.toString()}`;
         const response = await proxyFetch(path, {
@@ -1260,12 +1364,7 @@ export const backendApi = {
     features: Record<string, unknown>,
     datasetId?: string | null,
     sessionIdOverride?: string | null,
-  ): Promise<{
-    prediction: unknown;
-    reply: string;
-    probabilities?: unknown;
-    rawResponse: MessageResponse;
-  }> {
+  ): Promise<{ prediction: unknown; reply: string; probabilities?: unknown; rawResponse: MessageResponse }> {
     const sessionId = sessionIdOverride || getInferenceSessionId();
     if (!datasetId) {
       throw new Error("This model has no linked training dataset, so inference can't run.");
@@ -1308,20 +1407,12 @@ export const backendApi = {
     const probabilities = [res.output_json, res.output_file_data, res]
       .map((value) => {
         if (typeof value !== "string") return value;
-        try {
-          return JSON.parse(value);
-        } catch {
-          return null;
-        }
+        try { return JSON.parse(value); } catch { return null; }
       })
-      .map((value) => (Array.isArray(value) ? value[0] : value))
-      .find(
-        (value) =>
-          value &&
-          typeof value === "object" &&
-          ("probabilities" in value || "class_probabilities" in value),
-      ) as { probabilities?: unknown; class_probabilities?: unknown } | undefined;
-
+      .map((value) => Array.isArray(value) ? value[0] : value)
+      .find((value) => value && typeof value === "object" && ("probabilities" in value || "class_probabilities" in value)) as
+      | { probabilities?: unknown; class_probabilities?: unknown }
+      | undefined;
     return {
       prediction,
       reply,

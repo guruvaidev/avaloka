@@ -334,6 +334,7 @@ cp .env.example .env
 | `AVALOKA_LICENSE_KEY` | licence token; overrides the stored file |
 | `AVALOKA_HOME` | config directory (default `~/.avaloka`) |
 | `AVALOKA_LICENSE_PUBLIC_KEY` | override the verification key (staging only) |
+| `MLFLOW_TRACKING_URI` | where trained models are recorded and read back. Unset, a local `mlflow.db` (SQLite) in the working directory is used; point it at an MLflow server to share models across machines |
 
 Unknown values fail closed: an unrecognised deployment resolves to
 `self_hosted`, and an unrecognised edition resolves to `oss`.

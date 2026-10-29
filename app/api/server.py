@@ -326,6 +326,34 @@ from app.agents.visualization_agent import build_visualization_config_from_sampl
 from app.agents.chart_explainer import explain_charts
 from app.core.plan_limits import resolve_plan, limits_for, check_sizes, limit_error
 
+# Data transfer, model training and model inference are COST gates in
+# app/core/editions.py; app/core/plan_gate.py decides them (planner.py in chat,
+# the model endpoints below directly). Self-hosted deployments are never gated;
+# an unknown plan (lookup failed) is allowed, the same policy as the planner.
+from app.core.plan_gate import check_feature, upgrade_message, FEATURE_CAPABILITY
+
+
+def _plan_allows_premium(plan: Optional[str], feature: str = "model_training") -> bool:
+    """True when ``plan`` includes ``feature`` on this deployment."""
+    return check_feature(feature, plan=plan).allowed
+
+
+async def _require_premium_plan(user_id: str, feature: str) -> None:
+    """403 with an upgrade payload unless the user's plan includes the feature."""
+    decision = await asyncio.to_thread(check_feature, feature, user_id=user_id)
+    if decision.allowed:
+        return
+    raise HTTPException(
+        status.HTTP_403_FORBIDDEN,
+        {
+            "reason": "plan_upgrade_required",
+            "feature": feature,
+            "plan": decision.plan,
+            "allowed_plans": decision.allowed_plans(),
+            "message": upgrade_message(decision),
+        },
+    )
+
 import jwt
 from jwt import PyJWKClient, InvalidTokenError
 
@@ -551,14 +579,26 @@ def _find_header_row(rows: List[List[str]]) -> Optional[int]:
     return None
 
 
-def _fix_header_row(path: Path) -> Optional[Dict[str, Any]]:
+# The Excel reader names every column column_1..column_N when it cannot find
+# the header itself (a merged note row above it, e.g. "a" or "SE-01 is an
+# active ..." spanning A1:M1). The real names are then one of the data rows.
+_GENERATED_HEADER_RE = re.compile(r"^column_\d+$")
+
+
+def _fix_header_row(path: Path, generated_header: bool = False) -> Optional[Dict[str, Any]]:
     """Make the real header row the first row of a CSV/TSV, in place.
 
     Also names header cells that are blank but have data under them
     (column_N), which pandas would call "Unnamed: N" -- e.g. the index column
     written by DataFrame.to_csv, or a merged cell in an Excel export.
-    Returns {"header_row": n (1-based), "skipped": [...], "named": [...]}
-    when the file was changed, else None. Never raises."""
+
+    generated_header: the first row is column_1..column_N made up by the Excel
+    reader (it said "No header row was found"). The real header is looked for
+    in the rows below it; row numbers in the result are then sheet rows.
+
+    Returns {"header_row": n (1-based), "skipped": [...], "named": [...]} when the
+    file was changed, plus "replaced_generated": True when a made-up column_N header
+    row was replaced; else None. Never raises."""
     try:
         with open(path, "r", encoding="utf-8-sig", newline="") as f:
             head_lines = []
@@ -575,7 +615,17 @@ def _fix_header_row(path: Path) -> Optional[Dict[str, Any]]:
     try:
         delim = _sniff_delimiter_by_consistency(head_lines)
         rows = list(csv.reader(head_lines, delimiter=delim))
-        h = _find_header_row(rows) or 0
+        replaced_generated = False
+        if (generated_header and len(rows) > 1 and len(rows[0]) > 1
+                and all(_GENERATED_HEADER_RE.match((c or "").strip()) for c in rows[0])):
+            found = _find_header_row(rows[1:])
+            if found is not None:
+                h = found + 1
+                replaced_generated = True
+            else:
+                h = 0
+        else:
+            h = _find_header_row(rows) or 0
     except Exception:
         logger.warning("[upload] header-row scan failed for %s", path, exc_info=True)
         return None
@@ -626,8 +676,12 @@ def _fix_header_row(path: Path) -> Optional[Dict[str, Any]]:
         tmp.unlink(missing_ok=True)
         return None
 
-    skipped = [" ".join(_filled(r))[:80] for r in rows[:h] if _filled(r)]
-    return {"header_row": h + 1, "skipped": skipped, "named": named}
+    first = 1 if replaced_generated else 0          # the made-up row is not a sheet row
+    skipped = [" ".join(_filled(r))[:80] for r in rows[first:h] if _filled(r)]
+    result = {"header_row": h + 1 - first, "skipped": skipped, "named": named}
+    if replaced_generated:                          # only present when the made-up header was replaced
+        result["replaced_generated"] = True
+    return result
 
 
 def _cap_rows(rows: Any, n: int = PREVIEW_RESPONSE_ROWS) -> Any:
@@ -1409,6 +1463,11 @@ from app.analytics.collector import build_router as _build_analytics_router
 
 app.include_router(_build_analytics_router(_resolve_user_id))
 
+# Ray jobs panel: the caller's own Ray jobs (status, list, detail, logs, stop).
+# The browser never reaches Ray directly; see app/api/ray_jobs.py.
+from app.api.ray_jobs import build_router as _build_ray_jobs_router
+
+app.include_router(_build_ray_jobs_router(_resolve_user_id, _require_premium_plan))
 
 # ---------- PNA preflight ----------
 @app.middleware("http")
@@ -1528,7 +1587,16 @@ async def get_plan_limits(request: Request):
     if not user_id:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing or invalid auth token")
     plan = await asyncio.to_thread(resolve_plan, user_id)
-    return {"plan": plan, "limits": limits_for(plan).as_dict()}
+    return {
+        "plan": plan,
+        "limits": limits_for(plan).as_dict(),
+        # The same decision the chat and model endpoints make, for the UI to
+        # hide or label paid actions before the user tries them.
+        "features": {
+            feature: (await asyncio.to_thread(check_feature, feature, user_id=user_id)).allowed
+            for feature in FEATURE_CAPABILITY
+        },
+    }
 
 @app.get("/debug/whoami")
 async def whoami(request: Request):
@@ -1993,9 +2061,20 @@ async def upload_csv(
             # Runs before the blank-column strip below; Excel sheets arrive here
             # as CSV too, so they are covered.
             if ext in ("csv", "tsv"):
-                _hdr = await asyncio.to_thread(_fix_header_row, input_copy)
+                # A sheet the Excel reader could not find a header in arrives
+                # with made-up column_1..column_N names; look below them.
+                _no_header_note = [
+                    n for n in (item["notes"] or [])
+                    if isinstance(n, str) and n.startswith("No header row was found")
+                ]
+                _hdr = await asyncio.to_thread(
+                    _fix_header_row, input_copy, bool(item.get("sheet_name")) and bool(_no_header_note)
+                )
                 if _hdr:
-                    _hdr_notes = list(item["notes"] or [])
+                    _hdr_notes = [
+                        n for n in (item["notes"] or [])
+                        if not (_hdr.get("replaced_generated") and n in _no_header_note)
+                    ]
                     if _hdr["header_row"] > 1:
                         _hdr_notes.append(
                             f"Column names were found on row {_hdr['header_row']}; the "
@@ -3410,10 +3489,27 @@ def _merge_group_index(
     return ids
 
 
+def _group_selected_ids(group_sess: Dict[str, Any]) -> List[str]:
+    """The datasets a chat uses when a message does not name any.
+
+    Every dataset of the group except the ones the user switched off
+    (excluded_dataset_ids). Stored as exclusions so a sheet or file added later
+    ("+ Add") is in use straight away. Never empty: if every dataset was
+    excluded, all of them are used.
+    """
+    ids = _maybe_json_load(group_sess.get("dataset_ids")) or group_sess.get("dataset_ids") or []
+    ids = list(dict.fromkeys(ids)) if isinstance(ids, list) else []
+    excluded = _maybe_json_load(group_sess.get("excluded_dataset_ids")) or group_sess.get("excluded_dataset_ids") or []
+    excluded = set(excluded) if isinstance(excluded, list) else set()
+    selected = [d for d in ids if d not in excluded]
+    return selected or ids
+
+
 async def _group_datasets_out(group_sess: Dict[str, Any]) -> List[Dict[str, Any]]:
     """The chips for a chat: one entry per dataset in its group."""
     ids = group_sess.get("dataset_ids") or []
     smap = group_sess.get("dataset_session_map") or {}
+    selected = set(_group_selected_ids(group_sess))
     out: List[Dict[str, Any]] = []
     for dsid in ids:
         ds_sid = smap.get(dsid)
@@ -3424,6 +3520,10 @@ async def _group_datasets_out(group_sess: Dict[str, Any]) -> List[Dict[str, Any]
             "filename": ds_sess.get("filename"),
             "alias": ds_sess.get("alias"),
             "sheet_name": ds_sess.get("sheet_name"),
+            # Sheets of one workbook share this; separate files have None.
+            "source_workbook": ds_sess.get("source_workbook"),
+            "rows": ds_sess.get("total_rows_exact"),
+            "selected": dsid in selected,
             "available": bool(ds_sess),
         })
     return out
@@ -3478,8 +3578,54 @@ async def list_thread_datasets(request: Request, thread_id: str):
     gsid, gsess = await _resolve_thread_group_for_user(thread_id, user_id)
     if not gsid or gsess is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Chat not found for this user")
+   
     _merge_group_index(gsess, gsid, {})      # read-only normalize of older groups
-    return {"thread_id": thread_id, "datasets": await _group_datasets_out(gsess)}
+    return {"thread_id": thread_id, "datasets": await _group_datasets_out(gsess),
+            "selected_dataset_ids": _group_selected_ids(gsess)}
+
+
+class SelectDatasetsIn(BaseModel):
+    # The datasets of this chat to use from now on (at least one).
+    dataset_ids: List[str] = Field(default_factory=list)
+
+
+@app.put("/threads/{thread_id}/selected-datasets", tags=["threads"])
+async def select_thread_datasets(request: Request, thread_id: str, body: SelectDatasetsIn):
+    """Choose which of the chat's datasets are in use.
+
+    Upload of several files: the files the user ticked in the review step.
+    Chips under the chat: switching one on or off. A workbook's sheets are all
+    in use until the user switches one off. Messages that name no dataset_ids
+    use this selection; a message that names dataset_ids still wins.
+    """
+    user_id = _resolve_user_id(request)
+    if not user_id:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing or invalid auth token")
+    if not session_service.cache:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
+                            "Session storage (Redis) is not available.")
+    gsid, gsess = await _resolve_thread_group_for_user(thread_id, user_id)
+    if not gsid or gsess is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Chat not found for this user")
+
+    ids = _merge_group_index(gsess, gsid, {})
+    wanted = [d for d in dict.fromkeys(body.dataset_ids or []) if d]
+    if not wanted:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            "Select at least one dataset.")
+    unknown = [d for d in wanted if d not in ids]
+    if unknown:
+        raise HTTPException(status.HTTP_404_NOT_FOUND,
+                            f"Not datasets of this chat: {', '.join(unknown)}")
+
+    gsess["excluded_dataset_ids"] = [d for d in ids if d not in set(wanted)]
+    if not await save_session(gsid, gsess):
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            "Failed to save the chat's dataset selection.")
+    logger.info("[select] thread=%s group=%s selected=%d of %d",
+                thread_id, gsid, len(wanted), len(ids))
+    return {"thread_id": thread_id, "datasets": await _group_datasets_out(gsess),
+            "selected_dataset_ids": _group_selected_ids(gsess)}
 
 
 @app.post("/threads/{thread_id}/datasets", tags=["threads"])
@@ -4825,8 +4971,9 @@ async def send_message(
         # keep order, de-dupe
         selected_ids = list(dict.fromkeys(requested_ids))
     else:
-        # default: all datasets in this group
-        selected_ids = list(dict.fromkeys(group_sess.get("dataset_ids") or []))
+        # default: the datasets in use for this chat (all of a workbook's
+        # sheets; the files the user picked when several were uploaded)
+        selected_ids = _group_selected_ids(group_sess)
         if not selected_ids:
             fallback = dataset_id_hint or sess.get("dataset_id")
             selected_ids = [fallback] if fallback else []
@@ -5403,6 +5550,7 @@ async def send_message(
                 "sample_data_location": sample_path,
                 "full_data_location": full_path,
                 "active_data_source_location": active_path,
+                "active_data_source_location_cloud": ds_active_cloud,
                 #"data_source_location": active_path or full_path or sample_path,
                 "data_source_location": _first_usable_path(active_path, full_path, sample_path),
                 # Excel-sheet provenance (set when this dataset is one sheet of
@@ -5659,11 +5807,22 @@ async def send_message(
         _active_db_source_table,
     )
 
+    # The requester's plan gates data transfer and model training in the planner.
+    # None when it cannot be looked up: the gate then allows (fail open) instead
+    # of treating the user as Free.
+    try:
+        from app.core.plan_limits import try_resolve_plan
+        _user_plan = await asyncio.to_thread(try_resolve_plan, user_id)
+    except Exception:
+        logger.warning("[plan-gate] plan lookup failed for user=%s", user_id, exc_info=True)
+        _user_plan = None
+
     # ----------------------------------------------------
     # 11) Build state for LangGraph (now multi-dataset aware)
     # ----------------------------------------------------
     state_in: Dict[str, Any] = {
         "user_id": user_id,
+        "user_plan": _user_plan,
         "session_id": sid,
         "thread_id": thread_id,
         "messages": lc_msgs,
@@ -5796,6 +5955,8 @@ async def send_message(
     state_in.update(
         {
             "planner_definition": {},
+            # Set by the planner only on the turn a paid feature is refused.
+            "plan_upgrade_required": None,
             "planner_graph_path": None,
             "planner_graph_status": None,
             "task_info": {},
@@ -6698,6 +6859,7 @@ Ready to proceed with model training!"""
             messages=[{"role": "user", "content": body.content}]
             + ([{"role": "assistant", "content": _assistant_text}] if _assistant_text else []),
             reasoning=final.get("reasoning_trace"),
+            plan_upgrade_required=final.get("plan_upgrade_required"),
             planner_definition=final.get("planner_definition", {}) or {},
             ready_to_summarize=ready_to_summarize,
             ready_to_code=ready_to_code,
@@ -9263,6 +9425,7 @@ async def inference(
     user_id = _resolve_user_id(request)
     if not user_id:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing or invalid auth token")
+    await _require_premium_plan(user_id, "model_inference")
     if not session_service.cache:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Session storage (Redis) is not available.")
     if not storage_service.blob_store:
@@ -9308,6 +9471,9 @@ async def configure_inference_service(request: Request, run_id: str):
     user_id = _resolve_user_id(request)
     if not user_id:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing or invalid auth token")
+    # Starting a service spends hosted compute. Stopping one is never gated, so
+    # a user who lost the plan can always shut down what they started.
+    await _require_premium_plan(user_id, "model_inference")
     if not session_service.cache:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Session storage (Redis) is not available.")
     if not storage_service.blob_store:
@@ -9999,6 +10165,7 @@ _SESSION_SNAPSHOT_KEYS = tuple(dict.fromkeys((
     "uploaded_csv_columns", "uploaded_csv_preview", "schema", "ddl_schema",
     # multi-file group index so a cold reopen restores ALL members, not one
     "dataset_ids", "dataset_session_map", "group_session_id", "group_datasets",
+    "excluded_dataset_ids",
 )))
 
 
@@ -11261,7 +11428,7 @@ def _mcp_conn_select(connection_id: str) -> Optional[Dict[str, Any]]:
     res = (
         client.table(SUPABASE_MCP_CONN_TABLE)
         .select(
-            "id,user_id,api_key_ciphertext,api_key_iv,"
+            "id,user_id,customer_id,api_key_ciphertext,api_key_iv,"
             "username_ciphertext,username_iv"
         )
         .eq("id", connection_id)
@@ -11275,6 +11442,35 @@ def _mcp_conn_select(connection_id: str) -> Optional[Dict[str, Any]]:
 def _mcp_conn_update(connection_id: str, patch: Dict[str, Any]) -> None:
     client = get_supabase_client()
     client.table(SUPABASE_MCP_CONN_TABLE).update(patch).eq("id", connection_id).execute()
+
+
+async def _bind_mcp_customer_owner(customer_id: Optional[str], user_id: str, api_key: Optional[str]) -> None:
+    """Bind a registered database to the user who holds its api_key.
+
+    The onboarding API scopes every /customers route to an owner, and releases a
+    password to the planner only for a customer bound to the user it names. The
+    UI registers anonymously, so this is where the binding happens: here the
+    user is verified and the api_key is in hand. Best-effort; never fails the
+    caller's request.
+    """
+    token = os.getenv("MCP_SERVICE_TOKEN", "")
+    if not (token and customer_id and user_id and api_key):
+        return
+    base = os.getenv("ONBOARDING_API_URL", "http://localhost:8011").rstrip("/")
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.post(
+                f"{base}/customers/{customer_id}/owner",
+                headers={
+                    "X-Avaloka-Service-Token": token,
+                    "X-Avaloka-User": str(user_id),
+                    "Authorization": f"Bearer {api_key}",
+                },
+            )
+        if resp.status_code != 200:
+            logger.warning("[mcp-creds] owner bind for %s -> HTTP %s", customer_id, resp.status_code)
+    except Exception as exc:
+        logger.warning("[mcp-creds] owner bind for %s failed: %s", customer_id, exc)
 
 
 async def _mcp_conn_owned_row(connection_id: str, user_id: str) -> Dict[str, Any]:
@@ -11306,7 +11502,7 @@ async def encrypt_mcp_connection_credentials(
     if not user_id:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing or invalid auth token")
 
-    await _mcp_conn_owned_row(connection_id, user_id)
+    row = await _mcp_conn_owned_row(connection_id, user_id)
 
     patch: Dict[str, Any] = {}
     encrypted: List[str] = []
@@ -11338,6 +11534,7 @@ async def encrypt_mcp_connection_credentials(
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Failed to store credentials")
 
     logger.info("[mcp-creds] encrypted %s for connection %s", encrypted, connection_id)
+    await _bind_mcp_customer_owner(row.get("customer_id"), user_id, body.api_key)
     return {"success": True, "connection_id": connection_id, "encrypted": encrypted}
 
 
@@ -11370,6 +11567,7 @@ async def decrypt_mcp_connection_credentials(request: Request, connection_id: st
             "DB_ENCRYPTION_KEY. Re-register this connection.",
         )
 
+    await _bind_mcp_customer_owner(row.get("customer_id"), user_id, out["api_key"])
     return {"apiKey": out["api_key"], "username": out["username"]}
 
 

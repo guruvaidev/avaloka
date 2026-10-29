@@ -76,10 +76,10 @@ export function RegisterModelModal({ open, onOpenChange }: Props) {
       {step === "form" && (
         <DialogPortal>
           <DialogOverlay />
-          <DialogPrimitive.Content className="fixed left-1/2 top-1/2 z-50 max-h-[92vh] w-[760px] max-w-[94vw] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-2xl bg-white shadow-xl duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95">
+          <DialogPrimitive.Content className="fixed left-1/2 top-1/2 z-50 max-h-[92vh] w-[760px] max-w-[94vw] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-2xl bg-card text-foreground shadow-xl duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95">
             <div className="flex items-center justify-between border-b border-border px-5 py-4">
               <div className="flex items-center gap-3">
-                <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-white">
+                <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-input bg-background">
                   <ModelsIcon className="h-4 w-4 text-foreground" />
                 </div>
                 <h2 className="text-base font-semibold text-foreground">Register Model</h2>
@@ -92,14 +92,14 @@ export function RegisterModelModal({ open, onOpenChange }: Props) {
             <div className="max-h-[70vh] space-y-4 overflow-y-auto px-5 py-5">
               <div className="space-y-1.5">
                 <label className="text-sm font-medium text-foreground">Model Name</label>
-                <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Enter Model Name" className="h-10" />
+                <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Enter Model Name" className="h-10 border-input bg-background text-foreground placeholder:text-muted-foreground" />
               </div>
 
               <div className="space-y-1.5">
                 <label className="text-sm font-medium text-foreground">Task Type</label>
                 <Popover open={taskOpen} onOpenChange={setTaskOpen}>
                   <PopoverTrigger asChild>
-                    <button type="button" className={cn("flex h-10 w-full items-center justify-between rounded-md border border-border bg-white px-3 text-sm", taskType ? "text-foreground" : "text-muted-foreground")}>
+                    <button type="button" className={cn("flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 text-sm", taskType ? "text-foreground" : "text-muted-foreground")}>
                       {taskType || "Select Task Type"}
                       <ChevronDown className="h-4 w-4 text-muted-foreground" />
                     </button>
@@ -119,14 +119,14 @@ export function RegisterModelModal({ open, onOpenChange }: Props) {
                 <label className="text-sm font-medium text-foreground">
                   Description <span className="font-normal text-muted-foreground">(Optional)</span>
                 </label>
-                <Textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Enter Description" className="min-h-[96px] resize-none" />
+                <Textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Enter Description" className="min-h-[96px] resize-none border-input bg-background text-foreground placeholder:text-muted-foreground" />
               </div>
 
               <div className="space-y-1.5">
                 <label className="text-sm font-medium text-foreground">Tags</label>
                 <Popover open={tagOpen} onOpenChange={setTagOpen}>
                   <PopoverTrigger asChild>
-                    <button type="button" className="flex h-10 w-full items-center justify-between rounded-md border border-border bg-white px-3 text-sm text-muted-foreground">
+                    <button type="button" className="flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 text-sm text-muted-foreground">
                       Select Team Members
                       <ChevronDown className="h-4 w-4 text-muted-foreground" />
                     </button>
@@ -146,9 +146,9 @@ export function RegisterModelModal({ open, onOpenChange }: Props) {
                 {tags.length > 0 && (
                   <div className="flex flex-wrap items-center gap-1.5 pt-2">
                     {tags.map((t) => (
-                      <span key={t} className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700 ring-1 ring-inset ring-blue-200">
+                      <span key={t} className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary ring-1 ring-inset ring-primary/30">
                         {t}
-                        <button onClick={() => toggleTag(t)} className="text-blue-700/70 hover:text-blue-700" aria-label={`Remove ${t}`}>
+                        <button onClick={() => toggleTag(t)} className="text-primary/70 hover:text-primary" aria-label={`Remove ${t}`}>
                           <X className="h-3 w-3" />
                         </button>
                       </span>
@@ -161,7 +161,7 @@ export function RegisterModelModal({ open, onOpenChange }: Props) {
                 <label className="text-sm font-medium text-foreground">Select / Upload Model</label>
                 <Popover open={modelOpen} onOpenChange={setModelOpen}>
                   <PopoverTrigger asChild>
-                    <button type="button" className={cn("flex h-10 w-full items-center justify-between rounded-md border border-border bg-white px-3 text-sm", modelFile ? "text-foreground" : "text-muted-foreground")}>
+                    <button type="button" className={cn("flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 text-sm", modelFile ? "text-foreground" : "text-muted-foreground")}>
                       {modelFile || "Select Department"}
                       <ChevronDown className="h-4 w-4 text-muted-foreground" />
                     </button>
@@ -184,13 +184,13 @@ export function RegisterModelModal({ open, onOpenChange }: Props) {
                   const f = e.dataTransfer.files?.[0];
                   if (f) handleFile(f);
                 }}
-                className="flex flex-col items-center justify-center rounded-lg border-2 border-dashed border-[#1565EF] bg-white px-6 py-8 text-center"
+                className="flex flex-col items-center justify-center rounded-lg border-2 border-dashed border-border bg-background transition-colors hover:border-primary px-6 py-8 text-center"
               >
-                <button onClick={() => fileRef.current?.click()} className="flex h-10 w-10 items-center justify-center rounded-lg border border-border">
+                <button onClick={() => fileRef.current?.click()} className="flex h-10 w-10 items-center justify-center rounded-lg border border-border bg-card">
                   <UploadCloud className="h-5 w-5 text-foreground" />
                 </button>
                 <p className="mt-3 text-sm text-foreground">
-                  <button onClick={() => fileRef.current?.click()} className="font-semibold text-[#1565EF]">Select</button>{" "}
+                  <button onClick={() => fileRef.current?.click()} className="font-semibold text-primary">Select</button>{" "}
                   or drag and drop file
                 </p>
                 <p className="mt-1 text-xs text-muted-foreground">SVG, PNG, JPG or GIF (max. 800x400px)</p>
@@ -198,7 +198,7 @@ export function RegisterModelModal({ open, onOpenChange }: Props) {
               </div>
 
               {upload && (
-                <div className="flex items-start gap-3 rounded-lg border border-border bg-white p-3">
+                <div className="flex items-start gap-3 rounded-lg border border-input bg-background p-3">
                   <div className="flex h-9 w-9 items-center justify-center rounded-md border border-border">
                     <FileText className="h-4 w-4 text-muted-foreground" />
                   </div>
@@ -219,7 +219,7 @@ export function RegisterModelModal({ open, onOpenChange }: Props) {
                     </div>
                     <div className="mt-2 flex items-center gap-2">
                       <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
-                        <div className="h-full bg-[#1565EF] transition-all" style={{ width: `${upload.progress}%` }} />
+                        <div className="h-full bg-primary transition-all" style={{ width: `${upload.progress}%` }} />
                       </div>
                       <span className="text-xs text-muted-foreground">{upload.progress}%</span>
                     </div>
@@ -232,7 +232,7 @@ export function RegisterModelModal({ open, onOpenChange }: Props) {
               <Button
                 onClick={() => setStep("confirm")}
                 disabled={!canSubmit}
-                className="h-11 gap-2 bg-[#1565EF] px-5 font-semibold text-white hover:bg-[#1257cf] disabled:bg-[#f4f6fb] disabled:text-muted-foreground"
+                className="h-11 gap-2 bg-primary px-5 font-semibold text-primary-foreground hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100"
               >
                 <CheckCircle2 className="h-4 w-4" />
                 Register Model
@@ -245,13 +245,13 @@ export function RegisterModelModal({ open, onOpenChange }: Props) {
       {step === "confirm" && (
         <DialogPortal>
           <DialogOverlay />
-          <DialogPrimitive.Content className="fixed left-1/2 top-1/2 z-50 w-[420px] max-w-[92vw] -translate-x-1/2 -translate-y-1/2 rounded-2xl bg-white p-6 shadow-xl">
+          <DialogPrimitive.Content className="fixed left-1/2 top-1/2 z-50 w-[420px] max-w-[92vw] -translate-x-1/2 -translate-y-1/2 rounded-2xl bg-card text-foreground p-6 shadow-xl">
             <DialogPrimitive.Close className="absolute right-4 top-4 text-muted-foreground hover:text-foreground">
               <X className="h-5 w-5" />
             </DialogPrimitive.Close>
             <div className="flex flex-col items-center text-center">
-              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-blue-50">
-                <HelpCircle className="h-6 w-6 text-[#1565EF]" />
+              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary/10">
+                <HelpCircle className="h-6 w-6 text-primary" />
               </div>
               <h3 className="mt-4 text-lg font-semibold text-foreground">Are you sure you want to Register Model</h3>
               <p className="mt-1 text-sm text-muted-foreground">{name}?</p>
@@ -260,7 +260,7 @@ export function RegisterModelModal({ open, onOpenChange }: Props) {
                   <X className="h-4 w-4" />
                   Cancel
                 </Button>
-                <Button onClick={handleConfirm} className="h-11 flex-1 gap-2 bg-[#1565EF] font-semibold text-white hover:bg-[#1257cf]">
+                <Button onClick={handleConfirm} className="h-11 flex-1 gap-2 bg-primary font-semibold text-primary-foreground hover:bg-primary/90">
                   <CheckCircle2 className="h-4 w-4" />
                   Confirm
                 </Button>
@@ -273,7 +273,7 @@ export function RegisterModelModal({ open, onOpenChange }: Props) {
       {step === "success" && (
         <DialogPortal>
           <DialogOverlay />
-          <DialogPrimitive.Content className="fixed left-1/2 top-1/2 z-50 w-[420px] max-w-[92vw] -translate-x-1/2 -translate-y-1/2 rounded-2xl bg-white p-8 shadow-xl">
+          <DialogPrimitive.Content className="fixed left-1/2 top-1/2 z-50 w-[420px] max-w-[92vw] -translate-x-1/2 -translate-y-1/2 rounded-2xl bg-card text-foreground p-8 shadow-xl">
             <div className="flex flex-col items-center text-center">
               <div className="flex h-12 w-12 items-center justify-center rounded-full bg-emerald-100">
                 <CheckCircle2 className="h-6 w-6 text-emerald-600" />

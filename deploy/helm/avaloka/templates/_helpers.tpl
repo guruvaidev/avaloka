@@ -26,6 +26,10 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 {{- end -}}
 
+{{- define "avaloka.celeryServiceAccountName" -}}
+{{- printf "%s-celery" (include "avaloka.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
 {{/* Name of the Secret holding the GROQ keys (existing or chart-managed). */}}
 {{- define "avaloka.secretName" -}}
 {{- if .Values.existingSecret -}}

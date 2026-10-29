@@ -23,7 +23,7 @@ type Props = {
   /** dataset_ids already attached to this chat (chips). */
   chipDatasetIds: string[];
   /** Called after a successful attach; parent reloads chips. */
-  onAttached: () => Promise<void> | void;
+  onAttached: (info?: { uploadedDatasets?: any[]; analysisIds?: string[] }) => Promise<void> | void;
 };
 
 type Tab = "existing" | "upload";
@@ -120,8 +120,8 @@ export function AttachDatasetsModal({ open, onOpenChange, threadId, currentAnaly
     setStatuses([]);
   };
 
-  const finishSuccess = async () => {
-    await onAttached();
+  const finishSuccess = async (info?: { uploadedDatasets?: any[]; analysisIds?: string[] }) => {
+    await onAttached(info);
     onOpenChange(false);
   };
 
@@ -130,7 +130,7 @@ export function AttachDatasetsModal({ open, onOpenChange, threadId, currentAnaly
     setBusy(true);
     try {
       await backendApi.attachAnalysesToThread(threadId, picked);
-      await finishSuccess();
+      await finishSuccess({ analysisIds: picked });
     } catch (err) {
       toast.error(attachErrorMessage(err));
     } finally {
@@ -165,7 +165,7 @@ export function AttachDatasetsModal({ open, onOpenChange, threadId, currentAnaly
         return;
       }
       if (skipped.length) toast.warning(`Skipped by the server: ${skipped.map((s) => s.name).join(", ")}`);
-      await finishSuccess();
+      await finishSuccess({ uploadedDatasets: datasets });
     } catch (err) {
       setStatuses([]);
       toast.error(attachErrorMessage(err));

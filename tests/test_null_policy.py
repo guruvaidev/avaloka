@@ -432,7 +432,7 @@ def test_execution_scripts_get_the_module_itself_not_a_copy():
     assert agent._CSV_READER_SOURCE == inspect.getsource(null_policy)
     assert "def read_csv_best_effort" not in source, "a hand-kept copy of the reader is back"
     # Two script templates, each with the marker on a line of its own.
-    assert source.count("\n" + agent._CSV_READER_MARKER + "\n") == 2
+    assert source.count("\n" + agent._CSV_READER_MARKER + "\n") == 1
     with pytest.raises(ValueError):
         agent._with_csv_reader("import pandas as pd\n")
 

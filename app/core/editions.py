@@ -29,6 +29,7 @@ Two invariants follow, and both are enforced by tests:
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, fields, replace
 from enum import Enum
 from typing import Dict, Literal
@@ -220,6 +221,16 @@ def normalize_deployment(value: str | None) -> Deployment:
     """
     candidate = (value or "").strip().lower().replace("-", "_")
     return candidate if candidate in DEPLOYMENTS else "self_hosted"  # type: ignore[return-value]
+
+
+def deployment_from_env() -> Deployment:
+    """This process's deployment, from ``AVALOKA_DEPLOYMENT``.
+
+    Read on every call (not at import), so a test or an operator that sets the
+    variable later is honoured. Unset or unknown means ``self_hosted``; the
+    Avaloka-hosted service sets ``AVALOKA_DEPLOYMENT=avaloka_hosted``.
+    """
+    return normalize_deployment(os.getenv("AVALOKA_DEPLOYMENT"))
 
 
 def normalize_edition(value: str | None) -> Edition:

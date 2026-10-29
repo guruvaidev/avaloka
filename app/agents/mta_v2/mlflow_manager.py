@@ -31,6 +31,7 @@ import mlflow
 from mlflow.tracking import MlflowClient
 
 from app.agents.mta_v2.model import DynamicMLP, ModelConfig
+from app.agents.mta_v2.tracking import resolve_tracking_uri
 from app.agents.mta_v2.schema import ModelDetail, ModelSummary
 
 logger = logging.getLogger(__name__)
@@ -49,7 +50,7 @@ class MLflowManager:
     ----------
     tracking_uri : str, optional
         MLflow tracking URI. Falls back to MLFLOW_TRACKING_URI →
-        MLFLOW_BACKEND_STORE_URI → "mlruns".
+        MLFLOW_BACKEND_STORE_URI → a local ``mlflow.db`` (see tracking.py).
     experiment_name : str, optional
         Experiment to query. Falls back to MLFLOW_EXPERIMENT_NAME →
         "avaloka-training".
@@ -66,13 +67,7 @@ class MLflowManager:
         tracking_uri:    Optional[str] = None,
         experiment_name: Optional[str] = None,
     ) -> None:
-        uri = (
-            tracking_uri
-            or os.getenv("MLFLOW_TRACKING_URI", "").strip()
-            or os.getenv("MLFLOW_BACKEND_STORE_URI", "").strip()
-            or "mlruns"
-        )
-        mlflow.set_tracking_uri(uri)
+        mlflow.set_tracking_uri(resolve_tracking_uri(tracking_uri))
         self._client = MlflowClient()
         self._experiment_name = (
             experiment_name

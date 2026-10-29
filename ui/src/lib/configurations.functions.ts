@@ -46,20 +46,81 @@ async function sendInviteEmailViaSmtp(opts: {
 
 
 
+  const logo = "https://storage.googleapis.com/avaloka-public-assets/Logo.svg";
+  const safeActionLink = actionLink.replace(/&/g, "&amp;").replace(/\"/g, "&quot;");
   const html = `
-    <div style="font-family:Inter,Arial,sans-serif;color:#0f172a;line-height:1.6">
-      <h2 style="margin:0 0 8px 0">You've been invited to Avaloka</h2>
-      <p style="margin:0 0 16px 0;color:#475569;font-size:14px">
-        You have been invited to collaborate. Click the button below to accept the
-        invitation and set up your account.
-      </p>
-      <p style="margin:24px 0">
-        <a href="${actionLink}" style="background:#1565ef;color:#ffffff;text-decoration:none;padding:10px 18px;border-radius:8px;font-weight:600;font-size:14px">Accept invitation</a>
-      </p>
-      <p style="margin:16px 0;color:#64748b;font-size:12px;word-break:break-all">
-        Or paste this link into your browser:<br/>${actionLink}
-      </p>
-    </div>
+<!doctype html>
+<html>
+<body style="margin:0;padding:0;background:#ffffff">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#ffffff">
+  <tr>
+    <td align="center" style="padding:24px 16px">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+        style="max-width:560px;font-family:Arial,sans-serif;color:#374151">
+        <tr>
+          <td>
+            <table role="presentation" cellpadding="0" cellspacing="0">
+              <tr>
+                <td style="vertical-align:middle">
+                  <img src="${logo}" width="28" height="28" alt="Avaloka AI"
+                    style="display:block;border:0;outline:none;text-decoration:none" />
+                </td>
+                <td style="vertical-align:middle;padding-left:10px;font-size:18px;font-weight:700;color:#111">
+                  Avaloka AI
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding-top:24px;font-size:22px;font-weight:700;color:#111">
+            You've been invited to Avaloka
+          </td>
+        </tr>
+        <tr>
+          <td style="padding-top:20px;font-size:15px;line-height:24px;color:#374151">
+            You have been invited to collaborate in Avaloka. Accept the invitation to join and access the shared workspace.
+          </td>
+        </tr>
+        <tr>
+          <td style="padding-top:24px">
+            <a href="${safeActionLink}"
+              style="display:inline-block;background:#1565ef;color:#ffffff;text-decoration:none;padding:12px 20px;border-radius:6px;font-weight:600;font-size:14px">
+              Accept Invitation
+            </a>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding-top:32px;font-size:12px;color:#6b7280">
+            This email was sent because someone invited you to collaborate on Avaloka.
+          </td>
+        </tr>
+        <tr>
+          <td style="padding-top:12px;font-size:12px;line-height:20px;color:#6b7280">
+            &copy; ${new Date().getFullYear()} Avaloka AI, 18273 Sun Maiden Ct, San Diego, CA 92127, USA
+          </td>
+        </tr>
+        <tr>
+          <td style="padding-top:24px">
+            <table role="presentation" cellpadding="0" cellspacing="0">
+              <tr>
+                <td style="vertical-align:middle">
+                  <img src="${logo}" width="20" height="20" alt="Avaloka AI"
+                    style="display:block;border:0;outline:none;text-decoration:none" />
+                </td>
+                <td style="vertical-align:middle;padding-left:8px;font-size:15px;font-weight:700;color:#111">
+                  Avaloka AI
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+</table>
+</body>
+</html>
   `;
 
   const res = await fetch(`${supabaseUrl}/functions/v1/send-smtp-email`, {

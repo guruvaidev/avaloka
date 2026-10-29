@@ -141,7 +141,7 @@ export function ModelDetailView({ runId, onBack }: Props) {
 
   return (
     <div className="flex flex-1 flex-col gap-4 p-4 sm:p-6">
-      <div className="flex items-center gap-3 rounded-2xl border border-border bg-white px-5 py-4">
+      <div className="flex items-center gap-3 rounded-2xl border border-border bg-card px-5 py-4">
         <Button variant="ghost" size="icon" onClick={onBack} aria-label="Back" className="h-8 w-8">
           <ArrowLeft className="h-4 w-4" />
         </Button>
@@ -151,11 +151,11 @@ export function ModelDetailView({ runId, onBack }: Props) {
       </div>
 
       {q.isLoading ? (
-        <div className="flex flex-1 items-center justify-center rounded-2xl border border-border bg-white p-10">
+        <div className="flex flex-1 items-center justify-center rounded-2xl border border-border bg-card p-10">
           <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
         </div>
       ) : q.isError ? (
-        <div className="flex flex-1 flex-col items-center justify-center gap-3 rounded-2xl border border-border bg-white p-10 text-center">
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 rounded-2xl border border-border bg-card p-10 text-center">
           <AlertCircle className="h-6 w-6 text-red-500" />
           <div className="text-sm font-medium text-foreground">Failed to load model</div>
           <div className="text-xs text-muted-foreground">
@@ -167,7 +167,7 @@ export function ModelDetailView({ runId, onBack }: Props) {
         </div>
       ) : q.data ? (
         <div className="flex flex-1 flex-col gap-4">
-          <div className="rounded-2xl border border-border bg-white p-6">
+          <div className="rounded-2xl border border-border bg-card p-6">
             <div className="grid grid-cols-2 gap-x-8 gap-y-5">
               {modelType && <Field label="Task Type" value={titleCase(modelType)} />}
               {version && <Field label="Latest version" value={`Version ${version}`} />}
@@ -179,7 +179,7 @@ export function ModelDetailView({ runId, onBack }: Props) {
                 <h2 className="mt-7 text-base font-semibold text-foreground">Metrics</h2>
                 <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
                   {metricTiles.map((m) => (
-                    <div key={m.label} className="rounded-xl border border-border bg-[#f9fafb] p-4">
+                    <div key={m.label} className="rounded-xl border border-border bg-muted p-4">
                       <div className="text-xs text-muted-foreground">{m.label}</div>
                       <div className="mt-1 text-xl font-semibold text-foreground">{m.value}</div>
                     </div>
@@ -193,7 +193,7 @@ export function ModelDetailView({ runId, onBack }: Props) {
                 <h2 className="mt-7 text-base font-semibold text-foreground">Run Info</h2>
                 <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
                   {runInfoTiles.map((m) => (
-                    <div key={m.label} className="rounded-xl border border-border bg-[#f9fafb] p-4">
+                    <div key={m.label} className="rounded-xl border border-border bg-muted p-4">
                       <div className="text-xs text-muted-foreground">{m.label}</div>
                       <div className="mt-1 text-xl font-semibold text-foreground">{m.value}</div>
                     </div>
@@ -207,25 +207,25 @@ export function ModelDetailView({ runId, onBack }: Props) {
             const hasAccuracy = history.some((p) => p.accuracy !== undefined);
             const hasF1 = history.some((p) => p.f1_score !== undefined);
             return (
-            <div className="rounded-2xl border border-border bg-white p-6">
+            <div className="rounded-2xl border border-border bg-card p-6">
               <h2 className="text-base font-semibold text-foreground">Training metrics</h2>
               <div className="mt-4 h-[340px] w-full">
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart data={history} margin={{ top: 10, right: 16, left: 0, bottom: 24 }}>
-                    <CartesianGrid stroke="#eef2f7" />
+                    <CartesianGrid stroke="var(--chart-grid)" strokeOpacity={0.6} />
                     <XAxis
                       dataKey="epoch"
-                      tick={{ fontSize: 11, fill: "#6b7280" }}
-                      axisLine={{ stroke: "#e5e7eb" }}
-                      label={{ value: "Epoch", position: "insideBottom", offset: -10, fontSize: 11, fill: "#6b7280" }}
+                      tick={{ fontSize: 11, fill: "var(--chart-tick)" }}
+                      axisLine={{ stroke: "var(--chart-grid)" }}
+                      label={{ value: "Epoch", position: "insideBottom", offset: -10, fontSize: 11, fill: "var(--chart-tick)" }}
                     />
                     <YAxis
-                      tick={{ fontSize: 11, fill: "#6b7280" }}
-                      axisLine={{ stroke: "#e5e7eb" }}
-                      label={{ value: "Value", angle: -90, position: "insideLeft", fontSize: 11, fill: "#6b7280" }}
+                      tick={{ fontSize: 11, fill: "var(--chart-tick)" }}
+                      axisLine={{ stroke: "var(--chart-grid)" }}
+                      label={{ value: "Value", angle: -90, position: "insideLeft", fontSize: 11, fill: "var(--chart-tick)" }}
                     />
                     <Tooltip />
-                    <Legend verticalAlign="bottom" iconType="square" />
+                    <Legend verticalAlign="bottom" iconType="square" formatter={(value) => <span style={{ color: "var(--foreground)" }}>{value}</span>} />
                     <Line type="monotone" dataKey="train_loss" name="Training loss" stroke="#3b82f6" strokeWidth={2} dot={{ r: 2 }} />
                     <Line type="monotone" dataKey="val_loss" name="Validation loss" stroke="#fca5a5" strokeWidth={2} dot={{ r: 2 }} />
                     {hasAccuracy && <Line type="monotone" dataKey="accuracy" name="Accuracy" stroke="#10b981" strokeWidth={2} dot={{ r: 2 }} />}

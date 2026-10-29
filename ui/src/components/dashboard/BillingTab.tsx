@@ -33,6 +33,9 @@ import {
   VisaIcon,
 } from "@/components/foundations/payment-icons";
 
+import { submitSalesInquiry } from
+  "@/components/dashboard/sales-inquiry.server";
+
 type Cycle = "monthly" | "annual";
 type PlanId = "basic" | "pro" | "enterprise";
 type Step = "billing" | "method" | "success";
@@ -118,6 +121,7 @@ function formatDate(iso: string | null | undefined): string {
   }
 }
 
+
 export function BillingTab() {
   const queryClient = useQueryClient();
   const fetchSummary = useServerFn(getBillingSummary);
@@ -167,6 +171,48 @@ export function BillingTab() {
   const savedBilling = extractSavedBilling((summary as any)?.customerAccount);
 
   const [paypalRecoveryAttempted, setPaypalRecoveryAttempted] = useState(false);
+  
+const [salesModalOpen, setSalesModalOpen] = useState(false);
+const [salesSubmitting, setSalesSubmitting] = useState(false);
+const [salesError, setSalesError] = useState("");
+const [salesSuccess, setSalesSuccess] = useState(false);
+
+const [salesForm, setSalesForm] = useState({
+  name: "",
+  companyName: "",
+  email: "",
+  phone: "",
+  message: "",
+});
+
+async function handleSalesSubmit(
+  event: React.FormEvent<HTMLFormElement>,
+) {
+  event.preventDefault();
+  setSalesSubmitting(true);
+  setSalesError("");
+  setSalesSuccess(false);
+
+  try {
+    await submitSalesInquiry({ data: salesForm });
+    setSalesSuccess(true);
+    setSalesForm({
+      name: "",
+      companyName: "",
+      email: "",
+      phone: "",
+      message: "",
+    });
+  } catch (error) {
+    setSalesError(
+      error instanceof Error
+        ? error.message
+        : "Something went wrong. Please try again.",
+    );
+  } finally {
+    setSalesSubmitting(false);
+  }
+}
 
   // Handle return from Stripe/PayPal checkout — finalize (PayPal only) then
   // poll until the webhook activates the subscription.
@@ -391,6 +437,11 @@ export function BillingTab() {
           plans={plans}
           onSelect={startCheckout}
           onBuyNow={startBuyNow}
+          onContactSales={() => {
+        setSalesError("");
+        setSalesSuccess(false);
+        setSalesModalOpen(true);
+        }}
           enterpriseLoading={upgradeMutation.isPending}
           currentPlan={currentPlan}
           currentInterval={currentInterval}
@@ -398,6 +449,177 @@ export function BillingTab() {
         </>
       )}
 
+    {salesModalOpen && (
+      <div
+        className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+        onClick={() => {
+          if (!salesSubmitting) setSalesModalOpen(false);
+        }}
+      >
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="sales-modal-title"
+          className="w-full max-w-2xl rounded-2xl border border-border bg-background p-6 text-foreground shadow-2xl"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <div className="mb-6 flex items-start justify-between">
+            <div>
+              <h2 id="sales-modal-title" className="text-xl font-semibold">
+                Contact Enterprise Sales
+              </h2>
+              <p className="mt-2 text-sm text-slate-400">
+                Tell us about your company and our team can follow up.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              aria-label="Close sales form"
+              disabled={salesSubmitting}
+              onClick={() => setSalesModalOpen(false)}
+              className="text-2xl text-slate-400 hover:text-white"
+            >
+              ×
+            </button>
+          </div>
+
+      {salesSuccess ? (
+        <div>
+          <p className="text-green-600 dark:text-green-400">
+            Your inquiry has been sent successfully!
+          </p>
+          <button
+            type="button"
+            onClick={() => setSalesModalOpen(false)}
+            className="mt-5 rounded-lg bg-blue-600 px-5 py-2.5 font-medium hover:bg-blue-500"
+          >
+            Done
+          </button>
+        </div>
+      ) : (
+        <form onSubmit={handleSalesSubmit} className="space-y-4">
+          <div>
+            <label htmlFor="sales-name" className="mb-1 block text-sm">
+              Full name
+            </label>
+            <input
+              id="sales-name"
+              required
+              maxLength={100}
+              autoComplete="name"
+              value={salesForm.name}
+              onChange={(e) =>
+                setSalesForm({ ...salesForm, name: e.target.value })
+              }
+              className="w-full rounded-lg border border-input bg-background px-3 py-2.5 text-foreground placeholder:text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"              placeholder="Your name"
+            />
+          </div>
+
+          <div>
+            <label htmlFor="sales-company" className="mb-1 block text-sm">
+              Company name
+            </label>
+            <input
+              id="sales-company"
+              required
+              maxLength={150}
+              autoComplete="organization"
+              value={salesForm.companyName}
+              onChange={(e) =>
+                setSalesForm({
+                  ...salesForm,
+                  companyName: e.target.value,
+                })
+              }
+              
+              className="w-full rounded-lg border border-input bg-background px-3 py-2.5 text-foreground placeholder:text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+
+              placeholder="Your company"
+            />
+          </div>
+
+          <div>
+            <label htmlFor="sales-email" className="mb-1 block text-sm">
+              Work email
+            </label>
+            <input
+              id="sales-email"
+              type="email"
+              required
+              maxLength={254}
+              autoComplete="email"
+              value={salesForm.email}
+              onChange={(e) =>
+                setSalesForm({ ...salesForm, email: e.target.value })
+              }
+              
+              className="w-full rounded-lg border border-input bg-background px-3 py-2.5 text-foreground placeholder:text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+
+              placeholder="you@company.com"
+            />
+          </div>
+
+          <div>
+            <label htmlFor="sales-phone" className="mb-1 block text-sm">
+              Phone number
+            </label>
+            <input
+              id="sales-phone"
+              type="tel"
+              required
+              maxLength={30}
+              autoComplete="tel"
+              value={salesForm.phone}
+              onChange={(e) =>
+                setSalesForm({ ...salesForm, phone: e.target.value })
+              }
+              
+              className="w-full rounded-lg border border-input bg-background px-3 py-2.5 text-foreground placeholder:text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+
+              placeholder="+91 98765 43210"
+            />
+          </div>
+          <div>
+  <label
+    htmlFor="sales-message"
+    className="mb-1 block text-sm"
+  >
+    How can we help?
+  </label>
+
+  <textarea
+    id="sales-message"
+    rows={4}
+    maxLength={2000}
+    value={salesForm.message}
+    onChange={(e) =>
+      setSalesForm({
+        ...salesForm,
+        message: e.target.value,
+      })
+    }
+      className="w-full resize-y rounded-lg border border-input bg-background px-3 py-2.5 text-foreground placeholder:text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"    placeholder="Tell us about your team size, business needs, expected usage, or custom AI requirements..."
+        />
+      </div>
+          {salesError && (
+            <p role="alert" className="text-sm text-red-500 dark:text-red-400">
+              {salesError}
+            </p>
+          )}
+
+          <button
+            type="submit"
+            disabled={salesSubmitting}
+            className="w-full rounded-lg bg-blue-600 px-5 py-3 font-medium hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {salesSubmitting ? "Sending..." : "Submit Inquiry"}
+          </button>
+        </form>
+      )}
+    </div>
+  </div>
+)}
 
       {modal === "billing" && (
         <PaymentModal
@@ -478,9 +700,6 @@ export function BillingTab() {
       )}
       {buyStep === "method" && (
         <BuyNowMethodModal
-          plan={buyPlan}
-          price={buyPrice.price}
-          unit={buyPrice.unit}
           submitting={checkoutSubmitting}
           onBack={() => setBuyStep("billing")}
           onClose={() => setBuyStep(null)}
@@ -532,6 +751,7 @@ function Pricing({
   setCycle,
   plans,
   onSelect,
+  onContactSales,
   onBuyNow,
   enterpriseLoading,
   currentPlan,
@@ -541,6 +761,7 @@ function Pricing({
   setCycle: (c: Cycle) => void;
   plans: PlanRow[];
   onSelect: (p: PlanId, priceId?: string | null) => void;
+  onContactSales: () => void;
   onBuyNow: (
     p: PlanId,
     price: string,
@@ -588,6 +809,7 @@ function Pricing({
 
   return (
     <div className="flex flex-col pb-10 pt-6">
+  
       <div className="flex flex-col items-center">
         <p className="text-sm font-semibold text-[#1565EF]">Pricing</p>
         <h2 className="mt-2 text-center text-3xl font-bold tracking-tight sm:text-4xl">Simple, transparent pricing</h2>
@@ -614,9 +836,7 @@ function Pricing({
             )}
           >
             Annual billing
-            <span className="inline-flex items-center gap-1 rounded-full bg-[#dbe7ff] px-2 py-0.5 text-[11px] font-semibold text-[#1565EF] dark:bg-[#1565EF]/20 dark:text-[#8ab4ff]">
-              💎 Save ₹4000
-            </span>
+           
           </button>
         </div>
       </div>
@@ -645,7 +865,7 @@ function Pricing({
             proPlan?.description ??
             "For growing teams who need advanced ecommerce and reporting capabilities"
           }
-          badge={cycle === "annual" ? "Save 20%" : "Popular"}
+          badge={cycle === "annual" ? "Save 17%" : "Popular"}
           featuresHeading="Everything in Free"
           features={PRO_FEATURES}
           onClick={() =>
@@ -667,18 +887,11 @@ function Pricing({
           price={entPlan ? formatPlanPrice(Number(entPlan.price)) : "—"}
           unit={unitLabel}
           users={entPlan?.description ?? "Built for organizations with advanced AI and security needs"}
+          badge={cycle === "annual" ? "Save 17%" : undefined}
           featuresHeading="Everything in Professional"
           features={ENTERPRISE_FEATURES}
-          onClick={() =>
-            onBuyNow(
-              "enterprise",
-              entPlan ? formatPlanPrice(Number(entPlan.price)) : "—",
-              unitLabel,
-              entPlan?.stripe_price_id ?? null,
-              entPlan?.paypal_plan_id ?? null,
-            )
-          }
-          primaryLabel={isCurrent("enterprise") ? "Current plan" : "Get Started"}
+          onClick={onContactSales}
+          primaryLabel={isCurrent("enterprise") ? "Current plan" : "Contact sales"}
           selected={isCurrent("enterprise")}
           disabled={isCurrent("enterprise")}
         />
@@ -710,7 +923,7 @@ function Pricing({
             ))}
           </div>
         </div>
-        <ComparisonTable tab={compareTab} onSelect={onSelect} onBuyNow={onBuyNow} cycle={cycle} plans={plans} />
+        <ComparisonTable tab={compareTab} onSelect={onSelect} onBuyNow={onBuyNow} cycle={cycle} plans={plans} currentPlan={currentPlan}/>
       </div>
     </div>
   );
@@ -740,9 +953,7 @@ function Rows({ rows }: { rows: [string, React.ReactNode, React.ReactNode, React
         >
           <div className="flex items-center gap-1.5 text-foreground">
             {label}
-            <span className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-muted-foreground/50 text-[10px] text-muted-foreground">
-              ?
-            </span>
+            
           </div>
           <div className="flex justify-center text-muted-foreground">{a}</div>
           <div className="flex justify-center text-muted-foreground">{b}</div>
@@ -759,6 +970,7 @@ function ComparisonTable({
   onBuyNow,
   cycle,
   plans,
+  currentPlan,
 }: {
   tab: "all" | "overview" | "analytics" | "access";
   onSelect: (p: PlanId) => void;
@@ -771,49 +983,72 @@ function ComparisonTable({
   ) => void;
   cycle: Cycle;
   plans: PlanRow[];
+  currentPlan?: "free" | "professional" | "enterprise";
 }) {
-  const overviewRows: [string, React.ReactNode, React.ReactNode, React.ReactNode][] = [
-    ["Basic features", <Tick />, <Tick />, <Tick />],
-    ["Users", "10", "20", "Unlimited"],
-    ["Individual data", "20 GB", "40 GB", "Unlimited"],
-    ["Support", <Tick />, <Tick />, <Tick />],
-    ["Automated workflows", <Dash />, <Tick />, <Tick />],
-    ["200+ integrations", <Dash />, <Tick />, <Tick />],
-  ];
-  const analyticsRows: [string, React.ReactNode, React.ReactNode, React.ReactNode][] = [
-    ["Analytics", "Basic", "Advanced", "Advanced"],
-    ["Export reports", <Tick />, <Tick />, <Tick />],
-    ["Scheduled reports", <Tick />, <Tick />, <Tick />],
-    ["API Access", <Dash />, <Tick />, <Tick />],
-    ["Advanced reports", <Dash />, <Tick />, <Tick />],
-    ["Saved reports", <Dash />, <Tick />, <Tick />],
-    ["Customer properties", <Dash />, <Dash />, <Tick />],
-    ["Custom fields", <Dash />, <Dash />, <Tick />],
-  ];
-  const accessRows: [string, React.ReactNode, React.ReactNode, React.ReactNode][] = [
-    ["SSO/SAML authentication", <Tick />, <Tick />, <Tick />],
-    ["Advanced permissions", <Dash />, <Tick />, <Tick />],
-    ["Audit log", <Dash />, <Dash />, <Tick />],
-    ["Data history", <Dash />, <Dash />, <Tick />],
-  ];
+  const overviewRows: [
+  string,
+  React.ReactNode,
+  React.ReactNode,
+  React.ReactNode
+][] = [
+  ["Individual analysis", <Tick />, <Tick />, <Tick />],
+  ["Basic file management", <Tick />, <Tick />, <Tick />],
+  ["Advanced dataset management", <Dash />, <Tick />, <Tick />],
+  ["Scheduled batch-job analysis", <Dash />, <Tick />, <Tick />],
+  ["Ray-cluster execution for large datasets", <Dash />, <Tick />, <Tick />],
+    ["Teams and groups", <Dash />, <Dash />, <Tick />],
+
+];
+
+const analyticsRows: [
+  string,
+  React.ReactNode,
+  React.ReactNode,
+  React.ReactNode
+][] = [
+  ["Basic analytics", <Tick />, <Tick />, <Tick />],
+  ["Auto Insights", <Tick />, <Tick />, <Tick />],
+  ["Advanced analytics", <Dash />, <Tick />, <Tick />],
+  ["SQL warehouse access", <Dash />, <Tick />, <Tick />],
+  ["Reports", <Dash />, <Dash />, <Tick />],
+  
+];
+
+const accessRows: [
+  string,
+  React.ReactNode,
+  React.ReactNode,
+  React.ReactNode
+][] = [
+  ["Individual usage", <Tick />, <Tick />, <Tick />],
+  ["Large-dataset workloads", <Dash />, <Tick />, <Tick />],
+  ["Team collaboration", <Dash />, <Dash />, <Tick />],
+  ["Group workloads", <Dash />, <Dash />, <Tick />],
+  
+];
   const showO = tab === "all" || tab === "overview";
   const showA = tab === "all" || tab === "analytics";
   const showU = tab === "all" || tab === "access";
   return (
     <div className="mt-6">
+      
       <div className="grid grid-cols-[1.4fr_1fr_1fr_1fr] items-center border-b border-border px-3 pb-4 text-base font-semibold">
         <div>Overview</div>
+
+        <div className="text-center">Free</div>
+
         <div className="text-center">
           <span className="inline-flex items-center gap-2">
-            Free
+            Professional
             <span className="rounded-full border border-[#1565EF]/30 bg-[#eaf1ff] px-2 py-0.5 text-[11px] font-semibold text-[#1565EF] dark:bg-[#1565EF]/20 dark:text-[#8ab4ff]">
               Popular
             </span>
           </span>
         </div>
-        <div className="text-center">Professional</div>
+
         <div className="text-center">Enterprise</div>
       </div>
+
       {showO && <Rows rows={overviewRows} />}
       {showA && (
         <>
@@ -831,9 +1066,10 @@ function ComparisonTable({
         <div />
         <Button
           onClick={() => onSelect("basic")}
+          disabled={currentPlan === "free"}
           className="h-11 bg-[#1565EF] font-semibold text-white hover:bg-[#1257d4]"
         >
-          Get started
+          {currentPlan === "free" ? "Current plan" : "Get started"}
         </Button>
         <Button
           onClick={() => {
@@ -2504,9 +2740,9 @@ function Modal({
   maxWidth?: string;
 }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={onClose}>
       <div
-        className={cn("w-full overflow-hidden rounded-2xl bg-card text-foreground shadow-xl", maxWidth)}
+        className={cn("w-full overflow-hidden rounded-2xl border border-border bg-card text-foreground shadow-xl dark:border-white/20", maxWidth)}
         onClick={(e) => e.stopPropagation()}
       >
         {children}
@@ -2575,7 +2811,7 @@ function BuyNowBillingModal({
 
 
   return (
-    <Modal onClose={onClose} maxWidth="max-w-[460px]">
+    <Modal onClose={onClose} maxWidth="max-w-2xl">
       <form onSubmit={submit}>
         {/* Header */}
         <div className="flex items-center justify-between px-5 pt-5">
@@ -2604,13 +2840,8 @@ function BuyNowBillingModal({
           </div>
         </div>
 
-        {/* Plan */}
-        <div className="flex items-center justify-between bg-[#f6f7fb] px-5 py-2 text-sm font-semibold">
-          <span>Plan</span>
-          <button type="button" onClick={onClose} className="text-sm font-semibold text-[#1565EF] underline">
-            Change
-          </button>
-        </div>
+        
+        
         <div className="px-5 pt-3">
           <div className="rounded-lg border border-border p-4">
             <div className="flex items-start justify-between">
@@ -2693,27 +2924,20 @@ function BuyNowBillingModal({
 
 /* -------------------- Buy Now — Payment Method -------------------- */
 function BuyNowMethodModal({
-  plan,
-  price,
-  unit,
   submitting,
   onBack,
   onClose,
   onConfirm,
 }: {
-  plan: PlanId;
-  price: string;
-  unit: string;
   submitting?: boolean;
   onBack: () => void;
   onClose: () => void;
   onConfirm: (method: PayMethod) => void;
 }) {
   const [method, setMethod] = useState<PayMethod>("stripe");
-  const title = planTitle(plan);
 
   return (
-    <Modal onClose={onClose} maxWidth="max-w-[460px]">
+    <Modal onClose={onClose} maxWidth="max-w-2xl">
       <div className="flex items-center justify-between px-5 pt-5">
         <h3 className="text-lg font-bold">Payment</h3>
         <button
@@ -2739,23 +2963,6 @@ function BuyNowMethodModal({
             <span className="h-2.5 w-2.5 rounded-full bg-[#1565EF]" />
           </span>
           <span className="text-xs font-semibold text-[#1565EF]">Payment Method</span>
-        </div>
-      </div>
-
-      {/* Plan summary */}
-      <div className="bg-[#f6f7fb] px-5 py-2 text-sm font-semibold">Plan</div>
-      <div className="px-5 pt-3">
-        <div className="rounded-lg border border-border p-4">
-          <div className="flex items-start justify-between">
-            <div>
-              <span className="text-base font-semibold">{title}</span>
-              <p className="mt-1 text-sm text-muted-foreground">Advanced features and reporting.</p>
-            </div>
-            <div className="text-right">
-              <p className="text-xl font-bold">{price}</p>
-              {unit && <p className="text-xs text-muted-foreground">{unit}</p>}
-            </div>
-          </div>
         </div>
       </div>
 

@@ -80,9 +80,19 @@ export function useThemeApplier() {
     window.addEventListener("app:theme-change", onChange);
     mql.addEventListener?.("change", onMedia);
 
-    const { data: sub } = supabase.auth.onAuthStateChange(async () => {
-      const t = await loadThemeFromProfile();
-      applyTheme(t);
+
+        // Don't await Supabase inside this callback: it runs while Supabase holds its auth
+    // lock, and awaiting user_settings there deadlocks during a token refresh.
+    const { data: sub } = supabase.auth.onAuthStateChange(() => {
+      setTimeout(() => {
+        loadThemeFromProfile()
+          .then((t) => {
+            if (!cancelled) applyTheme(t);
+          })
+          .catch(() => {
+            /* keep the current theme */
+          });
+      }, 0);
     });
 
     return () => {

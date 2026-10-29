@@ -11,7 +11,7 @@ from groq import APIError
 from langchain_core.messages import AIMessage, HumanMessage, BaseMessage
 from langchain_core.prompts import ChatPromptTemplate
 import requests
-
+from app.infra.ray_job_runner import ray_job_context
 
 # Load environment variables
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -41,6 +41,86 @@ from app.core.inference import resolve_provider, tool_choice_for_provider
 
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Plan gates: data transfer (DTA) and model training are COST gates in
+# app/core/editions.py. app/core/plan_gate.py decides them from that matrix:
+# never on a self-hosted deployment, on the hosted service only for plans that
+# include the capability, and allowed (fail open) when the plan is unknown.
+# Everything else (analysis, charts, code) is unchanged for every plan.
+# ---------------------------------------------------------------------------
+
+
+def _gate(feature: str, state):
+    from app.core.plan_gate import check_feature
+    st = state if isinstance(state, dict) else {}
+    return check_feature(
+        feature,
+        user_id=(st.get("user_id") or "").strip() or None,
+        plan=st.get("user_plan"),
+    )
+
+
+def _premium_allowed(state, feature: str = "data_transfer") -> bool:
+    """True when this turn may start ``feature`` (data_transfer or model_training)."""
+    return _gate(feature, state).allowed
+
+
+def _upgrade_message(feature: str, state) -> str:
+    from app.core.plan_gate import upgrade_message
+    return upgrade_message(_gate(feature, state))
+
+
+def _user_plan(state) -> Optional[str]:
+    """The requesting user's plan for logs, or None when unknown."""
+    return _gate("data_transfer", state).plan
+
+def _wants_training(out_state) -> bool:
+    if not isinstance(out_state, dict):
+        return False
+    sched = out_state.get("task_schedule")
+    return bool(
+        out_state.get("enable_training")
+        or out_state.get("skip_to_training")
+        or (isinstance(sched, dict) and str(sched.get("task_type") or "").lower() == "training")
+    )
+
+
+def _apply_training_plan_gate(state_in, out_state):
+    """Block any route into model training for plans without it.
+
+    Runs on the planner's OUTPUT, so every way the planner can choose training
+    (route classifier, train_model tool, training-plan reply, training schedule,
+    a training flag left over in the session) is covered in one place.
+    """
+    if not _wants_training(out_state) or _premium_allowed(state_in, "model_training"):
+        return out_state
+    out = dict(out_state)
+    sched = out.get("task_schedule")
+    training_schedule = isinstance(sched, dict) and str(sched.get("task_type") or "").lower() == "training"
+    if not training_schedule and (out.get("ready_to_code") or out.get("ready_to_summarize")):
+        # An analysis turn carrying a training flag left over from an earlier
+        # turn: drop the flag silently and let the analysis run.
+        out.update({"enable_training": False, "skip_to_training": False,
+                    "training_plan_reply_action": "none"})
+        return out
+    logger.info("[plan-gate] model training blocked for user=%s plan=%s",
+                (state_in or {}).get("user_id"), _user_plan(state_in))
+    if training_schedule:
+        out["task_schedule"] = None
+    out.update({
+        "enable_training": False,
+        "skip_to_training": False,
+        "ready_to_train": False,
+        "training_plan_reply_action": "none",
+        "ready_to_code": False,
+        "ready_to_summarize": False,
+        "plan_upgrade_required": "model_training",
+    })
+    msgs = list(out.get("messages") or state_in.get("messages") or [])
+    msgs.append(AIMessage(content=_upgrade_message("model_training", state_in)))
+    out["messages"] = msgs
+    return out
 
 FORCE_PLAN_ENV = "AVALOKA_FORCE_PLAN_ON_RESPONSE"
 
@@ -2731,6 +2811,21 @@ def _build_stub_plan(state: ETLState, user_input: str) -> str:
 ONBOARDING_API_URL = os.getenv("ONBOARDING_API_URL", "http://localhost:8011").rstrip("/")
 
 
+def _onboarding_headers(user_id: Optional[str]) -> Dict[str, str]:
+    """Server-to-server identity for the onboarding API.
+
+    Every /customers route needs one, and /credentials releases a password only
+    to this caller: the shared MCP_SERVICE_TOKEN plus the end user it acts for,
+    whose customers are the only ones it can reach. Without both, send nothing
+    and let the onboarding API refuse.
+    """
+    token = os.getenv("MCP_SERVICE_TOKEN", "")
+    user_id = (user_id or "").strip()
+    if not token or not user_id:
+        return {}
+    return {"X-Avaloka-Service-Token": token, "X-Avaloka-User": user_id}
+
+
 # Users phrase the destination table many ways, so accept a broad set rather than
 # one rigid pattern. A stopword guard prevents capturing words like "this"/"the".
 _DEST_TABLE_PATTERNS = (
@@ -3201,7 +3296,11 @@ def _handle_list_databases(state: ETLState) -> str:
     # no need to poll :8010. A non-200 or connection error is skipped, never fatal.
     try:
         with requests.Session() as session:
-            resp = session.get(f"{ONBOARDING_API_URL}/customers", timeout=5)
+            resp = session.get(
+                f"{ONBOARDING_API_URL}/customers",
+                headers=_onboarding_headers(state.get("user_id")),
+                timeout=5,
+            )
         if resp.status_code == 200:
             payload = resp.json()
             customers = payload if isinstance(payload, list) else payload.get("customers", [])
@@ -3658,7 +3757,7 @@ def _auto_fetch_cloud_from_ui(alias: str) -> Optional[dict]:
     return _cloud_conn_to_entry(conn)
 
 
-def _auto_fetch_from_ui(alias: str) -> Optional[dict]:
+def _auto_fetch_from_ui(alias: str, user_id: Optional[str] = None) -> Optional[dict]:
     """Auto-fetch database credentials from the customer_dbs API by customer_id.
 
     A plain connection NAME (== customer_id) resolves here; cloud connections do
@@ -3666,7 +3765,8 @@ def _auto_fetch_from_ui(alias: str) -> Optional[dict]:
     """
     try:
         with requests.Session() as session:
-            r = session.get(f"{ONBOARDING_API_URL}/customers/{alias}/credentials", timeout=5)
+            headers = _onboarding_headers(user_id)
+            r = session.get(f"{ONBOARDING_API_URL}/customers/{alias}/credentials", headers=headers, timeout=5)
             if r.status_code == 200:
                 data = r.json()
                 # db_type lookup is best-effort: the /customers endpoint may return a
@@ -3674,7 +3774,7 @@ def _auto_fetch_from_ui(alias: str) -> Optional[dict]:
                 # discard the credentials fetched above.
                 db_type = "unknown"
                 try:
-                    r2 = session.get(f"{ONBOARDING_API_URL}/customers", timeout=5)
+                    r2 = session.get(f"{ONBOARDING_API_URL}/customers", headers=headers, timeout=5)
                     if r2.status_code == 200:
                         payload = r2.json()
                         customers = payload if isinstance(payload, list) else payload.get("customers", [])
@@ -3826,7 +3926,7 @@ def _resolve_implicit_source(state: ETLState):
     db_customer = (state.get("active_db_customer_id") or "").strip()
     if db_customer:
         key = _resolve_registry_alias(registry, db_customer)
-        entry = registry[key] if key else _auto_fetch_from_ui(db_customer)
+        entry = registry[key] if key else _auto_fetch_from_ui(db_customer, state.get("user_id"))
         if not entry:
             return (
                 f"❌ **Couldn't reach the source database `{db_customer}`.**\n\n"
@@ -3996,7 +4096,11 @@ def _list_available_destinations(state: ETLState) -> str:
     cloud_lines: List[str] = []
     try:
         with requests.Session() as s:
-            r = s.get(f"{ONBOARDING_API_URL}/customers", timeout=5)
+            r = s.get(
+                f"{ONBOARDING_API_URL}/customers",
+                headers=_onboarding_headers(state.get("user_id")),
+                timeout=5,
+            )
             if r.status_code == 200:
                 payload = r.json()
                 customers = payload if isinstance(payload, list) else payload.get("customers", [])
@@ -4081,6 +4185,10 @@ def _format_dest_format_picker(base_name: str) -> str:
 
 def _resolve_pending_dta(state: ETLState, pending: dict, reply: str) -> str:
     """Fill the awaited slot from the user's reply and re-run the transfer handler."""
+    if not _premium_allowed(state):
+        state["pending_clarification"] = None
+        state["plan_upgrade_required"] = "data_transfer"
+        return _upgrade_message("data_transfer", state)
     collected = dict(pending.get("collected") or {})
     awaiting = pending.get("awaiting")
     answer = _strip_runtime_context(reply).strip()
@@ -4139,6 +4247,13 @@ def _resolve_pending_dta(state: ETLState, pending: dict, reply: str) -> str:
 
 
 def _handle_initiate_transfer(state: ETLState, params: InitiateTransferParams) -> str:
+    # Paid feature: refuse before resolving endpoints or starting any job.
+    if not _premium_allowed(state):
+        logger.info("[plan-gate] data transfer blocked for user=%s plan=%s",
+                    state.get("user_id"), _user_plan(state))
+        state["pending_clarification"] = None
+        state["plan_upgrade_required"] = "data_transfer"
+        return _upgrade_message("data_transfer", state)
     # End-to-end wall clock the user actually waits: endpoint resolution, schema
     # deduction, code generation and the run itself. This is deliberately larger
     # than the runner's own job duration, which is reported separately.
@@ -4157,7 +4272,7 @@ def _handle_initiate_transfer(state: ETLState, params: InitiateTransferParams) -
         if resolved_source:
             params.source_alias = resolved_source
         if params.source_alias not in registry:
-            fetched = _auto_fetch_from_ui(params.source_alias)                   # DB by name
+            fetched = _auto_fetch_from_ui(params.source_alias, state.get("user_id"))  # DB by name
             if fetched:
                 registry[params.source_alias] = fetched
                 logger.info("Auto-fetched source %s from customer_dbs", params.source_alias)
@@ -4227,7 +4342,7 @@ def _handle_initiate_transfer(state: ETLState, params: InitiateTransferParams) -
     # Resolve the destination NAME: chat registry → customer_dbs (DB by name) →
     # cloud_datasets by UUID (back-compat) → cloud_datasets by name (scoped to user).
     if params.destination_alias not in registry:
-        fetched = _auto_fetch_from_ui(params.destination_alias)                 # DB by name
+        fetched = _auto_fetch_from_ui(params.destination_alias, state.get("user_id"))  # DB by name
         if fetched:
             registry[params.destination_alias] = fetched
             logger.info("Resolved destination %s from customer_dbs", params.destination_alias)
@@ -4271,7 +4386,11 @@ def _handle_initiate_transfer(state: ETLState, params: InitiateTransferParams) -
         """Always try credentials endpoint first, fallback to registry entry."""
         try:
             with requests.Session() as session:
-                r = session.get(f"{ONBOARDING_API_URL}/customers/{alias}/credentials", timeout=5)
+                r = session.get(
+                    f"{ONBOARDING_API_URL}/customers/{alias}/credentials",
+                    headers=_onboarding_headers(state.get("user_id")),
+                    timeout=5,
+                )
                 if r.status_code == 200:
                     data = r.json()
                     return {
@@ -4534,10 +4653,18 @@ def _handle_initiate_transfer(state: ETLState, params: InitiateTransferParams) -
                 dest_creds.get("host") if isinstance(dest_creds, dict) else None,
             )
             runner_label = "in-cluster Ray" if _ray_dashboard else "GKE Ray cluster"
-            run_result = launch_gke_pipeline(
-                injection_script, job_id=job_id, cloud_env=cloud_env, gcp_sa_json=gcp_sa_json,
-                dest_gcp_sa_json=dest_gcp_sa_json, dashboard_url=_ray_dashboard,
-            )
+            
+            with ray_job_context(
+                user_id=state.get("user_id"),
+                thread_id=state.get("thread_id"),
+                kind="data_transfer",
+                source=source_res.get("file_uri") or params.source_table or params.source_alias,
+                destination=dest_res.get("file_uri") or params.dest_table or params.destination_alias,
+            ):
+                run_result = launch_gke_pipeline(
+                    injection_script, job_id=job_id, cloud_env=cloud_env, gcp_sa_json=gcp_sa_json,
+                    dest_gcp_sa_json=dest_gcp_sa_json, dashboard_url=_ray_dashboard,
+                )
     except Exception as e:
         elapsed = _format_duration(time.monotonic() - _transfer_started)
         # Full traceback to the logs; the customer gets one readable line.
@@ -4686,6 +4813,17 @@ def _invoke_planner_with_recovery(msgs, tool_choice, invoke_kwargs):
 
 
 def plan_etl_job(state: ETLState) -> ETLState:
+    """Planner node. Plans the turn, then applies the plan gate for model training."""
+    # is_dta_request means "THIS planner pass handled a data transfer". It used to
+    # be set and never cleared, so it stuck to the thread; reset it on every pass
+    # (the router ends the turn on it).
+    state["is_dta_request"] = False
+    out = _apply_training_plan_gate(state, _plan_etl_job_impl(state))
+    if isinstance(out, dict):
+        out.setdefault("is_dta_request", False)
+    return out
+
+def _plan_etl_job_impl(state: ETLState) -> ETLState:
     """
     Key change (RAY PATCH):
     - Preserves `infrastructure_provisioned` and `infrastructure_request` from the incoming state

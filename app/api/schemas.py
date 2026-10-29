@@ -54,6 +54,10 @@ class ChatResponse(BaseModel):
     pending_status: Optional[str] = None   # "running" when a turn deferred (any kind)
     pending_kind: Optional[str] = None      # "training" | "analysis"
     dataset_size_bytes: Optional[int] = None
+    # Plan gates: set to "data_transfer" or "model_training" on the turn the
+    # requester's plan did not include that feature (the assistant message
+    # carries the upgrade text); None otherwise. The UI can show an upgrade CTA.
+    plan_upgrade_required: Optional[str] = None
 
     # NEW: dropdown + multi-dataset support
     datasets: List[Dict[str, Any]] = Field(default_factory=list)

@@ -1,4 +1,39 @@
-
+import { DatasetChipName } from "@/components/dashboard/data-view/DatasetChipName";
+import { rayJobMarkdown } from "@/lib/ray-jobs";
+import { RayJobText } from "@/components/ray-jobs/RayJobText";
+import { Link } from "@tanstack/react-router";
+import { DataWorkspaceCard } from "@/components/dashboard/data-view/DataWorkspaceCard";
+import { getKeyFindings, keyFindingBullets, messagesWithKeyFindings, splitAtKeyFindings } from "@/lib/workspace-findings";
+import { KeyFindingsCard } from "@/components/dashboard/KeyFindingsCard";
+import { ChatResizeHandle } from "@/components/analysis/ChatResizeHandle";
+import { UserMessageEditor } from "@/components/analysis/MessageActions";
+import { clampChatWidth, clearChatWidth, defaultChatWidth, readChatWidth, writeChatWidth } from "@/lib/chat-width";
+import { currentSelectionText, shouldStartReplyDrag } from "@/lib/reply-drag";
+import { pickFindingText, pickTopInsights, type TopInsightChart } from "@/lib/top-insights";
+import { chipLabel, dedupeFindingGroups, noChartsText, toggleSelection, visibleChips } from "@/lib/multi-dataset-view";
+import { readableDatasetName, uploadKind, workbookHeading } from "@/lib/upload-review";
+import { TopChartsSection, TopKeyFindings } from "@/components/dashboard/multi-dataset/MultiDatasetInsights";
+import { DataGrid, type HighlightRequest } from "@/components/dashboard/data-view/DataGrid";
+import { ChartEmptyState } from "@/components/dashboard/data-view/ChartEmptyState";
+import { ColumnSummary } from "@/components/dashboard/data-view/ColumnSummary";
+import { type ColumnKind, type ColumnProfile } from "@/lib/data-view";
+import {
+  analysisCsvName,
+  clampAnalysisIndex,
+  extractTableRunsFromMessages,
+  extractTabularContent,
+  extraTablesFor,
+  mergeTableRun,
+  parseOutputTables,
+  sampleCsvName,
+  stripTabularContent,
+  tablesForRun,
+  type AnalysisResultTable,
+  type OutputFile,
+  type ParsedTable,
+  type TableRun,
+} from "@/lib/analysis-results";
+import { AnalysisResultsView } from "@/components/dashboard/data-view/AnalysisResultsView";
 import {
   useCallback,
   useEffect,
@@ -13,10 +48,9 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { analysesKey, useAnalysisMutations } from "@/lib/analyses";
-import { deriveVizFromResultTable, deriveVizFromRows, type ResultTableForViz } from "@/lib/derive-viz";
+import { deriveVizFromRows } from "@/lib/derive-viz";
 import { buildInsightGroups } from "@/lib/insight-groups";
 import { finishAutoInsightsBot } from "@/lib/auto-insights-bot";
-
 
 import { useProjects } from "@/lib/projects";
 import { TagPicker } from "@/components/analysis/TagPicker";
@@ -24,7 +58,6 @@ import { avatarPortrait } from "@/components/insights-avatar/avatarPortrait";
 const avatarBotAsset = { url: "/assets/dashboard/avatar_bot.png" };
 const avatarBot = avatarBotAsset.url;
 const avatarTtsVideo = "/assets/dashboard/avatar_tts.mp4";
-//const avatarTtsIdle = "/assets/dashboard/avatar_tts_idle.png";
 const avatarTtsIdle = avatarPortrait;
 import {
   MessageChatCircle,
@@ -48,7 +81,6 @@ import {
   SearchLg,
   File02,
   ArrowLeft,
-  ArrowRight,
   Database01,
   Database02,
   Check,
@@ -59,8 +91,11 @@ import {
   HelpCircle,
   ClockRewind,
 } from "@untitledui/icons";
+import { readChatDock, writeChatDock, type ChatDockSide } from "@/lib/chat-dock";
+import { ChatDockControls } from "@/components/analysis/ChatDockControls";
 import { Dialog, DialogContent, DialogPortal, DialogOverlay, DialogTitle } from "@/components/ui/dialog";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
+import { Maximize2 } from "lucide-react";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { analysisGroupName } from "@/lib/analysis-datasets";
@@ -94,7 +129,6 @@ import { buildUploadSummaryMessage } from "@/lib/upload-summary";
 /** Analyses whose upload summary was already saved this session (prevents duplicates). */
 const summaryPersisted = new Set<string>();
 
-
 const SERVER_NO_RESPONSE_MESSAGE =
   "The server didn't respond. Your request may still be running — please retry in a moment.";
 import { startTrainingJob, claimTrainingResult, TRAINING_RESULT_EVENT } from "@/lib/training-jobs";
@@ -108,6 +142,8 @@ import {
   loadAnalysis as persistLoadAnalysis,
   loadChildAnalyses,
   loadAnalysisGroupDatasets,
+  findSavedDatasetViz,
+  upsertGroupDatasetRow,
   loadMessages as persistLoadMessages,
   resolveMotherAnalysisId,
   updateAnalysisContext as persistUpdateAnalysisContext,
@@ -135,19 +171,22 @@ import {
 import { HistoryVersionPanel } from "@/components/dashboard/HistoryVersionPanel";
 import { AllInsightsPanel, type InsightSource } from "@/components/dashboard/AllInsightsPanel";
 import { ProjectDashboardView } from "@/components/dashboard/ProjectDashboardView";
-import { DataSetBrowserModal } from "@/components/dashboard/DataSetBrowserModal";
+import { AttachDatasetsModal } from "@/components/dashboard/AttachDatasetsModal";
 import { UploadModal } from "@/components/dashboard/UploadModal";
 import { DataSourceGrid } from "@/components/dashboard/DataSourceGrid";
 const bgPattern = { url: "/assets/dashboard/Background_pattern_decorative.png" };
 const illustration = { url: "/assets/dashboard/Upload_Illustration.png" };
 import { useUpgradeGate } from "@/components/dashboard/UpgradeGate";
 
-
 export const Route = createFileRoute("/analysis")({
   head: () => ({
     meta: [
       { title: "New Analysis · Avaloka AI" },
       { name: "description", content: "Generate AI insights for your dataset." },
+      { property: "og:title", content: "New Analysis · Avaloka AI" },
+      { property: "og:description", content: "Explore dataset charts and column statistics with Avaloka AI." },
+      { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary_large_image" },
     ],
   }),
   component: AnalysisPage,
@@ -169,7 +208,7 @@ type ChatMessage = {
   isSelf?: boolean;
 };
 
-const ANALYSIS_COMPLETE_MESSAGE = "Analysis complete. Click Chart to visualize the output data, or Data Table to view the underlying data in table format.";
+const ANALYSIS_COMPLETE_MESSAGE = "Analysis complete. Please check your output table and charts for analysis.";
 
 /** True when a turn actually produced an execution result. */
 function hasExecutionResult(payload: unknown): boolean {
@@ -180,128 +219,11 @@ function hasExecutionResult(payload: unknown): boolean {
   return hasJson || data.output_file_data != null;
 }
 
-type ParsedTable = { title?: string; headers: string[]; rows: Record<string, unknown>[] };
-
-/** Split a pipe-delimited markdown table row into cells. */
-function splitPipeRow(line: string): string[] {
-  const trimmed = line.trim();
-  const withoutOuterPipes = trimmed.replace(/^\|/, "").replace(/\|$/, "");
-  return withoutOuterPipes.split("|").map((c) => c.trim());
-}
-
-/**
- * Parse a single markdown pipe table from a block of text.
- * Returns null if the block does not look like a header + separator + body.
- */
-function parseMarkdownTableBlock(block: string): ParsedTable | null {
-  const lines = block
-    .split("\n")
-    .map((l) => l.trimEnd())
-    .filter((l) => l.trim().length > 0);
-  if (lines.length < 3) return null;
-
-  const headerCells = splitPipeRow(lines[0]!);
-  if (headerCells.length === 0 || headerCells.every((c) => c.length === 0)) return null;
-
-  const separator = lines[1]!;
-  if (!/^\s*\|?[\s:|-]+\|\s*$/.test(separator) || !/-/.test(separator)) return null;
-
-  const rows: Record<string, unknown>[] = [];
-  for (let i = 2; i < lines.length; i++) {
-    const cells = splitPipeRow(lines[i]!);
-    if (cells.length === 0 || cells.every((c) => c.length === 0)) continue;
-    const row: Record<string, unknown> = {};
-    headerCells.forEach((h, idx) => {
-      const key = h.trim() || `col_${idx + 1}`;
-      row[key] = cells[idx] ?? "";
-    });
-    rows.push(row);
-  }
-  if (rows.length === 0) return null;
-
-  return { headers: headerCells, rows };
-}
-
-/**
- * Find all markdown pipe tables in `raw` and parse them into structured rows.
- * Returns an empty array when no tables are found.
- */
-function parseMarkdownTables(raw: string): ParsedTable[] {
-  if (!raw) return [];
-  const tables: ParsedTable[] = [];
-  // Match a header row, a separator row containing '-', and any following body rows.
-  const tableRegex =
-    /(^|\n)[ \t]*\|?[^\n]*\|[^\n]*\n[ \t]*\|?[\s:|-]*-[\s:|-]*\n(?:[ \t]*\|?[^\n]*\|[^\n]*\n?)*/g;
-  let match: RegExpExecArray | null;
-  const seen = new Set<string>();
-  while ((match = tableRegex.exec(raw)) !== null) {
-    const block = match[0].replace(/^\n/, "");
-    const parsed = parseMarkdownTableBlock(block);
-    if (!parsed) continue;
-    const key = JSON.stringify({ headers: parsed.headers, rows: parsed.rows.slice(0, 3) });
-    if (seen.has(key)) continue;
-    seen.add(key);
-    tables.push(parsed);
-  }
-  return tables;
-}
-
-/**
- * Extract tabular payloads out of assistant text so the result table only ever
- * appears in the Data table panel — never duplicated inside the chat bubble.
- * Returns the cleaned text plus any parsed markdown tables.
- */
-export function extractTabularContent(raw: string): { text: string; tables: ParsedTable[] } {
-  if (!raw) return { text: "", tables: [] };
-  let text = raw;
-
-  // Fenced blocks that are only CSV / JSON row dumps.
-  text = text.replace(/```[a-zA-Z]*\s*\n([\s\S]*?)```/g, (block, inner: string) => {
-    const body = inner.trim();
-    if (!body) return "";
-    const looksJsonRows = /^\[\s*[{[]/.test(body) && /[}\]]\s*\]$/.test(body);
-    const lines = body.split("\n").filter((l) => l.trim());
-    const looksCsv =
-      lines.length > 1 &&
-      lines.every((l) => (l.match(/,/g)?.length ?? 0) >= 1) &&
-      new Set(lines.map((l) => (l.match(/,/g)?.length ?? 0))).size <= 2;
-    return looksJsonRows || looksCsv ? "" : block;
-  });
-
-  // Markdown pipe tables (header + --- separator + body rows).
-  const tables = parseMarkdownTables(text);
-  text = text.replace(
-    /(^|\n)[ \t]*\|?[^\n]*\|[^\n]*\n[ \t]*\|?[\s:|-]*-[\s:|-]*\n(?:[ \t]*\|?[^\n]*\|[^\n]*\n?)*/g,
-    "$1",
-  );
-
-  // Standalone "N rows × M columns" preambles (e.g. "Transformed data — 20 rows × 7 columns.").
-  text = text.replace(/(^|\n)[^\n]*\b\d+\s*rows?\s*[x×*]\s*\d+\s*columns?\b[^\n]*(?=\n|$)/gi, "$1");
-
-  // Leftover orphan pipe rows.
-  text = text
-    .split("\n")
-    .filter((l) => !/^\s*\|.*\|\s*$/.test(l))
-    .join("\n");
-
-  return { text: text.replace(/\n{3,}/g, "\n\n").trim(), tables };
-}
-
-/** Backwards-compatible helper that only returns the text portion. */
-export function stripTabularContent(raw: string): string {
-  return extractTabularContent(raw).text;
-}
-
 function chatDisplayContent(content: string, output?: unknown): string {
   const cleaned = stripTabularContent(content ?? "");
   if (cleaned.length > 0) return cleaned;
-  return hasExecutionResult(output) || (content && content.trim().length > 0)
-    ? ANALYSIS_COMPLETE_MESSAGE
-    : content;
+  return hasExecutionResult(output) || (content && content.trim().length > 0) ? ANALYSIS_COMPLETE_MESSAGE : content;
 }
-
-
-
 
 type WorkspaceSection = { id: string; title?: string };
 
@@ -309,11 +231,14 @@ function mainSectionId(tabId: string) {
   return `${tabId}-main`;
 }
 
-type OutputFile = { filename: string; content: string };
-
 type DatasetChip = {
   id: string;
   name: string;
+  sheetName?: string | null;
+  /** Original workbook file when this dataset is one of its sheets. */
+  sourceWorkbook?: string | null;
+  rows?: number | null;
+  available?: boolean;
   sessionId?: string;
   threadId?: string;
   schema?: unknown;
@@ -336,11 +261,9 @@ function datasetSizeMb(source: any): number | undefined {
   return mb && mb > 0 ? mb : undefined;
 }
 
-/** Full dataset row count from a response, a chip, or a visualization config. */
 function datasetTotalRows(source: any): number | undefined {
   const value =
     source?.total_rows ??
-    source?.dataset?.total_rows ??
     source?.visualization_config?.dataset?.total_rows ??
     source?.visualizationConfig?.dataset?.total_rows;
   const number = Number(value);
@@ -353,8 +276,6 @@ export function formatDatasetSize(mb?: number): string | null {
   if (mb >= 1024) return `${(mb / 1024).toFixed(2)} GB`;
   return `${mb.toFixed(mb < 10 ? 2 : 1)} MB`;
 }
-
-
 
 function normalizeDatasetSchema(schema: unknown, samples: unknown[]): string[] {
   if (Array.isArray(schema)) {
@@ -392,24 +313,29 @@ function populatedDatasetFromResponse(response: any, filename: string): Uploaded
     rows_sampled: response.rows_sampled ?? response.samples.length,
     total_rows: datasetTotalRows(response),
     size_mb: datasetSizeMb(response),
-
   };
 }
 
 function datasetChipsFromResponse(response: any, fallbackFilename?: string): DatasetChip[] {
-  const source = Array.isArray(response?.datasets) && response.datasets.length
-    ? response.datasets
-    : response?.dataset_id
-      ? [{ ...response, filename: fallbackFilename }]
-      : [];
+  const source =
+    Array.isArray(response?.datasets) && response.datasets.length
+      ? response.datasets
+      : response?.dataset_id
+        ? [{ ...response, filename: fallbackFilename }]
+        : [];
   const byId = new Map<string, DatasetChip>();
   source
     .filter((dataset: any) => typeof dataset?.dataset_id === "string" && dataset.dataset_id)
-    .forEach((dataset: any) => {
+    .forEach((dataset: any, index: number) => {
       if (byId.has(dataset.dataset_id)) return;
+      // The top-level visualization_config belongs to the first dataset.
+      const isFirst = dataset.dataset_id === response?.dataset_id || (index === 0 && !response?.dataset_id);
+      const topLevelViz = isFirst ? (response?.visualization_config ?? response?.visualization_configs) : undefined;
       byId.set(dataset.dataset_id, {
         id: dataset.dataset_id,
         name: dataset.alias || dataset.filename || dataset.dataset_id,
+        sheetName: dataset.sheet_name ?? null,
+        sourceWorkbook: dataset.source_workbook ?? null,
         sessionId: dataset.session_id ?? response?.session_id,
         threadId: dataset.thread_id ?? response?.thread_id,
         schema: dataset.schema ?? dataset.columns,
@@ -422,19 +348,21 @@ function datasetChipsFromResponse(response: any, fallbackFilename?: string): Dat
         totalRows: datasetTotalRows(dataset),
         sizeMb: datasetSizeMb(dataset) ?? datasetSizeMb(response),
 
-        visualizationConfig: dataset.visualization_config ?? dataset.visualization_configs,
-        visualizationStatus: dataset.visualization_status,
+        visualizationConfig: dataset.visualization_config ?? dataset.visualization_configs ?? topLevelViz,
+        visualizationStatus: dataset.visualization_status ?? (topLevelViz ? "ready" : undefined),
       });
-
     });
   return Array.from(byId.values());
 }
 
-/** Short, readable chip label: tail after the last "/", ellipsized in the middle. */
+/** Readable upload-review name; the chip owns visual truncation. */
 function datasetChipLabel(name: string): string {
-  const tail = String(name ?? "").split("/").filter(Boolean).pop() ?? String(name ?? "");
-  if (tail.length <= 26) return tail;
-  return `${tail.slice(0, 14)}…${tail.slice(-10)}`;
+  const tail =
+    String(name ?? "")
+      .split("/")
+      .filter(Boolean)
+      .pop() ?? String(name ?? "");
+  return readableDatasetName(tail);
 }
 
 const BATCH_KEY = "analysis:batch";
@@ -453,8 +381,7 @@ function storeDatasetBatch(analysisId: string | null | undefined, batch: StoredB
 function readDatasetBatch(analysisId: string | null | undefined): StoredBatch | null {
   try {
     const raw =
-      (analysisId ? sessionStorage.getItem(`${BATCH_KEY}:${analysisId}`) : null) ??
-      sessionStorage.getItem(BATCH_KEY);
+      (analysisId ? sessionStorage.getItem(`${BATCH_KEY}:${analysisId}`) : null) ?? sessionStorage.getItem(BATCH_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as StoredBatch;
     return Array.isArray(parsed?.chips) && parsed.chips.length ? parsed : null;
@@ -463,27 +390,7 @@ function readDatasetBatch(analysisId: string | null | undefined): StoredBatch | 
   }
 }
 
-type UserInsightEntry = {
-  id: string;
-  sectionId: string;
-  vizConfig: unknown;
-  samples?: unknown[];
-  tableTitle?: string;
-};
-
-// Each analysis run's tabular output, persisted per run (parallel to charts).
-type TableRun = {
-  id: string;
-  sectionId: string;
-  title: string;
-  rows: Record<string, unknown>[];
-  /** Code that produced THIS result (from coder_definition.code). */
-  code?: string | null;
-  /** Version stamp for this result, used by GET /analysis/{id}/code?prompt_ts= */
-  promptTs?: string | null;
-  /** CSV payload produced by this result. */
-  file?: OutputFile | null;
-};
+type UserInsightEntry = { id: string; sectionId: string; vizConfig: unknown; samples?: unknown[] };
 
 type PastedAnalysis = TableRun & {
   /** Chart config copied along with the run (falls back to derived charts). */
@@ -495,21 +402,6 @@ type PastedAnalysis = TableRun & {
   /** Ready-made slides captured from the source tab (rendered in a carousel). */
   slides?: unknown[];
 };
-
-
-function tableRunFingerprint(rows: unknown[]): string {
-  try {
-    return JSON.stringify(rows).slice(0, 5000);
-  } catch {
-    return String(rows.length);
-  }
-}
-
-function mergeTableRun(prev: TableRun[], run: TableRun): TableRun[] {
-  const fp = tableRunFingerprint(run.rows);
-  if (prev.some((r) => r.id === run.id || tableRunFingerprint(r.rows) === fp)) return prev;
-  return [...prev, run];
-}
 
 /** Clipboard marker used so a pasted analysis blob can be detected safely. */
 const AVALOKA_CLIP_MARKER = "__avaloka_analysis_clip__";
@@ -539,7 +431,6 @@ type AnalysisClip = {
   fidelity?: string;
   vizConfig?: unknown;
 };
-
 
 function isAnalysisClip(text: string): AnalysisClip | null {
   try {
@@ -594,13 +485,6 @@ function dedupeSlidesByInsight(slides: Slide[], excludeTitles?: Set<string>): Sl
   return out;
 }
 
-function resultVizFromOutput(rows: unknown, savedViz: unknown): unknown {
-  if (!Array.isArray(rows) || rows.length === 0) return savedViz;
-  const clientDerived = savedViz && typeof savedViz === "object" &&
-    !Array.isArray(savedViz) && (savedViz as { source?: unknown }).source === "client_derived";
-  return !savedViz || clientDerived ? deriveVizFromRows(rows) ?? savedViz : savedViz;
-}
-
 function extractUserInsightsFromMessages(
   rows: AnalysisMessage[],
   autoVizConfig: unknown | null,
@@ -612,38 +496,18 @@ function extractUserInsightsFromMessages(
 
   for (const row of rows) {
     if (row.role !== "assistant") continue;
-    const out = row.output as {
-      viz_config?: unknown;
-      output_json?: unknown[];
-      output_tables?: ResultTableForViz[];
-      section_id?: string;
-    } | null;
+    const out = row.output as { viz_config?: unknown; output_json?: unknown[]; section_id?: string } | null;
     if (!out) continue;
 
-    const sectionId = typeof out.section_id === "string" ? out.section_id : defaultSectionId;
-    if (Array.isArray(out.output_tables) && out.output_tables.length) {
-      out.output_tables.forEach((table, index) => {
-        const tableViz = deriveVizFromResultTable(table);
-        if (!tableViz) return;
-        const tableKey = `${sectionId}:${vizFingerprint(tableViz)}`;
-        if (seen.has(tableKey)) return;
-        seen.add(tableKey);
-        results.push({
-          id: `${row.id}-table-${index}`,
-          sectionId,
-          vizConfig: tableViz,
-          samples: table.rows,
-          tableTitle: table.title,
-        });
-      });
-      continue;
+    let viz = out.viz_config;
+    if (!viz && Array.isArray(out.output_json) && out.output_json.length > 0) {
+      viz = deriveVizFromRows(out.output_json);
     }
-
-    const viz = resultVizFromOutput(out.output_json, out.viz_config);
     if (!viz) continue;
 
     const key = vizFingerprint(viz);
     if (autoKey && key === autoKey) continue;
+    const sectionId = typeof out.section_id === "string" ? out.section_id : defaultSectionId;
     const dedupeKey = `${sectionId}:${key}`;
     if (seen.has(dedupeKey)) continue;
     seen.add(dedupeKey);
@@ -657,94 +521,8 @@ function extractUserInsightsFromMessages(
   return results;
 }
 
-// Rebuild the per-run table history from persisted analysis messages so the
-// Data table view survives reloads exactly like the charts do.
-function extractTableRunsFromMessages(rows: AnalysisMessage[], defaultSectionId: string): TableRun[] {
-  let runs: TableRun[] = [];
-  let lastPrompt = "";
-  for (const row of rows) {
-    if (row.role === "user") {
-      lastPrompt = String(row.content ?? "").trim();
-      continue;
-    }
-    if (row.role !== "assistant") continue;
-    const out = row.output as
-      | {
-          output_json?: unknown[];
-          output_tables?: ResultTableForViz[];
-          extracted_tables?: ParsedTable[];
-          section_id?: string;
-          code?: string | null;
-          prompt_ts?: string | null;
-          output_file?: OutputFile | null;
-        }
-      | null;
-
-    // Pasted results are stored as their own message kind and rendered in a
-    // dedicated section below the analysis — never as a normal result page.
-    if (
-      out &&
-      ((out as { pasted_analysis?: unknown }).pasted_analysis ||
-        (out as { pasted_analyses?: unknown }).pasted_analyses)
-    )
-      continue;
-
-
-    // Structured backend rows.
-    const structuredTables = Array.isArray(out?.output_tables) ? out.output_tables : [];
-    const hasStructured = !!(out && ((Array.isArray(out.output_json) && out.output_json.length > 0) || structuredTables.length));
-    if (structuredTables.length) {
-      structuredTables.forEach((table, index) => {
-        runs = mergeTableRun(runs, {
-          id: `${row.id}-table-${index}`,
-          sectionId: typeof out!.section_id === "string" ? out!.section_id : defaultSectionId,
-          title: table.title || lastPrompt || `Result ${runs.length + 1}`,
-          rows: table.rows,
-          code: typeof out!.code === "string" ? out!.code : null,
-          promptTs: typeof out!.prompt_ts === "string" ? out!.prompt_ts : null,
-          file: out!.output_file ?? null,
-        });
-      });
-    } else if (hasStructured) {
-      runs = mergeTableRun(runs, {
-        id: row.id,
-        sectionId: typeof out!.section_id === "string" ? out!.section_id : defaultSectionId,
-        title: lastPrompt || `Result ${runs.length + 1}`,
-        rows: out!.output_json as Record<string, unknown>[],
-        code: typeof out!.code === "string" ? out!.code : null,
-        promptTs: typeof out!.prompt_ts === "string" ? out!.prompt_ts : null,
-        file: out!.output_file ?? null,
-      });
-    }
-
-    // Tables embedded in the assistant's markdown content (e.g. "list cloud
-    // connections"). Only used when the same reply carried no structured rows —
-    // otherwise one request would yield two result pages.
-    if (!hasStructured) {
-      const extracted = extractTabularContent(row.content ?? "");
-      const extractedRows = extracted.tables.flatMap((t) => t.rows);
-      if (extractedRows.length > 0) {
-        runs = mergeTableRun(runs, {
-          id: `${row.id}-tables`,
-          sectionId: typeof out?.section_id === "string" ? out.section_id : defaultSectionId,
-          title: lastPrompt || `Result ${runs.length + 1}`,
-          rows: extractedRows,
-          code: null,
-          promptTs: null,
-          file: null,
-        });
-      }
-    }
-
-  }
-  return runs;
-}
-
 /** Pasted analyses persisted as assistant messages carrying `pasted_analysis`. */
-function extractPastedAnalysesFromMessages(
-  rows: AnalysisMessage[],
-  defaultSectionId: string,
-): PastedAnalysis[] {
+function extractPastedAnalysesFromMessages(rows: AnalysisMessage[], defaultSectionId: string): PastedAnalysis[] {
   const out: PastedAnalysis[] = [];
   for (const row of rows) {
     if (row.role !== "assistant") continue;
@@ -780,13 +558,9 @@ function extractPastedAnalysesFromMessages(
         slides: Array.isArray(payload.slides) ? (payload.slides as unknown[]) : undefined,
       });
     });
-
   }
   return out;
 }
-
-
-
 
 function tableRunToCsv(rows: Record<string, unknown>[]): string {
   const keys = new Set<string>();
@@ -799,7 +573,6 @@ function tableRunToCsv(rows: Record<string, unknown>[]): string {
   };
   return [columns.join(","), ...rows.map((r) => columns.map((c) => escape(r[c])).join(","))].join("\n");
 }
-
 
 function extraSectionsFromUserInsights(tabId: string, insights: UserInsightEntry[]): WorkspaceSection[] {
   const mainId = mainSectionId(tabId);
@@ -894,36 +667,87 @@ function AnalysisPage() {
     const v = (search as Record<string, unknown> | undefined)?.ds;
     return typeof v === "string" ? v : null;
   }, [search]);
-
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  // Composer draft lives here so other surfaces (e.g. Auto Insights) can prefill it.
   const [chatDraft, setChatDraft] = useState("");
   const [chatOpen, setChatOpen] = useState(true);
-  const [chatWidth, setChatWidth] = useState(360);
-  const chatAsideRef = useRef<HTMLElement | null>(null);
-  const chatResizingRef = useRef(false);
-  type ChatDock = "left" | "right" | "float";
-  const [chatDock, setChatDock] = useState<ChatDock>(() => {
-    if (typeof window === "undefined") return "right";
-    const v = window.localStorage.getItem("analysis:chatDock");
-    return v === "left" || v === "float" ? v : "right";
-  });
+  const [chatPreferenceReady, setChatPreferenceReady] = useState(false);
   useEffect(() => {
     try {
-      window.localStorage.setItem("analysis:chatDock", chatDock);
+      setChatOpen(localStorage.getItem("analysis:chatCollapsed") !== "true");
     } catch {
-      /* ignore */
+      /* unavailable storage retains the default */
     }
-  }, [chatDock]);
+    setChatPreferenceReady(true);
+  }, []);
+  useEffect(() => {
+    if (!chatPreferenceReady) return;
+    try {
+      localStorage.setItem("analysis:chatCollapsed", String(!chatOpen));
+    } catch {
+      /* session-only collapse */
+    }
+  }, [chatOpen, chatPreferenceReady]);
+  const [chatDock, setChatDockState] = useState<ChatDockSide>("right");
+  useEffect(() => {
+    setChatDockState(readChatDock());
+  }, []);
+  const setChatDock = useCallback((side: ChatDockSide) => {
+    setChatDockState(side);
+    writeChatDock(side);
+  }, []);
+  // Floating ("pop out") card geometry: restored from the earlier production
+  // implementation (commit 82b20a98, src/routes/analysis.tsx).
   const [chatFloatPos, setChatFloatPos] = useState<{ x: number; y: number }>({ x: 120, y: 96 });
-  const [chatFloatSize, setChatFloatSize] = useState<{ w: number; h: number }>({ w: 420, h: 620 });
+  const [chatFloatSize, setChatFloatSize] = useState<{ w: number; h: number }>(() => {
+    if (typeof window === "undefined") return { w: 520, h: 620 };
+    return { w: Math.min(520, window.innerWidth - 120), h: Math.max(320, window.innerHeight - 96 - 16) };
+  });
   const floatDraggingRef = useRef(false);
   const floatAsideRef = useRef<HTMLElement | null>(null);
+  // Below 1024px the chat is always the right-side drawer: a remembered
+  // "float" mode falls back to "right" until the viewport is wide again.
+  const [wideViewport, setWideViewport] = useState(() =>
+    typeof window === "undefined" ? true : window.matchMedia("(min-width: 1024px)").matches,
+  );
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 1024px)");
+    const update = () => setWideViewport(mq.matches);
+    mq.addEventListener("change", update);
+    return () => mq.removeEventListener("change", update);
+  }, []);
+  const effectiveChatDock: ChatDockSide = chatDock === "float" && !wideViewport ? "right" : chatDock;
+  // Resizable docked chat width (null = the default CSS width).
+  const [viewportWidth, setViewportWidth] = useState(1280);
+  const [chatWidth, setChatWidthState] = useState<number | null>(null);
+  useEffect(() => {
+    const update = () => setViewportWidth(window.innerWidth);
+    update();
+    setChatWidthState(readChatWidth(window.innerWidth));
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, []);
+  const setChatWidth = useCallback((width: number) => {
+    const next = clampChatWidth(width, window.innerWidth);
+    setChatWidthState(next);
+    writeChatWidth(next);
+  }, []);
+  const resetChatWidth = useCallback(() => {
+    setChatWidthState(null);
+    clearChatWidth();
+  }, []);
+  const appliedChatWidth = chatWidth == null ? null : clampChatWidth(chatWidth, viewportWidth);
   const [avatarMode, setAvatarMode] = useState(false);
   const [voiceListening, setVoiceListening] = useState(false);
-  const [avatarSpeaking, setAvatarSpeaking] = useState(false);
-  const [view, setView] = useState<"table" | "chart" | "preview">("chart");
-  
+  const [view, setView] = useState<"sample" | "results" | "chart" | "preview">("chart");
+  /** Which data table the Chart / Column Summary views describe. */
+  const [lastDataView, setLastDataView] = useState<"sample" | "results">("sample");
+  /** Visible table within the selected analysis result (multi-table pills). */
+  const [resultTableIndex, setResultTableIndex] = useState(0);
+  /** Chat message briefly highlighted by "Open in chat". */
+  const [chatHighlightId, setChatHighlightId] = useState<string | null>(null);
+  const [highlightRequest, setHighlightRequest] = useState<HighlightRequest>(null);
+  const sessionUploadedDataset = useUploadedDataset();
+
   const [moveOpen, setMoveOpen] = useState(false);
   const { blocked: upgradeBlocked, dialog: upgradeDialog } = useUpgradeGate();
 
@@ -954,40 +778,16 @@ function AnalysisPage() {
   const [threadId, setThreadId] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [selectedDatasetIds, setSelectedDatasetIds] = useState<string[]>([]);
+  const selectedDatasetIdsRef = useRef<string[]>([]);
+  selectedDatasetIdsRef.current = selectedDatasetIds;
+  const [chipsExpanded, setChipsExpanded] = useState(false);
   const [analysisFidelity, setAnalysisFidelity] = useState<
     "quick_sample" | "portfolio_samples" | "entire_dataset" | undefined
   >(undefined);
   const [selectedSampleName, setSelectedSampleName] = useState<string | undefined>(undefined);
   const [datasetChips, setDatasetChips] = useState<DatasetChip[]>([]);
-  const [datasetsExpanded, setDatasetsExpanded] = useState(false);
-  const [activePreviewDatasetId, setActivePreviewDatasetId] =
-  useState<string | null>(null);
-  const previewDatasets = useMemo(
-  () =>
-    selectedDatasetIds
-      .map((id) => datasetChips.find((d) => d.id === id))
-      .filter(Boolean) as DatasetChip[],
-  [selectedDatasetIds, datasetChips],
-);
-useEffect(() => {
-  if (previewDatasets.length === 0) {
-    setActivePreviewDatasetId(null);
-    return;
-  }
-
-  setActivePreviewDatasetId((current) => {
-    if (
-      current &&
-      previewDatasets.some(
-        (dataset) => dataset.id === current
-      )
-    ) {
-      return current;
-    }
-
-    return previewDatasets[0].id;
-  });
-}, [previewDatasets]);
+  const datasetChipsRef = useRef<DatasetChip[]>([]);
+  datasetChipsRef.current = datasetChips;
 
   // Analysis output from sendMessage
   const [analysisRows, setAnalysisRows] = useState<Record<string, unknown>[] | null>(null);
@@ -1032,7 +832,6 @@ useEffect(() => {
     if (hasGraph && !failed) setPlannerGraphAvailable(true);
   };
 
-
   // Auth-protected PNG — fetch as blob (a plain <img src> can't send the
   // bearer token), then show it via an object URL in a lightbox.
   const openPlannerGraph = async () => {
@@ -1051,7 +850,6 @@ useEffect(() => {
         // No planner graph for this thread yet — hide the button.
         setPlannerGraphAvailable(false);
         setPlannerGraphError("No planner graph available for this analysis yet.");
-
       } else if (err?.status === 401) {
         setPlannerGraphError("Your session has expired — please sign in again.");
       } else {
@@ -1072,13 +870,8 @@ useEffect(() => {
 
   // Voice mode reads the assistant's newest reply aloud inside <VoicePanel />.
   useEffect(() => {
-    if (!avatarMode) {stopSpeaking();
-      setAvatarSpeaking(false);
-    }
+    if (!avatarMode) stopSpeaking();
   }, [avatarMode]);
-
-
-
 
   // Persistence: the analysis_id is the stable key for this chat thread.
   // It comes from Postgres (gen_random_uuid()) on the first insert into
@@ -1110,6 +903,15 @@ useEffect(() => {
       // Toggle membership only — the uploaded group (datasetChips) is the source
       // of truth and must never be replaced by a single dataset.
       let nowSelected = true;
+      const prevSelection = selectedDatasetIdsRef.current;
+      const nextSelection = toggleSelection(prevSelection, dataset.id);
+      const chipThread = dataset.threadId ?? threadId;
+      // Save the chat's selection server-side (multi-dataset chats only).
+      if (!opts?.silent && chipThread && datasetChipsRef.current.length > 1 && nextSelection !== prevSelection) {
+        backendApi
+          .setSelectedDatasets(chipThread, nextSelection)
+          .catch((err) => console.warn("[analysis] save selected datasets failed", err));
+      }
       setSelectedDatasetIds((prev) => {
         if (prev.includes(dataset.id)) {
           // Keep at least one dataset selected.
@@ -1133,7 +935,6 @@ useEffect(() => {
       });
 
       if (!nowSelected) return;
-      setActivePreviewDatasetId(dataset.id);
 
       const label = datasetChipLabel(dataset.name);
       setAutoInsightsDatasetName(dataset.name);
@@ -1158,10 +959,7 @@ useEffect(() => {
                 : [];
             if (!rows.length) return;
             const cols = normalizeDatasetSchema(preview?.schema ?? preview?.columns, rows);
-            const cfg =
-              preview?.visualization_config ??
-              preview?.visualization_configs ??
-              deriveVizFromRows(rows);
+            const cfg = preview?.visualization_config ?? preview?.visualization_configs ?? deriveVizFromRows(rows);
             setDatasetChips((chips) =>
               chips.map((c) =>
                 c.id === dataset.id
@@ -1196,7 +994,6 @@ useEffect(() => {
         rows_sampled: dataset.rowsSampled ?? dataset.samples.length,
         total_rows: dataset.totalRows ?? datasetTotalRows(dataset.visualizationConfig),
         size_mb: dataset.sizeMb,
-
       });
       setAutoInsightsSamples(dataset.samples);
 
@@ -1205,157 +1002,35 @@ useEffect(() => {
       setAnalysisVizConfig(config);
       setAutoInsightsStatus(dataset.visualizationStatus ?? (config ? "ready" : undefined));
     },
-    [analysisId, aidFromUrl, sessionId],
+    [analysisId, aidFromUrl, sessionId, threadId],
   );
-  const handlePreviewDatasetChange = useCallback(
-  async (dataset: DatasetChip) => {
-    // A Data Preview tab can only display a dataset
-    // that is currently selected in the chat.
-    if (!selectedDatasetIds.includes(dataset.id)) {
-      return;
-    }
-
-    setActivePreviewDatasetId(dataset.id);
-
-    // Dataset preview is already cached.
-    if (dataset.samples?.length) {
-      const schema = normalizeDatasetSchema(
-        dataset.schema,
-        dataset.samples,
-      );
-
-      setPersistedDataset({
-        filename: dataset.name,
-        schema,
-        samples: dataset.samples,
-        rows_sampled:
-          dataset.rowsSampled ?? dataset.samples.length,
-        total_rows:
-          dataset.totalRows ?? datasetTotalRows(dataset.visualizationConfig),
-        size_mb: dataset.sizeMb,
-      });
-
-      setAutoInsightsSamples(dataset.samples);
-
-      const config =
-        dataset.visualizationConfig ??
-        deriveVizFromRows(dataset.samples);
-
-      setAutoInsightsConfig(config);
-      setAnalysisVizConfig(config);
-      setAutoInsightsStatus(
-        dataset.visualizationStatus ??
-          (config ? "ready" : undefined),
-      );
-
-      return;
-    }
-
-    // Preview isn't cached, so fetch this specific dataset.
-    try {
-      const sess = dataset.sessionId ?? sessionId ?? null;
-
-      const preview: any = sess
-        ? await backendApi.getDatasetPreview(dataset.id, sess)
-        : await backendApi.previewUploadedDataset(dataset.id);
-
-      const rows: any[] = Array.isArray(preview?.samples)
-        ? preview.samples
-        : Array.isArray(preview?.rows)
-          ? preview.rows
-          : [];
-
-      if (!rows.length) {
-        return;
-      }
-
-      const schema = normalizeDatasetSchema(
-        preview?.schema ?? preview?.columns,
-        rows,
-      );
-
-      const config =
-        preview?.visualization_config ??
-        preview?.visualization_configs ??
-        deriveVizFromRows(rows);
-
-      const totalRows = datasetTotalRows(preview) ?? dataset.totalRows;
-
-      // Cache the preview on THIS dataset only.
-      setDatasetChips((chips) =>
-        chips.map((chip) =>
-          chip.id === dataset.id
-            ? {
-                ...chip,
-                samples: rows,
-                schema,
-                visualizationConfig: config,
-                visualizationStatus: config
-                  ? "ready"
-                  : undefined,
-                rowsSampled:
-                  preview?.rows_sampled ?? rows.length,
-                totalRows,
-              }
-            : chip,
-        ),
-      );
-
-      setPersistedDataset({
-        filename: dataset.name,
-        schema,
-        samples: rows,
-        rows_sampled:
-          preview?.rows_sampled ?? rows.length,
-        total_rows: totalRows,
-        size_mb: dataset.sizeMb,
-      });
-
-      setAutoInsightsSamples(rows);
-      setAutoInsightsConfig(config);
-      setAnalysisVizConfig(config);
-      setAutoInsightsStatus(config ? "ready" : undefined);
-    } catch (err) {
-      console.warn(
-        "[data-preview-tab] preview failed",
-        dataset.id,
-        err,
-      );
-    }
-  },
-  [selectedDatasetIds, sessionId],
-);
-
 
   /** Per-dataset tabs for the Auto Insights modal (grouped uploads).
    *  One entry per DISTINCT dataset_id, each carrying its OWN config + OWN rows.
    *  Never pairs one dataset's chart spec with another dataset's rows. */
   const autoInsightsDatasets = useMemo(() => {
     const byId = new Map<string, { id: string; name: string; config: any; status?: string; samples?: any[] }>();
+    const multi = datasetChips.length > 1;
     datasetChips.forEach((d) => {
       if (!d?.id || byId.has(d.id)) return;
+      // Unselected chips stay in the analysis, but their insights are hidden until selected.
+      if (multi && selectedDatasetIds.length && !selectedDatasetIds.includes(d.id)) return;
       // Own rows only: chip samples, or the persisted preview when it belongs
       // to THIS dataset (same filename), otherwise none.
       const ownSamples =
         (Array.isArray(d.samples) && d.samples.length ? d.samples : undefined) ??
-        (persistedDataset?.filename && persistedDataset.filename === d.name
-          ? persistedDataset.samples
-          : undefined);
-      const ownConfig =
-        d.visualizationConfig ??
-        (ownSamples?.length ? deriveVizFromRows(ownSamples) : null);
+        (persistedDataset?.filename && persistedDataset.filename === d.name ? persistedDataset.samples : undefined);
+      const ownConfig = d.visualizationConfig ?? (ownSamples?.length ? deriveVizFromRows(ownSamples) : null);
       byId.set(d.id, {
         id: d.id,
-        name: d.name,
+        name: multi ? chipLabel(d) : d.name,
         config: ownConfig,
         status: d.visualizationStatus ?? (ownConfig ? "ready" : undefined),
         samples: ownSamples,
       });
     });
     return Array.from(byId.values());
-  }, [datasetChips, persistedDataset]);
-
-
+  }, [datasetChips, persistedDataset, selectedDatasetIds]);
 
   const vizInsights = useMemo(
     () => collectVizInsights(analysisVizConfig, chartSamples),
@@ -1454,15 +1129,12 @@ useEffect(() => {
     sessionId,
   ]);
 
-  // Dismiss the Auto Insights bot once charts are actually on screen.
   useEffect(() => {
     const chartsReady = Boolean(autoInsightsConfig || analysisVizConfig || userInsightsList.length);
     if (hydrating || insightsGenerating || !chartsReady) return;
     const frame = window.requestAnimationFrame(() => finishAutoInsightsBot());
     return () => window.cancelAnimationFrame(frame);
   }, [analysisVizConfig, autoInsightsConfig, hydrating, insightsGenerating, userInsightsList.length]);
-
-
 
   // Restore stored session for fresh uploads only (not when opening ?aid= from Supabase).
   useEffect(() => {
@@ -1564,11 +1236,17 @@ useEffect(() => {
 
     // Drop cached previews for the previous dataset and clear any stale
     // dataset / session / analysis state so nothing bleeds into the new bind.
-    try { backendApi.abortAllPreviews(); } catch { /* ignore */ }
+    try {
+      backendApi.abortAllPreviews();
+    } catch {
+      /* ignore */
+    }
     try {
       sessionStorage.removeItem("analysis:session");
       sessionStorage.removeItem("analysis:dataset");
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
     setAnalysisId(null);
     setMotherAnalysisId(null);
     setMotherAnalysisName("");
@@ -1629,17 +1307,13 @@ useEffect(() => {
       setView("chart");
     } else if (populatedDataset) {
       setAnalysisVizConfig(null);
-      setView("table");
+      setView("sample");
     }
 
     // Fresh uploads that asked for it land straight on the Auto Insights cards.
-    if (
-      (navState as any)?.showAutoInsights ||
-      (up && cfg && (!status || status === "ready"))
-    ) {
+    if ((navState as any)?.showAutoInsights) {
       setAutoInsightsOpen(true);
     }
-
 
     // Bind the chat session to the identifiers returned by THIS response.
     if (up.thread_id) setThreadId(up.thread_id);
@@ -1652,13 +1326,14 @@ useEffect(() => {
       setDatasetChips(chips);
       // Select every dataset from a multi-file upload so the first chat call
       // carries all dataset_ids and cross-dataset compare/join works.
-      setSelectedDatasetIds(chips.map((c) => c.id));
+      const chosen: string[] | undefined = (navState as any)?.selectedDatasetIds;
+      const chosenValid = Array.isArray(chosen) ? chosen.filter((id) => chips.some((c) => c.id === id)) : [];
+      setSelectedDatasetIds(chosenValid.length ? chosenValid : chips.map((c) => c.id));
       storeDatasetBatch((navState as any)?.newAnalysisId ?? aidFromUrl ?? null, {
         chips,
         selectedId: activeId,
       });
     }
-
   }, [navState, aidFromUrl, childIdFromUrl, navigate]);
 
   const [addToDashboardOpen, setAddToDashboardOpen] = useState(false);
@@ -1835,8 +1510,6 @@ useEffect(() => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [versionsOpen]);
 
-
-
   const handleRefresh = async () => {
     if (refreshing) return;
     let aid = resolvedAnalysisId ?? new URLSearchParams(window.location.search).get("aid");
@@ -1968,7 +1641,11 @@ useEffect(() => {
 
       const plannerCorrected = planner_status === "corrected";
       if (plannerCorrected) {
-        setPlannerNotes(typeof planner_notes === "string" && planner_notes ? planner_notes : "Planner adjusted the code before running.");
+        setPlannerNotes(
+          typeof planner_notes === "string" && planner_notes
+            ? planner_notes
+            : "Planner adjusted the code before running.",
+        );
         if (typeof final_code === "string" && final_code) {
           setCodeText(final_code);
         }
@@ -2102,7 +1779,6 @@ useEffect(() => {
     setFeedbackSubmitting(null);
   };
 
-
   /**
    * Load the code belonging to ONE result. Prefers the code returned with
    * that result (coder_definition.code); falls back to
@@ -2226,17 +1902,173 @@ useEffect(() => {
     sectionRefs.current[sectionId]?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, []);
 
-  const sectionHighlightClass = useCallback(
-    (_sectionId: string) => "border-transparent",
-    [],
-  );
-
+  const sectionHighlightClass = useCallback((_sectionId: string) => "border-transparent", []);
 
   // When an analysis is loaded via ?aid=, the row in Supabase is the source of
   // truth for project_id (a stale ctx from sessionStorage must not promote a
   // standalone analysis into a project one).
   const resolvedProjectId = analysisId ? loadedProjectId : (ctx?.projectId ?? loadedProjectId ?? null);
   const resolvedAnalysisId = activeAnalysisId ?? analysisId ?? ctx?.analysisId ?? null;
+
+  /**
+   * Refresh the chips under the chat from GET /threads/{thread_id}/datasets.
+   * Called after "+ Add" attaches a new file or an existing dataset to the
+   * current thread. Merges with the chips already shown and keeps the new
+   * datasets selected so the next message includes them.
+   */
+  const refreshThreadDatasets = useCallback(
+    async (opts?: { selectNew?: boolean }): Promise<number> => {
+      if (!threadId) return 0;
+      const items = await backendApi.listThreadDatasets(threadId);
+      const fresh: DatasetChip[] = (items ?? [])
+        .filter((d) => d?.dataset_id)
+        .map((d) => ({
+          id: d.dataset_id,
+          name: d.alias || d.filename || d.dataset_id,
+          sheetName: d.sheet_name ?? null,
+          sourceWorkbook: d.source_workbook ?? null,
+          rows: d.rows ?? null,
+          available: d.available !== false,
+          threadId,
+        }));
+      const serverSelected = (items ?? [])
+        .filter((d) => d?.dataset_id && d.selected === true && d.available !== false)
+        .map((d) => d.dataset_id);
+      const prevChips = datasetChipsRef.current;
+      const prevIds = new Set(prevChips.map((c) => c.id));
+      const byId = new Map(prevChips.map((c) => [c.id, c] as const));
+      for (const c of fresh) {
+        const existing = byId.get(c.id);
+        byId.set(
+          c.id,
+          existing
+            ? {
+                ...existing,
+                name: c.name,
+                sheetName: c.sheetName,
+                sourceWorkbook: c.sourceWorkbook,
+                rows: c.rows,
+                available: c.available,
+              }
+            : c,
+        );
+      }
+      const merged = Array.from(byId.values());
+      const newIds = fresh.filter((c) => !prevIds.has(c.id) && c.available !== false).map((c) => c.id);
+      const unavailable = new Set(merged.filter((c) => c.available === false).map((c) => c.id));
+      datasetChipsRef.current = merged;
+      setDatasetChips(merged);
+      storeDatasetBatch(resolvedAnalysisId ?? aidFromUrl ?? null, {
+        chips: merged,
+        selectedId: newIds[newIds.length - 1] ?? merged[0]?.id ?? null,
+      });
+      setSelectedDatasetIds((prev) => {
+        // The saved selection (GET selected: true) is authoritative after a reload.
+        const base = serverSelected.length ? serverSelected : prev;
+        const kept = base.filter((id) => !unavailable.has(id));
+        return opts?.selectNew ? Array.from(new Set([...kept, ...newIds])) : kept;
+      });
+      return merged.length - prevChips.length;
+    },
+    [threadId, resolvedAnalysisId, aidFromUrl],
+  );
+
+  // Load chips for this chat on open so a refresh shows every attached dataset.
+  useEffect(() => {
+    if (!threadId) return;
+    refreshThreadDatasets().catch((err) => console.warn("[analysis] load thread datasets failed", err));
+  }, [threadId, refreshThreadDatasets]);
+
+  // Fill missing per-dataset Auto Insights configs once per dataset_id:
+  // 1) known values from "+ Add", 2) saved analyses rows, 3) backend preview.
+  // Found configs are persisted as child rows under the mother analysis.
+  const vizLookupDoneRef = useRef<Set<string>>(new Set());
+  const knownDatasetVizRef = useRef<
+    Map<string, { viz_config: unknown; samples?: unknown[] | null; schema?: unknown; filename?: string | null }>
+  >(new Map());
+  useEffect(() => {
+    const missing = datasetChips.filter((c) => c?.id && !c.visualizationConfig && !vizLookupDoneRef.current.has(c.id));
+    if (!missing.length) return;
+    missing.forEach((c) => vizLookupDoneRef.current.add(c.id));
+    const ids = new Set(missing.map((c) => c.id));
+    setDatasetChips((prev) =>
+      prev.map((c) => (ids.has(c.id) && !c.visualizationConfig ? { ...c, visualizationStatus: "pending" } : c)),
+    );
+    const analysisForGroup = resolvedAnalysisId ?? aidFromUrl ?? null;
+    const motherPromise = analysisForGroup
+      ? resolveMotherAnalysisId(analysisForGroup).catch(() => analysisForGroup)
+      : Promise.resolve(null);
+    const lookup = async (chip: DatasetChip) => {
+      let found: {
+        viz_config: unknown;
+        samples?: unknown[] | null;
+        schema?: unknown;
+        filename?: string | null;
+      } | null = knownDatasetVizRef.current.get(chip.id) ?? null;
+      let persist = !!found;
+      if (!found) {
+        found = await findSavedDatasetViz(chip.id).catch(() => null);
+        persist = !!found;
+      }
+      if (!found) {
+        const sess = chip.sessionId ?? sessionId;
+        if (sess) {
+          const res = await backendApi
+            .getDatasetPreview(chip.id, sess, false, chip.threadId ?? threadId)
+            .catch(() => null);
+          const cfg = res?.visualization_config ?? res?.visualization_configs;
+          const rows = Array.isArray(res?.samples) ? res.samples : Array.isArray(res?.rows) ? res.rows : null;
+          if (cfg) {
+            found = {
+              viz_config: cfg,
+              samples: rows,
+              schema: res?.schema ?? res?.columns ?? null,
+              filename: chip.name,
+            };
+            persist = true;
+          }
+        }
+      }
+      setDatasetChips((prev) =>
+        prev.map((c) =>
+          c.id !== chip.id
+            ? c
+            : found
+              ? {
+                  ...c,
+                  visualizationConfig: found.viz_config,
+                  visualizationStatus: "ready",
+                  samples: (found.samples as Record<string, unknown>[] | null) ?? c.samples,
+                  schema: found.schema ?? c.schema,
+                }
+              : { ...c, visualizationStatus: "none" },
+        ),
+      );
+      if (found && persist) {
+        const motherId = await motherPromise;
+        if (motherId) {
+          await upsertGroupDatasetRow(motherId, {
+            dataset_id: chip.id,
+            filename: found.filename ?? chip.name,
+            schema: found.schema ?? chip.schema ?? null,
+            samples: found.samples ?? chip.samples ?? null,
+            viz_config: found.viz_config,
+          }).catch((e) => console.warn("[auto-insights] persist dataset viz failed", e));
+        }
+      }
+    };
+    // Max 4 lookups at a time.
+    const queue = [...missing];
+    const worker = async () => {
+      while (queue.length) {
+        const next = queue.shift()!;
+        await lookup(next).catch(() => {});
+      }
+    };
+    void Promise.all(Array.from({ length: Math.min(4, queue.length) }, worker));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [datasetChips]);
+
   const { typingUsers, notifyTyping, stopTyping } = useTypingPresence(resolvedAnalysisId);
 
   // Keep ?aid=<resolvedAnalysisId> in the URL so buttons that read the URL
@@ -2268,12 +2100,17 @@ useEffect(() => {
 
   const workspaceHeading = useMemo(() => {
     if (resolvedAnalysisId && resolvedAnalysisId === motherAnalysisId) {
+      const kind = uploadKind(
+        datasetChips.map((c) => ({ dataset_id: c.id, filename: c.name, source_workbook: c.sourceWorkbook ?? null })),
+      );
+      if (kind === "workbook" && datasetChips[0]?.sourceWorkbook)
+        return workbookHeading(datasetChips[0].sourceWorkbook, datasetChips.length);
       return analysisGroupName(motherAnalysisName || ctx?.name || "Analysis", datasetChips.length);
     }
     const child = childAnalyses.find((c) => c.id === resolvedAnalysisId);
     if (child) return child.name;
     return ctx?.name ?? "Analysis";
-  }, [resolvedAnalysisId, motherAnalysisId, motherAnalysisName, childAnalyses, ctx?.name, datasetChips.length]);
+  }, [resolvedAnalysisId, motherAnalysisId, motherAnalysisName, childAnalyses, ctx?.name, datasetChips]);
 
   const tabs = useMemo((): DashboardTab[] => {
     if (!resolvedProjectId || !motherAnalysisId) return [];
@@ -2383,7 +2220,6 @@ useEffect(() => {
             return base;
           }),
         );
-
       }
 
       // Never leave the chat empty: if this thread has no chat messages yet,
@@ -2439,9 +2275,9 @@ useEffect(() => {
         if (Array.isArray(out.output_json) && out.output_json.length > 0) {
           setAnalysisRows(out.output_json as Record<string, unknown>[]);
           setUserInsightsRows(out.output_json as Record<string, unknown>[]);
-          setView("table");
+          setView("results");
         }
-        lastMessageViz = resultVizFromOutput(out.output_json, out.viz_config);
+        if (out.viz_config) lastMessageViz = out.viz_config;
       }
 
       if (!row) return;
@@ -2465,14 +2301,30 @@ useEffect(() => {
       // the whole batch so the user can toggle between them inline.
       const storedBatch = readDatasetBatch(targetAnalysisId);
       let restoredChips: DatasetChip[] = [];
-      if (
-        storedBatch &&
-        (!row.dataset_id || storedBatch.chips.some((c) => c.id === row.dataset_id))
-      ) {
+      if (storedBatch && (!row.dataset_id || storedBatch.chips.some((c) => c.id === row.dataset_id))) {
         restoredChips = storedBatch.chips;
         setDatasetChips(storedBatch.chips);
-        const activeId =
-          storedBatch.selectedId ?? row.dataset_id ?? storedBatch.chips[0]?.id ?? null;
+        // The browser cache never overrides configs saved in the database:
+        // fill/replace each chip's config from its analyses row.
+        loadAnalysisGroupDatasets(targetAnalysisId)
+          .then((group) => {
+            const byId = new Map(group.map((g) => [g.dataset_id, g] as const));
+            setDatasetChips((prev) =>
+              prev.map((c) => {
+                const g = byId.get(c.id);
+                if (!g?.viz_config) return c;
+                return {
+                  ...c,
+                  visualizationConfig: g.viz_config,
+                  visualizationStatus: "ready",
+                  samples: (g.samples as Record<string, unknown>[] | null) ?? c.samples,
+                  schema: g.schema ?? c.schema,
+                };
+              }),
+            );
+          })
+          .catch(() => {});
+        const activeId = storedBatch.selectedId ?? row.dataset_id ?? storedBatch.chips[0]?.id ?? null;
         setSelectedDatasetIds(activeId ? [activeId] : []);
         const active = storedBatch.chips.find((c) => c.id === activeId);
         if (active) {
@@ -2486,12 +2338,29 @@ useEffect(() => {
         let groupChips: DatasetChip[] = [];
         try {
           const group = await loadAnalysisGroupDatasets(targetAnalysisId);
-          groupChips = group.map((g) => ({ id: g.dataset_id, name: g.name }));
+          groupChips = group.map((g) => ({
+            id: g.dataset_id,
+            name: g.name,
+            sessionId: g.session_id ?? undefined,
+            threadId: g.thread_id ?? undefined,
+            schema: g.schema ?? undefined,
+            visualizationConfig: g.viz_config ?? null,
+            visualizationStatus: g.viz_config ? "ready" : undefined,
+            samples: (g.samples as Record<string, unknown>[] | null) ?? undefined,
+          }));
         } catch {
           /* fall back to the single row below */
         }
         if (!groupChips.length && row.dataset_id) {
-          groupChips = [{ id: row.dataset_id, name: row.filename || "Dataset" }];
+          groupChips = [
+            {
+              id: row.dataset_id,
+              name: row.filename || "Dataset",
+              visualizationConfig: row.viz_config ?? null,
+              visualizationStatus: row.viz_config ? "ready" : undefined,
+              samples: Array.isArray(row.samples) ? (row.samples as Record<string, unknown>[]) : undefined,
+            },
+          ];
         }
         restoredChips = groupChips;
         setDatasetChips(groupChips);
@@ -2586,13 +2455,11 @@ useEffect(() => {
         }
       }
 
-        if (row.viz_config) {
+      if (row.viz_config) {
         setAutoInsightsConfig(row.viz_config as any);
         setAutoInsightsStatus("ready");
         setAnalysisVizConfig(row.viz_config);
-        // Analyses that already have results open on the data table;
-        // fresh ones with only Auto Insights still open on the chart.
-        setView(hydratedRuns.length ? "table" : "chart");
+        setView("chart");
       } else if (lastMessageViz) {
         setAutoInsightsConfig(null);
         setAutoInsightsStatus(undefined);
@@ -2686,7 +2553,6 @@ useEffect(() => {
     }
     setChildPickerOpen(true);
   }, [motherAnalysisId, resolvedProjectId]);
-
 
   const addWorkspaceSection = useCallback(() => {
     const tabId = resolvedTabIdRef.current || resolvedTabId;
@@ -2819,7 +2685,6 @@ useEffect(() => {
     [autoChartSlides],
   );
 
-
   const mainSectionUserSlides = useMemo(() => {
     const raw = userChartSlidesForSection(userInsightEntries, currentMainSectionId, undefined, chartSamples);
     return dedupeSlidesByInsight(raw, autoChartTitles);
@@ -2854,8 +2719,7 @@ useEffect(() => {
       const base = collectSlidesInsights(slides);
       const extras = runs.flatMap((r) => r.extraInsights ?? []);
       const extra = extras.filter(
-        (i, idx) =>
-          i && !base.insights.includes(i) && !base.summaries.includes(i) && extras.indexOf(i) === idx,
+        (i, idx) => i && !base.insights.includes(i) && !base.summaries.includes(i) && extras.indexOf(i) === idx,
       );
       return { groupId, runs, slides, insights: { ...base, insights: [...base.insights, ...extra] } };
     });
@@ -2870,16 +2734,6 @@ useEffect(() => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [codeOpen, selectedRunId, codeRunId]);
 
-  const goToRun = useCallback(
-    (dir: -1 | 1) => {
-      if (tableRuns.length < 2) return;
-      const from = selectedRunIndex >= 0 ? selectedRunIndex : tableRuns.length - 1;
-      const next = tableRuns[(from + dir + tableRuns.length) % tableRuns.length];
-      if (next) setSelectedRunId(next.id);
-    },
-    [tableRuns, selectedRunIndex],
-  );
-
   /** Copy only the current result's analysis data (table rows + code +
    *  fidelity) to the clipboard — never chat messages, never viz config. */
   /** When clipboard APIs are blocked (iframe permission policy etc.), show
@@ -2887,29 +2741,16 @@ useEffect(() => {
   const [copyFallbackText, setCopyFallbackText] = useState<string | null>(null);
 
   const copyAnalysisData = useCallback(async () => {
-    // Auto Insights can exist without any analysis/table result.
-    // In that case we should still allow Copy and copy the Auto Insights.
-    const hasAutoInsights =
-      autoChartSlides.length > 0 ||
-      mainSectionUserSlides.length > 0;
-
-    if (!selectedRun && !hasAutoInsights) {
-      toast.error("No analysis result or auto insights to copy");
+    if (!selectedRun) {
+      toast.error("No analysis result to copy");
       return;
     }
-
-    // Copy EVERY result of the current tab when analysis results exist.
-    // If there are no results, create an insight-only clip.
+    // Copy EVERY result of the current tab (not just the visible page), each
+    // with its own chart config, plus the tab's key insights.
     const tabId = resolvedTabId || activeTabId;
-    const inTab = (sid: string) =>
-      sid === currentMainSectionId || (!!tabId && sid.startsWith(`${tabId}-`));
-
+    const inTab = (sid: string) => sid === currentMainSectionId || (!!tabId && sid.startsWith(`${tabId}-`));
     const runsInTab = tableRuns.filter((r) => inTab(r.sectionId));
-    const sourceRuns = runsInTab.length
-      ? runsInTab
-      : selectedRun
-        ? [selectedRun]
-        : [];
+    const sourceRuns = runsInTab.length ? runsInTab : [selectedRun];
 
     const toClipRun = (r: TableRun): AnalysisClipRun => ({
       id: r.id,
@@ -2918,24 +2759,15 @@ useEffect(() => {
       code: r.code ?? null,
       promptTs: r.promptTs ?? null,
       file: r.file ?? null,
-      vizConfig:
-        userInsightEntries.find((e) => e.id === r.id)?.vizConfig ??
-        deriveVizFromRows(r.rows) ??
-        null,
+      vizConfig: userInsightEntries.find((e) => e.id === r.id)?.vizConfig ?? deriveVizFromRows(r.rows) ?? null,
     });
 
-    // Capture charts from actual analysis runs.
+    // Capture EVERY chart currently rendered for this tab (auto insights,
+    // user insights and each result's own charts) so paste reproduces them all.
     const runSlides = sourceRuns.flatMap((r) => {
-      const viz =
-        userInsightEntries.find((e) => e.id === r.id)?.vizConfig ??
-        deriveVizFromRows(r.rows);
-
-      return viz
-        ? (slidesForDashboardTab(viz, r.rows, undefined) as Slide[])
-        : [];
+      const viz = userInsightEntries.find((e) => e.id === r.id)?.vizConfig ?? deriveVizFromRows(r.rows);
+      return viz ? (slidesForDashboardTab(viz, r.rows, undefined) as Slide[]) : [];
     });
-
-    // Auto Insights + user insights + result charts.
     const allSlides = dedupeSlidesByInsight([
       ...autoChartSlides,
       ...mainSectionUserSlides,
@@ -2944,60 +2776,35 @@ useEffect(() => {
 
     const tabInsights = collectSlidesInsights(allSlides);
 
-    // Nothing actually copyable.
-    if (allSlides.length === 0 && tabInsights.summaries.length === 0 && tabInsights.insights.length === 0) {
-      toast.error("No analysis result or auto insights to copy");
-      return;
-    }
-
     let serializedSlides: unknown[] = [];
-
     try {
       serializedSlides = JSON.parse(JSON.stringify(allSlides));
     } catch {
       serializedSlides = [];
     }
 
-    // AnalysisClip requires a `run` for backwards compatibility.
-    // For Auto-Insights-only tabs, use an empty placeholder run.
-    const fallbackRun: AnalysisClipRun = {
-      id: `auto-insights-${Date.now()}`,
-      title: `${workspaceHeading} - Auto Insights`,
-      rows: [],
-      code: null,
-      promptTs: null,
-      file: null,
-      vizConfig: resolvedAutoViz ?? null,
-    };
-
     const clip: AnalysisClip = {
       marker: AVALOKA_CLIP_MARKER,
       v: 1,
-      run: sourceRuns[0] ? toClipRun(sourceRuns[0]) : fallbackRun,
+      run: toClipRun(selectedRun),
       runs: sourceRuns.map(toClipRun),
       insights: [...tabInsights.summaries, ...tabInsights.insights],
       slides: serializedSlides,
       fidelity: analysisFidelity,
     };
-
     const text = JSON.stringify(clip);
 
     // Try the async clipboard API first.
     if (navigator.clipboard && window.isSecureContext) {
       try {
         await navigator.clipboard.writeText(text);
-        toast.success(
-          sourceRuns.length
-            ? "Analysis data copied — paste into another analysis"
-            : "Auto insights copied — paste into another analysis",
-        );
+        toast.success("Analysis data copied — paste into another analysis");
         return;
       } catch {
-        // Fall through to execCommand.
+        // Fall through to the execCommand path below.
       }
     }
-
-    // Fallback for browsers/iframes blocking navigator.clipboard.
+    // Fallback: hidden textarea + execCommand (works where writeText is denied).
     try {
       const ta = document.createElement("textarea");
       ta.value = text;
@@ -3006,24 +2813,17 @@ useEffect(() => {
       ta.style.left = "0";
       ta.style.opacity = "0";
       ta.setAttribute("readonly", "");
-
       document.body.appendChild(ta);
       ta.focus();
       ta.select();
       ta.setSelectionRange(0, ta.value.length);
-
       const ok = document.execCommand("copy");
       document.body.removeChild(ta);
-
       if (!ok) throw new Error("execCommand copy failed");
-
-      toast.success(
-        sourceRuns.length
-          ? "Analysis data copied — paste into another analysis"
-          : "Auto insights copied — paste into another analysis",
-      );
+      toast.success("Analysis data copied — paste into another analysis");
       return;
     } catch {
+      // Last resort: show the text so the user can copy it manually.
       setCopyFallbackText(text);
       toast.info("Clipboard is blocked here — copy the text from the dialog");
     }
@@ -3037,8 +2837,6 @@ useEffect(() => {
     userInsightEntries,
     autoChartSlides,
     mainSectionUserSlides,
-    resolvedAutoViz,
-    workspaceHeading,
   ]);
 
   /** Paste modal state — user pastes the copied blob into a text area, then
@@ -3053,23 +2851,18 @@ useEffect(() => {
       return;
     }
     const stamp = Date.now();
-    const groupId = `pasted-${stamp}`;
     const sectionId = currentMainSectionId || "main";
-    const rawClipRuns = clip.runs?.length ? clip.runs : [clip.run];
-
-    const clipRuns = rawClipRuns.filter((r) => r && Array.isArray(r.rows));
-
-    const tabInsights = Array.isArray(clip.insights) ? clip.insights.filter(Boolean) : [];
-
-    const clipSlides = Array.isArray(clip.slides) ? clip.slides : [];
-
-    const hasAnalysisData = clipRuns.some((r) => r.rows.length > 0);
-    const hasAutoInsights = clipSlides.length > 0 || tabInsights.length > 0;
-
-    if (!hasAnalysisData && !hasAutoInsights) {
-      toast.error("Copied analysis has no data or auto insights");
+    const clipRuns = (clip.runs?.length ? clip.runs : [clip.run]).filter(
+      (r) => r && Array.isArray(r.rows) && r.rows.length > 0,
+    );
+    if (!clipRuns.length) {
+      toast.error("Copied analysis has no data");
       return;
     }
+    const tabInsights = Array.isArray(clip.insights) ? clip.insights.filter(Boolean) : [];
+
+    const groupId = `pasted-${stamp}`;
+    const clipSlides = Array.isArray(clip.slides) ? clip.slides : [];
 
     const pastedRuns: PastedAnalysis[] = clipRuns.map((r, i) => ({
       id: `pasted-${stamp}-${i}`,
@@ -3081,24 +2874,25 @@ useEffect(() => {
       promptTs: r.promptTs ?? null,
       file: r.file ?? null,
       vizConfig: r.vizConfig ?? null,
-
-      // Charts + key insights ride on the first run.
+      // Charts + key insights of the source tab ride on the first run of the
+      // group; the whole group renders as one carousel block.
       slides: i === 0 ? clipSlides : undefined,
       extraInsights: i === 0 ? tabInsights : undefined,
     }));
 
-    toast.success(
-      hasAnalysisData
-        ? pastedRuns.length > 1
-          ? `${pastedRuns.length} pasted results added below the current analysis`
-          : "Pasted result added below the current analysis"
-        : "Auto insights pasted successfully",
-    );
-
     setPastedAnalyses((prev) => [...prev, ...pastedRuns]);
     setPasteOpen(false);
     setPasteText("");
+    toast.success(
+      pastedRuns.length > 1
+        ? `${pastedRuns.length} pasted results added below the current analysis`
+        : "Pasted result added below the current analysis",
+    );
 
+    // Persist so the pasted results survive a reload — stored on the analysis
+    // message stream as a `pasted_analyses` payload (not a chat bubble), and
+    // merge the pasted rows into the analysis' `samples` column so the full
+    // dataset (original + pasted) travels with the analysis row.
     const aid = resolvedAnalysisId;
     if (aid) {
       void persistMessage({
@@ -3111,9 +2905,7 @@ useEffect(() => {
       void (async () => {
         try {
           const row = await persistLoadAnalysis(aid);
-          const existing = Array.isArray(row?.samples)
-            ? (row.samples as Record<string, unknown>[])
-            : [];
+          const existing = Array.isArray(row?.samples) ? (row.samples as Record<string, unknown>[]) : [];
           const merged = [...existing, ...pastedRuns.flatMap((r) => r.rows)];
           await persistUpdateAnalysisContext(aid, { samples: merged });
         } catch (err) {
@@ -3125,6 +2917,65 @@ useEffect(() => {
 
   /** Result action toolbar — rendered under the data table AND under the
    *  charts of the currently viewed result. Scoped to that result only. */
+  // Data View (table / chart builder / column summary) works on rows already loaded.
+  const viewDataset = persistedDataset ?? sessionUploadedDataset;
+  const columnProfiles: ColumnProfile[] = Array.isArray(autoInsightsConfig?.column_stats)
+    ? autoInsightsConfig.column_stats
+    : [];
+  // Data sample and chat analysis results are separate views: the sample is
+  // always the uploaded dataset's rows; results come from tableRuns only.
+  const sampleRows: Record<string, unknown>[] = viewDataset?.samples ?? [];
+  const sampleColumns: string[] = (() => {
+    if (viewDataset?.schema?.length) return viewDataset.schema;
+    const keys = new Set<string>();
+    sampleRows.slice(0, 50).forEach((row) => Object.keys(row ?? {}).forEach((key) => keys.add(key)));
+    return Array.from(keys);
+  })();
+  const selectedRunTables = selectedRun ? tablesForRun(selectedRun) : [];
+  const safeResultTableIndex = Math.min(resultTableIndex, Math.max(selectedRunTables.length - 1, 0));
+  const selectedResultRows: Record<string, unknown>[] = selectedRunTables[safeResultTableIndex]?.rows ?? [];
+  // Chart and Column Summary follow the last active sample/results table.
+  const dataViewRows: Record<string, unknown>[] =
+    lastDataView === "results" && selectedRun ? selectedResultRows : sampleRows;
+  const dataViewColumns: string[] = (() => {
+    if (lastDataView === "sample" && viewDataset?.schema?.length) return viewDataset.schema;
+    const keys = new Set<string>();
+    dataViewRows.slice(0, 50).forEach((row) => Object.keys(row ?? {}).forEach((key) => keys.add(key)));
+    return Array.from(keys);
+  })();
+  const dataSourceLabel =
+    lastDataView === "results" && selectedRun ? `Analysis ${selectedRunIndex + 1}` : "Data sample";
+  const dataSourceSwitch =
+    lastDataView === "results"
+      ? { label: "Switch to Data sample", view: "sample" as const }
+      : { label: tableRuns.length ? "Switch to Analysis results" : null, view: "results" as const };
+  const openResultInChat = (run: TableRun) => {
+    setChatOpen(true);
+    if (!run.messageId) return;
+    setChatHighlightId(run.messageId);
+    requestAnimationFrame(() => {
+      document
+        .querySelector(`[data-message-id="${run.messageId}"]`)
+        ?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+    window.setTimeout(() => setChatHighlightId(null), 2200);
+  };
+  const chartColumn = (column: string, _kind: ColumnKind) => {
+    setChatDraft(`Create a chart of ${column} `);
+    setChatOpen(true);
+    requestAnimationFrame(() => {
+      document.querySelector<HTMLTextAreaElement>("textarea")?.focus();
+    });
+  };
+  const askChartInChat = () => {
+    setChatDraft("Create a chart of ");
+    setChatOpen(true);
+    requestAnimationFrame(() => {
+      const box = document.querySelector<HTMLTextAreaElement>("textarea");
+      box?.focus();
+    });
+  };
+
   const renderResultToolbar = () => (
     <TooltipProvider delayDuration={100}>
       <div className="mt-4 flex items-center gap-4 text-fg-quaternary">
@@ -3137,54 +2988,52 @@ useEffect(() => {
           { label: "Open code", Icon: CodeSnippet02 },
           { label: "Good Response", Icon: ThumbsUp },
           { label: "Bad Response", Icon: ThumbsDown },
-          // { label: "Add New Section", Icon: PlusSquareIcon },
+          { label: "Add New Section", Icon: PlusSquareIcon },
         ].map(({ label, Icon }) => {
           const isComment = label === "Add to Comment";
-          // const isNewSection = label === "Add New Section";
+          const isNewSection = label === "Add New Section";
           const isThumbUp = label === "Good Response";
           const isThumbDown = label === "Bad Response";
           const isRefresh = label === "Refresh";
           const isCopy = label === "Copy";
           const isPaste = label === "Paste result";
           const isActiveThumb =
-            (isThumbUp && insightFeedback === "positive") ||
-            (isThumbDown && insightFeedback === "negative");
+            (isThumbUp && insightFeedback === "positive") || (isThumbDown && insightFeedback === "negative");
           const btn = (
             <button
               aria-label={label}
               aria-pressed={isThumbUp || isThumbDown ? isActiveThumb : undefined}
-              disabled={
-                ((isThumbUp || isThumbDown) && feedbackSubmitting !== null) ||
-                (isRefresh && refreshing)
-              }
+              disabled={((isThumbUp || isThumbDown) && feedbackSubmitting !== null) || (isRefresh && refreshing)}
               onClick={
                 label === "Add to dashboard"
                   ? () => openAddToDashboard(0)
                   : isComment
                     ? () => setInsightCommentOpen((v) => !v)
-                    : label === "Open code"
-                      ? () => {
-                          void handleOpenCode();
-                        }
-                      : isRefresh
+                    : isNewSection
+                      ? () => addWorkspaceSection()
+                      : label === "Open code"
                         ? () => {
-                            void handleRefresh();
+                            void handleOpenCode();
                           }
-                        : isThumbUp
+                        : isRefresh
                           ? () => {
-                              void handleThumb("positive");
+                              void handleRefresh();
                             }
-                          : isThumbDown
+                          : isThumbUp
                             ? () => {
-                                void handleThumb("negative");
+                                void handleThumb("positive");
                               }
-                            : isCopy
+                            : isThumbDown
                               ? () => {
-                                  void copyAnalysisData();
+                                  void handleThumb("negative");
                                 }
-                              : isPaste
-                                ? () => setPasteOpen(true)
-                                : undefined
+                              : isCopy
+                                ? () => {
+                                    void copyAnalysisData();
+                                  }
+                                : isPaste
+                                  ? () => setPasteOpen(true)
+                                  : undefined
               }
               className={cx(
                 "cursor-pointer hover:text-fg-secondary disabled:opacity-50",
@@ -3251,9 +3100,7 @@ useEffect(() => {
                       <li key={v.prompt_ts} className="flex items-start gap-3 px-4 py-3">
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-2">
-                            <p className="truncate text-sm font-medium text-primary">
-                              {formatPromptTs(v.prompt_ts)}
-                            </p>
+                            <p className="truncate text-sm font-medium text-primary">{formatPromptTs(v.prompt_ts)}</p>
                             {v.is_current && (
                               <span className="rounded-full bg-[#eff5ff] px-1.5 py-0.5 text-[10px] font-medium text-[#175cd3]">
                                 Current
@@ -3300,22 +3147,125 @@ useEffect(() => {
     </TooltipProvider>
   );
 
-  const downloadSelectedRunCsv = useCallback(() => {
-    if (!selectedRun?.rows?.length) return;
-    const blob = new Blob([tableRunToCsv(selectedRun.rows)], { type: "text/csv;charset=utf-8;" });
+  // Download CSV follows the visible table: the dataset sample or the
+  // currently selected analysis result table.
+  const downloadActiveCsv = useCallback(() => {
+    const rows = view === "sample" ? sampleRows : selectedResultRows;
+    if (!rows.length) return;
+    const dataset = autoInsightsDatasetName ?? navState?.filename ?? viewDataset?.filename ?? "dataset";
+    const filename = view === "sample" ? sampleCsvName(dataset) : analysisCsvName(dataset, selectedRunIndex + 1);
+    const blob = new Blob([tableRunToCsv(rows)], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `analysis-result-${selectedRunIndex + 1}.csv`;
+    a.download = filename;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-  }, [selectedRun, selectedRunIndex]);
+  }, [
+    view,
+    sampleRows,
+    selectedResultRows,
+    autoInsightsDatasetName,
+    navState?.filename,
+    viewDataset?.filename,
+    selectedRunIndex,
+  ]);
 
+  // Chart / Column Summary track whichever data table the user last viewed.
+  useEffect(() => {
+    if (view === "sample" || view === "results") setLastDataView(view);
+  }, [view]);
+
+  // Switching analyses resets the table pill to the first table.
+  useEffect(() => setResultTableIndex(0), [selectedRunId]);
 
   const tabVizInsights = useMemo(() => collectSlidesInsights(autoChartSlides), [autoChartSlides]);
-  const hasTabInsights = tabVizInsights.summaries.length > 0 || tabVizInsights.insights.length > 0;
+  const workspaceFindings = useMemo(() => {
+    const userSlides = userInsightEntries.flatMap((entry) => normalizeVizConfig(entry.vizConfig, chartSamples));
+    const userFindings = collectSlidesInsights(userSlides);
+    return tabVizInsights.summaries.concat(tabVizInsights.insights, userFindings.summaries, userFindings.insights);
+  }, [tabVizInsights, userInsightEntries, chartSamples]);
+  // Multi-dataset analyses: one shared top-5 pick for the Chart tab and the chat findings.
+  const multiTop = useMemo(() => {
+    if (!multiDatasetInsights) return null;
+    const rowsById = new Map(datasetChips.map((c) => [c.id, c.totalRows ?? c.rows ?? null] as const));
+    const picks = pickTopInsights(
+      autoInsightGroups.map((g) => ({
+        id: g.id,
+        name: g.name,
+        rows: rowsById.get(g.id) ?? null,
+        visualization_config: g.config,
+      })),
+    );
+    const slideFor = (groupId: string, chart: TopInsightChart) => {
+      const group = autoInsightGroups.find((g) => g.id === groupId);
+      const title = String(chart.title ?? "")
+        .trim()
+        .toLowerCase();
+      return group?.slides.find(
+        (s) => (chart.id != null && s.id === chart.id) || (title && s.title.trim().toLowerCase() === title),
+      );
+    };
+    const topSlides = picks
+      .map((p) => {
+        const slide = slideFor(p.datasetId, p.chart);
+        return slide ? { ...slide, sourceLabel: p.datasetName } : null;
+      })
+      .filter(Boolean);
+    const findingPicks = picks
+      .map((p) => {
+        const slide = slideFor(p.datasetId, p.chart);
+        const text = pickFindingText({
+          ...p.chart,
+          headline: p.chart.headline ?? slide?.headline,
+          insight: p.chart.insight ?? slide?.insights[0],
+        });
+        return { text, datasetName: p.datasetName };
+      })
+      .filter((p) => p.text);
+    const findingGroups = dedupeFindingGroups(
+      autoInsightGroups
+        .map((g) => {
+          const own = collectSlidesInsights(g.slides as Slide[]);
+          return { id: g.id, name: g.name, findings: own.summaries.concat(own.insights) };
+        })
+        .concat([
+          {
+            id: "__other__",
+            name: "Other findings",
+            findings: keyFindingBullets(
+              messages.find((m) => m.role === "ai" && !m.thinking && !m.error)?.content ?? "",
+            ).concat(
+              collectSlidesInsights(
+                userInsightEntries.flatMap((entry) => normalizeVizConfig(entry.vizConfig, chartSamples)),
+              ).insights,
+            ),
+          },
+        ]),
+    );
+    const kind = uploadKind(
+      datasetChips.map((c) => ({ dataset_id: c.id, filename: c.name, source_workbook: c.sourceWorkbook ?? null })),
+    );
+    const noun = kind === "workbook" ? "sheets" : "files";
+    return {
+      heading: `Top insights across ${autoInsightGroups.length} ${noun}`,
+      topSlides,
+      totalCharts: autoInsightGroups.reduce((sum, g) => sum + g.slides.length, 0),
+      findingPicks,
+      findingGroups,
+    };
+  }, [multiDatasetInsights, autoInsightGroups, datasetChips, messages, userInsightEntries, chartSamples]);
+  const displayMessages = useMemo(
+    () => (multiTop ? messages : messagesWithKeyFindings(messages, workspaceFindings)),
+    [messages, workspaceFindings, multiTop],
+  );
+  const chatKeyFindings = useMemo(() => getKeyFindings(displayMessages), [displayMessages]);
+  const firstAiMessageId = useMemo(
+    () => displayMessages.find((m) => m.role === "ai" && !m.thinking && !m.error)?.id ?? null,
+    [displayMessages],
+  );
 
   const resolveThreadVizConfig = useCallback(
     (targetAnalysisId: string) => {
@@ -3523,11 +3473,30 @@ useEffect(() => {
     })();
   };
 
+  // Thread whose deferred turn send() is awaiting right now. While set, the
+  // background listener must not claim that result: send() renders it with
+  // the full pipeline. Claiming it here too rendered the same answer twice,
+  // the extra copy titled "Training result".
+  const awaitingDeferredThreadRef = useRef<string | null>(null);
+
+  /** Title for a result card: the user's prompt, as for a direct response. */
+  const deferredResultTitle = (res: any, label?: string | null): string => {
+    const userMsg = Array.isArray(res?.messages)
+      ? [...res.messages]
+          .reverse()
+          .find((m: any) => m && m.role === "user" && typeof m.content === "string" && m.content.trim())
+      : null;
+    const prompt = String(userMsg?.content ?? label ?? "").trim();
+    if (prompt) return prompt;
+    return res?.training_completed === true ? "Training result" : "Result";
+  };
+
   /**
-   * Render a training result that finished while this view was unmounted
-   * (the user navigated away mid-run). Minimal: assistant text + table + chart.
+   * Render a deferred result (analysis or training) that finished while this
+   * view was unmounted (the user navigated away mid-run).
+   * Minimal: assistant text + table + chart.
    */
-  const applyBackgroundTrainingResult = (res: any) => {
+  const applyBackgroundTrainingResult = (res: any, label?: string | null) => {
     if (!res || typeof res !== "object") return;
     updatePlannerGraphAvailability(res);
     const sectionId = activeSectionIdRef.current || mainSectionId(resolvedTabIdRef.current || activeTabId);
@@ -3552,23 +3521,26 @@ useEffect(() => {
     ]);
 
     const runId = `bg-run-${Date.now()}`;
-    const rows: Record<string, unknown>[] | null = Array.isArray(res.output_json) && res.output_json.length
-      ? (res.output_json as Record<string, unknown>[])
-      : extracted.tables[0]?.rows ?? null;
+    const rows: Record<string, unknown>[] | null =
+      Array.isArray(res.output_json) && res.output_json.length
+        ? (res.output_json as Record<string, unknown>[])
+        : (extracted.tables[0]?.rows ?? null);
     if (rows && rows.length) {
       setAnalysisRows(rows);
       setUserInsightsRows(rows);
       pushTableRun({
         id: runId,
         sectionId,
-        title: "Training result",
+        title: deferredResultTitle(res, label),
         rows,
         code: typeof res?.coder_definition?.code === "string" ? res.coder_definition.code : null,
         promptTs: null,
         file: null,
+        prompt: typeof label === "string" && label.trim() ? label : null,
+        ranAt: new Date().toISOString(),
       });
-      setView("table");
-      const viz = deriveVizFromRows(rows) ?? (res.visualization_config ?? null);
+      setView("results");
+      const viz = deriveVizFromRows(rows) ?? res.visualization_config ?? null;
       if (viz) {
         setUserInsightsViz(viz);
         setUserInsightsList((prev) =>
@@ -3586,8 +3558,12 @@ useEffect(() => {
   useEffect(() => {
     if (!threadId) return;
     const drain = () => {
+      // send() is awaiting this thread's deferred turn and will render it.
+      if (awaitingDeferredThreadRef.current === threadId) return;
       const claimed = claimTrainingResult(threadId);
-      if (claimed?.result) applyBackgroundTrainingResult(claimed.result);
+      if (claimed?.result) {
+        applyBackgroundTrainingResult(claimed.result, claimed.label ?? null);
+      }
     };
     drain();
     const onEvent = (e: Event) => {
@@ -3606,7 +3582,6 @@ useEffect(() => {
 
     const tabId = resolvedTabIdRef.current || resolvedTabId || activeTabId;
     const targetSectionId = activeSectionIdRef.current || mainSectionId(tabId);
-
 
     const nowTime = new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
     const userId = `u${Date.now()}`;
@@ -3658,22 +3633,17 @@ useEffect(() => {
       // Dataset routing: always carry the full group of dataset_ids so a
       // multi-file group keeps every file in scope on every turn. A single
       // explicit selection narrows the request to that one dataset.
-      const groupIds = Array.from(new Set(datasetChips.map((c) => c.id).filter(Boolean)));
-      const validSelected = Array.from(
-        new Set(selectedDatasetIds.filter((id) => id && groupIds.includes(id))),
+      const groupIds = Array.from(
+        new Set(
+          datasetChips
+            .filter((c) => c.available !== false)
+            .map((c) => c.id)
+            .filter(Boolean),
+        ),
       );
-      const datasetIdsToSend =
-        validSelected.length === 1
-          ? validSelected
-          : groupIds.length > 0
-            ? groupIds
-            : undefined;
-      const pinnedId =
-        validSelected.length === 1
-          ? validSelected[0]
-          : groupIds.length === 1
-            ? groupIds[0]
-            : null;
+      const validSelected = Array.from(new Set(selectedDatasetIds.filter((id) => id && groupIds.includes(id))));
+      const datasetIdsToSend = validSelected.length > 0 ? validSelected : groupIds.length > 0 ? groupIds : undefined;
+      const pinnedId = validSelected.length === 1 ? validSelected[0] : groupIds.length === 1 ? groupIds[0] : null;
       let res = await backendApi.sendMessage(
         threadId,
         sessionId,
@@ -3686,16 +3656,15 @@ useEffect(() => {
       // eslint-disable-next-line no-console
       console.log("[analysis.sendMessage] raw response", res);
 
-          if (isDeferredTurn(res)) {
+      // LONG-RUNNING TURN: the backend either accepted a training job and is
+      // still running it, or the proxy stopped waiting for a slow response.
+      // Keep the user's message, show a progress bubble and poll for the
+      // real result instead of failing or faking a "Done." reply.
+      if (isDeferredTurn(res)) {
         const deferredId = (res as any).analysis_task_id ?? null;
-        // The backend now tells us WHAT deferred. Only a real training turn may
-        // show training UI; a slow analysis shows a neutral "still running".
-        const pendingKind: "training" | "analysis" =
-          (res as any).pending_kind === "training" || (res as any).training_status === "running"
-            ? "training"
-            : "analysis";
-        const isTraining = pendingKind === "training";
-
+        // The backend classifies every deferred turn (pending_kind). Only a
+        // real training turn is described as training.
+        const isTrainingTurn = (res as any).pending_kind === "training" || (res as any).training_status === "running";
         setMessages((curr) =>
           curr.map((m) =>
             m.id === placeholderId
@@ -3703,26 +3672,36 @@ useEffect(() => {
                   ...m,
                   thinking: true,
                   error: false,
-                  content: isTraining
+                  content: isTrainingTurn
                     ? "Training is running — this can take a few minutes. Results will appear here automatically."
-                    : "This analysis is taking longer than usual — results will appear here automatically when it's done.",
+                    : "This analysis is taking longer than usual — the answer will appear here automatically.",
                 }
               : m,
           ),
         );
 
-        const pending = await startTrainingJob({
-          threadId,
-          deferredId,
-          sessionId,
-          analysisId: aid ?? resolvedAnalysisId ?? null,
-          kind: pendingKind, // NEW: suppress the "Training model…" toast for analysis
-          label:
-            (isTraining ? "Training run" : "Analysis") +
-            (String(content ?? "").trim() ? `: ${String(content).trim().slice(0, 60)}` : ""),
-        });
+        // Polling lives in the global training-jobs store so it survives
+        // navigation between threads/views. Exactly one poll per thread.
+        awaitingDeferredThreadRef.current = threadId;
+        let pending: Awaited<ReturnType<typeof startTrainingJob>>;
+        try {
+          pending = await startTrainingJob({
+            threadId,
+            deferredId,
+            sessionId,
+            analysisId: aid ?? resolvedAnalysisId ?? null,
+            label:
+              String(content ?? "")
+                .trim()
+                .slice(0, 80) || (isTrainingTurn ? "Training run" : "Analysis"),
+            kind: isTrainingTurn ? "training" : "analysis",
+          });
+        } finally {
+          awaitingDeferredThreadRef.current = null;
+        }
 
         if (pending.status === "done" && pending.result) {
+          // Claim it so the background listener doesn't render it twice.
           claimTrainingResult(threadId);
           res = pending.result;
           // eslint-disable-next-line no-console
@@ -3730,22 +3709,27 @@ useEffect(() => {
         } else if (pending.status === "error") {
           const failMsg =
             pending.message ||
-            (isTraining ? "Training failed. Please try again." : "The analysis failed. Please try again.");
+            (isTrainingTurn ? "Training failed. Please try again." : "The analysis failed. Please try again.");
           setMessages((curr) =>
             curr.map((m) =>
               m.id === placeholderId
-                ? { ...m, thinking: false, error: true, content: `⚠️ ${failMsg}`,
-                    time: new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) }
+                ? {
+                    ...m,
+                    thinking: false,
+                    error: true,
+                    content: `⚠️ ${failMsg}`,
+                    time: new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }),
+                  }
                 : m,
             ),
           );
           return false;
         } else {
+          // superseded / none — a newer turn took over. Drop the bubble quietly.
           setMessages((curr) => curr.filter((m) => m.id !== placeholderId));
           return true;
         }
       }
-
 
       // Failed / unreachable backend (proxy fallback envelope or empty body):
       // never turn it into a "Done." reply.
@@ -3766,7 +3750,6 @@ useEffect(() => {
         return false;
       }
 
-
       updatePlannerGraphAvailability(res);
 
       // Render the LAST assistant message's explanatory text. Any tabular
@@ -3774,10 +3757,7 @@ useEffect(() => {
       const allMsgs = (res.messages ?? []) as any[];
       const lastAssistant = [...allMsgs]
         .reverse()
-        .find(
-          (m) =>
-            m && m.role === "assistant" && typeof m.content === "string" && m.content.trim().length > 0,
-        );
+        .find((m) => m && m.role === "assistant" && typeof m.content === "string" && m.content.trim().length > 0);
       const extracted = lastAssistant
         ? extractTabularContent(lastAssistant.content as string)
         : { text: "", tables: [] as ParsedTable[] };
@@ -3835,9 +3815,27 @@ useEffect(() => {
         });
       }
 
-      // The MTA's assistant reply already contains the training report and run ID.
-      // training_completed persists across turns, so it must not create a second
-      // chat bubble (or replay the same run ID after an unrelated message).
+      // TRAINING RESULT: summarise the completed run under the assistant text.
+      if ((res as any).training_completed === true) {
+        const metrics = (res as any).training_metrics ?? (res as any).training_result?.metrics ?? null;
+        const metricLines =
+          metrics && typeof metrics === "object"
+            ? Object.entries(metrics)
+                .slice(0, 12)
+                .map(([k, v]) => `- **${k}**: ${typeof v === "number" ? Number(v).toFixed(4) : String(v)}`)
+                .join("\n")
+            : "";
+        const runId = (res as any).mlflow_run_id;
+        const statusLabel = String((res as any).training_status ?? "completed");
+        assistantMsgs.push({
+          id: `${placeholderId}-train`,
+          role: "ai" as const,
+          content: [`**Training ${statusLabel}**`, runId ? `Run ID: \`${runId}\`` : "", metricLines]
+            .filter(Boolean)
+            .join("\n\n"),
+          time: new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }),
+        });
+      }
 
       setMessages((curr) => {
         const without = curr.filter((m) => m.id !== placeholderId);
@@ -3856,26 +3854,28 @@ useEffect(() => {
       // If the assistant returned markdown tables with no structured output_json,
       // parse them into result runs so they render in the Data Table panel.
       const extractedTableRunIds: string[] = [];
-      const resultTables = Array.isArray(res.output_tables) ? res.output_tables : [];
-      const hasStructuredRows = (Array.isArray(res.output_json) && res.output_json.length > 0) || resultTables.length > 0;
-      // Structured results, including separate grouped tables, take priority
-      // over tables repeated in the assistant's markdown reply.
+      const hasStructuredRows = Array.isArray(res.output_json) && res.output_json.length > 0;
+      // One request must map to exactly one result: when the backend already
+      // returned structured rows, ignore markdown tables in the same reply.
       if (extractedTables.length && !isScheduledResponse && !hasStructuredRows) {
         const baseRunId = `chat-${Date.now()}`;
-        extractedTables.forEach((table, idx) => {
-          const runId = `${baseRunId}-table-${idx}`;
-          extractedTableRunIds.push(runId);
-          pushTableRun({
-            id: runId,
-            sectionId: targetSectionId,
-            title: String(content ?? "").trim() || "Result",
-            rows: table.rows,
-            code: null,
-            promptTs: null,
-            file: null,
-          });
+        // One analysis -> one result; additional markdown tables become pills.
+        const [firstTable, ...restTables] = extractedTables;
+        pushTableRun({
+          id: `${baseRunId}-table-0`,
+          sectionId: targetSectionId,
+          title: String(content ?? "").trim() || "Result",
+          rows: firstTable!.rows,
+          code: null,
+          promptTs: null,
+          file: null,
+          prompt: String(content ?? "").trim() || null,
+          ranAt: new Date().toISOString(),
+          messageId: userId,
+          extraTables: restTables.map((table) => ({ name: table.title, rows: table.rows })),
         });
-        setView("table");
+        extractedTableRunIds.push(`${baseRunId}-table-0`);
+        setView("results");
       }
 
       // Backend visualization (if any). For prompt replies the backend
@@ -3886,18 +3886,17 @@ useEffect(() => {
       const backendVizReady = vc && (!vs || vs === "ready");
       const hasPromptRows = Array.isArray(res.output_json) && res.output_json.length > 0;
       const hasExtractedRows = extractedTables.length > 0;
-      const derivedViz = hasPromptRows && !resultTables.length ? deriveVizFromRows(res.output_json) : null;
+      const derivedViz = hasPromptRows ? deriveVizFromRows(res.output_json) : null;
 
       // User Insights must follow the latest prompt result. Some backend
       // message responses can echo the upload-time auto-insight config, so
       // when output_json exists we prefer a chart derived from those prompt
       // rows instead of reusing the stable Auto Insights chart.
-      const effectiveViz = resultTables.length ? null : derivedViz ?? (backendVizReady ? vc : null);
+      const effectiveViz = derivedViz ?? (backendVizReady ? vc : null);
 
       // The code that produced THIS result. Never reused across results.
       const coderDef: any = (res as any).coder_definition;
-      const runCode: string | null =
-        typeof coderDef?.code === "string" && coderDef.code.trim() ? coderDef.code : null;
+      const runCode: string | null = typeof coderDef?.code === "string" && coderDef.code.trim() ? coderDef.code : null;
       const runPromptTs: string | null =
         typeof (res as any).prompt_ts === "string"
           ? (res as any).prompt_ts
@@ -3914,15 +3913,9 @@ useEffect(() => {
       // structured output so we can rehydrate both table and chart later.
       if (aid) {
         const output =
-          (Array.isArray(res.output_json) && res.output_json.length > 0) ||
-          resultTables.length > 0 ||
-          effectiveViz ||
-          extractedTables.length
+          (Array.isArray(res.output_json) && res.output_json.length > 0) || effectiveViz || extractedTables.length
             ? {
-                output_json: Array.isArray(res.output_json)
-                  ? res.output_json
-                  : extractedTables[0]?.rows ?? undefined,
-                output_tables: resultTables.length ? resultTables : undefined,
+                output_json: Array.isArray(res.output_json) ? res.output_json : (extractedTables[0]?.rows ?? undefined),
                 extracted_tables: extractedTables.length ? extractedTables : undefined,
                 viz_config: effectiveViz ?? undefined,
                 section_id: targetSectionId,
@@ -3951,7 +3944,6 @@ useEffect(() => {
         }
 
         // Analysis-completed notification intentionally removed — no popup.
-
       }
 
       // Skip all output rendering for scheduled tasks — those live on the
@@ -3960,50 +3952,7 @@ useEffect(() => {
         // Shared id so the chart entry and the table run refer to the same run.
         const runId = `chat-${Date.now()}`;
         // output_json -> table (appended as its own run; never overwritten)
-        if (resultTables.length) {
-          resultTables.forEach((table, index) => {
-            pushTableRun({
-              id: `${runId}-table-${index}`,
-              sectionId: targetSectionId,
-              title: table.title || String(content ?? "").trim() || "Result",
-              rows: table.rows,
-              code: runCode,
-              promptTs: runPromptTs,
-              file: runFile,
-            });
-          });
-          setAnalysisRows(resultTables[0].rows);
-          setUserInsightsRows(resultTables[0].rows);
-          const tableCharts = resultTables.flatMap((table, index) => {
-            const vizConfig = deriveVizFromResultTable(table);
-            return vizConfig ? [{
-              id: `${runId}-table-${index}`,
-              sectionId: targetSectionId,
-              vizConfig,
-              samples: table.rows,
-              tableTitle: table.title,
-            }] : [];
-          });
-          setUserInsightsViz(tableCharts[0]?.vizConfig ?? null);
-          if (tableCharts.length) {
-            setUserInsightsList((prev) => {
-              const seen = new Set(prev.map((entry) => `${entry.sectionId}:${vizFingerprint(entry.vizConfig)}`));
-              return [...prev, ...tableCharts.filter((entry) => {
-                const key = `${entry.sectionId}:${vizFingerprint(entry.vizConfig)}`;
-                if (seen.has(key)) return false;
-                seen.add(key);
-                return true;
-              })];
-            });
-            setMessages((curr) => curr.map((message) =>
-              message.id === userId ? { ...message, sectionId: targetSectionId } : message,
-            ));
-            activeSectionIdRef.current = targetSectionId;
-            setActiveSectionId(targetSectionId);
-          }
-          // Always land on the data table after an analysis; charts are one click away.
-          setView("table");
-        } else if (Array.isArray(res.output_json) && res.output_json.length > 0) {
+        if (Array.isArray(res.output_json) && res.output_json.length > 0) {
           setAnalysisRows(res.output_json as Record<string, unknown>[]);
           setUserInsightsRows(res.output_json as Record<string, unknown>[]);
           pushTableRun({
@@ -4014,8 +3963,15 @@ useEffect(() => {
             code: runCode,
             promptTs: runPromptTs,
             file: runFile,
+            prompt: String(content ?? "").trim() || null,
+            ranAt: new Date().toISOString(),
+            messageId: userId,
+            extraTables: extraTablesFor(res.output_json as Record<string, unknown>[], [
+              ...parseOutputTables((res as any).output_tables),
+              ...extractedTables.map((table) => ({ name: table.title, rows: table.rows })),
+            ]),
           });
-          setView("table");
+          setView("results");
         } else if (res.output_json == null) {
           // leave previous rows in place
         }
@@ -4024,7 +3980,6 @@ useEffect(() => {
         if (runFile) {
           setOutputFile(runFile);
         }
-
 
         // visualization (backend wins, else use client-derived)
         if (effectiveViz) {
@@ -4036,9 +3991,7 @@ useEffect(() => {
             }
             return [...prev, { id: runId, sectionId: targetSectionId, vizConfig: effectiveViz }];
           });
-          // Show the table first whenever the turn produced rows. Only fall back to the
-          // chart when the backend returned a chart with no tabular output at all.
-          setView(hasPromptRows || hasExtractedRows ? "table" : "chart");
+          setView(hasPromptRows || extractedTables.length ? "results" : "chart");
           // Link the user message to the produced insight section for
           // navigation, but preserve the user's exact typed text verbatim
           // — do NOT overwrite `content` with the workspace heading or
@@ -4104,7 +4057,6 @@ useEffect(() => {
         });
       }
 
-
       if (aid) {
         void refreshOneThreadInsightSource(aid);
       }
@@ -4138,6 +4090,316 @@ useEffect(() => {
 
   const projectContextLoading = !!analysisId && !ctx;
 
+  const isChatFloat = effectiveChatDock === "float";
+
+  const chatHeader = (
+    <div
+      className={cx(
+        "analysis-chat-header flex items-center gap-2 px-4 py-2.5",
+        isChatFloat && "cursor-move select-none",
+      )}
+      onMouseDown={
+        isChatFloat
+          ? (e) => {
+              // Drag the floating card by its header (restored from the
+              // earlier production implementation, commit 82b20a98).
+              if ((e.target as HTMLElement).closest("button")) return;
+              e.preventDefault();
+              floatDraggingRef.current = true;
+              const startX = e.clientX;
+              const startY = e.clientY;
+              const startPos = { ...chatFloatPos };
+              let latest = { ...startPos };
+              let raf = 0;
+              const applyStyle = () => {
+                raf = 0;
+                const el = floatAsideRef.current;
+                if (el) {
+                  el.style.left = `${latest.x}px`;
+                  el.style.top = `${latest.y}px`;
+                }
+              };
+              const onMove = (ev: MouseEvent) => {
+                if (!floatDraggingRef.current) return;
+                const nx = Math.max(
+                  8,
+                  Math.min(window.innerWidth - chatFloatSize.w - 8, startPos.x + (ev.clientX - startX)),
+                );
+                const ny = Math.max(8, Math.min(window.innerHeight - 60, startPos.y + (ev.clientY - startY)));
+                latest = { x: nx, y: ny };
+                if (!raf) raf = requestAnimationFrame(applyStyle);
+              };
+              const onUp = () => {
+                floatDraggingRef.current = false;
+                window.removeEventListener("mousemove", onMove);
+                window.removeEventListener("mouseup", onUp);
+                if (raf) cancelAnimationFrame(raf);
+                setChatFloatPos(latest);
+              };
+              window.addEventListener("mousemove", onMove);
+              window.addEventListener("mouseup", onUp);
+            }
+          : undefined
+      }
+    >
+      <h2 className="text-md font-semibold text-primary flex-1">Chat</h2>
+      <ChatDockControls mode={chatDock} onChange={setChatDock} className="hidden lg:flex" />
+    </div>
+  );
+
+  const chatBody = (
+    <>
+      {avatarMode ? (
+        <VoicePanel
+          onClose={() => {
+            stopSpeaking();
+            setAvatarMode(false);
+          }}
+          messages={displayMessages}
+          isSending={isSending}
+          listening={voiceListening}
+        />
+      ) : (
+        <div ref={scrollRef} className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 py-4">
+          <div className="mt-auto flex flex-col">
+            <div className="my-3 flex items-center gap-3">
+              <div className="h-px flex-1 bg-border-secondary" />
+              <span className="text-xs text-tertiary">Today</span>
+              <div className="h-px flex-1 bg-border-secondary" />
+            </div>
+            {displayMessages.map((m) => (
+              <div
+                key={m.id}
+                data-message-id={m.id}
+                className={cx("rounded-lg transition-shadow", chatHighlightId === m.id && "ring-2 ring-[#1565ef]")}
+              >
+                <MessageRow
+                  message={m}
+                  keyFindings={
+                    multiTop && m.id === firstAiMessageId ? (
+                      <TopKeyFindings picks={multiTop.findingPicks} groups={multiTop.findingGroups} />
+                    ) : undefined
+                  }
+                  activeSectionId={activeSectionId}
+                  onSectionSelect={focusSection}
+                  onReply={() =>
+                    setReplyContext({
+                      label: m.role === "ai" ? "Avaloka AI" : "You",
+                      content: m.content,
+                    })
+                  }
+                  onEditResend={
+                    m.role !== "ai" && m.isSelf !== false
+                      ? (text) => {
+                          void send(text);
+                        }
+                      : undefined
+                  }
+                  onRefresh={() => {
+                    void handleRefresh();
+                  }}
+                  onThumb={(t) => {
+                    void handleThumb(t);
+                  }}
+                  onCopy={() => {
+                    try {
+                      void navigator.clipboard?.writeText(m.content);
+                      toast.success("Copied");
+                    } catch {
+                      toast.error("Failed to copy");
+                    }
+                  }}
+                  feedback={insightFeedback}
+                  feedbackSubmitting={feedbackSubmitting}
+                  refreshing={refreshing}
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="analysis-chat-footer p-3">
+        {replyContext && (
+          <div className="mb-2 flex items-stretch overflow-hidden rounded-lg border border-secondary bg-primary">
+            <span className="w-1 shrink-0 bg-[#1565ef]" />
+            <div className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2">
+              <MessageChatCircle className="size-4 shrink-0 text-fg-quaternary" />
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-semibold text-[#1565ef]">{replyContext.label}</p>
+                <p className="truncate text-xs text-secondary">{replyContext.content}</p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setReplyContext(null)}
+              aria-label="Cancel reply"
+              className="grid w-9 place-items-center text-fg-quaternary hover:text-fg-secondary"
+            >
+              <X className="size-4" />
+            </button>
+          </div>
+        )}
+        <TypingIndicator users={typingUsers} />
+        <ChatComposer
+          draft={chatDraft}
+          onDraftChange={setChatDraft}
+          isSending={isSending}
+          avatarMode={avatarMode}
+          onAvatarModeChange={() => setAvatarMode((value) => !value)}
+          onListeningChange={setVoiceListening}
+          onSend={send}
+          onTyping={notifyTyping}
+          onStopTyping={stopTyping}
+        />
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-1.5">
+            {(() => {
+              const allChips = datasetChips.length
+                ? datasetChips
+                : isPersistedAnalysis
+                  ? []
+                  : [{ id: "ds1", name: "Data Set 1" } as DatasetChip];
+              const { shown, hidden } = visibleChips(allChips, chipsExpanded);
+              return (
+                <>
+                  {shown.map((d) => {
+                    const active =
+                      datasetChips.length <= 1
+                        ? selectedDatasetIds.length === 0 || selectedDatasetIds.includes(d.id)
+                        : selectedDatasetIds.includes(d.id);
+                    const chip = d as DatasetChip;
+                    const unavailable = chip.available === false;
+                    const isLastSelected = active && datasetChips.length > 1 && selectedDatasetIds.length <= 1;
+                    const label = chipLabel(chip);
+                    return (
+                      <button
+                        type="button"
+                        key={d.id}
+                        disabled={unavailable}
+                        onClick={() => selectDatasetChip(chip)}
+                        title={
+                          unavailable
+                            ? "No longer available"
+                            : isLastSelected
+                              ? "At least one dataset must be selected"
+                              : chip.sourceWorkbook && chip.sheetName
+                                ? `${readableDatasetName(chip.sourceWorkbook)} · ${chip.sheetName}`
+                                : `${d.name}\nDataset ID: ${d.id}`
+                        }
+                        aria-pressed={active}
+                        className={cx(
+                          "analysis-dataset-chip inline-flex max-w-[240px] items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition",
+                          unavailable
+                            ? "cursor-not-allowed border-secondary bg-secondary text-quaternary opacity-60"
+                            : active
+                              ? "border-[#1565ef] bg-[#eff8ff] text-[#175cd3] shadow-xs"
+                              : "border-secondary bg-primary text-tertiary hover:border-tertiary",
+                        )}
+                      >
+                        <Database01
+                          className={cx("size-3.5 shrink-0", active ? "text-[#1565ef]" : "text-fg-quaternary")}
+                        />
+                        <DatasetChipName
+                          name={d.name}
+                          sheetName={chip.sheetName}
+                          sourceWorkbook={chip.sourceWorkbook}
+                        />
+                        {chip.sheetName && !chip.sourceWorkbook ? (
+                          <span className="shrink-0 text-[10px] opacity-70">· {chip.sheetName}</span>
+                        ) : null}
+                      </button>
+                    );
+                  })}
+                  {hidden > 0 ? (
+                    <button
+                      type="button"
+                      onClick={() => setChipsExpanded(true)}
+                      className="rounded-full border border-secondary bg-primary px-2.5 py-1 text-xs font-medium text-secondary hover:border-tertiary"
+                    >
+                      +{hidden} more
+                    </button>
+                  ) : chipsExpanded && allChips.length > 4 ? (
+                    <button
+                      type="button"
+                      onClick={() => setChipsExpanded(false)}
+                      className="rounded-full px-2 py-1 text-xs font-medium text-brand-secondary hover:underline"
+                    >
+                      Show less
+                    </button>
+                  ) : null}
+                </>
+              );
+            })()}
+          </div>
+          <div className="flex items-center gap-2 text-xs font-semibold text-secondary">
+            <span className="text-primary">Selected Dataset</span>
+            <button
+              type="button"
+              onClick={() => setSourcesOpen(true)}
+              className="inline-flex items-center gap-1 hover:text-primary"
+            >
+              <Plus className="size-3.5" /> Add
+            </button>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+
+  const resizeHandle = (
+    <ChatResizeHandle
+      width={appliedChatWidth ?? defaultChatWidth(viewportWidth)}
+      viewport={viewportWidth}
+      chatSide={effectiveChatDock === "left" ? "left" : "right"}
+      onResize={setChatWidth}
+      onReset={resetChatWidth}
+    />
+  );
+
+  const renderChatPanel = (): ReactNode => {
+    if (isChatFloat) {
+      // Floating card over the data area; the data area keeps its full width.
+      return (
+        <aside
+          ref={floatAsideRef}
+          aria-label="Chat sidebar"
+          className="analysis-chat-sidebar"
+          data-dock="float"
+          style={{
+            position: "fixed",
+            left: chatFloatPos.x,
+            top: chatFloatPos.y,
+            width: chatFloatSize.w,
+            height: chatFloatSize.h,
+            zIndex: 60,
+          }}
+        >
+          {chatHeader}
+          {chatBody}
+        </aside>
+      );
+    }
+    return (
+      <>
+        <div className="analysis-chat-backdrop" onClick={() => setChatOpen(false)} aria-hidden="true" />
+        {wideViewport && effectiveChatDock === "right" ? resizeHandle : null}
+        <aside
+          aria-label="Chat sidebar"
+          className="analysis-chat-sidebar"
+          data-dock={effectiveChatDock}
+          style={wideViewport && appliedChatWidth != null ? { width: appliedChatWidth } : undefined}
+        >
+          {chatHeader}
+          {chatBody}
+        </aside>
+        {wideViewport && effectiveChatDock === "left" ? resizeHandle : null}
+      </>
+    );
+  };
+
+  const renderChatSlot = (): ReactNode => renderChatPanel();
+
   return (
     <div className="flex h-screen w-full bg-primary text-primary">
       {projectContextLoading ? (
@@ -4148,68 +4410,68 @@ useEffect(() => {
           ))}
         </aside>
       ) : (
-      <IconRail
-        variant={resolvedProjectId ? "analysis-project" : "default"}
-        active={
-          resolvedProjectId
-            ? pane === "project"
-              ? "projects"
-              : insightsOpen
-                ? "reports"
-                : restorePanelOpen
-                  ? "restore"
-                  : "chat"
-            : undefined
-        }
-        skipNavIds={resolvedProjectId ? ["chat", "projects", "sources", "restore", "reports"] : undefined}
-        onItemClick={
-          resolvedProjectId
-            ? (id: string) => {
-                if (id === "chat") {
-                  setPane("workspace");
-                  setHistoryOpen(false);
-                  setRestorePanelOpen(false);
-                  setInsightsOpen(false);
-                  setConnectCloudOpen(false);
-                  setSourcesOpen(false);
-                  setChatOpen(true);
-                } else if (id === "projects") {
-                  setPane("project");
-                  setHistoryOpen(false);
-                  setRestorePanelOpen(false);
-                  setConnectCloudOpen(false);
-                  setSourcesOpen(false);
-                } else if (id === "sources") {
-                  setPane("workspace");
-                  setHistoryOpen(false);
-                  setRestorePanelOpen(false);
-                  setInsightsOpen(false);
-                  setConnectCloudOpen(false);
-                  setSourcesOpen(true);
-                } else if (id === "restore") {
-                  setPane("workspace");
-                  setInsightsOpen(false);
-                  setHistoryOpen(false);
-                  setConnectCloudOpen(false);
-                  setSourcesOpen(false);
-                  setRestorePanelOpen((open) => {
-                    const next = !open;
-                    if (next) void fetchVersions();
-                    return next;
-                  });
-                } else if (id === "reports") {
-                  setInsightsOpen((open) => !open);
-                  setHistoryOpen(false);
-                  setRestorePanelOpen(false);
-                  setConnectCloudOpen(false);
-                  setSourcesOpen(false);
+        <IconRail
+          variant={resolvedProjectId ? "analysis-project" : "default"}
+          active={
+            resolvedProjectId
+              ? pane === "project"
+                ? "projects"
+                : insightsOpen
+                  ? "reports"
+                  : restorePanelOpen
+                    ? "restore"
+                    : "chat"
+              : undefined
+          }
+          skipNavIds={resolvedProjectId ? ["chat", "projects", "sources", "restore", "reports"] : undefined}
+          onItemClick={
+            resolvedProjectId
+              ? (id: string) => {
+                  if (id === "chat") {
+                    setPane("workspace");
+                    setHistoryOpen(false);
+                    setRestorePanelOpen(false);
+                    setInsightsOpen(false);
+                    setConnectCloudOpen(false);
+                    setSourcesOpen(false);
+                    setChatOpen(true);
+                  } else if (id === "projects") {
+                    setPane("project");
+                    setHistoryOpen(false);
+                    setRestorePanelOpen(false);
+                    setConnectCloudOpen(false);
+                    setSourcesOpen(false);
+                  } else if (id === "sources") {
+                    setPane("workspace");
+                    setHistoryOpen(false);
+                    setRestorePanelOpen(false);
+                    setInsightsOpen(false);
+                    setConnectCloudOpen(false);
+                    setSourcesOpen(true);
+                  } else if (id === "restore") {
+                    setPane("workspace");
+                    setInsightsOpen(false);
+                    setHistoryOpen(false);
+                    setConnectCloudOpen(false);
+                    setSourcesOpen(false);
+                    setRestorePanelOpen((open) => {
+                      const next = !open;
+                      if (next) void fetchVersions();
+                      return next;
+                    });
+                  } else if (id === "reports") {
+                    setInsightsOpen((open) => !open);
+                    setHistoryOpen(false);
+                    setRestorePanelOpen(false);
+                    setConnectCloudOpen(false);
+                    setSourcesOpen(false);
+                  }
                 }
-              }
-            : undefined
-        }
-      />
+              : undefined
+          }
+        />
       )}
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2 bg-secondary p-2">
+      <div className="analysis-workspace-layout flex min-h-0 min-w-0 flex-1 flex-col bg-secondary">
         {resolvedProjectId && !hydrating ? (
           <div className="rounded-xl bg-primary">
             <div className="flex items-center gap-3 px-5 py-3">
@@ -4230,7 +4492,7 @@ useEffect(() => {
             </div>
           </div>
         ) : null}
-        <div className="flex min-h-0 flex-1 gap-2 overflow-hidden">
+        <div className="analysis-workspace-row flex min-h-0 flex-1 overflow-hidden">
           {restorePanelOpen && pane === "workspace" && (
             <aside className="flex h-full w-[300px] shrink-0 flex-col overflow-hidden rounded-xl border border-secondary bg-primary">
               <div className="flex items-start justify-between gap-2 border-b border-secondary px-4 py-3">
@@ -4267,13 +4529,19 @@ useEffect(() => {
                           </div>
                           <div className="mt-1 flex flex-wrap gap-1">
                             {v.has_code && (
-                              <span className="rounded bg-secondary px-1.5 py-0.5 text-[10px] text-secondary">Code</span>
+                              <span className="rounded bg-secondary px-1.5 py-0.5 text-[10px] text-secondary">
+                                Code
+                              </span>
                             )}
                             {v.has_output && (
-                              <span className="rounded bg-secondary px-1.5 py-0.5 text-[10px] text-secondary">Output</span>
+                              <span className="rounded bg-secondary px-1.5 py-0.5 text-[10px] text-secondary">
+                                Output
+                              </span>
                             )}
                             {v.has_viz && (
-                              <span className="rounded bg-secondary px-1.5 py-0.5 text-[10px] text-secondary">Chart</span>
+                              <span className="rounded bg-secondary px-1.5 py-0.5 text-[10px] text-secondary">
+                                Chart
+                              </span>
                             )}
                           </div>
                         </div>
@@ -4324,7 +4592,7 @@ useEffect(() => {
                     title: "Restored result",
                     rows: payload.rows as Record<string, unknown>[],
                   });
-                  setView("table");
+                  setView("results");
                   toast.success("Restored data table");
                 } else if (payload.kind === "message") {
                   setChatOpen(true);
@@ -4347,8 +4615,21 @@ useEffect(() => {
             />
           )}
 
+          {pane === "workspace" && !chatOpen ? (
+            <Button
+              color="secondary"
+              size="sm"
+              onPress={() => setChatOpen(true)}
+              className="analysis-chat-open"
+              aria-label="Open chat"
+            >
+              Chat
+            </Button>
+          ) : null}
           {/* Main canvas */}
-          <main className="relative flex flex-1 flex-col overflow-hidden rounded-xl bg-primary">
+          {/* Chat panel (left dock: icon rail | Chat | data area) */}
+          {pane === "workspace" && chatOpen && effectiveChatDock === "left" && renderChatSlot()}
+          <main className="analysis-data-area relative flex flex-col overflow-hidden rounded-xl bg-primary">
             {hydrating ? (
               <AnalysisSkeleton />
             ) : (
@@ -4400,31 +4681,52 @@ useEffect(() => {
                             </p>
                           </div>
                           <div className="ml-auto flex items-center gap-2">
-                            <button
-                              onClick={() => setAutoInsightsOpen(true)}
-                              className="inline-flex items-center gap-2 rounded-lg border border-secondary bg-primary px-3 py-2 text-sm font-semibold text-primary shadow-xs hover:bg-primary_hover"
+                            <div
+                              role="tablist"
+                              aria-label="Insights"
+                              className="mr-2 flex items-end gap-4 self-stretch"
                             >
-                              <Stars02 className="size-4 text-[#1565ef]" />
-                              Auto Insights
-                            </button>
-                            <button
-                              onClick={() => setUserInsightsOpen(true)}
-                              disabled={!userInsightsViz && !userInsightsRows?.length}
-                              title={
-                                userInsightsViz || userInsightsRows?.length
-                                  ? "View insights from your latest prompt"
-                                  : "Send a prompt to generate insights"
-                              }
-                              className="inline-flex items-center gap-2 rounded-lg border border-secondary bg-primary px-3 py-2 text-sm font-semibold text-primary shadow-xs hover:bg-primary_hover disabled:cursor-not-allowed disabled:opacity-50"
-                            >
-                              <Stars02 className="size-4 text-[#7a5af8]" />
-                              User Insights
-                            </button>
+                              <button
+                                role="tab"
+                                aria-selected={!userInsightsOpen}
+                                onClick={() => setAutoInsightsOpen(true)}
+                                className={cx(
+                                  "-mb-3 inline-flex items-center gap-2 border-b-2 px-1 pb-2.5 text-sm font-semibold transition",
+                                  !userInsightsOpen
+                                    ? "border-[#1a5fe0] text-primary"
+                                    : "border-transparent text-tertiary hover:text-primary",
+                                )}
+                              >
+                                <Stars02 className="size-4 text-[#1565ef]" />
+                                Auto Insights
+                              </button>
+                              <button
+                                role="tab"
+                                aria-selected={userInsightsOpen}
+                                onClick={() => setUserInsightsOpen(true)}
+                                disabled={!userInsightsViz && !userInsightsRows?.length}
+                                title={
+                                  userInsightsViz || userInsightsRows?.length
+                                    ? "View insights from your latest prompt"
+                                    : "Send a prompt to generate insights"
+                                }
+                                className={cx(
+                                  "-mb-3 inline-flex items-center gap-2 border-b-2 px-1 pb-2.5 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50",
+                                  userInsightsOpen
+                                    ? "border-[#1a5fe0] text-primary"
+                                    : "border-transparent text-tertiary hover:text-primary",
+                                )}
+                              >
+                                <Stars02 className="size-4 text-[#7a5af8]" />
+                                User Insights
+                              </button>
+                            </div>
                             <button
                               onClick={() => {
                                 if (upgradeBlocked("Moving analyses into a project")) return;
                                 setMoveOpen(true);
                               }}
+
                               className="inline-flex items-center gap-2 rounded-lg border border-secondary bg-primary px-3 py-2 text-sm font-semibold text-primary shadow-xs hover:bg-primary_hover"
                             >
                               <Folder className="size-4 text-fg-secondary" />
@@ -4468,328 +4770,276 @@ useEffect(() => {
                         </div>
                       ) : null}
 
-                      <div className="h-full overflow-y-auto px-4 py-4">
-                        <div key={activeTab?.id} className="mx-auto flex w-full max-w-none flex-col">
+                      <div
+                        className="analysis-workspace-scroll"
+                        data-table-view={view === "sample" || view === "results"}
+                      >
+                        <div
+                          key={activeTab?.id}
+                          className="analysis-workspace-sections mx-auto flex w-full max-w-none flex-col"
+                        >
                           <div
                             ref={(el) => {
                               sectionRefs.current[currentMainSectionId] = el;
                             }}
                             data-section-id={currentMainSectionId}
                             className={cx(
-                              "scroll-mt-4 rounded-xl p-4 transition-[box-shadow,border-color]",
+                              "analysis-main-section scroll-mt-4 transition-[box-shadow,border-color]",
                               sectionHighlightClass(currentMainSectionId),
                             )}
                           >
-                            <div className="mb-3 flex items-center justify-end gap-3">
-
-                              <div className="flex items-center gap-2">
-                                {view === "table" && selectedRun?.rows?.length ? (
-                                  <button
-                                    type="button"
-                                    onClick={downloadSelectedRunCsv}
-                                    className="inline-flex items-center gap-1.5 rounded-lg border border-secondary bg-primary px-2.5 py-1.5 text-xs font-semibold text-primary shadow-xs hover:bg-primary_hover"
-                                  >
-                                    Download CSV
-                                  </button>
-                                ) : outputFile ? (
-                                  <a
-                                    href={outputFile.content}
-                                    download={outputFile.filename}
-                                    className="inline-flex items-center gap-1.5 rounded-lg border border-secondary bg-primary px-2.5 py-1.5 text-xs font-semibold text-primary shadow-xs hover:bg-primary_hover"
-                                  >
-                                    Download CSV
-                                  </a>
-                                ) : null}
-                                {plannerGraphAvailable && threadId ? (
-                                  <button
-                                    type="button"
-                                    onClick={openPlannerGraph}
-                                    disabled={plannerGraphLoading}
-                                    className="inline-flex items-center gap-1.5 rounded-lg border border-secondary bg-primary px-2.5 py-1.5 text-xs font-semibold text-primary shadow-xs hover:bg-primary_hover disabled:opacity-50"
-                                  >
-                                    {plannerGraphLoading ? "Loading…" : "Planner Graph"}
-                                  </button>
-                                ) : null}
-                                {plannerGraphError ? (
-                                  <span className="text-xs text-error-primary">{plannerGraphError}</span>
-                                ) : null}
-                                <div className="inline-flex items-center rounded-lg border border-secondary bg-primary p-1 shadow-xs">
-                                  <button
-                                    onClick={() => setView("table")}
-                                    className={cx(
-                                      "rounded-md px-3 py-1.5 text-sm font-semibold transition",
-                                      view === "table" ? "bg-secondary text-primary" : "text-tertiary",
-                                    )}
-                                  >
-                                    Data table
-                                  </button>
-                                  <button
-                                    onClick={() => setView("chart")}
-                                    className={cx(
-                                      "rounded-md px-3 py-1.5 text-sm font-semibold transition",
-                                      view === "chart" ? "bg-secondary text-primary" : "text-tertiary",
-                                    )}
-                                  >
-                                    Chart
-                                  </button>
-                                  <button
-                                    onClick={() => setView("preview")}
-                                    className={cx(
-                                      "rounded-md px-3 py-1.5 text-sm font-semibold transition",
-                                      view === "preview" ? "bg-secondary text-primary" : "text-tertiary",
-                                    )}
-                                    title="View uploaded dataset preview"
-                                  >
-                                    Data Preview
-                                  </button>
-                                </div>
-                              </div>
-                            </div>
-
-                            {view === "preview" ? (
-                              <>
-                                <DataPreviewPanel
-                                  datasets={previewDatasets}
-                                  activeDatasetId={activePreviewDatasetId}
-                                  onDatasetChange={handlePreviewDatasetChange}
-                                  dataset={persistedDataset}
-                                  filename={
-                                    previewDatasets.find(
-                                      (dataset) =>
-                                        dataset.id === activePreviewDatasetId
-                                    )?.name ??
-                                    autoInsightsDatasetName ??
-                                    navState?.filename
-                                  }
-                                />
-                                {renderResultToolbar()}
-                              </>
-                            ) : view === "chart" ? (
-                              resolvedAutoViz || multiDatasetInsights || mainSectionUserSlides.length > 0 ? (
-                                <div className="mt-4 space-y-6">
-                                  {!chartSamples?.length && mainSectionUserSlides.length === 0 ? (
-                                    <p className="text-sm text-tertiary">Loading chart data…</p>
-                                  ) : autoChartSlides.length === 0 && mainSectionUserSlides.length === 0 ? (
-                                    <>
-                                      <WorkspaceSectionUserInsights
-                                        sectionId={currentMainSectionId}
-                                        entries={userInsightEntries}
-                                        activeTab={undefined}
-                                        chartSamples={chartSamples}
-                                        excludeTitles={autoChartTitles}
-                                        dismissedKeys={dismissedInsightCardKeys}
-                                        onDismiss={dismissInsightCard}
-                                        activeRunId={selectedRunId}
-                                        onRunChange={setSelectedRunId}
-                                      />
-                                      <p className="text-sm text-tertiary">No chart available for this tab.</p>
-                                    </>
-                                  ) : (
-                                    <>
-                                      {/* User insights (from user prompts) — always rendered on top */}
-                                      <WorkspaceSectionUserInsights
-                                        sectionId={currentMainSectionId}
-                                        entries={userInsightEntries}
-                                        activeTab={undefined}
-                                        chartSamples={chartSamples}
-                                        excludeTitles={autoChartTitles}
-                                        dismissedKeys={dismissedInsightCardKeys}
-                                        onDismiss={dismissInsightCard}
-                                        activeRunId={selectedRunId}
-                                        onRunChange={setSelectedRunId}
-                                      />
-                                      {/* Auto insights (generated at upload) — always rendered below.
-                                          With several datasets selected, render the union grouped per dataset. */}
-                                      {multiDatasetInsights ? (
-                                        <div className="space-y-6">
-                                          {autoInsightGroups.map((g) => (
-                                            <div key={g.id} className="space-y-3">
-                                              <div className="flex items-center gap-2">
-                                                <h3 className="truncate text-sm font-semibold text-primary">{g.name}</h3>
-                                                <span className="rounded-full bg-[#1565ef]/10 px-2 py-0.5 text-[11px] font-semibold text-[#1565ef]">
-                                                  {g.slides.length} chart{g.slides.length === 1 ? "" : "s"}
-                                                </span>
-                                              </div>
-                                              {g.slides.length ? (
-                                                <WorkspaceChartCards
-                                                  slides={g.slides as any}
-                                                  keyPrefix={`auto-${g.id}`}
-                                                  dismissedKeys={dismissedInsightCardKeys}
-                                                  onDismiss={dismissInsightCard}
-                                                />
-                                              ) : (
-                                                <p className="text-sm text-tertiary">
-                                                  No auto-insights available for this dataset
-                                                </p>
-                                              )}
-                                            </div>
-                                          ))}
-                                        </div>
-                                      ) : (
-                                        <WorkspaceChartCards
-                                          slides={autoChartSlides}
-                                          keyPrefix="auto"
-                                          dismissedKeys={dismissedInsightCardKeys}
-                                          onDismiss={dismissInsightCard}
-                                        />
+                            <DataWorkspaceCard>
+                              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--workspace-border)] bg-[var(--workspace-header-bg)] px-3 py-2">
+                                <div
+                                  role="tablist"
+                                  aria-label="Dataset views"
+                                  className="inline-flex items-center rounded-lg bg-[var(--workspace-tablist-bg)] p-0.5"
+                                >
+                                  {(
+                                    [
+                                      ["sample", "Data sample"],
+                                      [
+                                        "results",
+                                        tableRuns.length
+                                          ? `Analysis results (${tableRuns.length})`
+                                          : "Analysis results",
+                                      ],
+                                      ["chart", "Chart"],
+                                      ["preview", "Column Summary"],
+                                    ] as const
+                                  ).map(([key, label]) => (
+                                    <button
+                                      key={key}
+                                      role="tab"
+                                      aria-selected={view === key}
+                                      onClick={() => setView(key)}
+                                      title={
+                                        key === "preview" ? "Structure of the dataset: one row per column" : undefined
+                                      }
+                                      className={cx(
+                                        "rounded-md px-3 py-1.5 text-sm font-semibold transition",
+                                        view === key
+                                          ? "bg-primary text-primary shadow-[0_1px_2px_rgba(16,24,40,0.12)]"
+                                          : "text-tertiary hover:text-primary",
                                       )}
-
-                                    </>
-                                  )}
+                                    >
+                                      {label}
+                                    </button>
+                                  ))}
                                 </div>
-                              ) : insightsGenerating ? (
-                                <div className="mt-8 flex flex-col items-center gap-3 text-sm text-tertiary">
-                                  <span className="size-4 animate-spin rounded-full border-2 border-[#1565ef]/30 border-t-[#1565ef]" />
-                                  Generating auto insights…
+                                <div className="flex items-center gap-2">
+                                  {(view === "sample" && sampleRows.length > 0) ||
+                                  (view === "results" && selectedResultRows.length > 0) ? (
+                                    <button
+                                      type="button"
+                                      onClick={downloadActiveCsv}
+                                      className="inline-flex items-center gap-1.5 rounded-lg border border-secondary bg-primary px-2.5 py-1.5 text-xs font-semibold text-primary shadow-xs hover:bg-primary_hover"
+                                    >
+                                      Download CSV
+                                    </button>
+                                  ) : view === "results" && outputFile ? (
+                                    <a
+                                      href={outputFile.content}
+                                      download={outputFile.filename}
+                                      className="inline-flex items-center gap-1.5 rounded-lg border border-secondary bg-primary px-2.5 py-1.5 text-xs font-semibold text-primary shadow-xs hover:bg-primary_hover"
+                                    >
+                                      Download CSV
+                                    </a>
+                                  ) : null}
+                                  {plannerGraphAvailable && threadId ? (
+                                    <button
+                                      type="button"
+                                      onClick={openPlannerGraph}
+                                      disabled={plannerGraphLoading}
+                                      className="inline-flex items-center gap-1.5 rounded-lg border border-secondary bg-primary px-2.5 py-1.5 text-xs font-semibold text-primary shadow-xs hover:bg-primary_hover disabled:opacity-50"
+                                    >
+                                      {plannerGraphLoading ? "Loading…" : "Planner Graph"}
+                                    </button>
+                                  ) : null}
+                                  {plannerGraphError ? (
+                                    <span className="text-xs text-error-primary">{plannerGraphError}</span>
+                                  ) : null}
                                 </div>
-                              ) : isPersistedAnalysis ? (
-                                <p className="mt-8 text-center text-sm text-tertiary">
-                                  No chart saved for this analysis yet.
-                                </p>
-
-                              ) : (
-                                <>
-                                  {/* Chart */}
-                                  <div className="mt-4 h-[340px] w-full">
-                                    <ResponsiveContainer width="100%" height="100%">
-                                      <ComposedChart
-                                        data={chartData}
-                                        margin={{ top: 10, right: 10, left: 0, bottom: 0 }}
-                                      >
-                                        <defs>
-                                          <linearGradient id="fill2020" x1="0" y1="0" x2="0" y2="1">
-                                            <stop offset="0%" stopColor="#1565ef" stopOpacity={0.25} />
-                                            <stop offset="100%" stopColor="#1565ef" stopOpacity={0.05} />
-                                          </linearGradient>
-                                          <linearGradient id="fill2021" x1="0" y1="0" x2="0" y2="1">
-                                            <stop offset="0%" stopColor="#f97066" stopOpacity={0.2} />
-                                            <stop offset="100%" stopColor="#f97066" stopOpacity={0.05} />
-                                          </linearGradient>
-                                        </defs>
-                                        <CartesianGrid stroke="#e4e7ec" strokeDasharray="3 3" />
-                                        <XAxis
-                                          dataKey="month"
-                                          tick={{ fill: "#667085", fontSize: 12 }}
-                                          tickLine={false}
-                                          axisLine={false}
-                                        />
-                                        <YAxis
-                                          domain={[-100, 100]}
-                                          ticks={[-100, -50, 0, 50, 100]}
-                                          tick={{ fill: "#667085", fontSize: 12 }}
-                                          tickLine={false}
-                                          axisLine={false}
-                                        />
-                                        <ReferenceLine y={0} stroke="#1565ef" strokeWidth={1.5} />
-                                        <Area
-                                          type="linear"
-                                          dataKey="y2021"
-                                          stroke="#f97066"
-                                          strokeWidth={1.5}
-                                          fill="url(#fill2021)"
-                                          dot={{ fill: "#f97066", stroke: "#fff", strokeWidth: 2, r: 5 }}
-                                          activeDot={{ r: 6 }}
-                                        />
-                                        <Area
-                                          type="linear"
-                                          dataKey="y2020"
-                                          stroke="#1565ef"
-                                          strokeWidth={1.5}
-                                          fill="url(#fill2020)"
-                                          dot={{ fill: "#1565ef", stroke: "#fff", strokeWidth: 2, r: 5 }}
-                                          activeDot={{ r: 6 }}
-                                        />
-                                      </ComposedChart>
-                                    </ResponsiveContainer>
-                                  </div>
-
-                                  {/* Legend */}
-                                  <div className="mt-2 flex items-center justify-center gap-6 text-xs text-secondary">
-                                    <span className="inline-flex items-center gap-2">
-                                      <span className="size-2.5 rounded-sm bg-[#1565ef]" /> 2020
-                                    </span>
-                                    <span className="inline-flex items-center gap-2">
-                                      <span className="size-2.5 rounded-sm bg-[#f97066]" /> 2021
-                                    </span>
-                                  </div>
-                                </>
-                              )
-                            ) : (
-                              <div>
-                                {tableRuns.length > 1 && (
-                                  <div className="mt-4 flex items-center justify-between gap-3 rounded-lg border border-secondary bg-primary px-3 py-2">
-                                    <p className="min-w-0 truncate text-xs text-tertiary" title={selectedRun?.title}>
-                                      {selectedRun?.title || "Result"}
-                                    </p>
-                                    <div className="flex shrink-0 items-center gap-1">
-                                      <button
-                                        type="button"
-                                        aria-label="Previous result"
-                                        onClick={() => goToRun(-1)}
-                                        className="rounded-md border border-secondary bg-primary p-1 text-fg-secondary hover:bg-primary_hover"
-                                      >
-                                        <ChevronLeft className="size-4" />
-                                      </button>
-                                      <span className="px-1 text-xs text-tertiary">
-                                        {selectedRunIndex + 1} / {tableRuns.length}
-                                      </span>
-                                      <button
-                                        type="button"
-                                        aria-label="Next result"
-                                        onClick={() => goToRun(1)}
-                                        className="rounded-md border border-secondary bg-primary p-1 text-fg-secondary hover:bg-primary_hover"
-                                      >
-                                        <ChevronRight className="size-4" />
-                                      </button>
-                                    </div>
-                                  </div>
-                                )}
-                                <DataTableView
-                                  key={selectedRun?.id ?? "latest"}
-                                  data={selectedRun?.rows ?? analysisRows ?? undefined}
-                                  dataset={persistedDataset}
-                                  disableMockFallback={isPersistedAnalysis}
-                                  analysisKey={resolvedAnalysisId ?? aidFromUrl ?? selectedRun?.id ?? "current"}
-                                />
-                                {/* Toolbar for THIS result, directly under its data table */}
-                                {renderResultToolbar()}
                               </div>
-                            )}
 
-                            {/* Same toolbar directly under the charts of this result */}
-                            {view === "chart" ? renderResultToolbar() : null}
-
-                            {/* Key Insights */}
-                            <CollapsibleInsights>
-                              <ul className="list-disc space-y-1.5 pl-5 text-sm text-secondary">
-                                {resolvedAutoViz ? (
-                                  hasTabInsights ? (
-                                    <>
-                                      {tabVizInsights.summaries.map((summary, i) => (
-                                        <li key={`summary-${i}`}>
-                                          <InlineMarkdown content={summary} />
-                                        </li>
-                                      ))}
-                                      {tabVizInsights.insights.map((insight, i) => (
-                                        <li key={`insight-${i}`}>
-                                          <InlineMarkdown content={insight} />
-                                        </li>
-                                      ))}
-                                    </>
-                                  ) : (
-                                    <li className="text-tertiary">
-                                      Chart insights will appear here once analysis completes.
-                                    </li>
-                                  )
-                                ) : insightsGenerating ? (
-                                  <li className="text-tertiary">Generating key insights…</li>
-                                ) : isPersistedAnalysis ? (
-                                  <li className="text-tertiary">No insights saved for this analysis yet.</li>
+                              <div
+                                className="data-workspace-content"
+                                data-table-view={view === "sample" || view === "results"}
+                              >
+                                {view === "preview" ? (
+                                  <>
+                                    <p className="mb-2 text-xs text-tertiary">
+                                      Source: {dataSourceLabel}
+                                      {dataSourceSwitch.label ? (
+                                        <>
+                                          {" · "}
+                                          <button
+                                            type="button"
+                                            onClick={() => setView(dataSourceSwitch.view)}
+                                            className="font-semibold text-[#1a5fe0] hover:underline"
+                                          >
+                                            {dataSourceSwitch.label}
+                                          </button>
+                                        </>
+                                      ) : null}
+                                    </p>
+                                    <ColumnSummary
+                                      title={
+                                        autoInsightsDatasetName ??
+                                        navState?.filename ??
+                                        viewDataset?.filename ??
+                                        "Dataset"
+                                      }
+                                      rows={dataViewRows}
+                                      columns={dataViewColumns}
+                                      profiles={columnProfiles}
+                                      totalRows={lastDataView === "sample" ? viewDataset?.total_rows : undefined}
+                                      sizeLabel={
+                                        lastDataView === "sample" ? formatDatasetSize(viewDataset?.size_mb) : null
+                                      }
+                                      onColumn={(column) => {
+                                        setView(lastDataView);
+                                        setHighlightRequest({ name: column, nonce: Date.now() });
+                                      }}
+                                    />
+                                    {renderResultToolbar()}
+                                  </>
+                                ) : view === "chart" ? (
+                                  <>
+                                    {resolvedAutoViz || multiDatasetInsights || mainSectionUserSlides.length > 0 ? (
+                                      <div className="mt-4 space-y-6">
+                                        {!chartSamples?.length && mainSectionUserSlides.length === 0 ? (
+                                          <p className="text-sm text-tertiary">Loading chart data…</p>
+                                        ) : autoChartSlides.length === 0 && mainSectionUserSlides.length === 0 ? (
+                                          <>
+                                            <WorkspaceSectionUserInsights
+                                              sectionId={currentMainSectionId}
+                                              entries={userInsightEntries}
+                                              activeTab={undefined}
+                                              chartSamples={chartSamples}
+                                              excludeTitles={autoChartTitles}
+                                              dismissedKeys={dismissedInsightCardKeys}
+                                              onDismiss={dismissInsightCard}
+                                              activeRunId={selectedRunId}
+                                              onRunChange={setSelectedRunId}
+                                            />
+                                            <p className="text-sm text-tertiary">No chart available for this tab.</p>
+                                          </>
+                                        ) : (
+                                          <>
+                                            {/* User insights (from user prompts) — always rendered on top */}
+                                            <WorkspaceSectionUserInsights
+                                              sectionId={currentMainSectionId}
+                                              entries={userInsightEntries}
+                                              activeTab={undefined}
+                                              chartSamples={chartSamples}
+                                              excludeTitles={autoChartTitles}
+                                              dismissedKeys={dismissedInsightCardKeys}
+                                              onDismiss={dismissInsightCard}
+                                              activeRunId={selectedRunId}
+                                              onRunChange={setSelectedRunId}
+                                            />
+                                            {/* Auto insights (generated at upload) — always rendered below.
+                                          With several datasets selected, render the union grouped per dataset. */}
+                                            {multiDatasetInsights && multiTop ? (
+                                              <TopChartsSection
+                                                heading={multiTop.heading}
+                                                total={multiTop.totalCharts}
+                                                topCards={
+                                                  <WorkspaceChartCards
+                                                    slides={multiTop.topSlides as any}
+                                                    keyPrefix="auto-top"
+                                                    dismissedKeys={dismissedInsightCardKeys}
+                                                    onDismiss={dismissInsightCard}
+                                                  />
+                                                }
+                                                groups={autoInsightGroups.map((g) => ({
+                                                  id: g.id,
+                                                  name: g.name,
+                                                  count: g.slides.length,
+                                                  emptyText: noChartsText(g.config?.charts_left_out),
+                                                  cards: (
+                                                    <WorkspaceChartCards
+                                                      slides={g.slides as any}
+                                                      keyPrefix={`auto-${g.id}`}
+                                                      dismissedKeys={dismissedInsightCardKeys}
+                                                      onDismiss={dismissInsightCard}
+                                                    />
+                                                  ),
+                                                }))}
+                                              />
+                                            ) : (
+                                              <WorkspaceChartCards
+                                                slides={autoChartSlides}
+                                                keyPrefix="auto"
+                                                dismissedKeys={dismissedInsightCardKeys}
+                                                onDismiss={dismissInsightCard}
+                                              />
+                                            )}
+                                            {multiTop ? (
+                                              <KeyFindingsCard>
+                                                <TopKeyFindings picks={multiTop.findingPicks} groups={multiTop.findingGroups} />
+                                              </KeyFindingsCard>
+                                            ) : (
+                                              <KeyFindingsCard findings={chatKeyFindings} />
+                                            )}
+                                          </>
+                                        )}
+                                      </div>
+                                    ) : insightsGenerating ? (
+                                      <div className="mt-8 flex flex-col items-center gap-3 text-sm text-tertiary">
+                                        <span className="size-4 animate-spin rounded-full border-2 border-[#1565ef]/30 border-t-[#1565ef]" />
+                                        Generating auto insights…
+                                      </div>
+                                    ) : (
+                                      <ChartEmptyState onAsk={askChartInChat} />
+                                    )}
+                                  </>
+                                ) : view === "sample" ? (
+                                  <div>
+                                    {/* Always the uploaded dataset's sample rows — a chat
+                                    analysis never replaces this view. */}
+                                    <DataTableView
+                                      key="data-sample"
+                                      dataset={persistedDataset}
+                                      disableMockFallback={isPersistedAnalysis}
+                                      analysisKey={`${resolvedAnalysisId ?? aidFromUrl ?? "current"}:sample`}
+                                      profiles={columnProfiles}
+                                      highlight={highlightRequest}
+                                      onChartColumn={chartColumn}
+                                    />
+                                  </div>
                                 ) : (
-                                  <li className="text-tertiary">Insights will appear here once analysis completes.</li>
+                                  <div>
+                                    <AnalysisResultsView
+                                      runs={tableRuns}
+                                      index={clampAnalysisIndex(selectedRunIndex, tableRuns.length)}
+                                      onIndexChange={(next) => {
+                                        const run = tableRuns[next];
+                                        if (run) setSelectedRunId(run.id);
+                                      }}
+                                      tableIndex={safeResultTableIndex}
+                                      onTableChange={setResultTableIndex}
+                                      profiles={columnProfiles}
+                                      highlight={highlightRequest}
+                                      onChartColumn={chartColumn}
+                                      onOpenInChat={openResultInChat}
+                                      onAskInChat={() => {
+                                        setChatOpen(true);
+                                        requestAnimationFrame(() =>
+                                          document.querySelector<HTMLTextAreaElement>("textarea")?.focus(),
+                                        );
+                                      }}
+                                    />
+                                    {/* Toolbar for THIS result, directly under its data table */}
+                                    {tableRuns.length ? renderResultToolbar() : null}
+                                  </div>
                                 )}
-                              </ul>
-                            </CollapsibleInsights>
+
+                                {/* Same toolbar directly under the charts of this result */}
+                                {view === "chart" ? renderResultToolbar() : null}
+                              </div>
+                            </DataWorkspaceCard>
 
                             {pastedPreviews.map(({ groupId, runs, slides, insights }, pastedIndex) => (
                               <PastedAnalysisSection
@@ -4819,7 +5069,6 @@ useEffect(() => {
                                 onDismissValidation={() => setValidationFeedback(null)}
                               />
                             )}
-
 
                             {insightCommentOpen && (
                               <div className="mt-4">
@@ -4885,326 +5134,10 @@ useEffect(() => {
             )}
           </main>
 
-          {/* Chat panel */}
-          {pane === "workspace" && (() => {
-            const isFloat = chatDock === "float";
-            const isLeft = chatDock === "left";
-
-            const dockButton = (target: ChatDock, label: string, children: ReactNode) => (
-              <button
-                type="button"
-                onClick={() => setChatDock(target)}
-                aria-label={label}
-                title={label}
-                className={cx(
-                  "grid size-7 place-items-center rounded-md text-fg-quaternary hover:bg-secondary hover:text-fg-secondary",
-                  chatDock === target && "bg-[#eff8ff] text-[#1565ef]",
-                )}
-              >
-                {children}
-              </button>
-            );
-
-            const header = (
-              <div
-                className={cx(
-                  "flex items-center gap-2 border-b border-secondary px-4 py-2.5",
-                  isFloat && "cursor-move select-none",
-                )}
-                onMouseDown={
-                  isFloat
-                    ? (e) => {
-                        if ((e.target as HTMLElement).closest("button")) return;
-                        e.preventDefault();
-                        floatDraggingRef.current = true;
-                        const startX = e.clientX;
-                        const startY = e.clientY;
-                        const startPos = { ...chatFloatPos };
-                        let latest = { ...startPos };
-                        let raf = 0;
-                        const applyStyle = () => {
-                          raf = 0;
-                          const el = floatAsideRef.current;
-                          if (el) {
-                            el.style.left = `${latest.x}px`;
-                            el.style.top = `${latest.y}px`;
-                          }
-                        };
-                        const onMove = (ev: MouseEvent) => {
-                          if (!floatDraggingRef.current) return;
-                          const nx = Math.max(8, Math.min(window.innerWidth - chatFloatSize.w - 8, startPos.x + (ev.clientX - startX)));
-                          const ny = Math.max(8, Math.min(window.innerHeight - 60, startPos.y + (ev.clientY - startY)));
-                          latest = { x: nx, y: ny };
-                          if (!raf) raf = requestAnimationFrame(applyStyle);
-                        };
-                        const onUp = () => {
-                          floatDraggingRef.current = false;
-                          window.removeEventListener("mousemove", onMove);
-                          window.removeEventListener("mouseup", onUp);
-                          if (raf) cancelAnimationFrame(raf);
-                          // Snap to dock if dropped near edges
-                          const snapThreshold = 60;
-                          if (latest.x <= snapThreshold) {
-                            setChatDock("left");
-                          } else if (latest.x + chatFloatSize.w >= window.innerWidth - snapThreshold) {
-                            setChatDock("right");
-                          } else {
-                            setChatFloatPos(latest);
-                          }
-                        };
-                        window.addEventListener("mousemove", onMove);
-                        window.addEventListener("mouseup", onUp);
-                      }
-                    : undefined
-                }
-              >
-                <h2 className="text-md font-semibold text-primary flex-1">Chat</h2>
-                <div className="flex items-center gap-0.5">
-                  {dockButton("left", "Dock left", <ArrowLeft className="size-4" />)}
-                  {dockButton(
-                    "float",
-                    "Pop out",
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="size-4">
-                      <path d="M14 3h7v7" />
-                      <path d="M10 14 21 3" />
-                      <path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5" />
-                    </svg>,
-                  )}
-                  {dockButton("right", "Dock right", <ArrowRight className="size-4" />)}
-                </div>
-              </div>
-            );
-
-            const body = (
-              <>
-                {avatarMode ? (
-                  <VoicePanel
-                    onClose={() => {
-                      stopSpeaking();
-                      setAvatarMode(false);
-                    }}
-                    messages={messages}
-                    isSending={isSending}
-                    listening={voiceListening}
-                    onSpeakingChange={setAvatarSpeaking}
-                  />
-
-                ) : (
-                  <div ref={scrollRef} className="flex flex-1 flex-col overflow-y-auto px-4 py-4">
-                    <div className="mt-auto flex flex-col">
-                      <div className="my-3 flex items-center gap-3">
-                        <div className="h-px flex-1 bg-border-secondary" />
-                        <span className="text-xs text-tertiary">Today</span>
-                        <div className="h-px flex-1 bg-border-secondary" />
-                      </div>
-                      {messages.map((m) => (
-                        <MessageRow
-                          key={m.id}
-                          message={m}
-                          activeSectionId={activeSectionId}
-                          onSectionSelect={focusSection}
-                          onReply={() =>
-                            setReplyContext({
-                              label: m.role === "ai" ? "Avaloka AI" : "You",
-                              content: m.content,
-                            })
-                          }
-                          onRefresh={() => {
-                            void handleRefresh();
-                          }}
-                          onThumb={(t) => {
-                            void handleThumb(t);
-                          }}
-                          onCopy={() => {
-                            try {
-                              void navigator.clipboard?.writeText(m.content);
-                              toast.success("Copied");
-                            } catch {
-                              toast.error("Failed to copy");
-                            }
-                          }}
-                          feedback={insightFeedback}
-                          feedbackSubmitting={feedbackSubmitting}
-                          refreshing={refreshing}
-                        />
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                <div className="border-t border-secondary bg-secondary/40 p-3">
-                  {replyContext && (
-                    <div className="mb-2 flex items-stretch overflow-hidden rounded-lg border border-secondary bg-primary">
-                      <span className="w-1 shrink-0 bg-[#1565ef]" />
-                      <div className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2">
-                        <MessageChatCircle className="size-4 shrink-0 text-fg-quaternary" />
-                        <div className="min-w-0 flex-1">
-                          <p className="text-xs font-semibold text-[#1565ef]">{replyContext.label}</p>
-                          <p className="truncate text-xs text-secondary">{replyContext.content}</p>
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => setReplyContext(null)}
-                        aria-label="Cancel reply"
-                        className="grid w-9 place-items-center text-fg-quaternary hover:text-fg-secondary"
-                      >
-                        <X className="size-4" />
-                      </button>
-                    </div>
-                  )}
-                  <TypingIndicator users={typingUsers} />
-                  <ChatComposer
-                    draft={chatDraft}
-                    onDraftChange={setChatDraft}
-                    isSending={isSending}
-                    avatarMode={avatarMode}
-                    onAvatarModeChange={() => setAvatarMode((value) => !value)}
-                    onListeningChange={setVoiceListening}
-                    onSend={send}
-                    onTyping={notifyTyping}
-                    onStopTyping={stopTyping}
-                    speaking={avatarSpeaking}
-                    onStopSpeaking={() => {
-                      stopSpeaking();
-                      setAvatarSpeaking(false);
-                    }}
-                  />
-                  <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      {(datasetChips.length
-                        ? datasetChips
-                        : isPersistedAnalysis
-                          ? []
-                          : [{ id: "ds1", name: "Data Set 1" }]
-                      )
-                        .slice(0, datasetsExpanded ? undefined : 2)
-                        .map((d) => {
-                          const active =
-                            datasetChips.length <= 1
-                              ? selectedDatasetIds.length === 0 || selectedDatasetIds.includes(d.id)
-                              : selectedDatasetIds.includes(d.id);
-
-                          return (
-                            <button
-                              type="button"
-                              key={d.id}
-                              onClick={() => selectDatasetChip(d as DatasetChip)}
-                              title={`${d.name}\nDataset ID: ${d.id}`}
-                              className={cx(
-                                "inline-flex max-w-[240px] items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition",
-                                active
-                                  ? "border-[#1565ef] bg-[#eff8ff] text-[#175cd3] shadow-xs"
-                                  : "border-secondary bg-primary text-tertiary hover:border-tertiary",
-                              )}
-                            >
-                              <Database01
-                                className={cx(
-                                  "size-3.5 shrink-0",
-                                  active ? "text-[#1565ef]" : "text-fg-quaternary",
-                                )}
-                              />
-                              <span className="truncate">{datasetChipLabel(d.name)}</span>
-                            </button>
-                          );
-                        })}
-
-                      {datasetChips.length > 2 && (
-                        <button
-                          type="button"
-                          onClick={() => setDatasetsExpanded((prev) => !prev)}
-                          className="text-xs font-semibold text-[#1565ef] hover:underline"
-                        >
-                          {datasetsExpanded ? "Less" : `More (${datasetChips.length - 2})`}
-                        </button>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2 text-xs font-semibold text-secondary">
-                      <span className="text-primary">Selected Dataset</span>
-                      <button
-                        type="button"
-                        onClick={() => setSourcesOpen(true)}
-                        className="inline-flex items-center gap-1 hover:text-primary"
-                      >
-                        <Plus className="size-3.5" /> Add
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </>
-            );
-
-            if (isFloat) {
-              return (
-                <aside
-                  ref={floatAsideRef}
-                  style={{
-                    position: "fixed",
-                    left: chatFloatPos.x,
-                    top: chatFloatPos.y,
-                    width: chatFloatSize.w,
-                    height: chatFloatSize.h,
-                    zIndex: 60,
-                  }}
-                  className="flex flex-col overflow-hidden rounded-xl border border-secondary bg-primary shadow-2xl"
-                >
-                  {header}
-                  {body}
-                </aside>
-              );
-            }
-
-            const separator = (
-              <div
-                role="separator"
-                aria-orientation="vertical"
-                aria-label="Resize chat"
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  chatResizingRef.current = true;
-                  const startX = e.clientX;
-                  const startW = chatWidth;
-                  let latest = startW;
-                  let raf = 0;
-                  const apply = () => {
-                    raf = 0;
-                    if (chatAsideRef.current) chatAsideRef.current.style.width = `${latest}px`;
-                  };
-                  const onMove = (ev: MouseEvent) => {
-                    if (!chatResizingRef.current) return;
-                    const dx = isLeft ? ev.clientX - startX : startX - ev.clientX;
-                    latest = Math.min(900, Math.max(300, startW + dx));
-                    if (!raf) raf = requestAnimationFrame(apply);
-                  };
-                  const onUp = () => {
-                    chatResizingRef.current = false;
-                    if (raf) cancelAnimationFrame(raf);
-                    window.removeEventListener("mousemove", onMove);
-                    window.removeEventListener("mouseup", onUp);
-                    setChatWidth(latest);
-                  };
-                  window.addEventListener("mousemove", onMove);
-                  window.addEventListener("mouseup", onUp);
-                }}
-                style={{ order: isLeft ? -1 : 0 }}
-                className="w-1 shrink-0 cursor-col-resize bg-transparent hover:bg-[#1565ef]/30 active:bg-[#1565ef]/50"
-              />
-            );
-
-            return (
-              <>
-                {separator}
-                <aside
-                  ref={chatAsideRef}
-                  style={{ width: chatWidth, order: isLeft ? -2 : 0 }}
-                  className="flex shrink-0 flex-col overflow-hidden rounded-xl border border-secondary bg-primary"
-                >
-                  {header}
-                  {body}
-                </aside>
-              </>
-            );
-          })()}
+          {/* Chat panel (right dock) */}
+          {pane === "workspace" && chatOpen && effectiveChatDock === "right" && renderChatSlot()}
+          {/* Floating "pop out" card: position:fixed, so the data area keeps its full width */}
+          {pane === "workspace" && chatOpen && effectiveChatDock === "float" && renderChatSlot()}
         </div>
 
         {upgradeDialog}
@@ -5236,10 +5169,22 @@ useEffect(() => {
               }}
               className="group relative mt-2 block w-full cursor-pointer overflow-hidden rounded-2xl border-2 border-dashed border-secondary bg-primary/60 px-6 py-10 text-center transition hover:border-brand"
             >
-              <img src={bgPattern.url} alt="" aria-hidden className="pointer-events-none absolute left-1/2 top-1/2 w-[420px] -translate-x-1/2 -translate-y-1/2 select-none" />
+              <img
+                src={bgPattern.url}
+                alt=""
+                aria-hidden
+                className="pointer-events-none absolute left-1/2 top-1/2 w-[420px] -translate-x-1/2 -translate-y-1/2 select-none"
+              />
               <div className="relative flex flex-col items-center">
-                <img src={illustration.url} alt="" aria-hidden className="h-auto w-auto max-w-[96px] select-none object-contain" />
-                <h3 className="mt-4 text-md font-semibold text-primary">Select or drag &amp; drop file to analyze data</h3>
+                <img
+                  src={illustration.url}
+                  alt=""
+                  aria-hidden
+                  className="h-auto w-auto max-w-[96px] select-none object-contain"
+                />
+                <h3 className="mt-4 text-md font-semibold text-primary">
+                  Select or drag &amp; drop file to analyze data
+                </h3>
                 <p className="mt-1 text-sm text-tertiary">CSV, Excel or JSON (100MB)</p>
               </div>
             </button>
@@ -5265,7 +5210,48 @@ useEffect(() => {
           }}
           datasetName={currentDataset?.title ?? ""}
         />
-        <DataSetBrowserModal open={sourcesOpen} onOpenChange={setSourcesOpen} />
+        <AttachDatasetsModal
+          open={sourcesOpen}
+          onOpenChange={setSourcesOpen}
+          threadId={threadId}
+          currentAnalysisId={resolvedAnalysisId}
+          chipDatasetIds={datasetChips.map((c) => c.id)}
+          onAttached={async (info) => {
+            try {
+              const known = knownDatasetVizRef.current;
+              if (info?.uploadedDatasets?.length) {
+                for (const d of info.uploadedDatasets) {
+                  const cfg = d?.visualization_config ?? d?.visualization_configs;
+                  if (d?.dataset_id && cfg)
+                    known.set(d.dataset_id, {
+                      viz_config: cfg,
+                      samples: Array.isArray(d.samples) ? d.samples : null,
+                      schema: d.schema ?? d.columns ?? null,
+                      filename: d.filename ?? d.alias ?? null,
+                    });
+                }
+              }
+              if (info?.analysisIds?.length) {
+                const groups = await Promise.all(
+                  info.analysisIds.map((id) => loadAnalysisGroupDatasets(id).catch(() => [])),
+                );
+                for (const g of groups.flat()) {
+                  if (g.dataset_id && g.viz_config && !known.has(g.dataset_id))
+                    known.set(g.dataset_id, {
+                      viz_config: g.viz_config,
+                      samples: g.samples,
+                      schema: g.schema,
+                      filename: g.name,
+                    });
+                }
+              }
+              const added = await refreshThreadDatasets({ selectNew: true });
+              toast.success(`Added ${Math.max(0, added)} dataset(s) to this chat`);
+            } catch (err) {
+              console.warn("[analysis] refresh thread datasets failed", err);
+            }
+          }}
+        />
         <ConnectCloudModal open={connectCloudOpen} onOpenChange={setConnectCloudOpen} />
         <AutoInsightsModal
           open={autoInsightsOpen}
@@ -5321,7 +5307,6 @@ useEffect(() => {
             </div>
           </div>
         ) : null}
-
 
         {pasteOpen ? (
           <div
@@ -5406,7 +5391,8 @@ useEffect(() => {
               </div>
               <div className="flex flex-col gap-3 p-4">
                 <p className="text-xs text-tertiary">
-                  Your browser blocked automatic clipboard access. Click in the box, press Ctrl+A then Ctrl+C (Cmd+A / Cmd+C on Mac) to copy.
+                  Your browser blocked automatic clipboard access. Click in the box, press Ctrl+A then Ctrl+C (Cmd+A /
+                  Cmd+C on Mac) to copy.
                 </p>
                 <textarea
                   value={copyFallbackText}
@@ -5444,7 +5430,6 @@ useEffect(() => {
           aid={aidFromUrl}
         />
 
-
         <AddToDashboardModal
           open={addToDashboardOpen}
           onOpenChange={setAddToDashboardOpen}
@@ -5455,7 +5440,6 @@ useEffect(() => {
           chartIndex={dashboardChartIndex}
           insight={dashboardInsight}
         />
-
 
         <HistoryCollaborationDetailModal
           payload={collaborationDetail}
@@ -5468,14 +5452,65 @@ useEffect(() => {
 }
 
 const PY_KEYWORDS = new Set([
-  "and", "as", "assert", "async", "await", "break", "class", "continue", "def", "del", "elif",
-  "else", "except", "finally", "for", "from", "global", "if", "import", "in", "is", "lambda",
-  "nonlocal", "not", "or", "pass", "raise", "return", "try", "while", "with", "yield",
+  "and",
+  "as",
+  "assert",
+  "async",
+  "await",
+  "break",
+  "class",
+  "continue",
+  "def",
+  "del",
+  "elif",
+  "else",
+  "except",
+  "finally",
+  "for",
+  "from",
+  "global",
+  "if",
+  "import",
+  "in",
+  "is",
+  "lambda",
+  "nonlocal",
+  "not",
+  "or",
+  "pass",
+  "raise",
+  "return",
+  "try",
+  "while",
+  "with",
+  "yield",
 ]);
 const PY_CONSTANTS = new Set(["True", "False", "None", "self", "cls"]);
 const PY_BUILTINS = new Set([
-  "abs", "all", "any", "bool", "dict", "enumerate", "filter", "float", "int", "len", "list",
-  "map", "max", "min", "print", "range", "round", "set", "sorted", "str", "sum", "tuple", "type", "zip",
+  "abs",
+  "all",
+  "any",
+  "bool",
+  "dict",
+  "enumerate",
+  "filter",
+  "float",
+  "int",
+  "len",
+  "list",
+  "map",
+  "max",
+  "min",
+  "print",
+  "range",
+  "round",
+  "set",
+  "sorted",
+  "str",
+  "sum",
+  "tuple",
+  "type",
+  "zip",
 ]);
 
 const PY_TOKEN_RE =
@@ -5483,12 +5518,20 @@ const PY_TOKEN_RE =
 
 /** Lightweight VS Code-ish Python highlighter (display only). */
 function highlightPython(code: string) {
-  const out: ReactNode[] = [];
+  const out: React.ReactNode[] = [];
   let last = 0;
   let key = 0;
   const push = (text: string, cls?: string) => {
     if (!text) return;
-    out.push(cls ? <span key={key++} className={cls}>{text}</span> : text);
+    out.push(
+      cls ? (
+        <span key={key++} className={cls}>
+          {text}
+        </span>
+      ) : (
+        text
+      ),
+    );
   };
   for (const m of code.matchAll(PY_TOKEN_RE)) {
     const idx = m.index ?? 0;
@@ -5586,13 +5629,9 @@ function InlineCodeEditor({
               disabled={loading || saving || !code}
               className="relative inline-flex items-center gap-1.5 rounded-lg border border-[#1570ef] bg-[#1570ef] px-2.5 py-1 text-[12px] font-semibold text-white shadow-sm hover:bg-[#175cd3] disabled:opacity-60"
             >
-              {saving && (
-                <span className="size-3 animate-spin rounded-full border-2 border-white/50 border-t-white" />
-              )}
+              {saving && <span className="size-3 animate-spin rounded-full border-2 border-white/50 border-t-white" />}
               {saving ? "Verifying & Running…" : "Save & Execute"}
-              {!saving && dirty && (
-                <span className="ml-0.5 inline-block size-1.5 rounded-full bg-white" />
-              )}
+              {!saving && dirty && <span className="ml-0.5 inline-block size-1.5 rounded-full bg-white" />}
             </button>
           )}
           <button
@@ -5644,8 +5683,7 @@ function InlineCodeEditor({
       {plannerNotes && (
         <div className="flex items-start justify-between gap-3 border-b border-[#fedf89] bg-[#fffaeb] px-4 py-2 text-[12px] text-[#93370d]">
           <p>
-            <span className="font-semibold">The planner corrected your code before running:</span>{" "}
-            {plannerNotes}
+            <span className="font-semibold">The planner corrected your code before running:</span> {plannerNotes}
           </p>
           {onDismissPlanner && (
             <button
@@ -5680,10 +5718,7 @@ function InlineCodeEditor({
         ) : (
           <>
             <div
-              className={cx(
-                "relative w-full",
-                expanded ? "max-h-[640px] overflow-auto" : "overflow-hidden",
-              )}
+              className={cx("relative w-full", expanded ? "max-h-[640px] overflow-auto" : "overflow-hidden")}
               style={{ height: expanded ? undefined : 320 }}
             >
               <div className="relative flex w-max min-w-full">
@@ -5713,7 +5748,6 @@ function InlineCodeEditor({
                   />
                 </div>
               </div>
-
             </div>
             {!expanded && (
               <div className="pointer-events-none absolute inset-x-0 bottom-0 flex h-24 items-end justify-center bg-gradient-to-t from-white via-white/90 to-transparent pb-3 dark:from-[#0d1117] dark:via-[#0d1117]/90">
@@ -5740,8 +5774,6 @@ function InlineCodeEditor({
           </>
         )}
       </div>
-
-
     </div>
   );
 }
@@ -6031,13 +6063,11 @@ function VoicePanel({
   messages,
   isSending,
   listening,
-  onSpeakingChange,
 }: {
   onClose: () => void;
   messages: ChatMessage[];
   isSending: boolean;
   listening: boolean;
-  onSpeakingChange?: (speaking: boolean) => void;
 }) {
   const [userName, setUserName] = useState("");
   const [spokenText, setSpokenText] = useState("");
@@ -6053,20 +6083,12 @@ function VoicePanel({
   }
 
   useEffect(() => {
-    onSpeakingChange?.(speaking);
-  }, [speaking, onSpeakingChange]);
-
-  useEffect(() => {
     let cancelled = false;
     void (async () => {
       try {
         const profileId = await getCurrentProfileId();
         if (!profileId) return;
-        const { data } = await supabase
-          .from("profiles")
-          .select("full_name")
-          .eq("id", profileId)
-          .maybeSingle();
+        const { data } = await supabase.from("profiles").select("full_name").eq("id", profileId).maybeSingle();
         if (!cancelled) setUserName((data as any)?.full_name ?? "");
       } catch {
         /* ignore */
@@ -6163,7 +6185,10 @@ function VoicePanel({
             <img
               src={avatarTtsIdle}
               alt="Avaloka AI"
-              className={cx("absolute inset-0 size-full object-cover transition-opacity", speaking ? "opacity-0" : "opacity-100")}
+              className={cx(
+                "absolute inset-0 size-full object-cover transition-opacity",
+                speaking ? "opacity-0" : "opacity-100",
+              )}
             />
             <video
               ref={videoRef}
@@ -6176,14 +6201,11 @@ function VoicePanel({
               style={{ top: "-14%", height: "auto", width: "92%", left: "4%" }}
               className={cx("absolute object-cover transition-opacity", speaking ? "opacity-100" : "opacity-0")}
             />
-
           </div>
         </div>
 
         <div className="space-y-1">
-          <p className="text-lg font-semibold text-primary">
-            {userName ? `Welcome, ${userName}` : "Welcome"}
-          </p>
+          <p className="text-lg font-semibold text-primary">{userName ? `Welcome, ${userName}` : "Welcome"}</p>
           <p className="text-sm text-tertiary">
             {isThinking
               ? "Thinking..."
@@ -6221,7 +6243,6 @@ function VoicePanel({
   );
 }
 
-
 function ChatComposer({
   draft,
   onDraftChange,
@@ -6232,8 +6253,6 @@ function ChatComposer({
   onTyping,
   onStopTyping,
   onListeningChange,
-  speaking,
-  onStopSpeaking,
 }: {
   draft: string;
   onDraftChange: (value: string) => void;
@@ -6244,8 +6263,6 @@ function ChatComposer({
   onTyping?: () => void;
   onStopTyping?: () => void;
   onListeningChange?: (listening: boolean) => void;
-  speaking?: boolean;
-  onStopSpeaking?: () => void;
 }) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -6260,8 +6277,7 @@ function ChatComposer({
     setIsSubmitting(true);
     try {
       const accepted = await onSend(content);
-      // Put the text back if the send was rejected so nothing is lost.
-      if (!accepted) onDraftChange(content);
+      if (!accepted) onDraftChange(draft || content);
     } finally {
       setIsSubmitting(false);
     }
@@ -6328,33 +6344,23 @@ function ChatComposer({
           className="field-sizing-content min-h-5 max-h-[240px] flex-1 resize-none overflow-y-auto bg-transparent text-sm text-primary placeholder:text-tertiary focus:outline-none"
         />
         {avatarMode ? (
-          speaking ? (
-            <button
-              type="button"
-              aria-label="Stop speaking"
-              title="Stop speaking"
-              onClick={() => onStopSpeaking?.()}
-              className="mt-0.5 shrink-0 rounded-full bg-[#1565ef] p-1 text-white ring-4 ring-[#1565ef]/20 transition hover:bg-[#1257d6]"
-            >
-              <StopListeningIcon className="size-5" />
-            </button>
-          ) : (
-            <button
-              type="button"
-              aria-label={voice.listening ? "Stop listening" : "Start listening"}
-              title={voice.listening ? "Stop listening" : "Start listening"}
-              onClick={() => {
-                if (voice.listening) voice.stop();
-                else holdStart();
-              }}
-              className={cx(
-                "mt-0.5 shrink-0 rounded-full p-1 transition",
-                voice.listening ? "bg-[#1565ef] text-white ring-4 ring-[#1565ef]/20" : "text-[#1565ef] hover:bg-[#1565ef]/10",
-              )}
-            >
-              {voice.listening ? <StopListeningIcon className="size-5" /> : <MicIcon className="size-5" />}
-            </button>
-          )
+          <button
+            type="button"
+            aria-label={voice.listening ? "Stop listening" : "Start listening"}
+            title={voice.listening ? "Stop listening" : "Start listening"}
+            onClick={() => {
+              if (voice.listening) voice.stop();
+              else holdStart();
+            }}
+            className={cx(
+              "mt-0.5 shrink-0 rounded-full p-1 transition",
+              voice.listening
+                ? "bg-[#1565ef] text-white ring-4 ring-[#1565ef]/20"
+                : "text-[#1565ef] hover:bg-[#1565ef]/10",
+            )}
+          >
+            {voice.listening ? <StopListeningIcon className="size-5" /> : <MicIcon className="size-5" />}
+          </button>
         ) : (
           <button
             type="button"
@@ -6394,8 +6400,12 @@ function MessageRow({
   feedback,
   feedbackSubmitting,
   refreshing,
+  keyFindings,
+  onEditResend,
 }: {
   message: ChatMessage;
+  /** User's own messages: Save in the inline editor re-sends the edited text. */
+  onEditResend?: (text: string) => void;
   onReply?: () => void;
   onSectionSelect?: (sectionId: string) => void;
   activeSectionId?: string;
@@ -6405,16 +6415,25 @@ function MessageRow({
   feedback?: "positive" | "negative" | null;
   feedbackSubmitting?: "positive" | "negative" | null;
   refreshing?: boolean;
+  /** Multi-dataset analyses: structured "Key findings" replacing the markdown section. */
+  keyFindings?: ReactNode;
 }) {
   const isAi = message.role === "ai";
   const [dragX, setDragX] = useState(0);
   const startRef = useRef<{ x: number; y: number } | null>(null);
   const triggeredRef = useRef(false);
 
+  // Drag-to-reply starts only from the dedicated handle and never during a text selection.
   const handlePointerDown = (e: ReactPointerEvent) => {
     if (!onReply || message.thinking) return;
+    if (!shouldStartReplyDrag({ fromHandle: true, selectionText: currentSelectionText(), button: e.button })) return;
     startRef.current = { x: e.clientX, y: e.clientY };
     triggeredRef.current = false;
+    try {
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {
+      /* capture unsupported */
+    }
   };
   const handlePointerMove = (e: ReactPointerEvent) => {
     if (!startRef.current) return;
@@ -6434,15 +6453,31 @@ function MessageRow({
     setDragX(0);
   };
 
-  const swipeProps = {
+  const dragHandleProps = {
     onPointerDown: handlePointerDown,
     onPointerMove: handlePointerMove,
     onPointerUp: handlePointerUp,
     onPointerCancel: handlePointerUp,
+  };
+  const dragHandle = onReply ? (
+    <span
+      {...dragHandleProps}
+      role="button"
+      aria-label="Drag to reply"
+      title="Drag to reply"
+      className="flex w-3 shrink-0 cursor-grab touch-none select-none items-center justify-center self-stretch text-fg-quaternary opacity-0 transition-opacity group-hover/msg:opacity-100 active:cursor-grabbing"
+    >
+      <svg viewBox="0 0 6 14" className="h-3.5 w-1.5" fill="currentColor" aria-hidden>
+        <circle cx="1.5" cy="2" r="1" /><circle cx="4.5" cy="2" r="1" />
+        <circle cx="1.5" cy="7" r="1" /><circle cx="4.5" cy="7" r="1" />
+        <circle cx="1.5" cy="12" r="1" /><circle cx="4.5" cy="12" r="1" />
+      </svg>
+    </span>
+  ) : null;
+  const swipeProps = {
     style: {
       transform: `translateX(${dragX}px)`,
       transition: dragX === 0 ? "transform 0.18s ease-out" : "none",
-      touchAction: "pan-y" as const,
     },
   };
 
@@ -6469,13 +6504,14 @@ function MessageRow({
 
   if (isAi) {
     return (
-      <div className="relative mb-5">
+      <div className="group/msg relative mb-5">
         {dragX !== 0 && (
           <div className="pointer-events-none absolute inset-y-0 right-2 flex items-center text-[#1565ef]">
             <MessageChatCircle className="size-4" />
           </div>
         )}
         <div {...swipeProps} className="flex items-start gap-2">
+          {dragHandle}
           <img
             src={avatarBot}
             alt="Avaloka AI"
@@ -6490,12 +6526,11 @@ function MessageRow({
             </div>
             <div
               className={cx(
-                "mt-1 rounded-lg border px-3 py-2 text-sm cursor-pointer",
+                "mt-1 cursor-text select-text rounded-lg border px-3 py-2 text-sm",
                 message.error
                   ? "border-[#fda29b] bg-[#fef3f2] text-[#b42318]"
                   : "border-secondary bg-primary text-primary hover:border-[#b2ddff]",
               )}
-              onDoubleClick={() => onReply?.()}
             >
               {message.replyTo && (
                 <div className="mb-1.5 rounded-md border-l-[3px] border-[#1565ef] bg-secondary/50 px-2 py-1">
@@ -6503,12 +6538,22 @@ function MessageRow({
                   <p className="truncate text-xs text-secondary">{message.replyTo.content}</p>
                 </div>
               )}
-              <MarkdownContent content={message.content} />
+              {keyFindings ? (
+                (() => {
+                  const parts = splitAtKeyFindings(message.content);
+                  return (
+                    <>
+                      {parts.before.trim() ? <MarkdownContent content={parts.before} /> : null}
+                      {keyFindings}
+                      {parts.after.trim() ? <MarkdownContent content={parts.after} /> : null}
+                    </>
+                  );
+                })()
+              ) : (
+                <MarkdownContent content={message.content} />
+              )}
             </div>
             <div className="mt-2 flex items-center gap-3 text-fg-quaternary">
-              <button aria-label="Edit" className="hover:text-fg-secondary">
-                <Edit01Icon className="size-3.5" />
-              </button>
               <button
                 aria-label="Refresh"
                 onClick={onRefresh}
@@ -6562,13 +6607,17 @@ function MessageRow({
 
   // user
   return (
-    <div className="relative mb-5">
+    <div className="group/msg relative mb-5">
       {dragX !== 0 && (
         <div className="pointer-events-none absolute inset-y-0 left-2 flex items-center text-[#1565ef]">
           <MessageChatCircle className="size-4" />
         </div>
       )}
-      <div {...swipeProps} className="flex flex-col items-end">
+      <div {...swipeProps} className="flex items-start gap-1">
+      <div className="flex min-w-0 flex-1 flex-col items-end">
+      <UserMessageEditor content={message.content} onResend={onEditResend}>
+        {({ editButton }) => (
+        <>
         <div className="flex items-center gap-1.5">
           {!message.isSelf && message.authorAvatar ? (
             <img
@@ -6590,12 +6639,11 @@ function MessageRow({
           <CheckCheckIcon className="size-3.5 text-[#1565ef]" />
         </div>
         <div
-          onDoubleClick={() => onReply?.()}
           onClick={() => {
-            if (message.sectionId) onSectionSelect?.(message.sectionId);
+            if (message.sectionId && !currentSelectionText()) onSectionSelect?.(message.sectionId);
           }}
           className={cx(
-            "mt-1 max-w-[85%] cursor-pointer rounded-lg border border-secondary bg-primary px-3 py-2 text-sm text-primary hover:border-[#b2ddff]",
+            "mt-1 max-w-[85%] select-text rounded-lg border border-secondary bg-primary px-3 py-2 text-sm text-primary hover:border-[#b2ddff]",
             message.sectionId && activeSectionId === message.sectionId && "border-[#1565ef] ring-2 ring-[#1565ef]/20",
           )}
         >
@@ -6605,13 +6653,29 @@ function MessageRow({
               <p className="truncate text-xs text-secondary">{message.replyTo.content}</p>
             </div>
           )}
-          {message.content}
+          <RayJobText content={message.content} />
         </div>
         <div className="mt-1.5 flex items-center gap-3 text-fg-quaternary">
+          {editButton}
           <button aria-label="Copy" onClick={onCopy} className="hover:text-fg-secondary">
             <Copy01 className="size-3.5" />
           </button>
+          {onReply ? (
+            <button
+              type="button"
+              aria-label="Reply"
+              onClick={() => onReply()}
+              className="text-[11px] font-semibold text-[#1565ef] hover:underline"
+            >
+              Reply
+            </button>
+          ) : null}
         </div>
+        </>
+        )}
+      </UserMessageEditor>
+      </div>
+      {dragHandle}
       </div>
     </div>
   );
@@ -6620,7 +6684,21 @@ function MessageRow({
 function MarkdownContent({ content }: { content: string }) {
   return (
     <div className="prose-sm max-w-none break-words text-sm leading-relaxed [&_a]:text-[#1565ef] [&_a]:underline [&_code]:rounded [&_code]:bg-secondary/60 [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-[12px] [&_pre]:my-2 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:bg-[#0f172a] [&_pre]:p-3 [&_pre]:text-[12px] [&_pre]:text-white [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_pre_code]:text-white [&_h1]:mt-2 [&_h1]:mb-1 [&_h1]:text-base [&_h1]:font-semibold [&_h2]:mt-2 [&_h2]:mb-1 [&_h2]:text-sm [&_h2]:font-semibold [&_h3]:mt-2 [&_h3]:mb-1 [&_h3]:text-sm [&_h3]:font-semibold [&_p]:my-1 [&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:my-0.5 [&_blockquote]:my-2 [&_blockquote]:border-l-2 [&_blockquote]:border-secondary [&_blockquote]:pl-3 [&_blockquote]:text-secondary [&_table]:my-2 [&_table]:w-full [&_table]:border-collapse [&_th]:border [&_th]:border-secondary [&_th]:px-2 [&_th]:py-1 [&_th]:text-left [&_td]:border [&_td]:border-secondary [&_td]:px-2 [&_td]:py-1 [&_hr]:my-2 [&_hr]:border-secondary [&_strong]:font-semibold">
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          a: ({ children, href }) =>
+            href?.startsWith("/ray-jobs?job=") ? (
+              <Link to="/ray-jobs" search={{ job: href.slice("/ray-jobs?job=".length), status: "", kind: "" }}>
+                {children}
+              </Link>
+            ) : (
+              <a href={href}>{children}</a>
+            ),
+        }}
+      >
+        {rayJobMarkdown(content)}
+      </ReactMarkdown>
     </div>
   );
 }
@@ -6631,17 +6709,26 @@ function InlineMarkdown({ content }: { content: string }) {
       remarkPlugins={[remarkGfm]}
       components={{
         p: ({ children }) => <>{children}</>,
-        a: ({ children, href }) => (
-          <a href={href} className="text-[#1565ef] underline" target="_blank" rel="noreferrer">
-            {children}
-          </a>
-        ),
+        a: ({ children, href }) =>
+          href?.startsWith("/ray-jobs?job=") ? (
+            <Link
+              to="/ray-jobs"
+              search={{ job: href.slice("/ray-jobs?job=".length), status: "", kind: "" }}
+              className="text-brand-secondary underline"
+            >
+              {children}
+            </Link>
+          ) : (
+            <a href={href} className="text-[#1565ef] underline" target="_blank" rel="noreferrer">
+              {children}
+            </a>
+          ),
         code: ({ children }) => <code className="rounded bg-secondary/60 px-1 py-0.5 text-[12px]">{children}</code>,
         strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
         em: ({ children }) => <em className="italic">{children}</em>,
       }}
     >
-      {content}
+      {rayJobMarkdown(content)}
     </ReactMarkdown>
   );
 }
@@ -6657,7 +6744,6 @@ function WorkspaceChartCards({
   onDismiss,
   activeRunId,
   onRunChange,
-  showNeighbors = true,
 }: {
   slides: RunSlide[];
   keyPrefix: string;
@@ -6665,7 +6751,6 @@ function WorkspaceChartCards({
   onDismiss?: (cardKey: string) => void;
   activeRunId?: string | null;
   onRunChange?: (runId: string) => void;
-  showNeighbors?: boolean;
 }) {
   const visible = useMemo(
     () =>
@@ -6680,9 +6765,7 @@ function WorkspaceChartCards({
     [slides, keyPrefix, dismissedKeys],
   );
   if (!visible.length) return null;
-  return (
-    <ChartCarousel items={visible} onDismiss={onDismiss} activeRunId={activeRunId} onRunChange={onRunChange} showNeighbors={showNeighbors} />
-  );
+  return <ChartCarousel items={visible} onDismiss={onDismiss} activeRunId={activeRunId} onRunChange={onRunChange} />;
 }
 
 function ChartCarousel({
@@ -6690,15 +6773,14 @@ function ChartCarousel({
   onDismiss,
   activeRunId,
   onRunChange,
-  showNeighbors,
 }: {
   items: { slide: Slide; index: number; cardKey: string; runId?: string }[];
   onDismiss?: (cardKey: string) => void;
   activeRunId?: string | null;
   onRunChange?: (runId: string) => void;
-  showNeighbors: boolean;
 }) {
   const [active, setActive] = useState(0);
+  const [fullscreenOpen, setFullscreenOpen] = useState(false);
   const total = items.length;
   const safeActive = Math.min(active, total - 1);
   const runIdsKey = items.map((item) => item.runId ?? "").join("\u001f");
@@ -6724,8 +6806,6 @@ function ChartCarousel({
     if (i >= 0) setActive((current) => (current === i ? current : i));
   }, [activeRunId, runIdsKey, safeActive]);
 
-
-
   // Offset from center: -1 = prev, 0 = active, 1 = next. Only render 3 neighbours.
   const getOffset = (i: number) => {
     if (total <= 1) return 0;
@@ -6741,13 +6821,12 @@ function ChartCarousel({
   return (
     <div className="space-y-3 rounded-2xl bg-secondary/50 p-4">
       <div className="relative">
-
         {total > 1 ? (
           <button
             type="button"
             aria-label="Previous chart"
             onClick={() => go(-1)}
-            className="absolute left-2 top-1/2 z-30 -translate-y-1/2 rounded-full bg-brand-600 p-2.5 text-white shadow-md hover:bg-brand-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600"
+            className="absolute left-0 top-1/2 z-30 -translate-y-1/2 rounded-full bg-brand-600 p-2.5 text-white shadow-md hover:bg-brand-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600"
           >
             <ChevronLeft className="size-5" strokeWidth={2.5} />
           </button>
@@ -6757,25 +6836,26 @@ function ChartCarousel({
             type="button"
             aria-label="Next chart"
             onClick={() => go(1)}
-            className="absolute right-2 top-1/2 z-30 -translate-y-1/2 rounded-full bg-brand-600 p-2.5 text-white shadow-md hover:bg-brand-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600"
+            className="absolute right-0 top-1/2 z-30 -translate-y-1/2 rounded-full bg-brand-600 p-2.5 text-white shadow-md hover:bg-brand-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600"
           >
             <ChevronRight className="size-5" strokeWidth={2.5} />
           </button>
         ) : null}
 
+        {/* Arrows (40px) sit in 52px gutters: 12px clear of the active card on each side. */}
         <div
-          className="relative mx-auto w-full overflow-hidden"
-          style={{ height: STAGE_H, perspective: "1600px" }}
+          className="relative mx-auto overflow-hidden"
+          style={{ height: STAGE_H, perspective: "1600px", width: total > 1 ? "calc(100% - 104px)" : "100%" }}
         >
           {items.map((it, i) => {
             const off = getOffset(i);
-            if (Math.abs(off) > 1 || (!showNeighbors && off !== 0)) return null;
+            if (Math.abs(off) > 1) return null; // only render 3 nearest
             const isActive = off === 0;
             const translateX = off * 52; // percent
             const translateY = isActive ? 0 : -10;
             const scale = isActive ? 1 : 0.86;
             const rotY = off * -10; // subtle 3D tilt toward center
-            const opacity = isActive ? 1 : 0.55;
+            const opacity = isActive ? 1 : 0.4;
             const z = isActive ? 20 : 10;
             const filter = isActive ? "none" : "grayscale(1) blur(0.3px)";
 
@@ -6795,18 +6875,17 @@ function ChartCarousel({
                   opacity,
                   zIndex: z,
                   filter,
-                  transition:
-                    "transform 550ms cubic-bezier(0.22, 1, 0.36, 1), opacity 400ms ease, filter 400ms ease",
+                  transition: "transform 550ms cubic-bezier(0.22, 1, 0.36, 1), opacity 400ms ease, filter 400ms ease",
                   pointerEvents: "auto",
                   cursor: isActive ? "default" : "pointer",
                 }}
               >
-                <div className={cx(
-                  "relative rounded-xl p-4",
-                  isActive
-                    ? "border border-secondary bg-primary shadow-sm"
-                    : "border border-primary bg-muted/90",
-                )}>
+                <div
+                  className={cx(
+                    "relative rounded-xl p-4",
+                    isActive ? "border border-secondary bg-primary shadow-sm" : "pointer-events-none select-none border border-primary bg-muted/90",
+                  )}
+                >
                   {isActive && onDismiss ? (
                     <button
                       type="button"
@@ -6822,9 +6901,28 @@ function ChartCarousel({
                   ) : null}
                   <div className="flex flex-wrap items-center gap-2 pr-8">
                     <h3 className="text-sm font-semibold text-primary">{it.slide.title}</h3>
+                    {(it.slide as Slide & { sourceLabel?: string }).sourceLabel ? (
+                      <span className="rounded-full bg-secondary px-2 py-0.5 text-[11px] font-medium text-secondary">
+                        {(it.slide as Slide & { sourceLabel?: string }).sourceLabel}
+                      </span>
+                    ) : null}
                     {isActive ? <TagPicker size="sm" /> : null}
+                    {isActive ? (
+                      <button
+                        type="button"
+                        aria-label={`Maximize ${it.slide.title} chart`}
+                        title="Maximize chart"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setFullscreenOpen(true);
+                        }}
+                        className="ml-auto rounded-md border border-secondary bg-primary p-1.5 text-fg-secondary shadow-sm transition hover:bg-secondary hover:text-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600"
+                      >
+                        <Maximize2 className="size-4" aria-hidden="true" />
+                      </button>
+                    ) : null}
                     {isActive && total > 1 ? (
-                      <span className="ml-auto text-xs text-tertiary">
+                      <span className="text-xs text-tertiary">
                         {safeActive + 1} / {total}
                       </span>
                     ) : null}
@@ -6842,20 +6940,6 @@ function ChartCarousel({
             );
           })}
         </div>
-
-        {s.insights.length > 0 ? (
-          <div className="mx-auto mt-4 w-[86%]">
-            <CollapsibleInsights className="rounded-xl border border-secondary bg-primary p-4">
-              <ul className="list-disc space-y-1.5 pl-5 text-sm text-secondary">
-                {s.insights.map((insight, j) => (
-                  <li key={j}>
-                    <InlineMarkdown content={insight} />
-                  </li>
-                ))}
-              </ul>
-            </CollapsibleInsights>
-          </div>
-        ) : null}
       </div>
       {total > 1 ? (
         <div className="flex items-center justify-center gap-1.5">
@@ -6868,12 +6952,29 @@ function ChartCarousel({
               className={
                 i === safeActive
                   ? "h-2 w-6 rounded-full bg-brand-solid transition-all"
-                  : "h-2 w-2 rounded-full bg-quaternary hover:bg-tertiary transition-all"
+                  : "h-2 w-2 rounded-full bg-muted-foreground/40 hover:bg-muted-foreground/60 transition-all"
               }
             />
           ))}
         </div>
       ) : null}
+      <Dialog open={fullscreenOpen} onOpenChange={setFullscreenOpen}>
+        <DialogContent className="grid h-[90vh] w-[94vw] max-w-none grid-rows-[auto_auto_1fr] gap-3 overflow-hidden rounded-xl border-secondary bg-primary p-5 shadow-2xl">
+          <DialogTitle className="pr-10 text-base font-semibold text-primary">{s.title}</DialogTitle>
+          {s.subtitle ? (
+            <p className="text-sm text-tertiary">
+              <InlineMarkdown content={s.subtitle} />
+            </p>
+          ) : null}
+          <div className="min-h-0 w-full overflow-auto">
+            <DynamicChart
+              slide={s}
+              height={typeof window === "undefined" ? 590 : Math.max(360, window.innerHeight * 0.68)}
+              chartKey={`${cardKey}-fullscreen`}
+            />
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -6899,15 +7000,12 @@ function CollapsibleInsights({
         className="flex w-full items-center justify-between gap-2 text-left"
       >
         <h3 className="text-sm font-semibold text-primary">{title}</h3>
-        <ChevronDown
-          className={`size-4 text-fg-secondary transition-transform ${open ? "rotate-180" : ""}`}
-        />
+        <ChevronDown className={`size-4 text-fg-secondary transition-transform ${open ? "rotate-180" : ""}`} />
       </button>
       {open ? <div className="mt-3">{children}</div> : null}
     </div>
   );
 }
-
 
 function WorkspaceSectionUserInsights({
   sectionId,
@@ -6933,66 +7031,24 @@ function WorkspaceSectionUserInsights({
   const slides = useMemo(
     () =>
       dedupeSlidesByInsight(
-        userChartSlidesForSection(entries.filter((entry) => !entry.tableTitle), sectionId, activeTab, chartSamples),
+        userChartSlidesForSection(entries, sectionId, activeTab, chartSamples),
         excludeTitles,
       ) as RunSlide[],
     [entries, sectionId, activeTab, chartSamples, excludeTitles],
   );
-  const tableSlides = useMemo(
-    () => dedupeSlidesByInsight(
-      userChartSlidesForSection(entries.filter((entry) => entry.tableTitle), sectionId, activeTab, chartSamples),
-    ) as RunSlide[],
-    [entries, sectionId, activeTab, chartSamples],
-  );
-  const sectionInsights = useMemo(
-    () => collectSlidesInsights([...slides, ...tableSlides]),
-    [slides, tableSlides],
-  );
-  const hasSectionInsights = sectionInsights.summaries.length > 0 || sectionInsights.insights.length > 0;
 
-  if (!slides.length && !tableSlides.length) return null;
+  if (!slides.length) return null;
 
   return (
-    <div className="space-y-6 p-1">
-      {slides.length ? (
-        <WorkspaceChartCards
-          slides={slides}
-          keyPrefix={`user-${sectionId}`}
-          dismissedKeys={dismissedKeys}
-          onDismiss={onDismiss}
-          activeRunId={activeRunId}
-          onRunChange={onRunChange}
-        />
-      ) : null}
-
-      {tableSlides.length ? (
-        <WorkspaceChartCards
-          slides={tableSlides}
-          keyPrefix={`table-${sectionId}`}
-          dismissedKeys={dismissedKeys}
-          onDismiss={onDismiss}
-          activeRunId={activeRunId}
-          onRunChange={onRunChange}
-          showNeighbors={false}
-        />
-      ) : null}
-
-      {hasSectionInsights ? (
-        <CollapsibleInsights>
-          <ul className="list-disc space-y-1.5 pl-5 text-sm text-secondary">
-            {sectionInsights.summaries.map((summary, i) => (
-              <li key={`user-summary-${i}`}>
-                <InlineMarkdown content={summary} />
-              </li>
-            ))}
-            {sectionInsights.insights.map((insight, i) => (
-              <li key={`user-insight-${i}`}>
-                <InlineMarkdown content={insight} />
-              </li>
-            ))}
-          </ul>
-        </CollapsibleInsights>
-      ) : null}
+    <div className="p-1">
+      <WorkspaceChartCards
+        slides={slides}
+        keyPrefix={`user-${sectionId}`}
+        dismissedKeys={dismissedKeys}
+        onDismiss={onDismiss}
+        activeRunId={activeRunId}
+        onRunChange={onRunChange}
+      />
     </div>
   );
 }
@@ -7003,23 +7059,6 @@ function PlusSquareIcon({ className }: { className?: string }) {
     <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.33" className={className} aria-hidden>
       <rect x="2" y="2" width="12" height="12" rx="2" />
       <path d="M8 5v6M5 8h6" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function Edit01Icon({ className }: { className?: string }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={className}
-      aria-hidden
-    >
-      <path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
     </svg>
   );
 }
@@ -7116,119 +7155,6 @@ type UploadedDataset = {
   size_mb?: number;
 };
 
-function DataPreviewPanel({
-  dataset: datasetProp,
-  filename,
-  datasets = [],
-  activeDatasetId,
-  onDatasetChange,
-}: {
-  dataset?: UploadedDataset | null;
-  filename?: string;
-  datasets?: DatasetChip[];
-  activeDatasetId?: string | null;
-  onDatasetChange?: (dataset: DatasetChip) => void;
-}) {
-  const sessionDataset = useUploadedDataset();
-  const dataset = datasetProp ?? sessionDataset;
-  const columns: string[] = dataset?.schema ?? [];
-  const samples: any[] = dataset?.samples ?? [];
-  const rows = samples.slice(0, 50);
-  const cellOf = (row: any, col: string) => {
-    if (Array.isArray(row)) return row[columns.indexOf(col)];
-    return row?.[col];
-  };
-  const title = filename || dataset?.filename || "Dataset preview";
-
-  return (
-    <div className="mt-4 flex flex-col">
-      {datasets.length > 1 ? (
-      <div className="mb-4 overflow-x-auto border-b border-secondary">
-        <div className="flex min-w-max items-end gap-1">
-          {datasets.map((dataset) => {
-            const active =
-              dataset.id === activeDatasetId;
-
-            return (
-              <button
-                key={dataset.id}
-                type="button"
-                onClick={() =>
-                  onDatasetChange?.(dataset)
-                }
-                title={dataset.name}
-                className={cx(
-                  "relative max-w-[240px] whitespace-nowrap px-3 py-2 text-sm font-semibold transition",
-                  active
-                    ? "text-[#1565ef]"
-                    : "text-tertiary hover:text-primary",
-                )}
-              >
-                <span className="truncate">
-                  {datasetChipLabel(dataset.name)}
-                </span>
-
-                {active && (
-                  <span className="absolute inset-x-0 bottom-0 h-0.5 bg-[#1565ef]" />
-                )}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-    ):(
-      <div className="mb-3 min-w-0">
-        <h3 className="truncate text-sm font-semibold text-primary">{title}</h3>
-        <p className="mt-0.5 text-xs text-tertiary">
-          {columns.length} columns · preview of {dataset?.rows_sampled ?? samples.length} rows — not full analysis results
-          {formatDatasetSize(dataset?.size_mb) ? ` · ${formatDatasetSize(dataset?.size_mb)}` : ""}
-        </p>
-      </div>
-    )}
-      <div className="flex flex-col overflow-hidden">
-        {rows.length === 0 || columns.length === 0 ? (
-          <p className="text-sm text-tertiary">
-            No dataset preview is available. Try re-uploading the file to view its preview.
-          </p>
-        ) : (
-          <div className="max-h-[60vh] overflow-auto rounded-lg border border-secondary">
-            <table className="w-full border-collapse text-sm">
-              <thead className="sticky top-0 z-10 bg-secondary">
-                <tr>
-                  <th className="w-10 px-3 py-2 text-left text-xs font-medium text-tertiary">#</th>
-                  {columns.map((c) => (
-                    <th key={c} className="whitespace-nowrap px-3 py-2 text-left text-xs font-medium text-secondary">
-                      {c}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((row, i) => (
-                  <tr key={i} className="border-t border-secondary hover:bg-secondary/60">
-                    <td className="px-3 py-2 text-xs text-tertiary">{i + 1}</td>
-                    {columns.map((c) => {
-                      const v = cellOf(row, c);
-                      const s = v == null ? "" : typeof v === "object" ? JSON.stringify(v) : String(v);
-                      return (
-                        <td key={c} className="px-3 py-2 text-primary">
-                          <div className="max-w-[200px] truncate" title={s}>
-                            {s}
-                          </div>
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
 function useUploadedDataset(): UploadedDataset | null {
   const [data, setData] = useState<UploadedDataset | null>(null);
   useEffect(() => {
@@ -7245,30 +7171,25 @@ function useUploadedDataset(): UploadedDataset | null {
   return data;
 }
 
-function formatCell(v: unknown): { text: string; isNumber: boolean } {
-  if (v === null || v === undefined || v === "") return { text: "—", isNumber: false };
-  if (typeof v === "number" && Number.isFinite(v)) {
-    return { text: v.toLocaleString(undefined, { maximumFractionDigits: 4 }), isNumber: true };
-  }
-  if (typeof v === "object") return { text: JSON.stringify(v), isNumber: false };
-  return { text: String(v), isNumber: false };
-}
-
 function DataTableView({
   data,
   dataset: datasetProp,
   disableMockFallback = false,
   analysisKey,
+  profiles,
+  highlight,
+  onChartColumn,
 }: {
   data?: Record<string, unknown>[];
   dataset?: UploadedDataset | null;
   disableMockFallback?: boolean;
   analysisKey?: string;
+  profiles?: ColumnProfile[];
+  highlight?: HighlightRequest;
+  onChartColumn?: (column: string, kind: ColumnKind) => void;
 } = {}) {
   const sessionDataset = useUploadedDataset();
   const dataset = datasetProp ?? sessionDataset;
-  const pageSize = 8;
-  const [page, setPage] = useState(1);
   const [rawTable, setRawTable] = useState(false);
   const preferenceKey = `analysis:report-view:${analysisKey ?? "current"}`;
   useEffect(() => {
@@ -7316,11 +7237,6 @@ function DataTableView({
     }));
   }
 
-  const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
-  const safePage = Math.min(page, totalPages);
-  const start = (safePage - 1) * pageSize;
-  const pageRows = rows.slice(start, start + pageSize);
-  // Full-file row count when the backend reports it; otherwise undefined.
   const totalRows = usingReal ? dataset!.total_rows : rows.length;
 
   if (reportRow && !rawTable) {
@@ -7369,111 +7285,15 @@ function DataTableView({
           </div>
         </div>
       )}
-      <div className="mt-4 flex max-h-[min(640px,calc(100vh-260px))] flex-col overflow-hidden rounded-xl border border-secondary bg-primary">
-        <div className="flex-1 overflow-auto">
-          <table className="w-full text-sm">
-            <thead className="sticky top-0 z-10 bg-secondary text-tertiary">
-              <tr>
-                <th className="px-4 py-2.5 text-left font-medium">#</th>
-                {columns.map((c) => (
-                  <th key={c} className="px-4 py-2.5 text-left font-medium whitespace-nowrap">
-                    {c}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {pageRows.length === 0 ? (
-                <tr>
-                  <td colSpan={columns.length + 1} className="px-4 py-10 text-center text-sm text-tertiary">
-                    No table data saved for this analysis yet.
-                  </td>
-                </tr>
-              ) : (
-                pageRows.map((row, i) => (
-                  <tr key={start + i} className="border-t border-secondary">
-                    <td className="px-4 py-2.5 text-tertiary">{start + i + 1}</td>
-                    {columns.map((c) => {
-                      const { text, isNumber } = formatCell(row[c]);
-                      return (
-                        <td
-                          key={c}
-                          className={cx(
-                            "px-4 py-2.5 whitespace-nowrap",
-                            isNumber ? "text-right font-medium text-primary" : "text-secondary",
-                          )}
-                        >
-                          {text}
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        <div className="flex shrink-0 items-center justify-between border-t border-secondary px-4 py-3">
-          <p className="text-xs text-tertiary">
-            Showing {rows.length === 0 ? 0 : start + 1}-{Math.min(start + pageSize, rows.length)} of{" "}
-            {rows.length.toLocaleString()}
-            {usingReal && totalRows && totalRows > rows.length
-              ? ` (preview · ${totalRows.toLocaleString()} rows total)`
-              : usingReal
-                ? ` in a sample of ${dataset!.rows_sampled.toLocaleString()} rows`
-                : ""}
-          </p>
-          <div className="flex items-center gap-1">
-            <button
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-              disabled={safePage === 1}
-              className="rounded-md border border-secondary bg-primary px-3 py-1.5 text-xs font-semibold text-primary disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              Previous
-            </button>
-            {(() => {
-              const visiblePages: (number | "ellipsis")[] = [];
-              const startWindow = Math.max(2, safePage - 2);
-              const endWindow = Math.min(totalPages - 1, safePage + 2);
-              visiblePages.push(1);
-              if (startWindow > 2) visiblePages.push("ellipsis");
-              for (let n = startWindow; n <= endWindow; n++) visiblePages.push(n);
-              if (endWindow < totalPages - 1) visiblePages.push("ellipsis");
-              if (totalPages > 1) visiblePages.push(totalPages);
-
-              return visiblePages.map((item, index) => {
-                if (item === "ellipsis") {
-                  return (
-                    <span key={`ellipsis-${index}`} className="px-1 text-xs text-tertiary">
-                      ...
-                    </span>
-                  );
-                }
-                const n = item;
-                return (
-                  <button
-                    key={n}
-                    onClick={() => setPage(n)}
-                    className={cx(
-                      "size-8 rounded-md text-xs font-semibold",
-                      n === safePage ? "bg-[#1565ef] text-white" : "text-secondary hover:bg-secondary",
-                    )}
-                  >
-                    {n}
-                  </button>
-                );
-              });
-            })()}
-            <button
-              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-              disabled={safePage === totalPages}
-              className="rounded-md border border-secondary bg-primary px-3 py-1.5 text-xs font-semibold text-primary disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              Next
-            </button>
-          </div>
-        </div>
+      <div className="mt-4">
+        <DataGrid
+          rows={rows}
+          columns={columns}
+          profiles={profiles}
+          previewOf={usingReal ? totalRows : undefined}
+          highlight={highlight}
+          onChartColumn={onChartColumn}
+        />
       </div>
     </div>
   );
@@ -7907,9 +7727,7 @@ function PastedAnalysisSection({ runs, slides, insights, index }: PastedAnalysis
     <section className="mt-8 border-t border-secondary pt-6" aria-labelledby={`${groupKey}-title`}>
       <div className="mb-4 flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-xs font-semibold uppercase text-brand-secondary">
-            Pasted analysis {index + 1}
-          </p>
+          <p className="text-xs font-semibold uppercase text-brand-secondary">Pasted analysis {index + 1}</p>
           <h3 id={`${groupKey}-title`} className="mt-1 truncate text-base font-semibold text-primary">
             {run.title}
           </h3>
@@ -7974,7 +7792,6 @@ function PastedAnalysisSection({ runs, slides, insights, index }: PastedAnalysis
           <DataTableView data={run.rows} disableMockFallback />
         </>
       )}
-
 
       <div className="mt-5">
         <CollapsibleInsights title="Pasted result insights">

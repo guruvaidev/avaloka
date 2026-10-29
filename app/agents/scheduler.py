@@ -3,7 +3,6 @@ import calendar
 import logging
 import datetime
 import os
-import subprocess
 
 from dateutil.relativedelta import relativedelta
 
@@ -22,9 +21,6 @@ from redis.connection import parse_url
 
 logger = logging.getLogger(__name__)
 CELERY_URL = parse_url(os.getenv("CELERY_REDIS_URL", "redis://avaloka-redis:6379/0"))
-# Container that runs the Celery worker; overridable so schedules don't break
-# when the compose project / container name differs from the dev default.
-CELERY_WORKER_CONTAINER = os.getenv("CELERY_WORKER_CONTAINER", "avaloka-dev-celery-worker-1")
 
 # RayTrainer can wait for a submitted job for up to 12 hours. Give scheduled
 # training a little extra time to persist the final result after that wait,
@@ -352,57 +348,6 @@ def handle_task_cancel(state: ETLState):
 
 def handle_task_scheduling(state: ETLState) -> None:
     logger.info("Scheduling periodic task")
-
-    # Skip docker file copy for cloud-resident data (GCS/S3)
-    cloud_uri = state.get("data_source_location_cloud") or ""
-    is_cloud = cloud_uri.startswith(("gs://", "s3://", "gcs://"))
-    execution_mode = state.get("execution_mode")
-
-    # Training runs read the dataset URI directly (LocalTrainer reads gs://,
-    # RayTrainer runs in-cluster), so no CSV needs to be copied into the worker
-    # container. Skipping the docker copy also means a scheduled train never
-    # depends on a specifically-named docker worker existing on the host.
-    _sched_task_type = (state.get("task_schedule") or {}).get("task_type")
-
-    if _sched_task_type != "training" and (not is_cloud or execution_mode == "local"):
-        for dataset in (state.get("multi_dataset_state") or []):
-            logger.info("Creating input folder on docker")
-            data_source_location = os.path.dirname(dataset["data_source_location"])
-            p = subprocess.run(["docker", "exec", CELERY_WORKER_CONTAINER, "mkdir", "-p", data_source_location], capture_output=True)
-            if p.returncode:
-                logger.info(f"Stderr:\n" + p.stderr.decode())
-                logger.info(f"Stdout:\n" + p.stdout.decode())
-                new_state = state.copy()
-                new_state.update({
-                    "messages": new_state["messages"] + [AIMessage("Failed to schedule task - failed to copy input data to docker")]
-                })
-                return new_state
-
-            logger.info("Copying input data on docker")
-            p = subprocess.run(["docker", "cp", data_source_location, f"{CELERY_WORKER_CONTAINER}:{os.path.dirname(data_source_location)}"], capture_output=True)
-            if p.returncode:
-                logger.info(f"Stderr:\n" + p.stderr.decode())
-                logger.info(f"Stdout:\n" + p.stdout.decode())
-                new_state = state.copy()
-                new_state.update({
-                    "messages": new_state["messages"] + [AIMessage("Failed to schedule task - failed to copy input data to docker")]
-                })
-                return new_state
-
-        output_loc = state.get("output_location") or ""
-        if output_loc:
-            logger.info("Copying input data on docker")
-            p = subprocess.run(
-                ["docker", "exec", CELERY_WORKER_CONTAINER, "mkdir", "-p",
-                os.path.dirname(output_loc)],
-                capture_output=True
-            )
-            if p.returncode:
-                new_state = state.copy()
-                new_state.update({
-                    "messages": new_state["messages"] + [AIMessage("Failed to schedule task - failed to create output folder on docker")]
-                })
-                return new_state
     celery_state: ETLState = state.copy()
     schedule_data = state["task_schedule"]
     task_metadata = scheduled_task_metadata(schedule_data)

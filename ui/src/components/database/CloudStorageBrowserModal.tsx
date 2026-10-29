@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -10,6 +10,7 @@ import {
   CornerLeftUp,
   Database,
   Folder,
+  File,
   Loader2,
   RefreshCw,
   Search,
@@ -21,9 +22,13 @@ import { backendApi, type UploadLimits } from "@/lib/api/backendApi";
 import { supabase } from "@/integrations/supabase/client";
 import { createAnalysis as persistCreateAnalysis } from "@/lib/analysis-messages";
 import type { StorageConnection, StorageProvider } from "./CloudStorageConnectModal";
+import { exactBytesLabel, formatBytes } from "@/lib/format-bytes";
+import { presentBucketListing, selectionLabel as formatSelectionLabel, useSelectionLabel, type BucketObject, type BucketFolder } from "@/lib/bucket-picker";
+import { BucketFolderName } from "./BucketFolderName";
+import "./bucket-picker.css";
 
-type RemoteObject = { key: string; size?: string; updated?: string };
-type RemoteFolder = { name: string; prefix: string };
+type RemoteObject = BucketObject;
+type RemoteFolder = BucketFolder;
 type RowStatus =
   | { state: "idle" }
   | { state: "running" }
@@ -165,8 +170,9 @@ export function CloudStorageBrowserModal({
         connectionId: connection.id,
       });
       const items = (res.objects || []).filter((o) => o.key && !o.key.endsWith("/"));
-      setObjects(items);
-      setFolders((res.folders || []).filter((f) => f && f.prefix));
+      const listing = presentBucketListing(items, (res.folders || []).filter((f) => f && f.prefix));
+      setObjects(listing.objects);
+      setFolders(listing.folders);
       setListBucket(res.bucket || bucket);
       setListPrefix(res.prefix ?? nextPrefix ?? "");
     } catch (e) {
@@ -249,7 +255,8 @@ export function CloudStorageBrowserModal({
   };
 
   const buildStorageUri = () => {
-    const scheme = schemeFor(connection!.provider);
+    if (!connection) return "";
+    const scheme = schemeFor(connection.provider);
     const b = listBucket || bucket;
     // /buckets/list now returns the full object path in key. Keep storage_uri
     // anchored to the bucket root so the folder path is neither dropped nor doubled.
@@ -388,7 +395,6 @@ export function CloudStorageBrowserModal({
           total_rows: s.response.total_rows,
           sample_statistics: s.response.sample_statistics,
           rows_sampled: s.response.rows_sampled,
-
           visualization_config:
             s.response.visualization_config ?? s.response.visualization_configs,
           visualization_status: s.response.visualization_status,
@@ -406,7 +412,6 @@ export function CloudStorageBrowserModal({
         total_rows: v.total_rows,
         sample_statistics: v.sample_statistics,
         rows_sampled: v.rows_sampled,
-
         file_size_mb: v.file_size_mb,
         file_size_bytes: v.file_size_bytes,
 
@@ -431,7 +436,6 @@ export function CloudStorageBrowserModal({
             total_rows: v.total_rows,
             sample_statistics: v.sample_statistics,
             rows_sampled: v.rows_sampled,
-
             visualization_config: v.visualization_config ?? v.visualization_configs,
             visualization_status: v.visualization_status,
             analysis_fidelity: v.analysis_fidelity,
@@ -562,7 +566,6 @@ export function CloudStorageBrowserModal({
       total_rows: s.response.total_rows,
       sample_statistics: s.response.sample_statistics,
       rows_sampled: s.response.rows_sampled,
-
       file_size_mb: s.response.file_size_mb,
       file_size_bytes: s.response.file_size_bytes,
       visualization_config: s.response.visualization_config ?? s.response.visualization_configs,
@@ -581,7 +584,6 @@ export function CloudStorageBrowserModal({
       total_rows: v.total_rows,
       sample_statistics: v.sample_statistics,
       rows_sampled: v.rows_sampled,
-
       file_size_mb: v.file_size_mb,
       file_size_bytes: v.file_size_bytes,
       analysis_fidelity: v.analysis_fidelity,
@@ -671,20 +673,16 @@ export function CloudStorageBrowserModal({
     ? partitionSelected[0].prefix.replace(/\/+$/, "").split("/").slice(0, -1).join("/")
     : "";
   const partitionParentName = partitionParentPrefix.split("/").filter(Boolean).pop() || "";
-  const selectionLabel = selectedFolders.length
-    ? folderBusy
-      ? `Registering ${folderDone + 1} of ${selectedFolders.length} folder(s)…`
-      : `${selectedFolders.length} folder(s) selected`
-    : selected.size === 1
-      ? fileName(Array.from(selected)[0])
-      : `${selected.size} file(s) selected`;
+  const selectionLabel = folderBusy
+    ? `Registering ${folderDone + 1} of ${selectedFolders.length} folders…`
+    : formatSelectionLabel(selectedFolders.length, selected.size);
 
 
 
 
   return (
     <Dialog open={open} onOpenChange={(o) => (o ? onOpenChange(true) : close())}>
-      <DialogContent className="max-w-[820px] gap-0 overflow-hidden rounded-xl border border-border p-0 [&>button]:hidden">
+      <DialogContent className="bucket-picker max-w-[820px] gap-0 overflow-hidden rounded-xl border border-border bg-card p-0 text-foreground [&>button]:hidden">
         <div className="flex items-center justify-between border-b border-border bg-background px-5 py-4">
           <div className="flex items-center gap-2.5">
             <Database className="h-5 w-5 text-foreground" strokeWidth={1.75} />
@@ -775,23 +773,23 @@ export function CloudStorageBrowserModal({
               <Loader2 className="h-4 w-4 animate-spin" /> Loading files…
             </div>
           ) : loadError ? (
-            <div className="mx-5 my-6 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
-              <p className="text-xs text-amber-800">{loadError}</p>
+            <div className="mx-5 my-6 flex items-start gap-2 rounded-lg border border-border bg-muted px-3 py-2">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+              <p className="text-xs text-foreground">{loadError}</p>
             </div>
           ) : filtered.length === 0 && filteredFolders.length === 0 ? (
             <p className="px-5 py-16 text-center text-sm text-muted-foreground">
               No files or folders found in this bucket/prefix.
             </p>
           ) : (
-            <table className="w-full text-sm">
+            <table className="w-full table-fixed text-sm">
               <thead className="sticky top-0 z-10 border-b border-border bg-muted/40 text-xs text-muted-foreground">
                 <tr>
                   <th className="w-10 px-3 py-2">
                     <input
                       type="checkbox"
                       aria-label="Select all files"
-                      className="h-4 w-4 cursor-pointer accent-[#1565EF]"
+                      className="h-4 w-4 cursor-pointer accent-primary"
                       checked={allSelected}
                       ref={(el) => {
                         if (el) el.indeterminate = someSelected;
@@ -800,10 +798,10 @@ export function CloudStorageBrowserModal({
                     />
                   </th>
                   <th className="px-3 py-2 text-left font-medium">File Name</th>
-                  <th className="px-3 py-2 text-left font-medium">Size</th>
-                  <th className="px-3 py-2 text-left font-medium">Last Modified</th>
-                  <th className="px-3 py-2 text-left font-medium">Type</th>
-                  <th className="px-3 py-2 text-left font-medium">Status</th>
+                  <th className="w-20 px-3 py-2 text-right font-medium">Size</th>
+                  <th className="w-32 px-3 py-2 text-left font-medium">Last Modified</th>
+                  <th className="w-20 px-3 py-2 text-left font-medium">Type</th>
+                  <th className="w-24 px-3 py-2 text-left font-medium">Action</th>
                 </tr>
               </thead>
               <tbody>
@@ -814,40 +812,34 @@ export function CloudStorageBrowserModal({
                   return (
                     <tr
                       key={`folder:${f.prefix}`}
+                      onDoubleClick={() => navigateTo(f.prefix)}
                       className={cn(
-                        "border-b border-border/60 hover:bg-muted/30",
-                        isFolderSel && "bg-[#eef4ff]",
+                        "h-12 border-b border-border hover:bg-muted text-foreground",
+                        isFolderSel && "bg-primary/10",
                       )}
                     >
-                      <td className="px-3 py-2">
+                      <td className={cn("border-l-2 px-3 py-0", isFolderSel ? "border-l-primary" : "border-l-border")} onDoubleClick={(event) => event.stopPropagation()}>
                         <div className="flex items-center gap-2">
                           <input
                             type="checkbox"
                             aria-label={`Select folder ${f.name}`}
-                            className="h-4 w-4 cursor-pointer accent-[#1565EF]"
+                            className="h-4 w-4 cursor-pointer accent-primary"
                             checked={isFolderSel}
                             onChange={() => toggleFolder(f)}
                           />
                         </div>
                       </td>
-                      <td className="px-3 py-2 font-medium text-foreground">
-                        <span className="inline-flex items-center gap-2">
-                          <Folder className="h-4 w-4 shrink-0 text-[#1565EF]" />
-                          {f.name}
-                        </span>
+                      <td className="overflow-hidden px-3 py-0 font-medium text-foreground">
+                        <BucketFolderName folder={f} onOpen={navigateTo} disabled={loading || registering || folderBusy} />
                       </td>
-                      <td className="px-3 py-2 text-muted-foreground">—</td>
+                      <td className="px-3 py-2 text-right text-muted-foreground">—</td>
                       <td className="px-3 py-2 text-muted-foreground">—</td>
                       <td className="px-3 py-2 text-muted-foreground">Folder</td>
                       <td className="px-3 py-2 text-xs">
                         <div className="flex items-center gap-3">
-                          <button
-                            type="button"
-                            onClick={() => navigateTo(f.prefix)}
-                            className="text-[#1565EF] underline underline-offset-2 hover:text-[#1257d6]"
-                          >
+                          <Button variant="link" size="sm" onDoubleClick={(event) => event.stopPropagation()} onClick={() => navigateTo(f.prefix)} disabled={loading || registering || folderBusy} className="h-auto p-0 text-primary underline underline-offset-2">
                             Open
-                          </button>
+                          </Button>
                           {fProgress?.state === "running" && (
                             <span className="inline-flex items-center gap-1 text-muted-foreground">
                               <Loader2 className="h-3 w-3 animate-spin" /> Registering…
@@ -857,10 +849,10 @@ export function CloudStorageBrowserModal({
                             <span className="text-muted-foreground">Queued</span>
                           )}
                           {fProgress?.state === "done" && (
-                            <span className="text-emerald-700">Registered</span>
+                            <span className="text-muted-foreground">Registered</span>
                           )}
                           {fProgress?.state === "error" && (
-                            <span className="text-destructive" title={fProgress.message}>
+                            <span className="text-muted-foreground" title={fProgress.message}>
                               Failed
                             </span>
                           )}
@@ -879,22 +871,29 @@ export function CloudStorageBrowserModal({
                       key={o.key}
                       onClick={() => toggleOne(o.key)}
                       className={cn(
-                        "cursor-pointer border-b border-border/60 hover:bg-muted/30",
-                        isSel && "bg-[#eef4ff]",
+                        "h-12 cursor-pointer border-b border-border hover:bg-muted text-foreground",
+                        isSel && "bg-primary/10",
                       )}
                     >
-                      <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
+                      <td className={cn("border-l-2 px-3 py-0", isSel ? "border-l-primary" : "border-l-border")} onClick={(e) => e.stopPropagation()}>
                         <input
                           type="checkbox"
                           aria-label={`Select ${o.key}`}
-                          className="h-4 w-4 cursor-pointer accent-[#1565EF]"
+                          className="h-4 w-4 cursor-pointer accent-primary"
                           checked={isSel}
                           onChange={() => toggleOne(o.key)}
                         />
                       </td>
-                      <td className="px-3 py-2 font-medium text-foreground">{o.key}</td>
-                      <td className="px-3 py-2 text-muted-foreground">{o.size || "—"}</td>
-                      <td className="px-3 py-2 text-muted-foreground">{o.updated || "—"}</td>
+                      <td className="overflow-hidden px-3 py-0 font-medium text-foreground" title={o.key}>
+                        <span className="flex min-w-0 items-center gap-2"><File className="h-4 w-4 shrink-0 text-muted-foreground" /><span className="truncate">{o.key}</span></span>
+                      </td>
+                      <td
+                        className="px-3 py-2 text-right tabular-nums text-muted-foreground"
+                        title={exactBytesLabel(o.size) || undefined}
+                      >
+                        {formatBytes(o.size)}
+                      </td>
+                      <td className="truncate px-3 py-0 text-muted-foreground" title={o.updated}>{o.updated || "—"}</td>
                       <td className="px-3 py-2 text-muted-foreground">{fileType(o.key)}</td>
                       <td className="px-3 py-2">
                         {status?.state === "running" && (
@@ -903,7 +902,7 @@ export function CloudStorageBrowserModal({
                           </span>
                         )}
                         {status?.state === "success" && (
-                          <span className="text-xs text-emerald-700">
+                          <span className="text-xs text-muted-foreground">
                             Registered
                             {status.largeFidelity ? " — large, needs fidelity choice" : ""}
                           </span>
@@ -914,7 +913,7 @@ export function CloudStorageBrowserModal({
                               e.stopPropagation();
                               void retry(o.key);
                             }}
-                            className="text-xs text-red-600 underline"
+                            className="text-xs text-muted-foreground underline"
                             title={status.message}
                           >
                             Failed — Retry
@@ -932,7 +931,7 @@ export function CloudStorageBrowserModal({
         {hasPartitionSelection && (
           <div className="border-t border-border bg-background px-5 py-2">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="inline-flex items-start gap-1.5 text-xs text-amber-600 dark:text-amber-500">
+              <span className="inline-flex items-start gap-1.5 text-xs text-muted-foreground">
                 <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                 These look like partitions of a table. Go up one level and register the parent
                 folder as a single dataset instead.
@@ -965,7 +964,7 @@ export function CloudStorageBrowserModal({
               </span>
             )}
             {folderError && (
-              <span className="inline-flex items-start gap-1.5 text-xs text-destructive">
+              <span className="inline-flex items-start gap-1.5 text-xs text-muted-foreground">
                 <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                 {folderError}
               </span>
@@ -979,7 +978,8 @@ export function CloudStorageBrowserModal({
               ? "Large file: this runs as a background job and can take several minutes. You'll be notified when the analysis is ready."
               : selectionLabel}
           </p>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-col items-end gap-1.5">
+            {selectedFolders.length > 0 && <p className="text-xs text-muted-foreground">The whole folder is analysed as one dataset.</p>}
             {(() => {
               const folderMode = selectedFolders.length > 0;
               const nothingSelected = !folderMode && selected.size === 0;
@@ -988,7 +988,6 @@ export function CloudStorageBrowserModal({
                 <Button
                   onClick={() => (folderMode ? void handleRegisterFolder() : handleUse())}
                   disabled={nothingSelected || busy || (folderMode && hasPartitionSelection)}
-                  className="bg-[#1565EF] text-white hover:bg-[#1257d6]"
                   title={
                     folderMode && hasPartitionSelection
                       ? "Partition folders can't be registered individually — register the parent folder instead"
@@ -1006,17 +1005,11 @@ export function CloudStorageBrowserModal({
                           : "Registering folder…"
                         : "Registering…"}
                     </>
-                  ) : folderMode ? (
-                    <>
-                      <Folder className="mr-2 h-4 w-4" />
-                      {selectedFolders.length > 1
-                        ? `Use ${selectedFolders.length} folders`
-                        : "Use folder"}
-                    </>
-                  ) : selected.size > 1 ? (
-                    `Use ${selected.size} datasets`
                   ) : (
-                    "Use dataset"
+                    <>
+                      {folderMode && <Folder className="mr-2 h-4 w-4" />}
+                      {useSelectionLabel(selectedFolders.length, selected.size)}
+                    </>
                   )}
                 </Button>
               );
@@ -1031,39 +1024,32 @@ export function CloudStorageBrowserModal({
           if (!o) setPlanLimitMsg(null);
         }}
       >
-        {planLimitMsg && (
-          <DialogContent
-            className="max-w-[420px] gap-0 rounded-2xl border border-border bg-background p-6 shadow-xl [&>button]:hidden"
-            onPointerDownOutside={(e) => e.stopPropagation()}
+        <DialogContent className="max-w-[420px] gap-0 rounded-2xl border border-border bg-background p-6 shadow-xl [&>button]:hidden">
+          <button
+            type="button"
+            onClick={() => setPlanLimitMsg(null)}
+            aria-label="Close"
+            className="absolute right-4 top-4 rounded-md p-1 text-muted-foreground hover:bg-muted"
           >
-            <DialogDescription className="sr-only">{planLimitMsg}</DialogDescription>
-            <button
-              type="button"
-              onClick={() => setPlanLimitMsg(null)}
-              aria-label="Close"
-              className="absolute right-4 top-4 rounded-md p-1 text-muted-foreground hover:bg-muted"
+            <X className="h-4 w-4" />
+          </button>
+          <h2 className="text-lg font-semibold text-foreground">Free plan limit reached</h2>
+          <p className="mt-1.5 text-sm text-muted-foreground">{planLimitMsg}</p>
+          <div className="mt-6 flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setPlanLimitMsg(null)}>
+              Reduce file size
+            </Button>
+            <Button
+              onClick={() => {
+                setPlanLimitMsg(null);
+                onOpenChange(false);
+                navigate({ to: "/settings", search: { tab: "billing" } as any });
+              }}
             >
-              <X className="h-4 w-4" />
-            </button>
-            <DialogTitle className="text-lg font-semibold text-foreground">Free plan limit reached</DialogTitle>
-            <p className="mt-1.5 text-sm text-muted-foreground">{planLimitMsg}</p>
-            <div className="mt-6 flex justify-end gap-2">
-              <Button variant="outline" onClick={() => setPlanLimitMsg(null)}>
-                Reduce file size
-              </Button>
-              <Button
-                className="bg-[#1565EF] text-white hover:bg-[#1257d6]"
-                onClick={() => {
-                  setPlanLimitMsg(null);
-                  onOpenChange(false);
-                  navigate({ to: "/settings", search: { tab: "billing" } as any });
-                }}
-              >
-                Upgrade to Professional
-              </Button>
-            </div>
-          </DialogContent>
-        )}
+              Upgrade to Professional
+            </Button>
+          </div>
+        </DialogContent>
       </Dialog>
     </Dialog>
   );

@@ -15,6 +15,9 @@ import { ProjectDetailsView, type AnalysisRow } from "@/components/dashboard/Pro
 import { ReportsModal } from "../analysis";
 import { useProjectsPerms } from "@/lib/use-user-mgmt-perms";
 import { useUpgradeGate } from "@/components/dashboard/UpgradeGate";
+import { NewProjectDialog } from "@/components/dashboard/NewProjectDialog";
+import { toast } from "sonner";
+import { Loader2 } from "lucide-react";
 
 
 export const Route = createFileRoute("/_authenticated/dashboard")({
@@ -31,6 +34,7 @@ export const Route = createFileRoute("/_authenticated/dashboard")({
 });
 
 
+const SAMPLE_MEMBERS = [{ initials: "AB" }, { initials: "CD" }, { initials: "EF" }, { initials: "GH" }];
 
 function toAnalysisRows(
   list: {
@@ -64,7 +68,7 @@ function toAnalysisRows(
       src: a.created_by_avatar ?? undefined,
     },
 
-    members: [],
+    members: SAMPLE_MEMBERS,
   }));
 }
 
@@ -88,6 +92,7 @@ function DashboardPage() {
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [newProjectId, setNewProjectId] = useState<string | null>(null);
   const [reportsOpen, setReportsOpen] = useState(false);
+  const [newProjectOpen, setNewProjectOpen] = useState(false);
   const [pendingAnalysisId, setPendingAnalysisId] = useState<string | null>(() => getPendingDashboardAnalysis());
 
   const { data: dbProjects } = useProjects();
@@ -125,6 +130,23 @@ function DashboardPage() {
     }
   };
 
+  /** Runs the existing create mutation with feedback; rejects so forms keep what the user typed. */
+  const createProjectWithFeedback = async (name: string, description: string | null) => {
+    try {
+      const p = await create.mutateAsync({ name, description });
+      toast.success(`Project '${p.name ?? name}' created`);
+      if (pendingAnalysisId) {
+        await attachPendingAnalysisToProject(p.id);
+      }
+      setNewProjectId(p.id);
+      setCreatingNewProject(false);
+      setSelectedProjectId(p.id);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : (err as { message?: string })?.message || "Could not create project");
+      throw err;
+    }
+  };
+
   const hasProjects = (sidebarProjects.length ?? 0) > 0;
   const selectedAnalyses = dbAnalyses ?? [];
   const selectedProjectHasAnalyses = selectedAnalyses.length > 0;
@@ -141,9 +163,7 @@ function DashboardPage() {
         canCreate
           ? () => {
               if (blocked("Creating projects")) return;
-              setSelectedProjectId(null);
-              setNewProjectId(null);
-              setCreatingNewProject(true);
+              setNewProjectOpen(true);
             }
           : undefined
       }
@@ -175,7 +195,7 @@ function DashboardPage() {
         }
       }}
       onTogglePin={(id, next) => {
-         if (blocked("Managing projects")) return;
+        if (blocked("Managing projects")) return;
         toggleFlag.mutate({ id, field: "pinned", value: next });
       }}
       onDeleteProject={
@@ -266,22 +286,18 @@ function DashboardPage() {
           hasProjects={hasProjects}
           pendingAnalysisNotice={!!pendingAnalysisId}
           canCreate={canCreate}
-          onCreateProject={(name, description) => {
-             if (blocked("Managing projects")) return;
-            create.mutate({ name, description }, {
-              onSuccess: async (p) => {
-                if (pendingAnalysisId) {
-                  await attachPendingAnalysisToProject(p.id);
-                }
-                setNewProjectId(p.id);
-                setCreatingNewProject(false);
-                setSelectedProjectId(p.id);
-              },
-            });
+          onCreateProject={async (name, description) => {
+            if (blocked("Creating projects")) return;
+            await createProjectWithFeedback(name, description);
           }}
         />
       )}
 
+      <NewProjectDialog
+        open={newProjectOpen}
+        onOpenChange={setNewProjectOpen}
+        onCreate={(name, description) => createProjectWithFeedback(name, description)}
+      />
       <ReportsModal open={reportsOpen} onOpenChange={setReportsOpen} />
       {upgradeDialog}
 
@@ -298,15 +314,23 @@ function LockedProjectWorkspace({
   hasProjects: boolean;
   pendingAnalysisNotice: boolean;
   canCreate: boolean;
-  onCreateProject: (name: string, description: string | null) => void;
+  onCreateProject: (name: string, description: string | null) => Promise<void>;
 }) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const canSave = canCreate && name.trim().length > 0;
+  const [creating, setCreating] = useState(false);
+  const canSave = canCreate && name.trim().length > 0 && !creating;
 
-  const commit = () => {
+  const commit = async () => {
     if (!canSave) return;
-    onCreateProject(name.trim(), description.trim() || null);
+    setCreating(true);
+    try {
+      await onCreateProject(name.trim(), description.trim() || null);
+    } catch {
+      /* error toast already shown; keep the typed values */
+    } finally {
+      setCreating(false);
+    }
   };
 
   return (
@@ -318,16 +342,18 @@ function LockedProjectWorkspace({
               <input
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && commit()}
+                onKeyDown={(e) => e.key === "Enter" && void commit()}
                 disabled={!canCreate}
+                readOnly={creating}
                 placeholder="Add Project Name"
                 className="w-full bg-transparent text-md font-semibold text-primary outline-none placeholder:text-primary disabled:cursor-not-allowed"
               />
               <input
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && commit()}
+                onKeyDown={(e) => e.key === "Enter" && void commit()}
                 disabled={!canCreate}
+                readOnly={creating}
                 placeholder="Add Description"
                 className="w-full bg-transparent text-sm text-tertiary outline-none placeholder:text-tertiary disabled:cursor-not-allowed"
               />
@@ -335,13 +361,14 @@ function LockedProjectWorkspace({
             {canCreate && (
               <button
                 type="button"
-                onClick={commit}
+                onClick={() => void commit()}
                 disabled={!canSave}
+                aria-busy={creating}
                 aria-label="Create project"
                 title="Create project"
                 className="grid size-10 shrink-0 place-items-center rounded-full border border-secondary bg-primary text-tertiary transition hover:border-brand hover:text-brand-secondary disabled:cursor-not-allowed disabled:opacity-50"
               >
-                <Plus className="size-5" />
+                {creating ? <Loader2 className="size-5 animate-spin" /> : <Plus className="size-5" />}
               </button>
             )}
           </div>

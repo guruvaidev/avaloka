@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import concurrent.futures
@@ -308,11 +307,11 @@ _DATE_RE = re.compile(
 )
 # Column names that label an identifier, not a measure: "Room Number",
 # "Patient ID", "zip_code", "Policy No", and geographic codes ("census_tract",
-# "state_fips", "geoid", "msamd", "cbsa"): a census tract read as a number was
-# histogrammed and shown as "60B".
+# "state_fips", "geoid", "msamd", "derived_msa_md", "cbsa"): a census tract read
+# as a number was histogrammed and shown as "60B".
 _ID_NAME_RE = re.compile(
     r"(?:^|[\s_\-])(id|no|num|number|code|uuid|key|phone|zip|zipcode|postcode|pin|pincode"
-    r"|tract|census[\s_\-]?tract|fips|geoid|geo[\s_\-]?id|msamd|msa|cbsa)$",
+    r"|tract|census[\s_\-]?tract|fips|geoid|geo[\s_\-]?id|msamd|msa[\s_\-]md|msa|cbsa)$",
     re.IGNORECASE,
 )
 # A whole-number column holding calendar years (activity_year: 2018..2024).
@@ -1129,6 +1128,10 @@ def _build_extra_pie_chart(
             continue
         if col.get("role") == "identifier":
             continue
+        if col.get("is_year"):
+            # Years are a sequence, not parts of a whole: a pie of 2018-2024
+            # hides the trend a bar or line shows.
+            continue
         top_k = (col.get("stats") or {}).get("top_k") or []
         slices = [t for t in top_k if str(t.get("value")) != "nan"]
         n_unique = col.get("n_unique", 0) or 0
@@ -1423,6 +1426,38 @@ def _is_year_keys(values: Dict[str, Any]) -> bool:
     return True
 
 
+_BAND_RE = re.compile(
+    r"\s*(<|>|<=|>=|under|over|below|above)?\s*(\d+(?:\.\d+)?)\s*"
+    r"(?:(?:-|\u2013|to)\s*(\d+(?:\.\d+)?))?\s*(\+|or more|and over|plus)?\s*", re.I)
+
+
+def _band_sort_key(label: Any) -> Optional[float]:
+    """Position of an ordered band label ("<25", "25-34", "65-74", ">74", "75+").
+    None when the label is not a band."""
+    m = _BAND_RE.fullmatch(str(label))
+    if not m:
+        return None
+    op, lo, _hi, plus = m.groups()
+    key = float(lo)
+    op = (op or "").lower()
+    if op in ("<", "<=", "under", "below"):
+        key -= 0.5                 # "<25" sorts before "25-34"
+    elif op in (">", ">=", "over", "above") or plus:
+        key += 0.5                 # ">74" / "75+" after "65-74"
+    return key
+
+
+def _is_band_keys(values: Any) -> bool:
+    """Every category is a numeric band (age groups); at least one is a range
+    or open-ended, so plain numbers (codes, counts) do not qualify."""
+    keys = [str(k) for k in values]
+    if len(keys) < 3 or _is_year_keys(dict.fromkeys(keys)):
+        return False
+    if any(_band_sort_key(k) is None for k in keys):
+        return False
+    return any(re.search(r"[-\u2013<>+]|to|under|over", k, re.I) for k in keys)
+
+
 def _category_label(raw: Any) -> str:
     """A category's label. A whole-number float (a year read as 1970.0) is
     shown as 1970."""
@@ -1482,6 +1517,11 @@ def _ground_categories(
         # Years read left to right in time: the most recent top_k years.
         by_year = sorted(values.items(), key=lambda kv: int(kv[0]))
         points = [{"x": k, "y": round(v, 2)} for k, v in by_year[-top_k:]]
+    elif _is_band_keys(dict(shown)):
+        # Age groups read youngest to oldest, not biggest first (bars, and the
+        # slices and legend of a pie; "Other" stays last).
+        points = [{"x": k, "y": round(v, 2)}
+                  for k, v in sorted(shown, key=lambda kv: _band_sort_key(kv[0]))]
     else:
         points = [{"x": k, "y": round(v, 2)} for k, v in shown]
     if is_binary_count:
@@ -1784,8 +1824,15 @@ def _ground_rate_by_group(
     overall = sum(k for _, k in groups.values()) / total_n
     ordered = sorted(((key, ones / n, n) for key, (n, ones) in groups.items()),
                      key=lambda t: t[1], reverse=True)[: max(2, int(top_k or 15))]
+    # Ordered groups (years, age bands) keep their own order on the axis; the
+    # text below still names the highest and lowest rate.
+    drawn = ordered
+    if _is_year_keys(dict.fromkeys(k for k, _, _ in ordered)):
+        drawn = sorted(ordered, key=lambda t: int(t[0]))
+    elif _is_band_keys([k for k, _, _ in ordered]):
+        drawn = sorted(ordered, key=lambda t: _band_sort_key(t[0]))
     points = [{"x": key, "y": round(rate * 100, 1), "n": n, "rate": round(rate, 4)}
-              for key, rate, n in ordered]
+              for key, rate, n in drawn]
     solid = [t for t in ordered if t[2] >= RATE_MIN_BIN_ROWS] or ordered
     top, bottom = solid[0], solid[-1]
     parts = [
@@ -1916,6 +1963,7 @@ def _ground_chart(
     enc = chart.get("encodings") or {}
     cfg = chart.get("config") or {}
     result = None
+    count_chart = False
     x_key: Optional[str] = None
     y_key: Optional[str] = None
 
@@ -1932,6 +1980,26 @@ def _ground_chart(
         if xf and yf:
             result = _ground_scatter(rows, xf, yf)
             x_key, y_key = xf, yf
+    elif ctype == "bar" and isinstance(cfg.get("rate_by_value"), dict):
+        # Share of rows with one outcome value per group, in percent.
+        xf = _enc_field(enc, "x")
+        col = cfg["rate_by_value"].get("field")
+        val = cfg["rate_by_value"].get("value")
+        if xf and col and val is not None:
+            flag = _category_label(val)
+            flagged = [
+                {xf: r.get(xf),
+                 flag: None if _is_missing(r.get(col)) else
+                 (1 if _category_label(r.get(col)) == flag else 0)}
+                for r in rows
+            ]
+            result = _ground_rate_by_group(flagged, xf, flag, int(cfg.get("top_k") or 15))
+            x_key, y_key = xf, flag
+    elif ctype == "pie" and cfg.get("missing_vs_present"):
+        xf = _enc_field(enc, "color")
+        if xf:
+            result = _ground_missing_vs_present(rows, xf)
+            x_key, y_key = xf, "count"
     elif ctype in ("bar", "line", "pie"):
         if ctype == "pie":
             xf = _enc_field(enc, "color") or _enc_field(enc, "x")
@@ -1947,6 +2015,9 @@ def _ground_chart(
         agg = str(measure.get("aggregate") or ("sum" if yf else "count")).lower()
         if yf is None:
             agg = "count"
+        # Row counts per category: a title or sentence claiming a rate, an
+        # average or a subset of rows does not describe it.
+        count_chart = ctype in ("bar", "line") and agg == "count"
 
         if xf and yf and (profiles.get(xf) or {}).get("role") == "label" and agg != "count":
             # One row per label: show each row's own number, not a sum/share.
@@ -2015,7 +2086,8 @@ def _ground_chart(
         why = (_llm_text_conflict(llm_text, ctype, meta, on_full_file)
                or _llm_claim_conflict(llm_text, ctype, raw_points, text,
                                       shares=meta.get("shares"), other_labels=other_labels,
-                                      x_field=label_col))
+                                      x_field=label_col)
+               or (_count_claim_conflict(llm_text, profiles, label_col) if count_chart else None))
         if why:
             logger.info("Visualization agent: replacing LLM insight for %r (%s)", chart.get("title"), why)
             derived["llm_insight_replaced"] = llm_text
@@ -2054,7 +2126,9 @@ def _ground_chart(
             title_why = (_llm_text_conflict(str(llm_title), ctype, meta, on_full_file)
                          or _llm_claim_conflict(str(llm_title), ctype, raw_points, text,
                                                 shares=meta.get("shares"), other_labels=other_labels,
-                                                x_field=label_col))
+                                                x_field=label_col)
+                         or (_count_claim_conflict(str(llm_title), profiles, label_col)
+                             if count_chart else None))
         if title_why:
             neutral = _neutral_title(text, ctype, enc)
             logger.info("Visualization agent: title %r -> %r (%s)", llm_title, neutral, title_why)
@@ -2485,6 +2559,18 @@ def _llm_claim_conflict(
                 return f"it calls the relationship negative, but r = {r:.2f}"
             if re.search(r"\bpositive\b", text, re.IGNORECASE) and r < 0:
                 return f"it calls the relationship positive, but r = {r:.2f}"
+            # "Higher applicant income is associated with larger loan amounts"
+            # over r = -0.00: a relationship (or a direction) the data does not have.
+            negated = re.search(r"\b(no|not|little|negligible|weak|weakly|barely|hardly|"
+                                r"without|unrelated|independent)\b", text, re.IGNORECASE)
+            same_way = _SAME_WAY_RE.search(text)
+            opposite_way = _OPPOSITE_WAY_RE.search(text)
+            if abs(r) < 0.1 and not negated and (same_way or opposite_way or _ASSOC_RE.search(text)):
+                return f"it claims a relationship, but r = {r:.2f} (none)"
+            if same_way and not opposite_way and r <= -0.1:
+                return f"it says both rise together, but r = {r:.2f}"
+            if opposite_way and not same_way and r >= 0.1:
+                return f"it says one falls as the other rises, but r = {r:.2f}"
 
     if ctype in ("line", "bar"):
         if "level is flat" in data_text:
@@ -2500,6 +2586,14 @@ def _llm_claim_conflict(
         if _DOWN_WORDS_RE.search(text) and direction != "down":
             return f"it describes a fall, but the data is {direction}"
     return None
+
+
+_MORE = r"(?:higher|larger|bigger|greater|more|increas\w*|ris\w*)"
+_LESS = r"(?:lower|smaller|less|fewer|decreas\w*|fall\w*|drop\w*)"
+_SAME_WAY_RE = re.compile(rf"\b{_MORE}\b.{{0,80}}\b{_MORE}\b|\b{_LESS}\b.{{0,80}}\b{_LESS}\b", re.I)
+_OPPOSITE_WAY_RE = re.compile(rf"\b{_MORE}\b.{{0,80}}\b{_LESS}\b|\b{_LESS}\b.{{0,80}}\b{_MORE}\b", re.I)
+_ASSOC_RE = re.compile(r"\b(associated|correlat\w*|linked|tied to|drives?|driven by|tends? to|"
+                       r"predicts?|relationship|depends? on)\b", re.I)
 
 
 def _split_instructions(split: Optional[Dict[str, Any]]) -> str:
@@ -2934,6 +3028,102 @@ _ROW_COUNT_FIELDS = frozenset({
 })
 
 
+# A count per exact value of a continuous measure (interest_rate 3.471, 3.463,
+# ...) is not a chart: a pie of it was one huge "Other" slice and a list of
+# rates with 5-7 rows each. Above this many distinct values a measure is
+# continuous.
+CONTINUOUS_MIN_DISTINCT = 20
+_MISSING_WORDS_RE = re.compile(
+    r"\b(missing|null|nulls|blank|blanks|empty|absent|lack|lacks|lacking|present|"
+    r"completeness|populated)\b", re.I)
+# Words that say a chart shows a rate or an average, not a row count.
+_RATE_WORD_RE = re.compile(r"\b(rate|rates|ratio|average|avg|mean|median|per\s+cent)\b", re.I)
+_GENERIC_VALUES = frozenset({"yes", "no", "true", "false", "other", "others", "unknown",
+                             "none", "nan", "null", "total", "missing", "n/a"})
+
+
+def _is_continuous_measure(profile: Optional[Dict[str, Any]]) -> bool:
+    """A numeric measure with many distinct values (a rate, an amount)."""
+    return bool(
+        _is_scatter_measure(profile)
+        and not profile.get("is_year")
+        and int(profile.get("n_unique") or 0) > CONTINUOUS_MIN_DISTINCT
+    )
+
+
+def _value_named_in(value: str, text: str) -> bool:
+    """True when ``text`` names a category value: a multi-word value as a
+    phrase, a single word by its first six letters ("Originated" matches
+    "origination", "originated loans")."""
+    v = value.strip().lower()
+    if len(v) < 5 or not re.search(r"[a-z]", v) or v in _GENERIC_VALUES:
+        return False
+    low = text.lower()
+    if " " in v:
+        return re.search(r"\b" + re.escape(v) + r"\b", low) is not None
+    stem = v[:6]
+    return any(w.startswith(stem) for w in re.findall(r"[a-z]+", low) if len(w) >= len(stem))
+
+
+def _named_values(
+    text: str, profiles: Dict[str, Dict[str, Any]], exclude: Any = ()
+) -> List[Tuple[str, str]]:
+    """(column, value) pairs whose value ``text`` names, over the categorical
+    dimensions not in ``exclude`` (the chart's own label column)."""
+    found: List[Tuple[str, str]] = []
+    skip = {str(e) for e in exclude if e}
+    for name, prof in profiles.items():
+        if name in skip or prof.get("role") != "dimension" or prof.get("is_year"):
+            continue
+        if (prof.get("dtype") or "").lower() in NUMERIC_DTYPES:
+            continue
+        if int(prof.get("n_unique") or 0) > 20:
+            continue
+        for t in ((prof.get("stats") or {}).get("top_k") or []):
+            val = t.get("value")
+            if val is None or _is_missing(val):
+                continue
+            if _value_named_in(str(val), text):
+                found.append((name, _category_label(val)))
+    return found
+
+
+def _count_claim_conflict(
+    text: str, profiles: Dict[str, Dict[str, Any]], label_col: Optional[str]
+) -> Optional[str]:
+    """Why a sentence or title cannot describe a chart of ROW COUNTS per
+    category: it claims a rate/average ("Origination rate by loan type" over
+    counts), or a subset of rows ("Originated loans over time" over all rows)."""
+    if not text:
+        return None
+    m = _RATE_WORD_RE.search(text)
+    if m:
+        return f"it claims a {m.group(1).lower()} but the chart counts rows"
+    named = _named_values(text, profiles, exclude=[label_col])
+    if named:
+        col, val = named[0]
+        return f"it is about {col} = {val} but the chart counts all rows"
+    return None
+
+
+def _ground_missing_vs_present(
+    rows: List[Dict[str, Any]], xf: str
+) -> Optional[Tuple[List[Dict[str, Any]], Dict[str, Any], str]]:
+    """Rows with and without a value in ``xf`` (a two-slice pie)."""
+    n = len(rows)
+    if not n:
+        return None
+    missing = sum(1 for r in rows if _is_missing(r.get(xf)))
+    present = n - missing
+    if missing == 0:
+        return None
+    points = [{"x": "Present", "y": float(present)}, {"x": "Missing", "y": float(missing)}]
+    text = (f"Missing vs present {xf}: {missing:,} of {n:,} rows ({missing / n:.1%}) in the "
+            f"sample have no {xf}; {present:,} ({present / n:.1%}) have a value.")
+    meta = {"n": n, "missing": missing, "present": present}
+    return points, meta, text
+
+
 def _is_scatter_measure(profile: Optional[Dict[str, Any]]) -> bool:
     """A column a scatter axis can show: a real numeric measure, not a code,
     a year or a 0/1 flag."""
@@ -3101,6 +3291,76 @@ def _charts_from_llm_suggestions(
                         insight_source=None, llm_insight=None)
             logger.info("Visualization agent: scatter %r has a category on one axis; "
                         "charted as the average %s by %s", title, y_field, x_field)
+        if ctype in ("bar", "line", "pie") and _is_continuous_measure(x_prof) and (
+            not y_field or str(y_field) == str(x_field)
+        ):
+            # Counts per exact value of a continuous measure (a pie of
+            # interest_rate 3.471, 3.463, ...). Missing-value questions get a
+            # Missing vs present pie; anything else is the measure's histogram.
+            if _MISSING_WORDS_RE.search(f"{title} {insight or ''}") and float(
+                x_prof.get("missing_ratio") or 0
+            ) > 0:
+                base.update(
+                    type="pie",
+                    title=f"Missing vs present {x_field}",
+                    encodings={
+                        "theta": {"field": "count", "type": "quantitative", "aggregate": "sum"},
+                        "color": {"field": x_field, "type": "nominal"},
+                    },
+                    config={"missing_vs_present": True},
+                )
+                logger.info("Visualization agent: %s chart %r counts values of measure %r; "
+                            "charted as missing vs present", ctype, title, x_field)
+                charts.append(base)
+                continue
+            logger.info("Visualization agent: %s chart %r counts values of measure %r; "
+                        "charted as its histogram", ctype, title, x_field)
+            ctype, y_field = "histogram", None
+            base.update(title=f"Distribution of {x_field}", llm_title=None, insight=None,
+                        reason=None, insight_source=None, llm_insight=None)
+
+        if ctype == "pie" and x_prof.get("is_year"):
+            # Years are a sequence: a bar per year in calendar order shows the
+            # trend a pie of 2018-2024 hides.
+            logger.info("Visualization agent: pie %r is over the years in %r; charted as a bar",
+                        title, x_field)
+            ctype = "bar"
+
+        if ctype in ("bar", "line") and str(y_field or "") != str(x_field):
+            # "Origination rate by loan type": the share of one outcome value
+            # (action_taken = Originated) per group. Counting rows under that
+            # title showed the group sizes and called them a rate.
+            y_is_cat = bool(y_prof) and (y_prof.get("dtype") or "").lower() not in NUMERIC_DTYPES
+            wants_rate = y_is_cat or (not y_field and _RATE_WORD_RE.search(str(title)))
+            x_is_cat = (x_prof.get("dtype") or "").lower() not in NUMERIC_DTYPES or bool(
+                x_prof.get("is_year"))
+            if wants_rate and x_is_cat:
+                text = f"{title} {insight or ''}"
+                named = _named_values(text, profiles, exclude=[x_field])
+                if y_is_cat:
+                    named = [nv for nv in named if nv[0] == str(y_field)]
+                cols = {c for c, _ in named}
+                if len(named) == 1 or (len(cols) == 1 and len({v for _, v in named}) == 1):
+                    col, val = named[0]
+                    base.update(
+                        type="bar",
+                        intent="comparison",
+                        title=f"{val} rate by {x_field}",
+                        llm_title=None,
+                        encodings={
+                            "x": {"field": x_field, "type": "nominal"},
+                            "y": {"field": col, "type": "quantitative", "aggregate": "rate",
+                                  "value": val},
+                        },
+                        config={"rate_by_value": {"field": col, "value": val},
+                                "top_k": extra_cfg.get("top_k", 15), "y_format": "percent"},
+                        **_rate_chart_insight(insight),
+                    )
+                    logger.info("Visualization agent: %r charted as the %s = %s rate by %s",
+                                title, col, val, x_field)
+                    charts.append(base)
+                    continue
+
         if ctype == "histogram" and (x_prof.get("dtype") or "").lower() not in NUMERIC_DTYPES:
             # A histogram of a year or a category is a count per value.
             ctype, y_field = "bar", None
@@ -3867,6 +4127,94 @@ def build_dataset_summary(
     return {"scope": "sample", "rows_sampled": n, "insights": insights}
 
 
+# Column names the reader made up because the file had none: our own
+# "column_3" for a headerless sheet or a blank header cell, and pandas'
+# "Unnamed: 3". A chart titled "Records by column_3" tells nobody anything.
+_PLACEHOLDER_COLUMN_RE = re.compile(r"^(?:column_\d+|unnamed:?\s*\d+(?:_level_\d+)?)$", re.IGNORECASE)
+
+
+def _is_placeholder_column(name: Any) -> bool:
+    return isinstance(name, str) and bool(_PLACEHOLDER_COLUMN_RE.match(name.strip()))
+
+
+def _drop_placeholder_charts(
+    charts: List[Dict[str, Any]],
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Leave out charts on columns that have no real name.
+
+    Returns (kept charts, [{"title", "reason"}] for the ones left out). Ranks of
+    the kept charts are renumbered from 1.
+    """
+    kept: List[Dict[str, Any]] = []
+    left_out: List[Dict[str, Any]] = []
+    for ch in charts:
+        fields = set(_chart_fields(ch))
+        rate_cfg = (ch.get("config") or {}).get("rate_by_value")
+        if isinstance(rate_cfg, dict) and rate_cfg.get("field"):
+            fields.add(str(rate_cfg["field"]))
+        named = sorted(f for f in fields if _is_placeholder_column(f))
+        if named:
+            left_out.append({
+                "title": ch.get("title"),
+                "reason": f"charts a column with no name in the file ({', '.join(named)})",
+            })
+            logger.info("Visualization agent: leaving out %r -- unnamed column(s) %s",
+                        ch.get("title"), named)
+        else:
+            kept.append(ch)
+    for i, ch in enumerate(kept, start=1):
+        ch["rank"] = i
+    return kept, left_out
+
+
+def _chart_importance(chart: Dict[str, Any], rows_charted: int) -> int:
+    """0-100: how much this chart is worth showing among the "top insights" of
+    an analysis with several sheets or files.
+
+    Deterministic, no LLM. What it rewards, in order:
+      - rates of a yes/no outcome across groups (85), a relationship between
+        two measures by its strength (55 + 30 x |r|), a measure compared across
+        groups or over time (70), a distribution (60), row counts per group
+        (50), missing vs present (35);
+      - +5 when the domain finding from the model survived the data checks;
+      - -3 per place below first in its own dataset;
+      - -10 under 30 rows, -20 under 10 rows (a finding on a few rows is weak).
+    """
+    ctype = (chart.get("type") or "").lower()
+    cfg = chart.get("config") if isinstance(chart.get("config"), dict) else {}
+    dd = chart.get("derived_data") if isinstance(chart.get("derived_data"), dict) else {}
+    agg = str(dd.get("aggregate") or "").lower()
+    if cfg.get("missing_vs_present"):
+        score = 35.0
+    elif agg == "rate" or cfg.get("rate_by_value") or cfg.get("rate_by_group") or cfg.get("bin_x"):
+        score = 85.0
+    elif ctype == "scatter":
+        r = dd.get("r")
+        score = 55.0 + 30.0 * min(abs(float(r)), 1.0) if isinstance(r, numbers.Real) else 55.0
+    elif ctype == "histogram":
+        score = 60.0
+    elif ctype == "line" or (agg and agg != "count"):
+        score = 70.0
+    else:
+        score = 50.0
+    if chart.get("insight_source") == "llm":
+        score += 5
+    try:
+        score -= 3 * max(int(chart.get("rank") or 1) - 1, 0)
+    except (TypeError, ValueError):
+        pass
+    n = dd.get("n") or dd.get("n_rows") or rows_charted or 0
+    try:
+        n = int(n)
+    except (TypeError, ValueError):
+        n = 0
+    if n < 10:
+        score -= 20
+    elif n < 30:
+        score -= 10
+    return int(max(0, min(100, round(score))))
+
+
 def _drop_mirror_charts(charts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Drop a count chart whose groups have exactly the same row counts as an
     earlier count chart's: two columns that encode the same thing (Country and
@@ -4026,8 +4374,9 @@ def build_profile_overview(profiling_result: Optional[Dict[str, Any]]) -> Option
         "strengths": _str_list(dq.get("strengths"), 5),
         "concerns": _str_list(dq.get("concerns"), 5),
         "analysis_suggestions": _str_list(profiling_result.get("analysis_suggestions"), 5),
+        # A made-up name ("column_3") is not a metric anyone can act on.
         "high_value_columns": [c for c, v in (profiling_result.get("predictive_values") or {}).items()
-                               if v == "high"][:8],
+                               if v == "high" and not _is_placeholder_column(c)][:8],
         "incomplete_sections": profiling_result.get("incomplete_sections") or [],
     }
 
@@ -4431,6 +4780,7 @@ def build_visualization_config_from_sample(
             if c.get("type") == "bar"
             and not ((c.get("encodings") or {}).get("y") or {}).get("field")
             and (profiles_by_name.get(_enc_field(c.get("encodings") or {}, "x") or "") or {}).get("dtype") == "categorical"
+            and not (profiles_by_name.get(_enc_field(c.get("encodings") or {}, "x") or "") or {}).get("is_year")
         ]
         if len(count_bars) >= 2:
             bar = count_bars[-1]
@@ -4470,10 +4820,12 @@ def build_visualization_config_from_sample(
     # Full-file numbers: the sample chose WHAT to chart; every number shown is
     # computed from all rows, so Auto Insights and chat answers agree.
     grounded_rows = rows_sampled
+    full_len: Optional[int] = None
     if full_data_path and charts:
         _t_full = time.monotonic()
         full_rows = _load_full_rows(full_data_path, full_data_type,
                                     _charted_columns(charts, profiles_by_name))
+        full_len = len(full_rows) if full_rows else None
         if full_rows and len(full_rows) > rows_sampled:
             trial = copy.deepcopy(charts)
             for ch in trial:
@@ -4491,11 +4843,23 @@ def build_visualization_config_from_sample(
             dataset_id, len(charts), grounded_rows, rows_sampled, time.monotonic() - _t_full,
         )
     viz_profile["dataset"]["rows_charted"] = grounded_rows
+    # The "sample" was the whole file (6,000 of 6,000 rows): "across 6,000 rows
+    # in the sample" read as if rows were left out.
+    covers_all = grounded_rows == rows_sampled and (
+        (total_rows and rows_sampled >= int(total_rows))
+        or (full_len is not None and full_len <= rows_sampled)
+    )
+    if covers_all:
+        for ch in charts:
+            for key in ("insight", "reason", "insight_facts"):
+                if isinstance(ch.get(key), str):
+                    ch[key] = ch[key].replace(" in the sample", "")
     viz_profile["dataset"]["charts_scope"] = "full_file" if grounded_rows > rows_sampled else "sample"
     if total_rows:
         viz_profile["dataset"]["total_rows"] = int(total_rows)
 
     charts = _drop_mirror_charts(charts)
+    charts, placeholder_left_out = _drop_placeholder_charts(charts)
     charts, even_columns = _merge_even_count_charts(charts)
 
     # Last resort only: a chart whose grounding raised still gets some text.
@@ -4545,6 +4909,12 @@ def build_visualization_config_from_sample(
 
     # 6) Attach diagnostics & status
     viz_profile["charts"] = charts
+    # Lets the UI pick the "top insights" across the sheets / files of one
+    # analysis (see _chart_importance); higher is more worth showing.
+    for ch in charts:
+        ch["importance"] = _chart_importance(ch, grounded_rows)
+    if placeholder_left_out:
+        viz_profile["charts_left_out"] = placeholder_left_out
     viz_profile["model_diagnostics"] = {
         "enabled": False,
         "reason": "Baseline model diagnostics not yet implemented in auto-viz.",

@@ -32,6 +32,12 @@ that broke, or would have broken, a clean install or a first run.
 
 ### Fixed
 
+- **`avaloka train` works on a text-label target.** A classification target
+  of words -- `healthcare_dataset.csv --target "Test Results"`, the example in
+  `docs/INSTALL.md` -- crashed with "Cannot cast array data from dtype('O') to
+  dtype('int64')". Labels were encoded only when the column's dtype was
+  `object`, and the target arrived as pandas' string dtype. Any non-numeric
+  label is now encoded (`avaloka/modeling.py`).
 - **pandas is capped below 3** in `pyproject.toml`, `requirements.txt` and
   the five image/server requirements files. `>=2.0` let a clean install pick
   3.0.6, on which the hermetic gate fails 13 more tests (preparation agent,
@@ -49,6 +55,16 @@ that broke, or would have broken, a clean install or a first run.
   `limited` and names the candidate columns. Count goals and goals that name
   the column are answered as before (`avaloka/goal_analysis.py`).
 
+- **A model that does not beat its baseline is no longer announced as a success.**
+  Training through the API reported "The training was successful" and offered
+  predictions for a model below its trivial baseline (accuracy 0.627 vs 0.668),
+  although the evaluation report said so. The report now states the comparison
+  and says not to use the model; the claim verifier also rejects success wording
+  for a below-baseline model (`app/agents/mta_v2/agent.py`,
+  `app/agents/claim_verifier.py`).
+- **The claim verifier catches a wrong "lowest" or "highest".** "The west region
+  has the lowest at 68.12" passed beside a result whose minimum was 67.73. A new
+  check compares each superlative with the result column the figure came from.
 - **`tool_choice` is now chosen per provider**, not per client class. `local`,
   `openrouter` and `openai` all build the same `ChatOpenAI`, so the class name
   cannot tell them apart, and the two that matter need opposite values:
@@ -59,6 +75,18 @@ that broke, or would have broken, a clean install or a first run.
 - **The planner and MTA broke when no API key was set at all** —
   `TOOL_CHOICE` was left unbound, so the code raised `NameError` instead of
   reporting a disabled LLM.
+- **Training through the API works without MLflow configuration.** The trainer
+  and the model endpoints defaulted to MLflow's file store, which the pinned
+  MLflow refuses to write; every training turn failed and `GET /api/models`
+  returned 500 unless `MLFLOW_TRACKING_URI` was set. Both now default to a
+  local SQLite `mlflow.db` (`app/agents/mta_v2/tracking.py`), and the variable
+  is documented in `docs/INSTALL.md`.
+- **The API image runs the dependency set it pins.** An unpinned
+  `pip install langchain-google-vertexai` after the requirements upgraded
+  langchain-core to 1.x and pyarrow to 23 inside the published image. It is
+  removed (Vertex is optional; see `requirements-cloud-llm.txt`), the build now
+  runs `pip check`, and the arm64 image gets an arm64 `kubectl` instead of an
+  amd64 binary it could not execute (`deploy/docker/Dockerfile.api`).
 - **A cold clone could not install.** `requirements.txt` pinned plain
   `psycopg2`, which publishes no wheels, so pip built it from source and the
   install died.

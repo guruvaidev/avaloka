@@ -1,0 +1,9 @@
+/* This app also has legacy primary surface/text utilities. Scope the picker
+   to its existing shadcn primary token without changing other screens. */
+.bucket-picker .text-primary { color: var(--primary); }
+.bucket-picker .bg-primary { background-color: var(--primary); }
+.bucket-picker .bg-primary\/10 { background-color: color-mix(in oklab, var(--primary) 10%, transparent); }
+.bucket-picker .border-l-primary { border-left-color: var(--primary); }
+.bucket-picker .accent-primary { accent-color: var(--primary); }
+.bucket-picker .hover\:bg-primary\/90:hover { background-color: color-mix(in oklab, var(--primary) 90%, transparent); }
+.bucket-picker tr.hover\:bg-muted:hover { background-color: var(--muted); }

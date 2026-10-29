@@ -1,19 +1,17 @@
 import logging
 import json
 import os
-import subprocess
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Optional
 
-import requests
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage
 from celery import Celery
 from celery.utils.log import get_logger
 from redbeat.schedulers import RedBeatScheduler, RedBeatSchedulerEntry, RedBeatJSONEncoder, RedBeatJSONDecoder, get_redis, ensure_conf
 from dotenv import load_dotenv
 
-from app.agents.execution_agent import execution_agent_node, execution_agent_node_ssh
+from app.agents import execution_agent
 from app.agents.mta_v2.failure_diagnostics import (
     TRAINING_FAILURE_MESSAGE,
     build_training_failure,
@@ -27,10 +25,6 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 REDIS_URL = os.getenv("CELERY_REDIS_URL", "redis://avaloka-redis:6379/0")
-SERVERS = json.loads(os.getenv("CELERY_SSH_SERVERS", "[]"))
-SERVERS_IN_USE = []
-
-
 celery_app = Celery('celery_app', broker=REDIS_URL, backend=REDIS_URL)
 celery_app.conf.update(
     result_extended=True,
@@ -40,6 +34,26 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,
 )
 ensure_conf(celery_app)
+
+class AvalokaJSONEncoder(RedBeatJSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, date) and not isinstance(obj, datetime):
+            return {
+                '__type__': 'date',
+                'year': obj.year,
+                'month': obj.month,
+                'day': obj.day,
+            }
+
+        return super().default(obj)
+
+
+class AvalokaJSONDecoder(RedBeatJSONDecoder):
+    def dict_to_object(self, d):
+        if d.get('__type__') == 'date':
+            return date(d['year'], d['month'], d['day'])
+        return super().dict_to_object(d)
+
 
 class AvalokaEntry(RedBeatSchedulerEntry):
     def __init__(self, name=None, task=None, schedule=None, args=None, kwargs=None, enabled=True, options=None, max_runs: int = -1, **clsargs):
@@ -61,8 +75,8 @@ class AvalokaEntry(RedBeatSchedulerEntry):
             'last_run_at': self.last_run_at,
         }
         with get_redis(self.app).pipeline() as pipe:
-            pipe.hset(self.key, 'definition', json.dumps(definition, cls=RedBeatJSONEncoder))
-            pipe.hsetnx(self.key, 'meta', json.dumps(meta, cls=RedBeatJSONEncoder))
+            pipe.hset(self.key, 'definition', json.dumps(definition, cls=AvalokaJSONEncoder))
+            pipe.hsetnx(self.key, 'meta', json.dumps(meta, cls=AvalokaJSONEncoder))
             pipe.zadd(self.app.redbeat_conf.schedule_key, {self.key: self.score})
             pipe.execute()
 
@@ -108,11 +122,11 @@ class AvalokaScheduler(RedBeatScheduler):
                                 'enabled': entry.enabled,
                                 'max_runs': entry.max_runs
                             }
-                            pipe.hset(entry.key, 'definition', json.dumps(definition, cls=RedBeatJSONEncoder))
+                            pipe.hset(entry.key, 'definition', json.dumps(definition, cls=AvalokaJSONEncoder))
 
                         pipe.hget(entry.key, 'task_data')
 
-                        task_data = json.loads(pipe.execute()[-1] or '{}', cls=RedBeatJSONDecoder)
+                        task_data = json.loads(pipe.execute()[-1] or '{}', cls=AvalokaJSONDecoder)
                         task_ids = task_data.get("task_ids", [])
                         task_run_at = task_data.get("task_run_at", [])
 
@@ -120,7 +134,7 @@ class AvalokaScheduler(RedBeatScheduler):
                         task_data["task_run_at"] = [*task_run_at, datetime.now(timezone.utc)]
 
                         pipe.hset(
-                            entry.key, 'task_data', json.dumps(task_data, cls=RedBeatJSONEncoder)
+                            entry.key, 'task_data', json.dumps(task_data, cls=AvalokaJSONEncoder)
                         )
                         pipe.execute()
                     logger.debug('Scheduler: %s sent. id->%s', entry.task, result.id)
@@ -137,7 +151,7 @@ class AvalokaScheduler(RedBeatScheduler):
         )
         with get_redis(celery_app).pipeline() as pipe:
             pipe.hget(key, 'task_data')
-            task_ids = json.loads(pipe.execute()[0] or '{}', cls=RedBeatJSONDecoder).get("task_ids", [])
+            task_ids = json.loads(pipe.execute()[0] or '{}', cls=AvalokaJSONDecoder).get("task_ids", [])
             return (task_ids[-1] if task_ids else None)
         
     @staticmethod
@@ -149,7 +163,7 @@ class AvalokaScheduler(RedBeatScheduler):
         )
         with get_redis(celery_app).pipeline() as pipe:
             pipe.hget(key, 'task_data')
-            task_run_at = json.loads(pipe.execute()[0] or '{}', cls=RedBeatJSONDecoder).get("task_run_at", [])
+            task_run_at = json.loads(pipe.execute()[0] or '{}', cls=AvalokaJSONDecoder).get("task_run_at", [])
             return (task_run_at[-1] if task_run_at else None)
         
     @staticmethod
@@ -161,7 +175,7 @@ class AvalokaScheduler(RedBeatScheduler):
         )
         with get_redis(celery_app).pipeline() as pipe:
             pipe.hget(key, 'task_data')
-            task_ids = json.loads(pipe.execute()[0] or '{}', cls=RedBeatJSONDecoder).get("task_ids", [])
+            task_ids = json.loads(pipe.execute()[0] or '{}', cls=AvalokaJSONDecoder).get("task_ids", [])
             return task_ids or []
     
     @staticmethod
@@ -173,7 +187,7 @@ class AvalokaScheduler(RedBeatScheduler):
         )
         with get_redis(celery_app).pipeline() as pipe:
             pipe.hget(key, 'task_data')
-            task_run_at = json.loads(pipe.execute()[0] or '{}', cls=RedBeatJSONDecoder).get("task_run_at", [])
+            task_run_at = json.loads(pipe.execute()[0] or '{}', cls=AvalokaJSONDecoder).get("task_run_at", [])
             return task_run_at or []
     
     @staticmethod
@@ -185,7 +199,7 @@ class AvalokaScheduler(RedBeatScheduler):
         )
         with get_redis(celery_app).pipeline() as pipe:
             pipe.hget(key, 'task_data')
-            task_data = json.loads(pipe.execute()[0] or '{}', cls=RedBeatJSONDecoder)
+            task_data = json.loads(pipe.execute()[0] or '{}', cls=AvalokaJSONDecoder)
             return list(zip(task_data.get("task_ids", []), task_data.get("task_run_at", []))) or []
 
 
@@ -545,29 +559,14 @@ def _run_agent_task(json_state: dict) -> dict:
             )
         )
 
-        execution_mode = (
-            state.get("execution_mode") or "local"
-        )
+        execution_mode = state.get("execution_mode") or "local"
 
         if execution_mode == "k8s-ray":
-            from app.agents.execution_agent import (
-                execution_agent_node_ray,
-            )
-
-            state = execution_agent_node_ray(state)
-
+            state = execution_agent.execution_agent_node_ray(state)
         elif state.get("deploy_on_k8s"):
-            state = execution_agent_node(state)
-
-        elif SERVERS:
-            state = handle_ssh_execute(state)
-
+            state = execution_agent.execution_agent_node(state)
         else:
-            from app.agents.execution_agent import (
-                execution_agent_node_local,
-            )
-
-            state = execution_agent_node_local(state)
+            state = execution_agent.execution_agent_node_scheduled_pod(state)
 
         state["messages"] = (
             convert_message_objects_to_dicts(
@@ -701,7 +700,7 @@ def _run_agent_task(json_state: dict) -> dict:
     logger.info(
         "[agent_task] FINISHED task_type=%s status=%s",
         task_type,
-        execution_result.get("status", "completed"),
+        execution_result.get("status"),
     )
 
     return final_state
@@ -711,85 +710,6 @@ def execution_agent_task(json_state: dict) -> None:
     """Alias for agent_task — kept for backward compat with old Redis schedule entries."""
     return agent_task(json_state)
     
-def handle_ssh_execute(state: ETLState) -> ETLState:
-    waited = 0
-    while not SERVERS:
-        if waited >= 30:
-            logger.error("handle_ssh_execute: no SSH servers available after 30s")
-            new_state = state.copy()
-            new_state["messages"] = new_state["messages"] + [
-                AIMessage("Failed to run task - no execution server available")
-            ]
-            return new_state
-        time.sleep(1)
-        waited += 1
-
-    server = SERVERS.pop(-1)
-    SERVERS_IN_USE.append(server)
-    new_state = state.copy()
-
-    for dataset in (state.get("multi_dataset_state") or []):
-        logger.info("Creating input folder")
-        data_source_location = os.path.dirname(dataset["data_source_location"])
-        p = subprocess.run(["ssh", server, f"mkdir -p {data_source_location}"], capture_output=True)
-        if p.returncode:
-            logger.info(f"Stderr:\n" + p.stderr.decode())
-            logger.info(f"Stdout:\n" + p.stdout.decode())
-            new_state.update({
-                "messages": new_state["messages"] + [AIMessage("Failed to run task - failed to create input folder to server")]
-            })
-            SERVERS_IN_USE.remove(server)
-            SERVERS.append(server)
-            return new_state
-        
-        logger.info("Copying input file")
-        p = subprocess.run(["scp", "-r", data_source_location, f"{server}:{os.path.dirname(data_source_location)}"], capture_output=True)
-        if p.returncode:
-            logger.info(f"Stderr:\n" + p.stderr.decode())
-            logger.info(f"Stdout:\n" + p.stdout.decode())
-            new_state.update({
-                "messages": new_state["messages"] + [AIMessage("Failed to run task - failed to copy input data to server")]
-            })
-            SERVERS_IN_USE.remove(server)
-            SERVERS.append(server)
-            return new_state
-        
-
-    logger.info("Creating output folder")
-    output_location = os.path.dirname(state["output_location"])
-    p = subprocess.run(["ssh", server, f"mkdir -p {output_location}"], capture_output=True)
-    if p.returncode:
-        logger.info(f"Stderr:\n" + p.stderr.decode())
-        logger.info(f"Stdout:\n" + p.stdout.decode())
-        new_state.update({
-            "messages": new_state["messages"] + [AIMessage("Failed to run task - failed to create output folder on server")]
-        })
-        SERVERS_IN_USE.remove(server)
-        SERVERS.append(server)
-        return new_state
-
-        
-    logger.info("Copying execute script")
-    script = os.path.join(output_location, "execute.sh")
-    p = subprocess.run(["scp", os.path.join("scripts", "execute.sh"), f"{server}:{script}"], capture_output=True)
-    if p.returncode:
-        logger.info(f"Stderr:\n" + p.stderr.decode())
-        logger.info(f"Stdout:\n" + p.stdout.decode())
-        new_state.update({
-            "messages": new_state["messages"] + [AIMessage("Failed to run task - failed to copy execute script to server")]
-        })
-        SERVERS_IN_USE.remove(server)
-        SERVERS.append(server)
-        return new_state
-    
-    new_state = execution_agent_node_ssh(new_state, server)
-
-    SERVERS_IN_USE.remove(server)
-    SERVERS.append(server)
-    return new_state
-
-
-
 def _logs_from_final(final: dict) -> list:
     """Assemble a run log (list of lines) from a finished agent state so the
     UI can show execution logs instead of the output table."""
