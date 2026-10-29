@@ -209,6 +209,15 @@ def route_planner_output(state: ETLState):
     if state.get("skip_to_training", False):
         return "train_models"
 
+    # ── Data transfer is finished inside the planner (it runs the DTA pipeline
+    #    and the Ray job itself and appends the result message). Nothing else
+    #    to route to. Without this, a sticky execution_mode=k8s-ray seeds an
+    #    infrastructure_request, the turn detours through provision_infra, and
+    #    provision_infra -> plan_etl runs the whole transfer a second time. ──
+    if state.get("is_dta_request"):
+        logger.info("route_planner_output: data transfer handled by planner -> end")
+        return "end"
+
     ts = (state.get("task_schedule") or {})
     # ✅ DIAGNOSTIC LOG — delete once confirmed working
     logger.info(

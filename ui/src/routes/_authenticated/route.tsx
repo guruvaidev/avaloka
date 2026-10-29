@@ -4,7 +4,8 @@ import { IconRail } from "@/components/dashboard/IconRail";
 
 export const Route = createFileRoute("/_authenticated")({
   ssr: false,
-  beforeLoad: async () => {
+  beforeLoad: async ({ location }) => {    
+
     const bypass =
       typeof window !== "undefined" &&
       localStorage.getItem("admin-bypass") === "1";
@@ -14,6 +15,13 @@ export const Route = createFileRoute("/_authenticated")({
     // navigation (falls back to a real getUser() when nothing is cached).
     const user = await getCachedAuthUser();
     if (!user) {
+       const params = new URLSearchParams(location.search);
+      const tab = params.get("tab");
+
+      // Store tab=billing in a cookie
+      if (typeof document !== "undefined" && tab === "billing") {
+        document.cookie = "tab=billing; path=/; max-age=86400; SameSite=Lax";
+      }
       throw redirect({ to: "/" });
     }
   },

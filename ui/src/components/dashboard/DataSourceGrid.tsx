@@ -78,18 +78,22 @@ export function DataSourceGrid({ onSelect, disabled = false }: { onSelect?: (id:
                 : undefined
           }
         >
-          <Button
-            color="secondary"
-            size="lg"
-            onPress={() => handleTileClick(s)}
-            isDisabled={s.comingSoon || disabled}
+          <button
+            type="button"
+            onClick={() => handleTileClick(s)}
+            disabled={s.comingSoon || disabled}
             className={cn(
-              "h-[72px] w-full justify-center rounded-xl",
+              "flex h-[96px] w-full flex-col items-center justify-center gap-1.5 rounded-xl border border-border bg-card px-2 py-2 transition hover:border-primary",
               (s.comingSoon || disabled) && "cursor-not-allowed opacity-60",
             )}
           >
-            <img src={s.logoUrl} alt={s.name} className="h-10 w-full max-w-[112px] shrink-0 object-contain object-center" />
-          </Button>
+            <span className="flex h-10 items-center justify-center">
+              <span className="flex items-center justify-center rounded-md dark:bg-white dark:p-1.5">
+                <img src={s.logoUrl} alt={s.name} className="h-7 w-auto max-w-[112px] object-contain object-center" />
+              </span>
+            </span>
+            <span className="text-[13px] font-medium text-foreground">{s.name}</span>
+          </button>
           {s.comingSoon && (
             <span className="pointer-events-none absolute -right-1 -top-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-medium text-amber-700 shadow">
               Coming soon

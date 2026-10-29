@@ -2714,6 +2714,28 @@ class ModelTrainingAgent:
         else:
             status_sentence = "The training failed or did not return reportable metrics."
 
+        # A model that cannot beat a trivial predictor is not a successful
+        # result, however cleanly the run finished. The evaluation report has
+        # always carried the verdict; it used to be read for the splitter only,
+        # so a below-baseline model was announced as "successful" and offered
+        # for predictions.
+        below_baseline = isinstance(evaluation_report, dict) and evaluation_report.get("beats_baseline") is False
+        if succeeded and below_baseline:
+            metric = evaluation_report.get("primary_metric") or ("rmse" if is_regression else "accuracy")
+            model_score = (evaluation_report.get("metrics") or {}).get(metric)
+            baseline = evaluation_report.get("baseline") or {}
+            baseline_score = baseline.get(metric)
+            comparison = ""
+            if model_score is not None and baseline_score is not None:
+                strategy = str(baseline.get("strategy") or "a trivial predictor").replace("_", " ")
+                comparison = f" (validation {metric} {model_score} vs {baseline_score} for {strategy})"
+            metric_lines.append(f"* **Beats Baseline:** No{comparison}")
+            status_sentence = (
+                "Training finished, but the model does not beat the trivial baseline"
+                f"{comparison}. Do not use it for decisions. More informative features, "
+                "more rows, or a different target usually help."
+            )
+
         lines = [
             f"**{title}**",
             "",
@@ -2733,14 +2755,14 @@ class ModelTrainingAgent:
                 ]
             )
         if succeeded:
-            lines.extend(
-                [
-                    "",
-                    "You can view the trained model in the Configurations tab.",
-                    "",
-                    "You can now run a prediction in chat by sending one row or a JSON array of rows with feature values.",
-                ]
-            )
+            lines.extend(["", "You can view the trained model in the Configurations tab."])
+            if not below_baseline:
+                lines.extend(
+                    [
+                        "",
+                        "You can now run a prediction in chat by sending one row or a JSON array of rows with feature values.",
+                    ]
+                )
         return "\n".join(lines)
 
     def _execute_training(self, state: ETLState) -> ETLState:

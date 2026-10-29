@@ -338,6 +338,39 @@ async function loadSummary(supabase: any, userId: string, profileOverride?: AnyR
       ? Math.round(priceNumber * 100)
       : null;
 
+  let billingEmail: string | null = null;
+
+  const billingOwnerProfileId = subscription?.owner_profile_id;
+
+  if (billingOwnerProfileId) {
+    const { data: ownerProfile, error: profileError } =
+      await supabase
+        .from("profiles")
+        .select("user_id")
+        .eq("id", billingOwnerProfileId)
+        .maybeSingle();
+
+    if (profileError) {
+      console.warn(
+        "[billing] owner profile lookup failed:",
+        profileError.message
+      );
+    } else if (ownerProfile?.user_id) {
+      const { data, error: authError } =
+        await supabase.auth.admin.getUserById(ownerProfile.user_id);
+
+      if (authError) {
+        console.warn(
+          "[billing] owner auth user lookup failed:",
+          authError.message
+        );
+      } else {
+        billingEmail = data.user?.email ?? null;
+      }
+    }
+  }
+
+
   const mergedProfile: AnyRec | null = profile
     ? {
         ...profile,
@@ -371,7 +404,7 @@ async function loadSummary(supabase: any, userId: string, profileOverride?: AnyR
         card_last4: null,
         card_exp_month: null,
         card_exp_year: null,
-        billing_email: customerAccount?.billing_email ?? null,
+        billing_email: billingEmail,
         billing_name:
           customerAccount?.company_name ?? profile.full_name ?? null,
         // PayPal identifiers (read from the subscriptions row so the Billing

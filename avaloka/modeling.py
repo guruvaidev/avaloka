@@ -265,7 +265,11 @@ def train_candidates(
     y = data[target]
 
     if task != "regression":
-        y = y.astype("category").cat.codes if y.dtype == object else y
+        # Encode any label that is not already a number. Testing `dtype ==
+        # object` missed text held as pandas' string or category dtype, and
+        # the words then reached np.bincount unencoded.
+        if not pd.api.types.is_numeric_dtype(y):
+            y = y.astype("category").cat.codes
 
     if split_strategy == "time_based_holdout" and time_column:
         X_train, X_test, y_train, y_test = _temporal_split(

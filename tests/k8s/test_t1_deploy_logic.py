@@ -323,6 +323,8 @@ def test_t1_11_local_chart_manages_mlflow_with_the_object_store(rendered_chart):
     assert "--default-artifact-root" not in command
     env = {entry["name"]: entry for entry in container["env"]}
     assert env["MLFLOW_ARTIFACTS_DESTINATION"]["value"] == "s3://avaloka/mlflow-artifacts"
+
+
     # SeaweedFS serves S3 on 8333 where MinIO served 9000, and the credentials
     # live in that store's own Secret under the standard AWS key names (MinIO's
     # server required MINIO_ROOT_USER/_PASSWORD, so its Secret used those).
@@ -335,6 +337,87 @@ def test_t1_11_local_chart_manages_mlflow_with_the_object_store(rendered_chart):
     assert config["data"]["MLFLOW_TRACKING_URI"] == "http://avaloka-mlflow:5000"
     assert config["data"]["MLFLOW_REGISTRY_URI"] == "http://avaloka-mlflow:5000"
     assert "MLFLOW_DEFAULT_ARTIFACT_ROOT" not in config["data"]
+
+
+# --------------------------------------------------------------------------- T1.12
+@requires_helm
+def test_t1_12_scheduled_local_executor_is_chart_managed(rendered_chart):
+    docs = [d for d in yaml.safe_load_all(rendered_chart) if d]
+    executor = next(
+        d for d in docs
+        if d.get("kind") == "Deployment"
+        and d["metadata"].get("labels", {}).get("app.kubernetes.io/component") == "celery-executor"
+    )
+    assert executor["metadata"]["name"] == "avaloka-celery-executor"
+    assert executor["spec"]["replicas"] == 1
+    assert executor["spec"]["template"]["spec"]["automountServiceAccountToken"] is False
+    executor_container = executor["spec"]["template"]["spec"]["containers"][0]
+    assert executor_container["image"] == "ghcr.io/guruvaidev/avaloka-api:main"
+    assert executor_container["readinessProbe"]["exec"]
+    assert "SIGTERM" in executor_container["command"][-1]
+
+    config = next(d for d in docs if d.get("kind") == "ConfigMap")
+    assert config["data"]["AVALOKA_SCHEDULED_EXECUTION_DEPLOYMENT"] == "avaloka-celery-executor"
+    assert config["data"]["AVALOKA_SCHEDULED_EXECUTION_NAMESPACE"] == "default"
+    assert config["data"]["AVALOKA_SCHEDULED_EXECUTION_SELECTOR"] == (
+        "app.kubernetes.io/name=avaloka,app.kubernetes.io/instance=avaloka,"
+        "app.kubernetes.io/component=celery-executor"
+    )
+
+    celery_sa = next(
+        d for d in docs
+        if d.get("kind") == "ServiceAccount"
+        and d["metadata"]["name"] == "avaloka-celery"
+    )
+    celery_worker = next(
+        d for d in docs
+        if d.get("kind") == "Deployment"
+        and d["metadata"].get("labels", {}).get("app.kubernetes.io/component") == "celery"
+    )
+    assert celery_worker["spec"]["template"]["spec"]["serviceAccountName"] == celery_sa["metadata"]["name"]
+
+    app_role = next(d for d in docs if d.get("kind") == "Role" and d["metadata"]["name"] == "avaloka")
+    assert not any(
+        "pods/exec" in rule.get("resources", [])
+        for rule in app_role["rules"]
+    )
+    celery_role = next(
+        d for d in docs
+        if d.get("kind") == "Role" and d["metadata"]["name"] == "avaloka-celery"
+    )
+    assert any(
+        "pods/exec" in rule.get("resources", []) and "create" in rule.get("verbs", [])
+        for rule in celery_role["rules"]
+    )
+    assert any(
+        "deployments" in rule.get("resources", [])
+        and "apps" in rule.get("apiGroups", [])
+        and "get" in rule.get("verbs", [])
+        for rule in celery_role["rules"]
+    )
+    celery_binding = next(
+        d for d in docs
+        if d.get("kind") == "RoleBinding"
+        and d["metadata"]["name"] == "avaloka-celery"
+    )
+    assert celery_binding["subjects"][0]["name"] == "avaloka-celery"
+
+    disabled_chart = helm(
+        "template", "avaloka", str(CHART_DIR), "--set", "celery.enabled=false"
+    ).stdout
+    disabled_docs = [d for d in yaml.safe_load_all(disabled_chart) if d]
+    assert not any(
+        d.get("kind") == "Deployment"
+        and d["metadata"].get("labels", {}).get("app.kubernetes.io/component") == "celery-executor"
+        for d in disabled_docs
+    )
+    assert not any(
+        d.get("kind") in {"Role", "RoleBinding", "ServiceAccount"}
+        and d["metadata"]["name"] == "avaloka-celery"
+        for d in disabled_docs
+    )
+    disabled_config = next(d for d in disabled_docs if d.get("kind") == "ConfigMap")
+    assert "AVALOKA_SCHEDULED_EXECUTION_DEPLOYMENT" not in disabled_config["data"]
 
 
 @requires_helm

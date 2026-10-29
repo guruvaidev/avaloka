@@ -5,7 +5,9 @@ import json
 import time
 import base64
 import asyncio
+import secrets
 import threading
+import types
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union, Set
 
@@ -4722,6 +4724,48 @@ def test_mcp_decrypt_success(client: TestClient, monkeypatch):
     resp = client.post("/api/mcp-connections/c1/decrypt", headers=make_auth_headers("mcp-user"))
     assert resp.status_code == 200, resp.text
     assert resp.json() == {"apiKey": "plain:CT", "username": None}
+
+
+@pytest.mark.parametrize("route,body", [("encrypt", {"apiKey": "plain:CT"}), ("decrypt", None)])
+def test_mcp_credentials_bind_the_customer_to_the_verified_user(client: TestClient, monkeypatch, route, body):
+    """The onboarding API releases a password to the planner only for a customer
+    bound to the user it names; encrypt/decrypt are where that binding happens."""
+    _patch_mcp_row(monkeypatch, {"id": "c1", "user_id": "mcp-user", "customer_id": "cust_1",
+                                 "api_key_ciphertext": "CT", "api_key_iv": "IV"})
+    monkeypatch.setattr(server, "encrypt_secret", lambda v: {"ciphertext": "x", "iv": "y"}, raising=False)
+    monkeypatch.setattr(server, "_mcp_conn_update", lambda cid, patch: None, raising=False)
+    monkeypatch.setattr(server, "decrypt_secret",
+                        lambda blob: f"plain:{blob['ciphertext']}" if blob.get("ciphertext") else None,
+                        raising=False)
+    token = secrets.token_urlsafe(24)
+    monkeypatch.setenv("MCP_SERVICE_TOKEN", token)
+    posts: List[Dict[str, Any]] = []
+
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, headers=None, **k):
+            posts.append({"url": url, "headers": headers})
+            return types.SimpleNamespace(status_code=200)
+
+    monkeypatch.setattr(server.httpx, "AsyncClient", _Client)
+    resp = client.post(f"/api/mcp-connections/c1/{route}", json=body,
+                       headers=make_auth_headers("mcp-user"))
+    assert resp.status_code == 200, resp.text
+    assert len(posts) == 1
+    assert posts[0]["url"].endswith("/customers/cust_1/owner")
+    assert posts[0]["headers"] == {
+        "X-Avaloka-Service-Token": token,
+        "X-Avaloka-User": "mcp-user",
+        "Authorization": "Bearer plain:CT",
+    }
 
 
 def test_mcp_decrypt_key_mismatch_409(client: TestClient, monkeypatch):

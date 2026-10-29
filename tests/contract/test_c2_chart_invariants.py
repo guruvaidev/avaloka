@@ -64,7 +64,7 @@ STORAGE_CHART_COMPONENTS = frozenset(
 )
 # Background execution. E6.08 was the defect that none of this shipped; celery.yaml
 # now runs a worker and a beat/RedBeat scheduler, so these are expected workloads.
-EXECUTOR_CHART_COMPONENTS = frozenset({"celery", "celery-redbeat"})
+EXECUTOR_CHART_COMPONENTS = frozenset({"celery", "celery-executor", "celery-redbeat"})
 # Opt-in tiers, all disabled by default: the layer-4 vector store and its etcd,
 # the local inference server, and the remaining Supabase pieces.
 OPTIONAL_CHART_COMPONENTS = frozenset(

@@ -3,6 +3,7 @@
 import ast
 import inspect
 import base64
+import json
 import logging
 import os
 import shutil
@@ -30,6 +31,7 @@ from app.infra.ray_job_runner import run_rayjob_from_yaml
 
 import asyncio
 import concurrent.futures
+from urllib.parse import urlparse
 
 from app.api.cloud_connections import get_cloud_connection
 from app.infra.k8s_secrets import create_cloud_secret, kubectl_delete_secret
@@ -39,6 +41,92 @@ AVALOKA_LOCAL_EXEC_TIMEOUT = 120
 
 
 import os
+
+
+HELPER_FUNCTIONS = r'''
+# Headless server: force a non-GUI matplotlib backend BEFORE any user code
+# imports pyplot, so generated plotting code can never pop a window or block
+# the process on plt.show() (which would hang until the 60s timeout and surface
+# as an "execution failure"). Must run before "import matplotlib.pyplot".
+try:
+    import matplotlib
+    matplotlib.use("Agg")
+except Exception:
+    pass
+import pandas as pd
+import json as _avaloka_json
+
+def avaloka_result(value, kind=None, columns=None, **kw):
+    """Emit a structured result sentinel that the response renderer picks up.
+    Call this for analytical queries (mean, correlation, count, etc.) even when
+    an output file is also written — the sentinel takes priority over the table.
+    value   — the scalar result. Usually a number, but a single-value answer
+              is not always numeric ("which category is the biggest?" -> "Music"),
+              so a non-numeric scalar is passed through unchanged rather than
+              crashing the run.
+    kind    — "mean"|"sum"|"count"|"correlation"|"std"|"max"|"min"
+    columns — list of column names involved, e.g. ["TransactionAmt"] or
+              ["P_emaildomain_length","TransactionAmt"]
+    """
+    if value is None:
+        _coerced = None
+    else:
+        try:
+            _coerced = float(value)
+        except (TypeError, ValueError):
+            # A categorical answer ("Music", a channel name, a date). float()
+            # used to raise here and fail the entire execution.
+            _coerced = value
+    obj = {"kind": kind or "scalar", "value": _coerced,
+           "columns": list(columns or []), **kw}
+    print(f"<<<AVALOKA_RESULT>>>{_avaloka_json.dumps(obj)}<<<END_AVALOKA_RESULT>>>", flush=True)
+
+# <<AVALOKA_CSV_READER>>
+
+
+def safe_groupby_agg(df, group_cols, agg_col, agg_func='sum'):
+    """Safely perform groupby aggregation with conflict resolution."""
+    group_cols = [col for col in group_cols if col != agg_col]
+    if not group_cols:
+        print("Warning: No valid grouping columns found. Using categorical columns.")
+        categorical_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
+        group_cols = categorical_cols[:2]
+    print(f"Grouping by: {group_cols}")
+    print(f"Aggregating column: {agg_col}")
+    if group_cols:
+        result = df.groupby(group_cols)[agg_col].agg(agg_func).reset_index()
+        if agg_func == 'sum':
+            result = result.rename(columns={agg_col: f'{agg_col}_sum'})
+        elif agg_func == 'mean':
+            result = result.rename(columns={agg_col: f'{agg_col}_mean'})
+        elif agg_func == 'count':
+            result = result.rename(columns={agg_col: f'{agg_col}_count'})
+    else:
+        result = df[agg_col].agg(agg_func).to_frame().T
+        if agg_func == 'sum':
+            result = result.rename(columns={agg_col: f'{agg_col}_sum'})
+    return result
+
+
+def safe_groupby_multiple_agg(df, group_cols, agg_cols, agg_funcs=['sum']):
+    """Safely perform groupby with multiple aggregations."""
+    group_cols = [col for col in group_cols if col not in agg_cols]
+    if not group_cols:
+        print("Warning: No valid grouping columns found. Using categorical columns.")
+        categorical_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
+        group_cols = categorical_cols[:2]
+    print(f"Grouping by: {group_cols}")
+    print(f"Aggregating columns: {agg_cols}")
+    agg_dict = {col: agg_funcs for col in agg_cols}
+    result = df.groupby(group_cols).agg(agg_dict)
+    if isinstance(result.columns, pd.MultiIndex):
+        result.columns = [
+            f"{c[0]}_{c[1]}" if len(c) > 1 else str(c[0])
+            for c in result.columns
+        ]
+    return result.reset_index()
+'''
+
 
 def _resolve_read_paths(state) -> dict:
     """basename/alias -> real per-dataset path, for multi-file code."""
@@ -1122,6 +1210,344 @@ def execution_agent_node_local(state: ETLState) -> ETLState:
     return new_state
 
 
+_SCHEDULED_EXECUTION_DEPLOYMENT = os.getenv(
+    "AVALOKA_SCHEDULED_EXECUTION_DEPLOYMENT", "avaloka-celery-executor"
+)
+_SCHEDULED_EXECUTION_SELECTOR = os.getenv(
+    "AVALOKA_SCHEDULED_EXECUTION_SELECTOR",
+    "app.kubernetes.io/component=celery-executor",
+)
+_SCHEDULED_EXECUTION_SCRIPT = "\n".join([
+    "import contextlib, io, json, sys",
+    "from app.agents.execution_agent import execution_agent_node_local",
+    "from app.utils import convert_message_dicts_to_objects, convert_message_objects_to_dicts",
+    "state = json.load(sys.stdin)",
+    "state['messages'] = convert_message_dicts_to_objects(state.get('messages') or [])",
+    "with contextlib.redirect_stdout(io.StringIO()):",
+    "    result = execution_agent_node_local(state)",
+    "result['messages'] = convert_message_objects_to_dicts(result.get('messages') or [])",
+    "print('AVALOKA_EXECUTION_RESULT:' + json.dumps(result, default=str))",
+])
+
+
+def _run_scheduled_pod_command(args: list[str], **kwargs) -> subprocess.CompletedProcess:
+    result = subprocess.run(
+        ["kubectl", *args], capture_output=True, text=True, **kwargs
+    )
+    if result.returncode:
+        detail = (result.stderr or result.stdout or "kubectl command failed").strip()
+        raise RuntimeError(detail)
+    return result
+
+
+def _get_scheduled_execution_pod() -> tuple[str, str]:
+    namespace = os.getenv(
+        "AVALOKA_SCHEDULED_EXECUTION_NAMESPACE",
+        os.getenv("POD_NAMESPACE", os.getenv("K8S_NAMESPACE", "default")),
+    )
+    _run_scheduled_pod_command(
+        [
+            "rollout", "status", f"deployment/{_SCHEDULED_EXECUTION_DEPLOYMENT}",
+            "-n", namespace, "--timeout=180s",
+        ],
+        timeout=190,
+    )
+    result = _run_scheduled_pod_command(
+        [
+            "get", "pods", "-n", namespace, "-l", _SCHEDULED_EXECUTION_SELECTOR,
+            "-o", "jsonpath={.items[0].metadata.name}",
+        ],
+        timeout=30,
+    )
+    pod_name = result.stdout.strip()
+    if not pod_name:
+        raise RuntimeError("Scheduled execution Deployment has no ready pod")
+    return namespace, pod_name
+
+
+_SCHEDULED_INPUT_PATH_FIELDS = (
+    "data_source_location",
+    "active_data_source_location",
+    "active_data_source_location_local",
+    "full_data_location",
+    "sample_data_location",
+    "data_source_location_local",
+)
+
+
+def _is_shared_storage_uri(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    parsed = urlparse(value)
+    return parsed.scheme.lower() in {"gs", "s3", "az", "azure"} or (
+        parsed.hostname or ""
+    ).endswith(".blob.core.windows.net")
+
+
+def _scheduled_cloud_input_pairs(state: dict) -> list[tuple[Optional[str], str]]:
+    pairs: list[tuple[Optional[str], str]] = []
+    for local_key, cloud_key in (
+        ("data_source_location_local", "data_source_location_cloud"),
+        ("active_data_source_location_local", "active_data_source_location_cloud"),
+        ("full_data_location", "full_data_source_location_cloud"),
+    ):
+        uri = state.get(cloud_key)
+        if _is_shared_storage_uri(uri):
+            pairs.append((state.get(local_key), uri))
+
+    for key in ("data_source_location", "active_data_source_location"):
+        value = state.get(key)
+        if _is_shared_storage_uri(value):
+            pairs.append((None, value))
+
+    for dataset in state.get("multi_dataset_state") or []:
+        if not isinstance(dataset, dict):
+            continue
+        uri = dataset.get("active_data_source_location_cloud")
+        if not _is_shared_storage_uri(uri):
+            uri = next((
+                value for value in (
+                    dataset.get("active_data_source_location"),
+                    dataset.get("data_source_location"),
+                ) if _is_shared_storage_uri(value)
+            ), None)
+        if _is_shared_storage_uri(uri):
+            local_path = dataset.get("data_source_location")
+            if _is_shared_storage_uri(local_path):
+                local_path = None
+            pairs.append((local_path, uri))
+    return pairs
+
+
+def _replace_scheduled_input_paths(state: dict, replacements: dict[str, str]) -> None:
+    for key in _SCHEDULED_INPUT_PATH_FIELDS:
+        value = state.get(key)
+        if isinstance(value, str) and value in replacements:
+            state[key] = replacements[value]
+
+    for dataset in state.get("multi_dataset_state") or []:
+        if not isinstance(dataset, dict):
+            continue
+        for key in _SCHEDULED_INPUT_PATH_FIELDS:
+            value = dataset.get(key)
+            if isinstance(value, str) and value in replacements:
+                dataset[key] = replacements[value]
+
+    coder_definition = dict(state.get("coder_definition") or {})
+    code = coder_definition.get("code")
+    if isinstance(code, str):
+        for old_path, new_path in sorted(
+            replacements.items(), key=lambda item: len(item[0]), reverse=True
+        ):
+            code = code.replace(old_path, new_path)
+        coder_definition["code"] = code
+    if coder_definition:
+        state["coder_definition"] = coder_definition
+
+
+def _restore_scheduled_input_paths(result: dict, original: dict) -> None:
+    for key in _SCHEDULED_INPUT_PATH_FIELDS:
+        if key in original:
+            result[key] = original[key]
+    original_datasets = original.get("multi_dataset_state") or []
+    result_datasets = result.get("multi_dataset_state") or []
+    for index, dataset in enumerate(original_datasets):
+        if index >= len(result_datasets) or not isinstance(dataset, dict):
+            continue
+        for key in _SCHEDULED_INPUT_PATH_FIELDS:
+            if key in dataset:
+                result_datasets[index][key] = dataset[key]
+    if "coder_definition" in original:
+        result["coder_definition"] = original["coder_definition"]
+
+
+def _validate_scheduled_local_inputs(state: dict, staged_paths: set[str]) -> None:
+    candidates = [("dataset", state.get("data_source_location"))]
+    candidates.extend(
+        ("multi-dataset input", dataset.get("data_source_location"))
+        for dataset in state.get("multi_dataset_state") or []
+        if isinstance(dataset, dict)
+    )
+    for label, path in candidates:
+        if (
+            path
+            and not _is_shared_storage_uri(path)
+            and not os.path.isfile(str(path))
+            and path not in staged_paths
+        ):
+            raise RuntimeError(
+                f"Scheduled {label} is not available in the Celery pod: {path}. "
+                "Use a shared object-storage URI (gs://, s3://, or Azure Blob) "
+                "so the scheduled worker can stage the input."
+            )
+
+
+def execution_agent_node_scheduled_pod(state: ETLState) -> ETLState:
+    """Run scheduled local code in a persistent Kubernetes pod."""
+    new_state = state.copy()
+    staging = tempfile.TemporaryDirectory(prefix="avaloka-scheduled-")
+    namespace = None
+    pod_name = None
+    remote_root = f"/tmp/avaloka-scheduled-inputs/{os.path.basename(staging.name)}"
+    original_output_path = state.get("output_location")
+    remote_output_path = None
+    try:
+        namespace, pod_name = _get_scheduled_execution_pod()
+
+        from app.services import storage_service
+
+        pod_state = json.loads(json.dumps(state, default=str))
+        if original_output_path:
+            remote_output_path = (
+                f"{remote_root}/output/{os.path.basename(str(original_output_path))}"
+            )
+            pod_state["output_location"] = remote_output_path
+            coder_definition = dict(pod_state.get("coder_definition") or {})
+            code = coder_definition.get("code")
+            if isinstance(code, str):
+                coder_definition["code"] = code.replace(
+                    str(original_output_path), remote_output_path
+                )
+                pod_state["coder_definition"] = coder_definition
+
+        replacements: dict[str, str] = {}
+        copy_specs: list[tuple[str, str]] = []
+        staged_uris: dict[str, str] = {}
+        for index, (local_path, cloud_uri) in enumerate(
+            _scheduled_cloud_input_pairs(state)
+        ):
+            if local_path and os.path.isfile(str(local_path)):
+                continue
+            remote_path = staged_uris.get(cloud_uri)
+            if remote_path is None:
+                store, object_key = storage_service._store_and_key_from_uri(
+                    cloud_uri, None
+                )
+                if store is None or not object_key:
+                    raise RuntimeError(
+                        f"Could not resolve scheduled input storage URI: {cloud_uri}"
+                    )
+                filename = os.path.basename(urlparse(cloud_uri).path) or f"input-{index}"
+                staged_path = Path(staging.name) / f"{index}-{filename}"
+                store.get_file(object_key, staged_path)
+                remote_path = f"{remote_root}/{index}-{filename}"
+                staged_uris[cloud_uri] = remote_path
+                copy_specs.append((str(staged_path), remote_path))
+            replacements[cloud_uri] = remote_path
+            if local_path:
+                replacements[str(local_path)] = remote_path
+
+        _replace_scheduled_input_paths(pod_state, replacements)
+        _validate_scheduled_local_inputs(pod_state, set(replacements.values()))
+
+        input_paths = [
+            state.get("data_source_location"),
+            state.get("active_data_source_location_local"),
+            state.get("full_data_location"),
+            state.get("sample_data_location"),
+            state.get("data_source_location_local"),
+        ]
+        input_paths.extend(
+            dataset.get("data_source_location")
+            for dataset in (state.get("multi_dataset_state") or [])
+            if isinstance(dataset, dict)
+        )
+        for input_path in dict.fromkeys(path for path in input_paths if path):
+            if _is_shared_storage_uri(input_path):
+                continue
+            local_path = os.path.abspath(str(input_path))
+            if not os.path.isfile(local_path):
+                continue
+            copy_specs.append((local_path, local_path))
+
+        copied_destinations = set()
+        for source_path, remote_path in copy_specs:
+            if remote_path in copied_destinations:
+                continue
+            copied_destinations.add(remote_path)
+            _run_scheduled_pod_command(
+                ["exec", "-n", namespace, pod_name, "--", "mkdir", "-p", os.path.dirname(remote_path)],
+                timeout=30,
+            )
+            _run_scheduled_pod_command(
+                ["cp", "-n", namespace, source_path, f"{pod_name}:{remote_path}"],
+                timeout=300,
+            )
+
+        from app.utils import convert_message_objects_to_dicts
+
+        pod_state["messages"] = convert_message_objects_to_dicts(
+            state.get("messages") or []
+        )
+        result = _run_scheduled_pod_command(
+            [
+                "exec", "-i", "-n", namespace, pod_name, "--", "python", "-c",
+                _SCHEDULED_EXECUTION_SCRIPT,
+            ],
+            input=json.dumps(pod_state, default=str),
+            timeout=int(os.getenv("AVALOKA_SCHEDULED_EXECUTION_TIMEOUT", "300")),
+        )
+        result_prefix = "AVALOKA_EXECUTION_RESULT:"
+        result_line = next(
+            (line for line in reversed(result.stdout.splitlines()) if line.startswith(result_prefix)),
+            None,
+        )
+        if result_line is None:
+            raise RuntimeError("Scheduled execution pod returned no execution result")
+
+        from app.utils import convert_message_dicts_to_objects
+
+        pod_result = json.loads(result_line[len(result_prefix):])
+        pod_result["messages"] = convert_message_dicts_to_objects(
+            pod_result.get("messages") or []
+        )
+        _restore_scheduled_input_paths(pod_result, state)
+
+        output_path = original_output_path or pod_result.get("output_location")
+        if output_path and remote_output_path:
+            remote_path = os.path.abspath(remote_output_path)
+            exists = subprocess.run(
+                ["kubectl", "exec", "-n", namespace, pod_name, "--", "test", "-f", remote_path],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if exists.returncode == 0:
+                os.makedirs(os.path.dirname(os.path.abspath(str(output_path))), exist_ok=True)
+                _run_scheduled_pod_command(
+                    ["cp", "-n", namespace, f"{pod_name}:{remote_path}", str(output_path)],
+                    timeout=300,
+                )
+        if original_output_path:
+            pod_result["output_location"] = original_output_path
+            generated_code = pod_result.get("generated_code")
+            if isinstance(generated_code, str) and remote_output_path:
+                pod_result["generated_code"] = generated_code.replace(
+                    remote_output_path, str(original_output_path)
+                )
+        return pod_result
+    except Exception as exc:
+        logger.exception("Scheduled pod execution failed")
+        new_state.update({
+            "messages": new_state.get("messages", []) + [
+                AIMessage(content=f"Scheduled execution pod failed: {exc}")
+            ],
+            "execution_result": {"status": "failed", "message": str(exc)},
+            "output_file_data": None,
+        })
+        return new_state
+    finally:
+        if namespace and pod_name:
+            try:
+                _run_scheduled_pod_command(
+                    ["exec", "-n", namespace, pod_name, "--", "rm", "-rf", remote_root],
+                    timeout=30,
+                )
+            except Exception:
+                logger.warning("Failed to clean scheduled input staging directory %s", remote_root)
+        staging.cleanup()
+
+
 # ---------------------------------------------------------------------------
 # execution_agent_node_ssh  (from develop-1.2)
 # ---------------------------------------------------------------------------
@@ -1905,14 +2331,23 @@ def execution_agent_node_ray(state: ETLState) -> ETLState:
         user_code,
     )
 
+    user_code = re.sub(
+        r"""(['"])input\.csv\1""",
+        "DATA_SOURCE_URI, storage_options=opts",
+        user_code,
+    )
+
     # Patch any pd.read_csv in user code to use encoding fallback
     user_code = _patch_csv_encoding(user_code)
+    helper_code = _with_csv_reader(textwrap.dedent(HELPER_FUNCTIONS).lstrip())
 
     if execution_profile == "interactive_sample_analysis":
         workers = 1
         timeout_s = min(timeout_s, 600)
         script_text = (
             _build_interactive_sample_wrapper(str(data_uri), output_artifact_uri, output_metrics_uri)
+            + "\n\n"
+            + helper_code
             + "\n\n"
             + user_code
             + "\n\n"
@@ -1921,6 +2356,8 @@ def execution_agent_node_ray(state: ETLState) -> ETLState:
     else:
         script_text = (
             _build_ray_wrapper(str(data_uri), output_artifact_uri, output_metrics_uri)
+            + "\n\n"
+            + helper_code
             + "\n\n"
             + user_code
             + "\n\n"
@@ -2376,11 +2813,6 @@ if __name__ == "__main__":
 # execute_code_on_local
 # ---------------------------------------------------------------------------
 
-# def execute_code_on_local(
-#     code: str,
-#     input_data_location: Optional[np.ndarray] = None,
-#     output_location: Optional[str] = None,
-# ) -> Dict[str, Any]:
 def execute_code_on_local(
     code: str,
     input_data_location: Optional[np.ndarray] = None,
@@ -2402,21 +2834,7 @@ def execute_code_on_local(
         extracted_code
     )
 
-
-    # # 2) Replace ONLY pd.read_csv("literal_path", ...) with read_csv_best_effort(...)
-    # extracted_code = re.sub(
-    #     r"pd\.read_csv\(\s*([\"'][^\"']+[\"'])([^\)]*)\)",
-    #     r"read_csv_best_effort(\1\2)",
-    #     extracted_code,
-    #     flags=re.MULTILINE,
-    # )
-    # extracted_code = _replace_first_literal_arg(
-    #     extracted_code,
-    #     r"(read_csv_best_effort\(\s*)([\"'][^\"']+[\"'])",
-    #     str(input_data_location) if input_data_location is not None else None,
-    # )
-
-        # 2) Replace ONLY pd.read_csv("literal_path", ...) with read_csv_best_effort(...)
+    # 2) Replace ONLY pd.read_csv("literal_path", ...) with read_csv_best_effort(...)
     extracted_code = re.sub(
         r"pd\.read_csv\(\s*([\"'][^\"']+[\"'])([^\)]*)\)",
         r"read_csv_best_effort(\1\2)",
@@ -2461,95 +2879,10 @@ def execute_code_on_local(
     logger.info("candidate output location is %s", output_location)
     logger.info("extracted code is %s", extracted_code)
 
-    # 3) Inject helper functions at TOP-LEVEL (NO leading indentation!)
-    helper_functions = r'''
-# Headless server: force a non-GUI matplotlib backend BEFORE any user code
-# imports pyplot, so generated plotting code can never pop a window or block
-# the process on plt.show() (which would hang until the 60s timeout and surface
-# as an "execution failure"). Must run before "import matplotlib.pyplot".
-try:
-    import matplotlib
-    matplotlib.use("Agg")
-except Exception:
-    pass
-import pandas as pd
-import json as _avaloka_json
 
-def avaloka_result(value, kind=None, columns=None, **kw):
-    """Emit a structured result sentinel that the response renderer picks up.
-    Call this for analytical queries (mean, correlation, count, etc.) even when
-    an output file is also written — the sentinel takes priority over the table.
-    value   — the scalar result. Usually a number, but a single-value answer
-              is not always numeric ("which category is the biggest?" -> "Music"),
-              so a non-numeric scalar is passed through unchanged rather than
-              crashing the run.
-    kind    — "mean"|"sum"|"count"|"correlation"|"std"|"max"|"min"
-    columns — list of column names involved, e.g. ["TransactionAmt"] or
-              ["P_emaildomain_length","TransactionAmt"]
-    """
-    if value is None:
-        _coerced = None
-    else:
-        try:
-            _coerced = float(value)
-        except (TypeError, ValueError):
-            # A categorical answer ("Music", a channel name, a date). float()
-            # used to raise here and fail the entire execution.
-            _coerced = value
-    obj = {"kind": kind or "scalar", "value": _coerced,
-           "columns": list(columns or []), **kw}
-    print(f"<<<AVALOKA_RESULT>>>{_avaloka_json.dumps(obj)}<<<END_AVALOKA_RESULT>>>", flush=True)
-
-# <<AVALOKA_CSV_READER>>
-
-
-def safe_groupby_agg(df, group_cols, agg_col, agg_func='sum'):
-    """Safely perform groupby aggregation with conflict resolution."""
-    group_cols = [col for col in group_cols if col != agg_col]
-    if not group_cols:
-        print("Warning: No valid grouping columns found. Using categorical columns.")
-        categorical_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
-        group_cols = categorical_cols[:2]
-    print(f"Grouping by: {group_cols}")
-    print(f"Aggregating column: {agg_col}")
-    if group_cols:
-        result = df.groupby(group_cols)[agg_col].agg(agg_func).reset_index()
-        if agg_func == 'sum':
-            result = result.rename(columns={agg_col: f'{agg_col}_sum'})
-        elif agg_func == 'mean':
-            result = result.rename(columns={agg_col: f'{agg_col}_mean'})
-        elif agg_func == 'count':
-            result = result.rename(columns={agg_col: f'{agg_col}_count'})
-    else:
-        result = df[agg_col].agg(agg_func).to_frame().T
-        if agg_func == 'sum':
-            result = result.rename(columns={agg_col: f'{agg_col}_sum'})
-    return result
-
-
-def safe_groupby_multiple_agg(df, group_cols, agg_cols, agg_funcs=['sum']):
-    """Safely perform groupby with multiple aggregations."""
-    group_cols = [col for col in group_cols if col not in agg_cols]
-    if not group_cols:
-        print("Warning: No valid grouping columns found. Using categorical columns.")
-        categorical_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
-        group_cols = categorical_cols[:2]
-    print(f"Grouping by: {group_cols}")
-    print(f"Aggregating columns: {agg_cols}")
-    agg_dict = {col: agg_funcs for col in agg_cols}
-    result = df.groupby(group_cols).agg(agg_dict)
-    if isinstance(result.columns, pd.MultiIndex):
-        result.columns = [
-            f"{c[0]}_{c[1]}" if len(c) > 1 else str(c[0])
-            for c in result.columns
-        ]
-    return result.reset_index()
-'''
-
-    # 4) Build final script, ensuring both parts are left-aligned
-    #script_to_run = textwrap.dedent(helper_functions).lstrip() + "\n\n" + textwrap.dedent(extracted_code).lstrip()
+    # 3) Build final script, ensuring both parts are left-aligned
     script_parts = [
-        _with_csv_reader(textwrap.dedent(helper_functions).lstrip()),
+        _with_csv_reader(textwrap.dedent(HELPER_FUNCTIONS).lstrip()),
         textwrap.dedent(extracted_code).lstrip(),
     ]
 
@@ -2598,7 +2931,7 @@ def safe_groupby_multiple_agg(df, group_cols, agg_cols, agg_funcs=['sum']):
             "execution_error": message,
         }
 
-    # 5) Write temp script securely
+    # 4) Write temp script securely
     fd, temp_script_path = tempfile.mkstemp(suffix=".py", prefix="avaloka_exec_")
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write(script_to_run)
@@ -2678,100 +3011,16 @@ def execute_code_on_ssh(code: str, server: str, input_data_location: str, output
     logger.info("input data location is %s", input_data_location)
     logger.info("extracted code is %s", extracted_code)
 
-    # 3) Inject helper functions at TOP-LEVEL (NO leading indentation!)
-    helper_functions = r'''
-# Headless server: force a non-GUI matplotlib backend BEFORE any user code
-# imports pyplot, so generated plotting code can never pop a window or block
-# the process on plt.show() (which would hang until the 60s timeout and surface
-# as an "execution failure"). Must run before "import matplotlib.pyplot".
-try:
-    import matplotlib
-    matplotlib.use("Agg")
-except Exception:
-    pass
-import pandas as pd
-import json as _avaloka_json
 
-def avaloka_result(value, kind=None, columns=None, **kw):
-    """Emit a structured result sentinel that the response renderer picks up.
-    Call this for analytical queries (mean, correlation, count, etc.) even when
-    an output file is also written — the sentinel takes priority over the table.
-    value   — the scalar result. Usually a number, but a single-value answer
-              is not always numeric ("which category is the biggest?" -> "Music"),
-              so a non-numeric scalar is passed through unchanged rather than
-              crashing the run.
-    kind    — "mean"|"sum"|"count"|"correlation"|"std"|"max"|"min"
-    columns — list of column names involved, e.g. ["TransactionAmt"] or
-              ["P_emaildomain_length","TransactionAmt"]
-    """
-    if value is None:
-        _coerced = None
-    else:
-        try:
-            _coerced = float(value)
-        except (TypeError, ValueError):
-            # A categorical answer ("Music", a channel name, a date). float()
-            # used to raise here and fail the entire execution.
-            _coerced = value
-    obj = {"kind": kind or "scalar", "value": _coerced,
-           "columns": list(columns or []), **kw}
-    print(f"<<<AVALOKA_RESULT>>>{_avaloka_json.dumps(obj)}<<<END_AVALOKA_RESULT>>>", flush=True)
-
-# <<AVALOKA_CSV_READER>>
-
-
-def safe_groupby_agg(df, group_cols, agg_col, agg_func='sum'):
-    """Safely perform groupby aggregation with conflict resolution."""
-    group_cols = [col for col in group_cols if col != agg_col]
-    if not group_cols:
-        print("Warning: No valid grouping columns found. Using categorical columns.")
-        categorical_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
-        group_cols = categorical_cols[:2]
-    print(f"Grouping by: {group_cols}")
-    print(f"Aggregating column: {agg_col}")
-    if group_cols:
-        result = df.groupby(group_cols)[agg_col].agg(agg_func).reset_index()
-        if agg_func == 'sum':
-            result = result.rename(columns={agg_col: f'{agg_col}_sum'})
-        elif agg_func == 'mean':
-            result = result.rename(columns={agg_col: f'{agg_col}_mean'})
-        elif agg_func == 'count':
-            result = result.rename(columns={agg_col: f'{agg_col}_count'})
-    else:
-        result = df[agg_col].agg(agg_func).to_frame().T
-        if agg_func == 'sum':
-            result = result.rename(columns={agg_col: f'{agg_col}_sum'})
-    return result
-
-
-def safe_groupby_multiple_agg(df, group_cols, agg_cols, agg_funcs=['sum']):
-    """Safely perform groupby with multiple aggregations."""
-    group_cols = [col for col in group_cols if col not in agg_cols]
-    if not group_cols:
-        print("Warning: No valid grouping columns found. Using categorical columns.")
-        categorical_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
-        group_cols = categorical_cols[:2]
-    print(f"Grouping by: {group_cols}")
-    print(f"Aggregating columns: {agg_cols}")
-    agg_dict = {col: agg_funcs for col in agg_cols}
-    result = df.groupby(group_cols).agg(agg_dict)
-    if isinstance(result.columns, pd.MultiIndex):
-        result.columns = [
-            f"{c[0]}_{c[1]}" if len(c) > 1 else str(c[0])
-            for c in result.columns
-        ]
-    return result.reset_index()
-'''
-
-    # 4) Build final script
+    # 3) Build final script
     script_to_run = (
-        _with_csv_reader(textwrap.dedent(helper_functions).lstrip())
+        _with_csv_reader(textwrap.dedent(HELPER_FUNCTIONS).lstrip())
         + "\n\n" + textwrap.dedent(extracted_code).lstrip()
     )
 
     logger.info("\n\nscript to run is : \n\n%s\n\n", script_to_run)
 
-    # 5) Write temp script securely
+    # 4) Write temp script securely
     fd, temp_script_path = tempfile.mkstemp(suffix=".py", prefix="avaloka_exec_")
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write(script_to_run)

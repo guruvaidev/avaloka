@@ -331,8 +331,13 @@ def check_contradicted_by_metrics(claim: str, flat: Dict[str, Any]) -> Optional[
             break
     if beats is not False:
         return None
+    # Presenting the model as ready to use is the same claim in other words:
+    # "the training was successful ... you can now run a prediction" got past a
+    # list that only knew the vocabulary of accuracy.
     if not _mentions(claim, ("accurate", "accurately", "reliable", "reliably",
-                             "predicts", "strong", "good fit", "performs well")):
+                             "predicts", "strong", "good fit", "performs well",
+                             "successful", "successfully", "ready to use",
+                             "run a prediction", "make predictions")):
         return None
     return ClaimFinding(
         claim=claim, verdict=Verdict.CONTRADICTED, check="contradicted_by_metrics",
@@ -340,6 +345,66 @@ def check_contradicted_by_metrics(claim: str, flat: Dict[str, Any]) -> Optional[
                 "beat a trivial baseline"),
         evidence_ref="evaluation_report.beats_baseline",
     )
+
+
+_LOWEST_TERMS = ("lowest", "smallest", "minimum", "laggard")
+_HIGHEST_TERMS = ("highest", "largest", "greatest", "maximum", "leader")
+_ROW = re.compile(r"^(?:execution_output|output_json|output_data)\[\d+\]\.(.+)$")
+
+
+def check_ordering_contradicted(claim: str, flat: Dict[str, Any]) -> Optional[ClaimFinding]:
+    """"Lowest at 68.12" when the result table holds a lower value.
+
+    Each figure in the claim is located in a result column. For every
+    superlative the claim makes, at least one located figure must be that
+    column's extreme. Figures that match no column are left to the invented-
+    number check.
+    """
+    wants_low = _mentions(claim, _LOWEST_TERMS)
+    wants_high = _mentions(claim, _HIGHEST_TERMS)
+    if not (wants_low or wants_high):
+        return None
+    columns: Dict[str, List[float]] = {}
+    for key, value in flat.items():
+        m = _ROW.match(key)
+        if m and isinstance(value, (int, float)) and not isinstance(value, bool):
+            columns.setdefault(m.group(1), []).append(float(value))
+    columns = {c: v for c, v in columns.items() if len(v) >= 2}
+    if not columns:
+        return None
+
+    # Tolerance is the precision the claim states: "68.12" is 68.115-68.125.
+    # A relative tolerance is too loose here -- 1% of 68 swallows the 0.39 gap
+    # between the true minimum and the figure claimed to be it.
+    def _close(value: float, raw: str, actual: float) -> bool:
+        digits = re.sub(r"[^\d.]", "", raw)
+        decimals = len(digits.split(".", 1)[1]) if "." in digits else 0
+        return abs(value - actual) <= 0.5 * 10 ** -decimals + 1e-9
+
+    located: List[tuple] = []          # (value, raw, column)
+    for match in _NUMBER.finditer(claim):
+        raw = match.group(0)
+        value = _parse_number(raw)
+        if value is None or _is_percent(raw) or _SCALE_SUFFIX.match(raw.strip()):
+            continue
+        for col, vals in columns.items():
+            if any(_close(value, raw, v) for v in vals):
+                located.append((value, raw, col))
+    if not located:
+        return None
+    for term, pick in ((wants_low, min), (wants_high, max)):
+        if not term:
+            continue
+        if not any(_close(value, raw, pick(columns[col])) for value, raw, col in located):
+            value, raw, col = located[0]
+            extreme = pick(columns[col])
+            return ClaimFinding(
+                claim=claim, verdict=Verdict.CONTRADICTED, check="ordering_contradicted",
+                detail=(f"says {term!r} at {raw}, but the {pick.__name__} of {col!r} in the "
+                        f"computed result is {extreme:g}"),
+                evidence_ref=f"execution_output.{col}",
+            )
+    return None
 
 
 def check_absolute_language(claim: str, flat: Dict[str, Any]) -> Optional[ClaimFinding]:
@@ -370,6 +435,7 @@ def check_unsupported_significance(claim: str, flat: Dict[str, Any]) -> Optional
 
 CHECKS = (
     check_contradicted_by_metrics,
+    check_ordering_contradicted,
     check_causal_overreach,
     check_unsupported_significance,
     check_absolute_language,

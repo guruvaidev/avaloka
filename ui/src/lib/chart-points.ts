@@ -17,6 +17,7 @@ function parseIso(v: unknown): number | null {
 export function getLineRenderData(slide: Slide): { data: any[]; xKey: string } {
   const xKey = slide.xKey;
   const rows = Array.isArray(slide.data) ? slide.data : [];
+  if (slide.authoritativePoints) return { data: rows, xKey };
   if ((slide.type !== "line" && slide.type !== "area") || !rows.length) return { data: rows, xKey };
   const times = rows.map((r) => parseIso(r?.[xKey]));
   if (times.some((t) => t === null)) return { data: rows, xKey };
@@ -59,7 +60,7 @@ export function getPieRenderData(slide: Slide): { name: string; value: number }[
   const raw = (slide.data ?? []).filter((d) => d && d[nameKey] != null && Number.isFinite(Number(d[key])));
   let pieData = raw.map((d) => ({ name: String(d[nameKey]), value: Number(d[key]) }));
   const MAX_SLICES = 10;
-  if (pieData.length > MAX_SLICES) {
+  if (!slide.authoritativePoints && pieData.length > MAX_SLICES) {
     const sorted = [...pieData].sort((a, b) => b.value - a.value);
     const top = sorted.slice(0, MAX_SLICES - 1);
     const otherVal = sorted.slice(MAX_SLICES - 1).reduce((s, r) => s + r.value, 0);

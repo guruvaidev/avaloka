@@ -9,7 +9,7 @@ import {
   HeadContent,
   Scripts,
 } from "@tanstack/react-router";
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useMemo, type ReactNode } from "react";
 
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
@@ -39,7 +39,12 @@ function NotFoundComponent() {
   );
 }
 
-function ErrorComponent({ error, reset }: { error: Error; reset: () => void }) {
+// TanStack Router 1.170.41 passes the error as `unknown` (anything can be thrown).
+function ErrorComponent({ error: thrown, reset }: { error: unknown; reset: () => void }) {
+  const error = useMemo(
+    () => (thrown instanceof Error ? thrown : new Error(String(thrown ?? "Unknown error"))),
+    [thrown],
+  );
   console.error(error);
   const router = useRouter();
   useEffect(() => {
@@ -132,16 +137,42 @@ function RootShell({ children }: { children: ReactNode }) {
   );
 }
 
+
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
+  const router = useRouter();
+
   useThemeApplier();
+
+  useEffect(() => {
+    const cookie = document.cookie
+      .split("; ")
+      .find((item) => item.startsWith("tab="));
+
+    const cookietab = cookie
+      ? decodeURIComponent(cookie.slice("tab=".length))
+      : null;
+
+    if (cookietab === "billing") {
+      // Delete the cookie
+      document.cookie =
+        "tab=; path=/; max-age=0; SameSite=Lax";
+
+      // Redirect to /settings?tab=billing
+      void router.navigate({
+        to: "/settings",
+        search: { tab: "billing" },
+        replace: true,
+      });
+    }
+  }, [router]);
 
   return (
     <QueryClientProvider client={queryClient}>
       <TrainingJobsProvider>
-        {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
         <Outlet />
       </TrainingJobsProvider>
+
       <Toaster position="top-center" richColors />
     </QueryClientProvider>
   );

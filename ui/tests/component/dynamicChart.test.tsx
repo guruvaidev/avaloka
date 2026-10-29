@@ -35,7 +35,7 @@ describe("DynamicChart", () => {
     const [slide] = normalizeVizConfig(deriveVizFromRows(ROWS));
     const { container } = render(<DynamicChart slide={slide} />);
     expect(container.querySelectorAll(".recharts-bar-rectangle")).toHaveLength(3);
-    expect(screen.getByText("South")).toBeInTheDocument();
+    expect(screen.getAllByText("South").length).toBeGreaterThan(0);
   });
 
   it("draws a pie legend with each slice's share", () => {

@@ -9,53 +9,48 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as ScheduledAnalysisRouteImport } from './routes/scheduled-analysis'
-import { Route as ProanalysisRouteImport } from './routes/proanalysis'
-import { Route as LogoutRouteImport } from './routes/logout'
-import { Route as AnalysisRouteImport } from './routes/analysis'
-import { Route as AuthenticatedRouteRouteImport } from './routes/_authenticated/route'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as ProanalysisIndexRouteImport } from './routes/proanalysis.index'
-import { Route as SharedTokenRouteImport } from './routes/shared.$token'
-import { Route as SharedReportTokenRouteImport } from './routes/shared-report.$token'
-import { Route as ProanalysisScheduledAnalysisRouteImport } from './routes/proanalysis.scheduled-analysis'
-import { Route as AuthenticatedSupportQueriesRouteImport } from './routes/_authenticated/support-queries'
-import { Route as AuthenticatedSupportRouteImport } from './routes/_authenticated/support'
-import { Route as AuthenticatedSettingsRouteImport } from './routes/_authenticated/settings'
-import { Route as AuthenticatedReportsRouteImport } from './routes/_authenticated/reports'
-import { Route as AuthenticatedPaypalBootstrapRouteImport } from './routes/_authenticated/paypal-bootstrap'
-import { Route as AuthenticatedDbTablesRouteImport } from './routes/_authenticated/db-tables'
-import { Route as AuthenticatedDatasetsRouteImport } from './routes/_authenticated/datasets'
-import { Route as AuthenticatedDatabaseRouteImport } from './routes/_authenticated/database'
-import { Route as AuthenticatedDashboardRouteImport } from './routes/_authenticated/dashboard'
+import { Route as AuthenticatedRouteRouteImport } from './routes/_authenticated/route'
+import { Route as AnalysisRouteImport } from './routes/analysis'
+import { Route as LogoutRouteImport } from './routes/logout'
+import { Route as ProanalysisRouteImport } from './routes/proanalysis'
+import { Route as ScheduledAnalysisRouteImport } from './routes/scheduled-analysis'
 import { Route as AuthenticatedConfigurationsRouteImport } from './routes/_authenticated/configurations'
+import { Route as AuthenticatedDashboardRouteImport } from './routes/_authenticated/dashboard'
+import { Route as AuthenticatedDatabaseRouteImport } from './routes/_authenticated/database'
+import { Route as AuthenticatedDatasetsRouteImport } from './routes/_authenticated/datasets'
+import { Route as AuthenticatedDbTablesRouteImport } from './routes/_authenticated/db-tables'
+import { Route as AuthenticatedPaypalBootstrapRouteImport } from './routes/_authenticated/paypal-bootstrap'
+import { Route as AuthenticatedRayJobsRouteImport } from './routes/_authenticated/ray-jobs'
+import { Route as AuthenticatedReportsRouteImport } from './routes/_authenticated/reports'
+import { Route as AuthenticatedSettingsRouteImport } from './routes/_authenticated/settings'
+import { Route as AuthenticatedSupportRouteImport } from './routes/_authenticated/support'
+import { Route as AuthenticatedSupportQueriesRouteImport } from './routes/_authenticated/support-queries'
+import { Route as ProanalysisIndexRouteImport } from './routes/proanalysis.index'
+import { Route as ProanalysisScheduledAnalysisRouteImport } from './routes/proanalysis.scheduled-analysis'
+import { Route as SharedReportTokenRouteImport } from './routes/shared-report.$token'
+import { Route as SharedTokenRouteImport } from './routes/shared.$token'
 import { Route as AuthenticatedReportsIndexRouteImport } from './routes/_authenticated/reports.index'
-import { Route as ApiSharedTokenRouteImport } from './routes/api/shared.$token'
-import { Route as ApiPublicStripeWebhookRouteImport } from './routes/api/public/stripe-webhook'
-import { Route as ApiPublicSendReportEmailRouteImport } from './routes/api/public/send-report-email'
-import { Route as ApiPublicSendAnalysisEmailRouteImport } from './routes/api/public/send-analysis-email'
-import { Route as ApiPublicPaypalWebhookRouteImport } from './routes/api/public/paypal-webhook'
-import { Route as ApiPublicCancelPaypalSubscriptionsRouteImport } from './routes/api/public/cancel-paypal-subscriptions'
-import { Route as ApiPublicBackendProxyRouteImport } from './routes/api/public/backend-proxy'
-import { Route as AuthenticatedReportsGeneratedRouteImport } from './routes/_authenticated/reports.generated'
 import { Route as AuthenticatedReportsReportIdRouteImport } from './routes/_authenticated/reports.$reportId'
-import { Route as ApiPublicSharedReportTokenRouteImport } from './routes/api/public/shared-report.$token'
+import { Route as AuthenticatedReportsGeneratedRouteImport } from './routes/_authenticated/reports.generated'
+import { Route as ApiPublicBackendProxyRouteImport } from './routes/api/public/backend-proxy'
+import { Route as ApiPublicCancelPaypalSubscriptionsRouteImport } from './routes/api/public/cancel-paypal-subscriptions'
+import { Route as ApiPublicPaypalWebhookRouteImport } from './routes/api/public/paypal-webhook'
+import { Route as ApiPublicSendAnalysisEmailRouteImport } from './routes/api/public/send-analysis-email'
+import { Route as ApiPublicSendReportEmailRouteImport } from './routes/api/public/send-report-email'
+import { Route as ApiPublicStripeWebhookRouteImport } from './routes/api/public/stripe-webhook'
+import { Route as ApiSharedTokenRouteImport } from './routes/api/shared.$token'
 import { Route as ApiAnalysisAnalysisIdShareLinkRouteImport } from './routes/api/analysis.$analysisId.share-link'
+import { Route as ApiPublicSharedReportTokenRouteImport } from './routes/api/public/shared-report.$token'
 import { Route as ApiAnalysisAnalysisIdShareLinkTokenRouteImport } from './routes/api/analysis.$analysisId.share-link.$token'
 
-const ScheduledAnalysisRoute = ScheduledAnalysisRouteImport.update({
-  id: '/scheduled-analysis',
-  path: '/scheduled-analysis',
+const IndexRoute = IndexRouteImport.update({
+  id: '/',
+  path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ProanalysisRoute = ProanalysisRouteImport.update({
-  id: '/proanalysis',
-  path: '/proanalysis',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const LogoutRoute = LogoutRouteImport.update({
-  id: '/logout',
-  path: '/logout',
+const AuthenticatedRouteRoute = AuthenticatedRouteRouteImport.update({
+  id: '/_authenticated',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AnalysisRoute = AnalysisRouteImport.update({
@@ -63,55 +58,45 @@ const AnalysisRoute = AnalysisRouteImport.update({
   path: '/analysis',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AuthenticatedRouteRoute = AuthenticatedRouteRouteImport.update({
-  id: '/_authenticated',
+const LogoutRoute = LogoutRouteImport.update({
+  id: '/logout',
+  path: '/logout',
   getParentRoute: () => rootRouteImport,
 } as any)
-const IndexRoute = IndexRouteImport.update({
-  id: '/',
-  path: '/',
+const ProanalysisRoute = ProanalysisRouteImport.update({
+  id: '/proanalysis',
+  path: '/proanalysis',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ProanalysisIndexRoute = ProanalysisIndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => ProanalysisRoute,
-} as any)
-const SharedTokenRoute = SharedTokenRouteImport.update({
-  id: '/shared/$token',
-  path: '/shared/$token',
+const ScheduledAnalysisRoute = ScheduledAnalysisRouteImport.update({
+  id: '/scheduled-analysis',
+  path: '/scheduled-analysis',
   getParentRoute: () => rootRouteImport,
 } as any)
-const SharedReportTokenRoute = SharedReportTokenRouteImport.update({
-  id: '/shared-report/$token',
-  path: '/shared-report/$token',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ProanalysisScheduledAnalysisRoute =
-  ProanalysisScheduledAnalysisRouteImport.update({
-    id: '/scheduled-analysis',
-    path: '/scheduled-analysis',
-    getParentRoute: () => ProanalysisRoute,
-  } as any)
-const AuthenticatedSupportQueriesRoute =
-  AuthenticatedSupportQueriesRouteImport.update({
-    id: '/support-queries',
-    path: '/support-queries',
+const AuthenticatedConfigurationsRoute =
+  AuthenticatedConfigurationsRouteImport.update({
+    id: '/configurations',
+    path: '/configurations',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
-const AuthenticatedSupportRoute = AuthenticatedSupportRouteImport.update({
-  id: '/support',
-  path: '/support',
+const AuthenticatedDashboardRoute = AuthenticatedDashboardRouteImport.update({
+  id: '/dashboard',
+  path: '/dashboard',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
-const AuthenticatedSettingsRoute = AuthenticatedSettingsRouteImport.update({
-  id: '/settings',
-  path: '/settings',
+const AuthenticatedDatabaseRoute = AuthenticatedDatabaseRouteImport.update({
+  id: '/database',
+  path: '/database',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
-const AuthenticatedReportsRoute = AuthenticatedReportsRouteImport.update({
-  id: '/reports',
-  path: '/reports',
+const AuthenticatedDatasetsRoute = AuthenticatedDatasetsRouteImport.update({
+  id: '/datasets',
+  path: '/datasets',
+  getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
+const AuthenticatedDbTablesRoute = AuthenticatedDbTablesRouteImport.update({
+  id: '/db-tables',
+  path: '/db-tables',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
 const AuthenticatedPaypalBootstrapRoute =
@@ -120,80 +105,57 @@ const AuthenticatedPaypalBootstrapRoute =
     path: '/paypal-bootstrap',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
-const AuthenticatedDbTablesRoute = AuthenticatedDbTablesRouteImport.update({
-  id: '/db-tables',
-  path: '/db-tables',
+const AuthenticatedRayJobsRoute = AuthenticatedRayJobsRouteImport.update({
+  id: '/ray-jobs',
+  path: '/ray-jobs',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
-const AuthenticatedDatasetsRoute = AuthenticatedDatasetsRouteImport.update({
-  id: '/datasets',
-  path: '/datasets',
+const AuthenticatedReportsRoute = AuthenticatedReportsRouteImport.update({
+  id: '/reports',
+  path: '/reports',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
-const AuthenticatedDatabaseRoute = AuthenticatedDatabaseRouteImport.update({
-  id: '/database',
-  path: '/database',
+const AuthenticatedSettingsRoute = AuthenticatedSettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
-const AuthenticatedDashboardRoute = AuthenticatedDashboardRouteImport.update({
-  id: '/dashboard',
-  path: '/dashboard',
+const AuthenticatedSupportRoute = AuthenticatedSupportRouteImport.update({
+  id: '/support',
+  path: '/support',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
-const AuthenticatedConfigurationsRoute =
-  AuthenticatedConfigurationsRouteImport.update({
-    id: '/configurations',
-    path: '/configurations',
+const AuthenticatedSupportQueriesRoute =
+  AuthenticatedSupportQueriesRouteImport.update({
+    id: '/support-queries',
+    path: '/support-queries',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
+const ProanalysisIndexRoute = ProanalysisIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => ProanalysisRoute,
+} as any)
+const ProanalysisScheduledAnalysisRoute =
+  ProanalysisScheduledAnalysisRouteImport.update({
+    id: '/scheduled-analysis',
+    path: '/scheduled-analysis',
+    getParentRoute: () => ProanalysisRoute,
+  } as any)
+const SharedReportTokenRoute = SharedReportTokenRouteImport.update({
+  id: '/shared-report/$token',
+  path: '/shared-report/$token',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SharedTokenRoute = SharedTokenRouteImport.update({
+  id: '/shared/$token',
+  path: '/shared/$token',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AuthenticatedReportsIndexRoute =
   AuthenticatedReportsIndexRouteImport.update({
     id: '/',
     path: '/',
-    getParentRoute: () => AuthenticatedReportsRoute,
-  } as any)
-const ApiSharedTokenRoute = ApiSharedTokenRouteImport.update({
-  id: '/api/shared/$token',
-  path: '/api/shared/$token',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiPublicStripeWebhookRoute = ApiPublicStripeWebhookRouteImport.update({
-  id: '/api/public/stripe-webhook',
-  path: '/api/public/stripe-webhook',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiPublicSendReportEmailRoute =
-  ApiPublicSendReportEmailRouteImport.update({
-    id: '/api/public/send-report-email',
-    path: '/api/public/send-report-email',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const ApiPublicSendAnalysisEmailRoute =
-  ApiPublicSendAnalysisEmailRouteImport.update({
-    id: '/api/public/send-analysis-email',
-    path: '/api/public/send-analysis-email',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const ApiPublicPaypalWebhookRoute = ApiPublicPaypalWebhookRouteImport.update({
-  id: '/api/public/paypal-webhook',
-  path: '/api/public/paypal-webhook',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiPublicCancelPaypalSubscriptionsRoute =
-  ApiPublicCancelPaypalSubscriptionsRouteImport.update({
-    id: '/api/public/cancel-paypal-subscriptions',
-    path: '/api/public/cancel-paypal-subscriptions',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const ApiPublicBackendProxyRoute = ApiPublicBackendProxyRouteImport.update({
-  id: '/api/public/backend-proxy',
-  path: '/api/public/backend-proxy',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AuthenticatedReportsGeneratedRoute =
-  AuthenticatedReportsGeneratedRouteImport.update({
-    id: '/generated',
-    path: '/generated',
     getParentRoute: () => AuthenticatedReportsRoute,
   } as any)
 const AuthenticatedReportsReportIdRoute =
@@ -202,16 +164,60 @@ const AuthenticatedReportsReportIdRoute =
     path: '/$reportId',
     getParentRoute: () => AuthenticatedReportsRoute,
   } as any)
-const ApiPublicSharedReportTokenRoute =
-  ApiPublicSharedReportTokenRouteImport.update({
-    id: '/api/public/shared-report/$token',
-    path: '/api/public/shared-report/$token',
+const AuthenticatedReportsGeneratedRoute =
+  AuthenticatedReportsGeneratedRouteImport.update({
+    id: '/generated',
+    path: '/generated',
+    getParentRoute: () => AuthenticatedReportsRoute,
+  } as any)
+const ApiPublicBackendProxyRoute = ApiPublicBackendProxyRouteImport.update({
+  id: '/api/public/backend-proxy',
+  path: '/api/public/backend-proxy',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiPublicCancelPaypalSubscriptionsRoute =
+  ApiPublicCancelPaypalSubscriptionsRouteImport.update({
+    id: '/api/public/cancel-paypal-subscriptions',
+    path: '/api/public/cancel-paypal-subscriptions',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ApiPublicPaypalWebhookRoute = ApiPublicPaypalWebhookRouteImport.update({
+  id: '/api/public/paypal-webhook',
+  path: '/api/public/paypal-webhook',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiPublicSendAnalysisEmailRoute =
+  ApiPublicSendAnalysisEmailRouteImport.update({
+    id: '/api/public/send-analysis-email',
+    path: '/api/public/send-analysis-email',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiPublicSendReportEmailRoute =
+  ApiPublicSendReportEmailRouteImport.update({
+    id: '/api/public/send-report-email',
+    path: '/api/public/send-report-email',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiPublicStripeWebhookRoute = ApiPublicStripeWebhookRouteImport.update({
+  id: '/api/public/stripe-webhook',
+  path: '/api/public/stripe-webhook',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiSharedTokenRoute = ApiSharedTokenRouteImport.update({
+  id: '/api/shared/$token',
+  path: '/api/shared/$token',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiAnalysisAnalysisIdShareLinkRoute =
   ApiAnalysisAnalysisIdShareLinkRouteImport.update({
     id: '/api/analysis/$analysisId/share-link',
     path: '/api/analysis/$analysisId/share-link',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiPublicSharedReportTokenRoute =
+  ApiPublicSharedReportTokenRouteImport.update({
+    id: '/api/public/shared-report/$token',
+    path: '/api/public/shared-report/$token',
     getParentRoute: () => rootRouteImport,
   } as any)
 const ApiAnalysisAnalysisIdShareLinkTokenRoute =
@@ -233,6 +239,7 @@ export interface FileRoutesByFullPath {
   '/datasets': typeof AuthenticatedDatasetsRoute
   '/db-tables': typeof AuthenticatedDbTablesRoute
   '/paypal-bootstrap': typeof AuthenticatedPaypalBootstrapRoute
+  '/ray-jobs': typeof AuthenticatedRayJobsRoute
   '/reports': typeof AuthenticatedReportsRouteWithChildren
   '/settings': typeof AuthenticatedSettingsRoute
   '/support': typeof AuthenticatedSupportRoute
@@ -266,6 +273,7 @@ export interface FileRoutesByTo {
   '/datasets': typeof AuthenticatedDatasetsRoute
   '/db-tables': typeof AuthenticatedDbTablesRoute
   '/paypal-bootstrap': typeof AuthenticatedPaypalBootstrapRoute
+  '/ray-jobs': typeof AuthenticatedRayJobsRoute
   '/settings': typeof AuthenticatedSettingsRoute
   '/support': typeof AuthenticatedSupportRoute
   '/support-queries': typeof AuthenticatedSupportQueriesRoute
@@ -301,6 +309,7 @@ export interface FileRoutesById {
   '/_authenticated/datasets': typeof AuthenticatedDatasetsRoute
   '/_authenticated/db-tables': typeof AuthenticatedDbTablesRoute
   '/_authenticated/paypal-bootstrap': typeof AuthenticatedPaypalBootstrapRoute
+  '/_authenticated/ray-jobs': typeof AuthenticatedRayJobsRoute
   '/_authenticated/reports': typeof AuthenticatedReportsRouteWithChildren
   '/_authenticated/settings': typeof AuthenticatedSettingsRoute
   '/_authenticated/support': typeof AuthenticatedSupportRoute
@@ -337,6 +346,7 @@ export interface FileRouteTypes {
     | '/datasets'
     | '/db-tables'
     | '/paypal-bootstrap'
+    | '/ray-jobs'
     | '/reports'
     | '/settings'
     | '/support'
@@ -370,6 +380,7 @@ export interface FileRouteTypes {
     | '/datasets'
     | '/db-tables'
     | '/paypal-bootstrap'
+    | '/ray-jobs'
     | '/settings'
     | '/support'
     | '/support-queries'
@@ -404,6 +415,7 @@ export interface FileRouteTypes {
     | '/_authenticated/datasets'
     | '/_authenticated/db-tables'
     | '/_authenticated/paypal-bootstrap'
+    | '/_authenticated/ray-jobs'
     | '/_authenticated/reports'
     | '/_authenticated/settings'
     | '/_authenticated/support'
@@ -449,32 +461,11 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/scheduled-analysis': {
-      id: '/scheduled-analysis'
-      path: '/scheduled-analysis'
-      fullPath: '/scheduled-analysis'
-      preLoaderRoute: typeof ScheduledAnalysisRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/proanalysis': {
-      id: '/proanalysis'
-      path: '/proanalysis'
-      fullPath: '/proanalysis'
-      preLoaderRoute: typeof ProanalysisRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/logout': {
-      id: '/logout'
-      path: '/logout'
-      fullPath: '/logout'
-      preLoaderRoute: typeof LogoutRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/analysis': {
-      id: '/analysis'
-      path: '/analysis'
-      fullPath: '/analysis'
-      preLoaderRoute: typeof AnalysisRouteImport
+    '/': {
+      id: '/'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_authenticated': {
@@ -484,95 +475,39 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/': {
-      id: '/'
-      path: '/'
-      fullPath: '/'
-      preLoaderRoute: typeof IndexRouteImport
+    '/analysis': {
+      id: '/analysis'
+      path: '/analysis'
+      fullPath: '/analysis'
+      preLoaderRoute: typeof AnalysisRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/proanalysis/': {
-      id: '/proanalysis/'
-      path: '/'
-      fullPath: '/proanalysis/'
-      preLoaderRoute: typeof ProanalysisIndexRouteImport
-      parentRoute: typeof ProanalysisRoute
-    }
-    '/shared/$token': {
-      id: '/shared/$token'
-      path: '/shared/$token'
-      fullPath: '/shared/$token'
-      preLoaderRoute: typeof SharedTokenRouteImport
+    '/logout': {
+      id: '/logout'
+      path: '/logout'
+      fullPath: '/logout'
+      preLoaderRoute: typeof LogoutRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/shared-report/$token': {
-      id: '/shared-report/$token'
-      path: '/shared-report/$token'
-      fullPath: '/shared-report/$token'
-      preLoaderRoute: typeof SharedReportTokenRouteImport
+    '/proanalysis': {
+      id: '/proanalysis'
+      path: '/proanalysis'
+      fullPath: '/proanalysis'
+      preLoaderRoute: typeof ProanalysisRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/proanalysis/scheduled-analysis': {
-      id: '/proanalysis/scheduled-analysis'
+    '/scheduled-analysis': {
+      id: '/scheduled-analysis'
       path: '/scheduled-analysis'
-      fullPath: '/proanalysis/scheduled-analysis'
-      preLoaderRoute: typeof ProanalysisScheduledAnalysisRouteImport
-      parentRoute: typeof ProanalysisRoute
+      fullPath: '/scheduled-analysis'
+      preLoaderRoute: typeof ScheduledAnalysisRouteImport
+      parentRoute: typeof rootRouteImport
     }
-    '/_authenticated/support-queries': {
-      id: '/_authenticated/support-queries'
-      path: '/support-queries'
-      fullPath: '/support-queries'
-      preLoaderRoute: typeof AuthenticatedSupportQueriesRouteImport
-      parentRoute: typeof AuthenticatedRouteRoute
-    }
-    '/_authenticated/support': {
-      id: '/_authenticated/support'
-      path: '/support'
-      fullPath: '/support'
-      preLoaderRoute: typeof AuthenticatedSupportRouteImport
-      parentRoute: typeof AuthenticatedRouteRoute
-    }
-    '/_authenticated/settings': {
-      id: '/_authenticated/settings'
-      path: '/settings'
-      fullPath: '/settings'
-      preLoaderRoute: typeof AuthenticatedSettingsRouteImport
-      parentRoute: typeof AuthenticatedRouteRoute
-    }
-    '/_authenticated/reports': {
-      id: '/_authenticated/reports'
-      path: '/reports'
-      fullPath: '/reports'
-      preLoaderRoute: typeof AuthenticatedReportsRouteImport
-      parentRoute: typeof AuthenticatedRouteRoute
-    }
-    '/_authenticated/paypal-bootstrap': {
-      id: '/_authenticated/paypal-bootstrap'
-      path: '/paypal-bootstrap'
-      fullPath: '/paypal-bootstrap'
-      preLoaderRoute: typeof AuthenticatedPaypalBootstrapRouteImport
-      parentRoute: typeof AuthenticatedRouteRoute
-    }
-    '/_authenticated/db-tables': {
-      id: '/_authenticated/db-tables'
-      path: '/db-tables'
-      fullPath: '/db-tables'
-      preLoaderRoute: typeof AuthenticatedDbTablesRouteImport
-      parentRoute: typeof AuthenticatedRouteRoute
-    }
-    '/_authenticated/datasets': {
-      id: '/_authenticated/datasets'
-      path: '/datasets'
-      fullPath: '/datasets'
-      preLoaderRoute: typeof AuthenticatedDatasetsRouteImport
-      parentRoute: typeof AuthenticatedRouteRoute
-    }
-    '/_authenticated/database': {
-      id: '/_authenticated/database'
-      path: '/database'
-      fullPath: '/database'
-      preLoaderRoute: typeof AuthenticatedDatabaseRouteImport
+    '/_authenticated/configurations': {
+      id: '/_authenticated/configurations'
+      path: '/configurations'
+      fullPath: '/configurations'
+      preLoaderRoute: typeof AuthenticatedConfigurationsRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
     '/_authenticated/dashboard': {
@@ -582,74 +517,102 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedDashboardRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
-    '/_authenticated/configurations': {
-      id: '/_authenticated/configurations'
-      path: '/configurations'
-      fullPath: '/configurations'
-      preLoaderRoute: typeof AuthenticatedConfigurationsRouteImport
+    '/_authenticated/database': {
+      id: '/_authenticated/database'
+      path: '/database'
+      fullPath: '/database'
+      preLoaderRoute: typeof AuthenticatedDatabaseRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/datasets': {
+      id: '/_authenticated/datasets'
+      path: '/datasets'
+      fullPath: '/datasets'
+      preLoaderRoute: typeof AuthenticatedDatasetsRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/db-tables': {
+      id: '/_authenticated/db-tables'
+      path: '/db-tables'
+      fullPath: '/db-tables'
+      preLoaderRoute: typeof AuthenticatedDbTablesRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/paypal-bootstrap': {
+      id: '/_authenticated/paypal-bootstrap'
+      path: '/paypal-bootstrap'
+      fullPath: '/paypal-bootstrap'
+      preLoaderRoute: typeof AuthenticatedPaypalBootstrapRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/ray-jobs': {
+      id: '/_authenticated/ray-jobs'
+      path: '/ray-jobs'
+      fullPath: '/ray-jobs'
+      preLoaderRoute: typeof AuthenticatedRayJobsRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/reports': {
+      id: '/_authenticated/reports'
+      path: '/reports'
+      fullPath: '/reports'
+      preLoaderRoute: typeof AuthenticatedReportsRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/settings': {
+      id: '/_authenticated/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof AuthenticatedSettingsRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/support': {
+      id: '/_authenticated/support'
+      path: '/support'
+      fullPath: '/support'
+      preLoaderRoute: typeof AuthenticatedSupportRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/support-queries': {
+      id: '/_authenticated/support-queries'
+      path: '/support-queries'
+      fullPath: '/support-queries'
+      preLoaderRoute: typeof AuthenticatedSupportQueriesRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/proanalysis/': {
+      id: '/proanalysis/'
+      path: '/'
+      fullPath: '/proanalysis/'
+      preLoaderRoute: typeof ProanalysisIndexRouteImport
+      parentRoute: typeof ProanalysisRoute
+    }
+    '/proanalysis/scheduled-analysis': {
+      id: '/proanalysis/scheduled-analysis'
+      path: '/scheduled-analysis'
+      fullPath: '/proanalysis/scheduled-analysis'
+      preLoaderRoute: typeof ProanalysisScheduledAnalysisRouteImport
+      parentRoute: typeof ProanalysisRoute
+    }
+    '/shared-report/$token': {
+      id: '/shared-report/$token'
+      path: '/shared-report/$token'
+      fullPath: '/shared-report/$token'
+      preLoaderRoute: typeof SharedReportTokenRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/shared/$token': {
+      id: '/shared/$token'
+      path: '/shared/$token'
+      fullPath: '/shared/$token'
+      preLoaderRoute: typeof SharedTokenRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/_authenticated/reports/': {
       id: '/_authenticated/reports/'
       path: '/'
       fullPath: '/reports/'
       preLoaderRoute: typeof AuthenticatedReportsIndexRouteImport
-      parentRoute: typeof AuthenticatedReportsRoute
-    }
-    '/api/shared/$token': {
-      id: '/api/shared/$token'
-      path: '/api/shared/$token'
-      fullPath: '/api/shared/$token'
-      preLoaderRoute: typeof ApiSharedTokenRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/public/stripe-webhook': {
-      id: '/api/public/stripe-webhook'
-      path: '/api/public/stripe-webhook'
-      fullPath: '/api/public/stripe-webhook'
-      preLoaderRoute: typeof ApiPublicStripeWebhookRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/public/send-report-email': {
-      id: '/api/public/send-report-email'
-      path: '/api/public/send-report-email'
-      fullPath: '/api/public/send-report-email'
-      preLoaderRoute: typeof ApiPublicSendReportEmailRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/public/send-analysis-email': {
-      id: '/api/public/send-analysis-email'
-      path: '/api/public/send-analysis-email'
-      fullPath: '/api/public/send-analysis-email'
-      preLoaderRoute: typeof ApiPublicSendAnalysisEmailRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/public/paypal-webhook': {
-      id: '/api/public/paypal-webhook'
-      path: '/api/public/paypal-webhook'
-      fullPath: '/api/public/paypal-webhook'
-      preLoaderRoute: typeof ApiPublicPaypalWebhookRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/public/cancel-paypal-subscriptions': {
-      id: '/api/public/cancel-paypal-subscriptions'
-      path: '/api/public/cancel-paypal-subscriptions'
-      fullPath: '/api/public/cancel-paypal-subscriptions'
-      preLoaderRoute: typeof ApiPublicCancelPaypalSubscriptionsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/public/backend-proxy': {
-      id: '/api/public/backend-proxy'
-      path: '/api/public/backend-proxy'
-      fullPath: '/api/public/backend-proxy'
-      preLoaderRoute: typeof ApiPublicBackendProxyRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/_authenticated/reports/generated': {
-      id: '/_authenticated/reports/generated'
-      path: '/generated'
-      fullPath: '/reports/generated'
-      preLoaderRoute: typeof AuthenticatedReportsGeneratedRouteImport
       parentRoute: typeof AuthenticatedReportsRoute
     }
     '/_authenticated/reports/$reportId': {
@@ -659,11 +622,60 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedReportsReportIdRouteImport
       parentRoute: typeof AuthenticatedReportsRoute
     }
-    '/api/public/shared-report/$token': {
-      id: '/api/public/shared-report/$token'
-      path: '/api/public/shared-report/$token'
-      fullPath: '/api/public/shared-report/$token'
-      preLoaderRoute: typeof ApiPublicSharedReportTokenRouteImport
+    '/_authenticated/reports/generated': {
+      id: '/_authenticated/reports/generated'
+      path: '/generated'
+      fullPath: '/reports/generated'
+      preLoaderRoute: typeof AuthenticatedReportsGeneratedRouteImport
+      parentRoute: typeof AuthenticatedReportsRoute
+    }
+    '/api/public/backend-proxy': {
+      id: '/api/public/backend-proxy'
+      path: '/api/public/backend-proxy'
+      fullPath: '/api/public/backend-proxy'
+      preLoaderRoute: typeof ApiPublicBackendProxyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/public/cancel-paypal-subscriptions': {
+      id: '/api/public/cancel-paypal-subscriptions'
+      path: '/api/public/cancel-paypal-subscriptions'
+      fullPath: '/api/public/cancel-paypal-subscriptions'
+      preLoaderRoute: typeof ApiPublicCancelPaypalSubscriptionsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/public/paypal-webhook': {
+      id: '/api/public/paypal-webhook'
+      path: '/api/public/paypal-webhook'
+      fullPath: '/api/public/paypal-webhook'
+      preLoaderRoute: typeof ApiPublicPaypalWebhookRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/public/send-analysis-email': {
+      id: '/api/public/send-analysis-email'
+      path: '/api/public/send-analysis-email'
+      fullPath: '/api/public/send-analysis-email'
+      preLoaderRoute: typeof ApiPublicSendAnalysisEmailRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/public/send-report-email': {
+      id: '/api/public/send-report-email'
+      path: '/api/public/send-report-email'
+      fullPath: '/api/public/send-report-email'
+      preLoaderRoute: typeof ApiPublicSendReportEmailRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/public/stripe-webhook': {
+      id: '/api/public/stripe-webhook'
+      path: '/api/public/stripe-webhook'
+      fullPath: '/api/public/stripe-webhook'
+      preLoaderRoute: typeof ApiPublicStripeWebhookRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/shared/$token': {
+      id: '/api/shared/$token'
+      path: '/api/shared/$token'
+      fullPath: '/api/shared/$token'
+      preLoaderRoute: typeof ApiSharedTokenRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/analysis/$analysisId/share-link': {
@@ -671,6 +683,13 @@ declare module '@tanstack/react-router' {
       path: '/api/analysis/$analysisId/share-link'
       fullPath: '/api/analysis/$analysisId/share-link'
       preLoaderRoute: typeof ApiAnalysisAnalysisIdShareLinkRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/public/shared-report/$token': {
+      id: '/api/public/shared-report/$token'
+      path: '/api/public/shared-report/$token'
+      fullPath: '/api/public/shared-report/$token'
+      preLoaderRoute: typeof ApiPublicSharedReportTokenRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/analysis/$analysisId/share-link/$token': {
@@ -705,6 +724,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedDatasetsRoute: typeof AuthenticatedDatasetsRoute
   AuthenticatedDbTablesRoute: typeof AuthenticatedDbTablesRoute
   AuthenticatedPaypalBootstrapRoute: typeof AuthenticatedPaypalBootstrapRoute
+  AuthenticatedRayJobsRoute: typeof AuthenticatedRayJobsRoute
   AuthenticatedReportsRoute: typeof AuthenticatedReportsRouteWithChildren
   AuthenticatedSettingsRoute: typeof AuthenticatedSettingsRoute
   AuthenticatedSupportRoute: typeof AuthenticatedSupportRoute
@@ -718,6 +738,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedDatasetsRoute: AuthenticatedDatasetsRoute,
   AuthenticatedDbTablesRoute: AuthenticatedDbTablesRoute,
   AuthenticatedPaypalBootstrapRoute: AuthenticatedPaypalBootstrapRoute,
+  AuthenticatedRayJobsRoute: AuthenticatedRayJobsRoute,
   AuthenticatedReportsRoute: AuthenticatedReportsRouteWithChildren,
   AuthenticatedSettingsRoute: AuthenticatedSettingsRoute,
   AuthenticatedSupportRoute: AuthenticatedSupportRoute,

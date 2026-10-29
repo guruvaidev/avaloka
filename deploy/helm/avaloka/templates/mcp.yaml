@@ -67,6 +67,14 @@ spec:
             # registered customers and /call_tool 401s with "No customer found".
             - name: CUSTOMERS_FILE
               value: "{{ .Values.mcp.persistence.mountPath }}/customers.json"
+            # Same value the API gets through envFrom. Without it the MCP server
+            # releases no password and refuses /admin/customers.
+            - name: MCP_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "avaloka.secretName" . }}
+                  key: MCP_SERVICE_TOKEN
+                  optional: true
           ports:
             - name: http
               containerPort: {{ .Values.mcp.port }}

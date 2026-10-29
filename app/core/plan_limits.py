@@ -221,7 +221,9 @@ def _lookup_plan(user_id: str) -> str:
     return best if best in _PLAN_RANK else PLAN_FREE
 
 
-_CACHE: Dict[str, Tuple[float, str]] = {}
+# user_id -> (expires_at, plan, looked_up). looked_up is False for a failed
+# lookup, so callers that must not mistake "unknown" for Free can tell them apart.
+_CACHE: Dict[str, Tuple[float, str, bool]] = {}
 _CACHE_LOCK = threading.Lock()
 _CACHE_TTL_S = 300.0
 _FAILURE_TTL_S = 30.0
@@ -242,33 +244,57 @@ def _unbilled_plan() -> str:
 
 
 
+def _cached_or_lookup(user_id: str) -> Tuple[str, bool]:
+    """(plan, looked_up). A failed lookup gives (Free, False), cached only
+    _FAILURE_TTL_S; a successful one is cached _CACHE_TTL_S."""
+    now = time.monotonic()
+    with _CACHE_LOCK:
+        hit = _CACHE.get(user_id)
+        if hit and hit[0] > now:
+            # Entries written before looked_up existed (or seeded by tests as
+            # (expires_at, plan)) count as successful lookups.
+            return hit[1], (hit[2] if len(hit) > 2 else True)
+    try:
+        plan, ok, ttl = _lookup_plan(user_id), True, _CACHE_TTL_S
+    except Exception as exc:
+        logger.error("[plan-limits] plan lookup failed for %s (unknown for %ss): %s",
+                     user_id, int(_FAILURE_TTL_S), exc)
+        plan, ok, ttl = PLAN_FREE, False, _FAILURE_TTL_S
+    with _CACHE_LOCK:
+        _CACHE[user_id] = (now + ttl, plan, ok)
+    return plan, ok
+
+
 def resolve_plan(user_id: Optional[str]) -> str:
-    """The user's effective plan.
+    """The user's effective plan, for upload limits.
 
     - Billing disabled (AVALOKA_EDITION=oss/community or AVALOKA_PLAN_LIMITS=off):
       AVALOKA_DEFAULT_PLAN (default enterprise), no Supabase lookup.
     - No subscription row: Free.
     - Lookup failed: Free, cached only 30 s so a Supabase hiccup does not
-      lock a paying user out for long.
+      lock a paying user out for long. Feature gates must not use this answer
+      as a plan; they call try_resolve_plan, which reports the failure.
     Successful lookups are cached 5 minutes."""
     if _billing_disabled():
         return _unbilled_plan()
     if not user_id:
         return PLAN_FREE
-    now = time.monotonic()
-    with _CACHE_LOCK:
-        hit = _CACHE.get(user_id)
-        if hit and hit[0] > now:
-            return hit[1]
-    try:
-        plan, ttl = _lookup_plan(user_id), _CACHE_TTL_S
-    except Exception as exc:
-        logger.error("[plan-limits] plan lookup failed for %s (treating as free for %ss): %s",
-                    user_id, int(_FAILURE_TTL_S), exc)
-        plan, ttl = PLAN_FREE, _FAILURE_TTL_S
-    with _CACHE_LOCK:
-        _CACHE[user_id] = (now + ttl, plan)
-    return plan
+    return _cached_or_lookup(user_id)[0]
+
+
+def try_resolve_plan(user_id: Optional[str]) -> Optional[str]:
+    """Like resolve_plan, but None when the plan cannot be known right now
+    (no user, or the lookup failed), instead of Free.
+
+    For feature gates that fail open: an unknown plan must not be treated as
+    Free, or a Supabase outage (or a backend with no plan lookup at all) blocks
+    every user."""
+    if _billing_disabled():
+        return _unbilled_plan()
+    if not user_id:
+        return None
+    plan, looked_up = _cached_or_lookup(user_id)
+    return plan if looked_up else None
 
 
 def clear_plan_cache(user_id: Optional[str] = None) -> None:

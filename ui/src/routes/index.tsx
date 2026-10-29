@@ -219,42 +219,75 @@ function LoginPage() {
       }
     }
 
-    supabase.auth.getSession().then(async ({ data }) => {
-      if (data.session?.access_token) {
-        setExchanging(true);
-        if (await rejectIfDeactivated()) return;
-        acceptInviteFn()
-          .catch((err) => {
-            console.error("Failed to activate invited user", err);
-          })
-          .finally(async () => {
-            await primePlan();
-            localStorage.removeItem("admin-bypass");
-            navigate({
-              to: getPostLoginRoute(data.session?.user?.email),
-              replace: true,
-            });
-          });
+      // Both getSession() and onAuthStateChange can report the same session, so the
+    // sign-in steps below run once only.
+    let signingIn = false;
+    const finishSignIn = async (email: string | undefined) => {
+      if (signingIn) return;
+      signingIn = true;
+      setExchanging(true);
+      if (await rejectIfDeactivated()) {
+        signingIn = false;
+        return;
       }
+      try {
+        await acceptInviteFn();
+      } catch (err) {
+        console.error("Failed to activate invited user", err);
+      }
+      try {
+        await primePlan();
+      } finally {
+        localStorage.removeItem("admin-bypass");
+        navigate({ to: getPostLoginRoute(email), replace: true });
+      }
+    };
+
+    supabase.auth.getSession().then(({ data }) => {
+      if (data.session?.access_token) void finishSignIn(data.session.user?.email);
     });
-    const { data: sub } = supabase.auth.onAuthStateChange(async (_event, session) => {
-      if (session?.access_token) {
-        setExchanging(true);
-        if (await rejectIfDeactivated()) return;
-        acceptInviteFn().catch((err) => {
-          console.error("Failed to activate invited user", err);
-        });
-        primePlan().finally(() => {
-          localStorage.removeItem("admin-bypass");
-          navigate({
-            to: getPostLoginRoute(session?.user?.email),
-            replace: true,
-          });
-        });
-      }
+    // Do not make this callback async or await anything in it. Supabase runs it while
+    // holding its auth lock, and any Supabase call awaited here (rejectIfDeactivated,
+    // primePlan) waits for that same lock. During a token refresh, which happens when
+    // the tab is opened after more than an hour, that deadlocks on "Signing you in…".
+    // setTimeout runs the work after Supabase releases the lock.
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!session?.access_token) return;
+      const email = session.user?.email;
+      setTimeout(() => {
+        void finishSignIn(email);
+      }, 0);
     });
     return () => sub.subscription.unsubscribe();
   }, [acceptInviteFn, checkAccountActiveFn, navigate, queryClient, resolvePlanFn]);
+
+  // Safety net: if signing in still hasn't finished after 15 s, reload once (the token
+  // is fresh by then). If it is still stuck after that, show the login form instead
+  // of spinning forever.
+  useEffect(() => {
+    if (!exchanging) return;
+    const timer = window.setTimeout(() => {
+      let reloaded = false;
+      try {
+        reloaded = sessionStorage.getItem("avaloka.signinReloaded") === "1";
+        if (!reloaded) sessionStorage.setItem("avaloka.signinReloaded", "1");
+      } catch {
+        reloaded = true;
+      }
+      if (!reloaded) {
+        window.location.reload();
+        return;
+      }
+      try {
+        sessionStorage.removeItem("avaloka.signinReloaded");
+      } catch {
+        /* ignore */
+      }
+      setExchanging(false);
+      toast.error("Signing in took too long. Please try again.");
+    }, 15000);
+    return () => window.clearTimeout(timer);
+  }, [exchanging]);
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

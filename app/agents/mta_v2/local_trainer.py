@@ -106,12 +106,13 @@ def _compute_regression_metrics(labels: List[float], predictions: List[float]) -
 
 
 def setup_mlflow() -> None:
-    tracking_uri    = os.getenv("MLFLOW_TRACKING_URI", "").strip()
-    backend_store   = os.getenv("MLFLOW_BACKEND_STORE_URI", "").strip()
     artifact_root   = os.getenv("MLFLOW_DEFAULT_ARTIFACT_ROOT", "").strip()
     experiment_name = os.getenv("MLFLOW_EXPERIMENT_NAME", "avaloka-training").strip()
 
-    effective_uri = tracking_uri or backend_store or "mlruns"
+    # Shared with MLflowManager so the runs written here are the runs the
+    # model endpoints read back.
+    from app.agents.mta_v2.tracking import resolve_tracking_uri
+    effective_uri = resolve_tracking_uri()
     mlflow.set_tracking_uri(effective_uri)
     logger.info("[MLflow] tracking_uri=%s", effective_uri)
 

@@ -1,0 +1,4 @@
+config:
+  rayDashboardUrl: "http://avaloka-raycluster-head-svc.default.svc.cluster.local:8265"
+  rayDashboardUrlInCluster: "http://avaloka-raycluster-head-svc.default.svc.cluster.local:8265"
+  rayApiServerAddress: "http://avaloka-raycluster-head-svc.default.svc.cluster.local:8265"

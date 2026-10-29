@@ -357,7 +357,7 @@ export function ConnectCloudModal({ open, onOpenChange }: { open: boolean; onOpe
   return (
     <>
     <Dialog open={open} onOpenChange={(o) => (o ? onOpenChange(true) : requestClose())}>
-      <DialogContent className="max-w-[560px] gap-0 overflow-hidden rounded-xl border border-border p-0 [&>button]:hidden">
+      <DialogContent className="grid max-h-[calc(100dvh-2rem)] w-[min(560px,calc(100vw-2rem))] max-w-none grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden rounded-xl border border-border p-0 [&>button]:hidden">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-border bg-background px-5 py-4">
           <div className="flex items-center gap-2.5">
@@ -389,7 +389,7 @@ export function ConnectCloudModal({ open, onOpenChange }: { open: boolean; onOpe
         </div>
 
         {/* Body */}
-        <div className="bg-background px-6 pb-6 pt-5">
+        <div className="min-h-0 overflow-y-auto overscroll-contain bg-background px-6 pb-6 pt-5">
           <div className="mb-3 flex items-start justify-between gap-4">
             <div>
               <div className="text-sm font-semibold text-foreground">{stepInfo.title}</div>
@@ -427,7 +427,7 @@ export function ConnectCloudModal({ open, onOpenChange }: { open: boolean; onOpe
             </div>
           )}
 
-          <div className="min-h-[280px]">
+          <div className="min-h-0">
             {step === "select-provider" && (
               <div className="grid grid-cols-3 gap-3">
                 {PROVIDERS.map((p) => (
@@ -435,15 +435,20 @@ export function ConnectCloudModal({ open, onOpenChange }: { open: boolean; onOpe
                     key={p.id}
                     onClick={() => setProvider(p.id)}
                     className={cn(
-                      "flex h-[78px] items-center justify-center rounded-lg border bg-background dark:bg-white px-3 transition hover:border-[#1565EF] hover:shadow-sm",
-                      provider === p.id ? "border-[#1565EF] ring-1 ring-[#1565EF]/30" : "border-border",
+                      "flex h-[96px] flex-col items-center justify-center gap-1.5 rounded-lg border bg-card px-2 py-2 transition hover:border-primary hover:shadow-sm",
+                      provider === p.id ? "border-primary ring-1 ring-primary/30" : "border-border",
                     )}
                   >
-                    <img
-                      src={PROVIDER_LOGOS[p.id]}
-                      alt={p.name}
-                      className="max-h-9 max-w-[120px] object-contain"
-                    />
+                    <span className="flex h-10 items-center justify-center">
+                      <span className="flex items-center justify-center rounded-md dark:bg-white dark:p-1.5">
+                        <img
+                          src={PROVIDER_LOGOS[p.id]}
+                          alt={p.name}
+                          className="h-7 w-auto max-w-[120px] object-contain"
+                        />
+                      </span>
+                    </span>
+                    <span className="text-center text-[13px] font-medium leading-tight text-foreground">{p.name}</span>
                   </button>
                 ))}
                 {STORAGE_TILES.map((t) => (
@@ -451,14 +456,19 @@ export function ConnectCloudModal({ open, onOpenChange }: { open: boolean; onOpe
                     key={t.id}
                     onClick={() => setStorageConnectProvider(t.id)}
                     className={cn(
-                      "flex h-[78px] items-center justify-center rounded-lg border border-border bg-background dark:bg-white px-3 transition hover:border-[#1565EF] hover:shadow-sm",
+                      "flex h-[96px] flex-col items-center justify-center gap-1.5 rounded-lg border border-border bg-card px-2 py-2 transition hover:border-primary hover:shadow-sm",
                     )}
                   >
-                    <img
-                      src={t.logoUrl}
-                      alt={t.name}
-                      className="max-h-9 max-w-[120px] object-contain"
-                    />
+                    <span className="flex h-10 items-center justify-center">
+                      <span className="flex items-center justify-center rounded-md dark:bg-white dark:p-1.5">
+                        <img
+                          src={t.logoUrl}
+                          alt={t.name}
+                          className="h-7 w-auto max-w-[120px] object-contain"
+                        />
+                      </span>
+                    </span>
+                    <span className="text-center text-[13px] font-medium leading-tight text-foreground">{t.name}</span>
                   </button>
                 ))}
               </div>

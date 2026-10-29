@@ -365,6 +365,7 @@ Useful flags: `--service-type ClusterIP|NodePort|LoadBalancer`, `--skip-serve`,
 | `secrets.groqPlanningKey` / `groqCodingKey` / `jwtSecret` / `existingSecret` | Planner and coder LLM keys + JWT secret, injected at install; or reference a pre-created Secret. `secrets.groqApiKey` is a third, separate key read only by `app/agents/visualization_agent.py`. |
 | `inference.provider` | `groq` by default; `local`, `openai`, `openrouter`, `bedrock`, `vertex` or `azure`. Always emitted as `INFERENCE_PROVIDER`, so it overrides the key-aware default in `app/core/inference.py`. |
 | `secrets.openrouterKey` | Optional OpenRouter key arming the planner's backup provider on 429/404/5xx. Omitted from the Secret when empty. |
+| `secrets.mcpServiceToken` | `MCP_SERVICE_TOKEN`, the shared API <-> MCP service secret. Reaches the API through the Secret and the MCP pod through a `secretKeyRef`. Required for DB registration and DB-to-DB transfers; see Safety. |
 | `rbac.create` / `serviceAccount` | In-cluster RBAC so the app can submit Ray jobs and patch RayServices. |
 | `resources`, `nodeSelector`/`tolerations`/`affinity` | Standard scheduling/scaling controls. |
 
@@ -547,4 +548,11 @@ Use it as the source of truth for what "a working deployment" must prove.
   and `SUPABASE_JWT_SECRET` via environment/Secrets, never in committed values
   files. The variable is `SUPABASE_JWT_SECRET`; `JWT_SECRET` is only the Python
   name it is bound to (`app/api/server.py:322`) and setting it does nothing.
+- **Set `MCP_SERVICE_TOKEN` on both the API and the MCP server**, to the same
+  value. Every `/customers` route on the MCP server requires an identity (the
+  customer's api_key, or this token plus the end user's id), and
+  `/customers/{id}/credentials` releases a database password only to the token
+  holder. Unset, the MCP server fails closed: no password is released, so
+  DB-to-DB transfers cannot fetch credentials, and `/admin/customers` refuses
+  registrations. Generate it per install: `openssl rand -hex 32`.
 - **Don't expose the Ray dashboard publicly** — it has no authentication.

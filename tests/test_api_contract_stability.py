@@ -52,6 +52,10 @@ NEW_FIELDS = {
     "output_tables",
     "pending_kind",
     "pending_status",
+    # Plan gates (data transfer / model training): set to "data_transfer" or
+    # "model_training" when the hosted plan does not include the feature, so
+    # the UI can show an upgrade prompt instead of parsing the chat message.
+    "plan_upgrade_required",
 }
 
 

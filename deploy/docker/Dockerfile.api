@@ -56,7 +56,17 @@ RUN pip install --no-cache-dir --prefer-binary \
         --extra-index-url https://download.pytorch.org/whl/cpu \
         -r /tmp/requirements.txt
 
-RUN pip install --no-cache-dir langchain-google-vertexai
+# No langchain-google-vertexai here. Installed unpinned after the requirements,
+# it upgraded what they pin -- langchain-core to 1.x against a <0.4 cap, pyarrow
+# to 23 against ==16.1.0 -- so the published image ran a dependency set nobody
+# had tested. It cannot be pinned alongside requirements.txt either (it needs
+# google-cloud-storage<3; see requirements-cloud-llm.txt), and Vertex is not in
+# the default provider set. Deployments that use it build on this image with
+# requirements-cloud-llm.txt.
+#
+# pip check fails the build if anything above leaves the resolved set
+# inconsistent, so the next unpinned install cannot ship silently.
+RUN pip check
 # ---------- bake the embedding model into the image ----------
 # The memory plane embeds every query with sentence-transformers. Left to
 # itself it fetches the model from huggingface.co ON THE FIRST QUERY, which
@@ -82,9 +92,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libpq5 curl graphviz \
     && rm -rf /var/lib/apt/lists/*
 
+# The image is built for amd64 and arm64; a hard-coded amd64 kubectl left the
+# arm64 image with a binary it cannot execute. BuildKit sets TARGETARCH.
+ARG TARGETARCH
 RUN curl -fsSL -o /usr/local/bin/kubectl \
-        "https://dl.k8s.io/release/$(curl -fsSL https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" \
-    && chmod +x /usr/local/bin/kubectl
+        "https://dl.k8s.io/release/$(curl -fsSL https://dl.k8s.io/release/stable.txt)/bin/linux/${TARGETARCH:-amd64}/kubectl" \
+    && chmod +x /usr/local/bin/kubectl \
+    && kubectl version --client >/dev/null
 
 COPY --from=builder /opt/venv /opt/venv
 # The model cache baked in the builder stage. Without this the runtime

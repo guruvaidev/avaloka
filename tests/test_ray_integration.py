@@ -259,6 +259,8 @@ class TestExecutionAgentNodeRayDryrun:
         assert "s3://test-bucket/test.csv" in yaml_text
         assert "__DATA_SOURCE_URI__" not in yaml_text
         assert "__CLOUD_SECRET_NAME__" not in yaml_text
+        assert "def avaloka_result(" in yaml_text
+        assert "def read_csv_best_effort(" in yaml_text
 
         leftovers = re.findall(r"__([A-Z0-9_]+)__", yaml_text)
         assert leftovers == [], f"Leftover placeholders: {leftovers}"
@@ -310,6 +312,9 @@ class TestExecutionAgentNodeRayDryrun:
         assert er["status"] == "dryrun"
         assert er["worker_count"] == 1, \
             f"Interactive profile must pin workers to 1, got {er['worker_count']}"
+        yaml_text = er["rayjob_yaml"]
+        assert "def avaloka_result(" in yaml_text
+        assert "def read_csv_best_effort(" in yaml_text
         print("  ✅ interactive_sample_analysis profile pins workers=1")
 
 

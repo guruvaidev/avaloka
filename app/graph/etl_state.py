@@ -164,10 +164,17 @@ class ETLState(TypedDict):
     verification_safe_to_present: Optional[bool]
     agent_errors: Optional[list[dict]]
 
-    # Execution mode configuration
+        # Execution mode configuration
     execution_mode: Optional[str]           # "local", "k8s-ray" - determines execution strategy
     enable_training: Optional[bool]         # Flag to enable/disable ML training
     skip_to_training: Optional[bool]
+
+    # Plan gates (set by send_message / planner). Must be declared or LangGraph
+    # drops them: user_plan is the requester's plan ("free" | "professional" |
+    # "enterprise"); plan_upgrade_required names the paid feature a turn was
+    # refused ("data_transfer" | "model_training"), else None.
+    user_plan: Optional[str]
+    plan_upgrade_required: Optional[str]
 
     # Planner-side data transfer state (chat-registered DBs, last transfer)
     dta_database_registry: Optional[dict]
