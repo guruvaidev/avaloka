@@ -1089,6 +1089,118 @@ def test_database_connect_propagates_error(client: TestClient, monkeypatch):
     assert "Database connection failed" in resp.json()["detail"]
 
 
+# ---- /api/database/connect binds a customer to its user, on proof of the key --
+
+@pytest.fixture()
+def onboarding(tmp_path, monkeypatch):
+    """The real onboarding router over a customers.json, reached by server's httpx."""
+    import secrets
+    from fastapi import FastAPI
+    import app.mcp_server.customer_dbs as cdb
+
+    token = secrets.token_urlsafe(24)
+    monkeypatch.setenv("MCP_SERVICE_TOKEN", token)
+    keys = {cid: "ak_" + secrets.token_hex(16) for cid in ("cust_legacy", "cust_other", "cust_taken")}
+    owners = {"cust_legacy": None, "cust_other": None, "cust_taken": "someone_else"}
+    records = {}
+    for cid, key in keys.items():
+        records[cid] = {
+            "customer_id": cid, "customer_name": cid, "database_type": "postgresql",
+            "connection_string": f"postgresql://u:{secrets.token_hex(8)}@db.test.invalid:5432/d",
+            "environment": "production", "api_key": key, "status": "active",
+            "created_at": "2026-10-18T00:00:00",
+        }
+        if owners[cid]:
+            records[cid]["owner_user_id"] = owners[cid]
+    path = tmp_path / "customers.json"
+    path.write_text(json.dumps(records))
+    mgr = cdb.customer_manager
+    monkeypatch.setattr(mgr, "customers_file", str(path))
+    monkeypatch.setattr(mgr, "customers", {})
+    mgr.load_customers()
+    onboarding_app = FastAPI()
+    onboarding_app.include_router(cdb.router)
+    onboarding_client = TestClient(onboarding_app)
+    base = "http://onboarding.test"
+    monkeypatch.setenv("ONBOARDING_API_URL", base)
+
+    class _Routed:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, headers=None, **k):
+            assert url.startswith(base)
+            return onboarding_client.post(url[len(base):], headers=headers or {})
+
+    monkeypatch.setattr(server.httpx, "AsyncClient", _Routed)
+
+    async def list_tables_ok(customer_id: str, api_key: str) -> Dict[str, Any]:
+        # The MCP server authenticates the key, not the customer_id in the body.
+        return {"tables": ["t1"], "meta": {"database_type": "postgresql"}}
+
+    monkeypatch.setattr(server, "list_database_tables", list_tables_ok, raising=False)
+
+    def owner_of(cid):
+        return json.loads(path.read_text())[cid].get("owner_user_id")
+
+    def creds_status(cid, user):
+        return onboarding_client.get(
+            f"/customers/{cid}/credentials",
+            headers={"X-Avaloka-Service-Token": token, "X-Avaloka-User": user},
+        ).status_code
+
+    return types.SimpleNamespace(keys=keys, owner_of=owner_of, creds_status=creds_status)
+
+
+def _connect(client, user, customer_id, api_key):
+    return client.post(
+        "/api/database/connect",
+        json={"customer_id": customer_id, "api_key": api_key},
+        headers=make_auth_headers(user),
+    )
+
+
+def test_database_connect_binds_an_unbound_customer_to_the_user(client, onboarding):
+    assert onboarding.creds_status("cust_legacy", "user_b") == 200
+    resp = _connect(client, "user_a", "cust_legacy", onboarding.keys["cust_legacy"])
+    assert resp.status_code == 200, resp.text
+    assert onboarding.owner_of("cust_legacy") == "user_a"
+    assert onboarding.creds_status("cust_legacy", "user_a") == 200
+    assert onboarding.creds_status("cust_legacy", "user_b") == 404
+
+
+def test_database_connect_does_not_bind_without_the_customers_own_key(client, onboarding):
+    # cust_other's key is valid at the MCP server, so the connect itself succeeds,
+    # but it proves nothing about cust_legacy.
+    resp = _connect(client, "user_a", "cust_legacy", onboarding.keys["cust_other"])
+    assert resp.status_code == 200, resp.text
+    assert onboarding.owner_of("cust_legacy") is None
+    assert onboarding.creds_status("cust_legacy", "user_b") == 200
+
+
+def test_database_connect_never_rebinds_another_users_customer(client, onboarding):
+    resp = _connect(client, "user_a", "cust_taken", onboarding.keys["cust_taken"])
+    assert resp.status_code == 200, resp.text
+    assert onboarding.owner_of("cust_taken") == "someone_else"
+    assert onboarding.creds_status("cust_taken", "user_a") == 404
+
+
+def test_database_connect_binds_nothing_when_the_key_is_refused(client, onboarding, monkeypatch):
+    async def list_tables_error(customer_id: str, api_key: str) -> Dict[str, Any]:
+        return {"error": "Invalid API key"}
+
+    monkeypatch.setattr(server, "list_database_tables", list_tables_error, raising=False)
+    resp = _connect(client, "user_a", "cust_legacy", onboarding.keys["cust_legacy"])
+    assert resp.status_code == 400
+    assert onboarding.owner_of("cust_legacy") is None
+
+
 def test_database_query_missing_credentials_400(client: TestClient):
     body = {"content": "SELECT 1", "metadata": {}}
     resp = client.post(

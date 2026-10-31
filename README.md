@@ -183,10 +183,22 @@ it are on the [blog](https://avaloka.ai/blog).
   fixed chat timeouts, and clearer narration and charts.
 - **A safer install:** pandas is pinned below 3 until the codebase supports its
   new string type.
+- **Ray jobs you can watch.** A Ray jobs panel lists every job with its status,
+  and scheduled analyses that are not Ray jobs run in their own executor pod.
+- **Auto Insights across sheets.** A workbook with several sheets, or several
+  datasets in one analysis, gets one set of insights instead of a flood of
+  bullet points and unwanted charts.
+- **Database connections are authenticated.** The MCP server's onboarding and
+  admin routes now require a key or the API's service token, and only the
+  owner's customers are visible. **Self-hosters must set `MCP_SERVICE_TOKEN`**
+  (the same value on the API and the MCP server) and should rotate the
+  database connection strings stored there. See the advisory in
+  [SECURITY.md](SECURITY.md).
 
-## Coming in 1.7
+## Coming in 2.0
 
-In development now — not in this release. Follow the [blog](https://avaloka.ai/blog)
+The 1.7 development line ships publicly as **2.0**. In development now — not
+in this release. Follow the [blog](https://avaloka.ai/blog)
 for progress.
 
 - **The swarm, in every edition.** A mission clones Avaloka into sub-Avalokas

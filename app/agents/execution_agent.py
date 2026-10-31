@@ -2331,12 +2331,6 @@ def execution_agent_node_ray(state: ETLState) -> ETLState:
         user_code,
     )
 
-    user_code = re.sub(
-        r"""(['"])input\.csv\1""",
-        "DATA_SOURCE_URI, storage_options=opts",
-        user_code,
-    )
-
     # Patch any pd.read_csv in user code to use encoding fallback
     user_code = _patch_csv_encoding(user_code)
     helper_code = _with_csv_reader(textwrap.dedent(HELPER_FUNCTIONS).lstrip())

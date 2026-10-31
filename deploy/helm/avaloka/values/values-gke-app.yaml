@@ -47,3 +47,18 @@ image:
   repository: gcr.io/PROJECT_ID/avaloka-api
   tag: latest
   pullPolicy: Always
+
+# Production celery runs as its own GCP service account, never the test one it
+# would otherwise inherit from values-gke.yaml (bound to avaloka-app/avaloka-celery).
+celery:
+  serviceAccount:
+    annotations:
+      iam.gke.io/gcp-service-account: avaloka-celery@PROJECT_ID.iam.gserviceaccount.com
+
+# Production data and MLflow artifacts live in their own bucket, never the test
+# one inherited from values-gke.yaml. Only avaloka-celery@ is granted on it.
+config:
+  gcsBucket: "avaloka-app-user-filestore"
+mlflow:
+  artifactsDestination: "gs://avaloka-app-user-filestore/mlflow-artifacts"
+  defaultArtifactRoot: "gs://avaloka-app-user-filestore/mlflow-artifacts"

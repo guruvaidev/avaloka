@@ -255,6 +255,7 @@ Reference columns exactly as they appear in the schema and do not invent new col
 Do not print any data from the df, you should turn it into a column or new dataframe. New dataframe is the default but if the user requests then it should be appended to the current df
 Do not write executable code—return a numbered list of high-level steps that can be implemented with pandas.
 Do not include filesystem, operating system, shell, subprocess, network, package-management, scheduling, globals(), locals(), print statements, or arbitrary execution instructions.
+The primary input is already loaded into the pandas DataFrame `df` before `main(df)` is called. Pseudocode must operate on `df` and describe only transformations. Never instruct `main(df)` to open or reread the source file, call `pd.read_csv` (including with `chunksize`), define a CSV chunk size, or iterate over source-file chunks. For aggregates such as sums, counts, and averages, compute the result from the relevant column in `df`.
 Do not request interactive input. If the request lacks a required value, describe the missing value instead of inventing an input() step.
 Never assume missing filter values such as a weekday, day, date, month, year, category, threshold, or ID.
 Handle missing/null values only in the columns needed for the requested operation. Do not drop the whole row set just because one optional field is missing.
@@ -328,8 +329,6 @@ Rules for the contract itself:
 - A proportion, rate or share that you express as a 0-1 fraction gets "min": 0, "max": 1.
 - State only postconditions you are confident the correct result satisfies. An
   over-tight contract rejects correct code; prefer omitting a criterion to guessing one.
-
-
 """
 
     details: List[str] = []
@@ -1058,6 +1057,7 @@ RESULT SIGNALING — READ THIS BEFORE WRITING ANY CODE
 The helper avaloka_result() is pre-injected into every script. Use it ONLY
 when the user's final answer IS a single scalar (mean, sum, count, correlation,
 std, max, min) — NOT for transformations.
+Do not import avaloka_result. The injection will be handled externally
 
 The test: "Is the user waiting for ONE number, or for a modified dataset?"
   - User wants a NUMBER → call avaloka_result() + return a 1-row summary DataFrame.

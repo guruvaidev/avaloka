@@ -9,7 +9,31 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 On `develop-1.6` since 1.6.0, not yet tagged. Every entry below is a change
 that broke, or would have broken, a clean install or a first run.
 
+### Security
+
+- **The MCP server's onboarding and admin routes require authentication.**
+  `/customers/*`, `/admin/customers`, `/connect` and `/connections` were open
+  to anyone who could reach the MCP server. They now take the customer's API
+  key or the API's `MCP_SERVICE_TOKEN`, and are scoped to the caller's own
+  connections; a deleted connection's key is refused at once. **Set
+  `MCP_SERVICE_TOKEN` and rotate stored database credentials**; see the
+  advisory in [SECURITY.md](SECURITY.md)
+  (`app/mcp_server/customer_dbs.py`, `app/mcp_server/multi_tenant_mcp_server.py`).
+- **Connections registered before owners existed keep working for transfers.**
+  After the change above, the API's service could no longer fetch credentials
+  for a connection bound to no owner, so database-to-database transfers from
+  or into it failed. The service may now use such a connection on a user's
+  behalf for status, test-connection and credentials only, and the first
+  connect binds it to that user. Tested against real Postgres databases
+  (`tests/test_customer_dbs_dta_e2e.py`).
+
 ### Changed
+
+- **The Celery worker has its own Kubernetes service account identity.** The
+  chart can annotate it for cloud workload identity
+  (`celery.serviceAccount.annotations`), and its Role may create and watch
+  RayJobs for scheduled Ray analyses (`celery.rbac.rayJobs`, on by default).
+
 
 - **Python floor raised to 3.11, ceiling pinned below 3.13.**
   `app/services/session_service.py` uses `async with asyncio.timeout(...)`,
@@ -93,6 +117,10 @@ that broke, or would have broken, a clean install or a first run.
 
 ### Added
 
+- **A Ray jobs panel** in the UI, backed by a `ray_jobs` table (a new Supabase
+  migration, also applied by the Helm chart). Scheduled analyses that are not
+  Ray jobs run in an executor pod.
+- **Auto Insights across several datasets or sheets** in one analysis.
 - **The benchmark declares its known defects**, and its exit code follows
   them strictly, as `xfail(strict=True)` does: a declared run that fails
   does not fail the run; an undeclared failure does, as before; a declared
@@ -131,6 +159,10 @@ that broke, or would have broken, a clean install or a first run.
   index of what remains.
 
 ### Known issues
+
+- **Celery's soft time limit is above its hard limit** (1860 s and 1800 s in
+  `app/core/celery_app.py`), so a long task is stopped at 30 minutes without
+  the soft-limit warning that lets it clean up. A fix is in progress.
 
 - **A multi-sheet workbook is read from its longest sheet**, in the upload
   path (`file_handler/excel_connector.py::_resolve_sheet`), whatever the

@@ -7,6 +7,7 @@ from typing import Optional
 
 from langchain_core.messages import AIMessage
 from celery import Celery
+from celery.signals import worker_init
 from celery.utils.log import get_logger
 from redbeat.schedulers import RedBeatScheduler, RedBeatSchedulerEntry, RedBeatJSONEncoder, RedBeatJSONDecoder, get_redis, ensure_conf
 from dotenv import load_dotenv
@@ -29,8 +30,8 @@ celery_app = Celery('celery_app', broker=REDIS_URL, backend=REDIS_URL)
 celery_app.conf.update(
     result_extended=True,
     result_expires=None,
-    task_time_limit=300,
-    task_soft_time_limit=240,
+    task_time_limit=1800,        # Increased timeout as ray jobs can take longer
+    task_soft_time_limit=1860,
     worker_prefetch_multiplier=1,
 )
 ensure_conf(celery_app)
@@ -206,6 +207,22 @@ class AvalokaScheduler(RedBeatScheduler):
 from celery import current_task
 _SCHEDULED_RUNS_TABLE = os.getenv("SUPABASE_SCHEDULED_RUNS_TABLE", "scheduled_runs")
 _SCHEDULED_RUN_ROW_CAP = int(os.getenv("SCHEDULED_RUN_OUTPUT_ROW_CAP", "5000"))
+
+
+@worker_init.connect
+def _register_side_tasks(**_kwargs):
+    """Register tasks the API dispatches with ``.delay()`` from other modules.
+
+    Seen on the kind deploy: every scheduled run ended with
+    ``KeyError: 'app.services.milvus_recorder.record_execution_to_milvus'`` in
+    the worker, because nothing on the worker side imported that module, so
+    the execution insight was never recorded. A failing import only logs: the
+    recorder is a side channel, not the run.
+    """
+    try:
+        import app.services.milvus_recorder  # noqa: F401
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[worker] milvus recorder task not registered (%s: %s)", type(exc).__name__, exc)
 
 
 def _supabase():

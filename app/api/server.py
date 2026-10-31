@@ -9118,6 +9118,10 @@ async def connect_database(
             400,
             f"Database connection failed: {test_result['error']}",
         )
+    # The MCP server just accepted api_key for customer_id: that is the proof of
+    # possession. A customer bound to nobody yet is bound to this user now, so
+    # from here on only they can have the service transfer from it.
+    await _bind_mcp_customer_owner(customer_id, user_id, api_key)
 
     session_id = _new_id()
     # Persist the api_key encrypted at rest so /api/v1/database/query can reuse
@@ -11448,10 +11452,10 @@ async def _bind_mcp_customer_owner(customer_id: Optional[str], user_id: str, api
     """Bind a registered database to the user who holds its api_key.
 
     The onboarding API scopes every /customers route to an owner, and releases a
-    password to the planner only for a customer bound to the user it names. The
-    UI registers anonymously, so this is where the binding happens: here the
-    user is verified and the api_key is in hand. Best-effort; never fails the
-    caller's request.
+    password to the planner only for a customer bound to the user it names (or
+    to nobody yet). The UI registers anonymously, so this is where the binding
+    happens: here the user is verified and the api_key is in hand. Best-effort;
+    never fails the caller's request.
     """
     token = os.getenv("MCP_SERVICE_TOKEN", "")
     if not (token and customer_id and user_id and api_key):
