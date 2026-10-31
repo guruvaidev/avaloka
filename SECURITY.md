@@ -3,12 +3,43 @@
 ## Supported Versions
 
 Avaloka is under active development. Security fixes are applied to the latest
-0.x release. Older versions are not maintained.
+release line and published on `main`. Older versions are not maintained.
 
 | Version | Supported |
 | ------- | --------- |
-| 0.2.x   | ✅        |
-| < 0.2   | ❌        |
+| 1.6.x (`main`) | ✅ |
+| < 1.6   | ❌        |
+
+## Advisories
+
+### 2026-10: MCP server onboarding and admin routes were unauthenticated
+
+**Affected:** every release up to and including 1.6.0, and `main` before the
+sync of 2026-10-31.
+**Fixed in:** `main` from 2026-10-31.
+
+The MCP server (port 8010 in the Helm chart) served its customer-onboarding
+routes (`/customers/*`) and its admin routes (`/admin/customers`, `/connect`,
+`/connections`) without authentication. Anyone who could reach the MCP server
+could list the registered database connections, read their stored
+credentials, and replace a connection's configuration.
+
+**What changed:** these routes now require either the customer's own API key or
+the Avaloka API's service token (`MCP_SERVICE_TOKEN`), and each caller sees
+only the connections it owns. A deleted connection's key stops working
+immediately.
+
+**What you need to do:**
+
+1. Upgrade to the current `main`.
+2. Set `MCP_SERVICE_TOKEN` to the same random value on the API and on the MCP
+   server (`openssl rand -hex 32`; the Helm value is `secrets.mcpServiceToken`).
+   If it is unset, no credentials are released and database-to-database
+   transfers stop working.
+3. **Rotate the database credentials** stored in your MCP server. Treat them as
+   exposed if the server was ever reachable from an untrusted network.
+4. Keep the MCP server off untrusted networks. Registering a connection makes
+   the server connect to the address it is given.
 
 ## Reporting a Vulnerability
 
@@ -71,6 +102,8 @@ At minimum:
   workload uses.
 - **Do not expose the API or Ray dashboard to the public internet** without an
   authenticating proxy. The Ray dashboard has no authentication of its own.
+- **Set `MCP_SERVICE_TOKEN`** on the API and the MCP server, and keep the MCP
+  server on a private network. See the 2026-10 advisory above.
 
 ## Disclosure
 

@@ -51,6 +51,15 @@ MONGO_SERVER_SELECTION_TIMEOUT_MS = int(os.getenv("MONGO_SERVER_SELECTION_TIMEOU
 # A caller acts within one owner group: the Avaloka user a customer is bound to,
 # or, for a customer bound to nobody, that customer alone. Anything outside the
 # group is answered 404, never 403, so customer ids do not leak.
+#
+# One exception, for customers registered before owners existed: a customer bound
+# to nobody is also reachable by the API service, for whichever authenticated
+# user it names, on the routes a transfer needs (status, test-connection,
+# credentials). Never by another customer's api_key, never for delete, and never
+# listed. The first /api/database/connect that proves the customer's api_key
+# binds it to that user (POST /customers/{id}/owner), which closes it to everyone
+# else. Until then any signed-in user who names the id can have the service
+# transfer from it: the password still goes only to the service, never to them.
 SERVICE_TOKEN_HEADER = "X-Avaloka-Service-Token"
 SERVICE_USER_HEADER = "X-Avaloka-User"
 
@@ -162,15 +171,21 @@ async def _evict_from_mcp(customer_id: str) -> None:
         logger.warning(f"Could not evict {customer_id} from the MCP server: {e}")
 
 
-def _owned_customer(customers: Dict[str, Any], customer_id: str, caller: Caller) -> Dict[str, Any]:
+def _is_unbound(record: Dict[str, Any]) -> bool:
+    return not (record.get("owner_user_id") or "").strip()
+
+
+def _owned_customer(
+    customers: Dict[str, Any], customer_id: str, caller: Caller, *, service_may_use_unbound: bool = False
+) -> Dict[str, Any]:
     record = customers.get(customer_id)
-    if (
-        record is None
-        or record.get("status") == "inactive"
-        or _owner_of(customer_id, record) != caller.owner
-    ):
+    if record is None or record.get("status") == "inactive":
         raise HTTPException(status_code=404, detail="Customer not found")
-    return record
+    if _owner_of(customer_id, record) == caller.owner:
+        return record
+    if service_may_use_unbound and caller.is_service and _is_unbound(record):
+        return record
+    raise HTTPException(status_code=404, detail="Customer not found")
 
 
 class DatabaseConnectionRequest(BaseModel):
@@ -721,7 +736,7 @@ async def register_customer(
 
 @router.get("/customers/{customer_id}/status", response_model=CustomerStatus)
 async def get_customer_status(customer_id: str, caller: Caller = Depends(require_caller)):
-    _owned_customer(customer_manager.customers, customer_id, caller)
+    _owned_customer(customer_manager.customers, customer_id, caller, service_may_use_unbound=True)
     return customer_manager.get_customer_status(customer_id)
 
 
@@ -749,7 +764,7 @@ async def deactivate_customer(customer_id: str, caller: Caller = Depends(require
 
 @router.post("/customers/{customer_id}/test-connection")
 async def test_customer_connection(customer_id: str, caller: Caller = Depends(require_caller)):
-    customer = _owned_customer(customer_manager.customers, customer_id, caller)
+    customer = _owned_customer(customer_manager.customers, customer_id, caller, service_may_use_unbound=True)
     db_type = customer["database_type"]
 
     # ---- MongoDB ----
@@ -897,11 +912,12 @@ async def get_customer_credentials(customer_id: str, caller: Caller = Depends(re
     """Return full connection credentials parsed from connection_string for DTA transfer use.
 
     The password goes only to the Avaloka API service (MCP_SERVICE_TOKEN), and
-    only for a customer bound to the user it names. An end user's own api_key
-    is not enough.
+    only for a customer bound to the user it names or bound to nobody yet (a
+    legacy customer; see the note on caller identity). An end user's own
+    api_key is not enough.
     """
     _customers = customer_manager._read_customers_file()
-    customer = _owned_customer(_customers, customer_id, caller)
+    customer = _owned_customer(_customers, customer_id, caller, service_may_use_unbound=True)
     if not caller.is_service:
         raise HTTPException(status_code=403, detail="Credentials are released only to the Avaloka API service")
     conn_str = customer.get("connection_string", "")

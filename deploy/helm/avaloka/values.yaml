@@ -928,6 +928,16 @@ config:
 celery:
   enabled: true
   replicas: 1
+  # The worker runs as its own KSA (<fullname>-celery), not the app's. Put the
+  # cloud Workload Identity annotation here too, or celery gets no cloud
+  # credentials (GKE iam.gke.io/gcp-service-account, EKS role-arn, AKS client-id).
+  # Not needed with GKE's direct principal:// IAM binding.
+  serviceAccount:
+    annotations: {}
+  rbac:
+    # Let the worker submit scheduled RayJobs through KubeRay (kubectl apply).
+    # Not used when RAY_DASHBOARD_URL is set (HTTP job submission).
+    rayJobs: true
   resources:
     requests:
       cpu: 200m

@@ -762,3 +762,112 @@ def test_delete_from_a_separate_onboarding_process_calls_the_evict_route(reg, mo
     assert len(calls) == 1
     assert calls[0]["url"] == f"{cdb.customer_manager.mcp_server_url}/admin/customers/cust_a2"
     assert calls[0]["headers"].get(TOKEN_HEADER) == reg.token
+
+
+# ---- option (i): a customer bound to nobody is reachable through the service --
+#
+# Customers registered before owners existed are bound to nobody. The API
+# service reaches them for any signed-in user it names, on the routes a
+# transfer needs, until the first /api/database/connect that proves the key
+# binds them. Nothing else about them opens up: no other key, no delete, no
+# listing, no password to anyone but the service.
+
+UNBOUND_ROUTES = [
+    ("GET", "/customers/cust_legacy/status"),
+    ("POST", "/customers/cust_legacy/test-connection"),
+    ("GET", "/customers/cust_legacy/credentials"),
+]
+
+
+@pytest.mark.parametrize("method,path", UNBOUND_ROUTES)
+@pytest.mark.parametrize("user", ["user_a", "user_b", "user_new"])
+def test_service_reaches_an_unbound_customer_for_any_signed_in_user(reg, method, path, user):
+    r = reg.client.request(method, path, headers=_service(reg.token, user))
+    assert r.status_code == 200, r.text
+    if path.endswith("/credentials"):
+        assert r.json()["password"] == reg.pws["cust_legacy"]
+        assert r.json()["database_type"] == "postgresql"
+
+
+@pytest.mark.parametrize("method,path", UNBOUND_ROUTES)
+@pytest.mark.parametrize("who", ["a_key", "b_key"])
+def test_an_unbound_customer_stays_closed_to_other_customers_keys(reg, method, path, who):
+    key = {"a_key": reg.keys["cust_a"], "b_key": reg.keys["cust_b"]}[who]
+    r = reg.client.request(method, path, headers=_bearer(key))
+    assert r.status_code == 404
+    assert reg.pws["cust_legacy"] not in r.text
+
+
+def test_the_service_cannot_delete_or_list_an_unbound_customer(reg):
+    h = _service(reg.token, "user_b")
+    assert reg.client.delete("/customers/cust_legacy", headers=h).status_code == 404
+    assert _on_disk(reg)["cust_legacy"]["status"] == "active"
+    listed = reg.client.get("/customers", headers=h).json()["customers"]
+    assert "cust_legacy" not in {c["customer_id"] for c in listed}
+
+
+def test_an_unbound_customer_without_the_token_is_still_401(reg, monkeypatch):
+    r = reg.client.get("/customers/cust_legacy/credentials", headers={USER_HEADER: "user_b"})
+    assert r.status_code == 401
+    monkeypatch.delenv("MCP_SERVICE_TOKEN")
+    r = reg.client.get("/customers/cust_legacy/credentials", headers=_service(reg.token, "user_b"))
+    assert r.status_code == 401
+    assert reg.pws["cust_legacy"] not in r.text
+
+
+def test_binding_closes_an_unbound_customer_to_everyone_else(reg):
+    b = _service(reg.token, "user_b")
+    assert reg.client.get("/customers/cust_legacy/credentials", headers=b).status_code == 200
+    bind = reg.client.post(
+        "/customers/cust_legacy/owner",
+        headers={**_service(reg.token, "user_a"), **_bearer(reg.keys["cust_legacy"])},
+    )
+    assert bind.status_code == 200
+    assert _on_disk(reg)["cust_legacy"]["owner_user_id"] == "user_a"
+    r = reg.client.get("/customers/cust_legacy/credentials", headers=b)
+    assert r.status_code == 404
+    assert reg.pws["cust_legacy"] not in r.text
+    r = reg.client.get("/customers/cust_legacy/credentials", headers=_service(reg.token, "user_a"))
+    assert r.json()["password"] == reg.pws["cust_legacy"]
+
+
+def _transfer_between(p, user_id, source, destination):
+    state = {"user_id": user_id, "dta_database_registry": {}}
+    msg = p.planner._handle_initiate_transfer(
+        state,
+        p.planner.InitiateTransferParams(
+            source_alias=source, destination_alias=destination,
+            user_prompt=f"transfer from {source} to {destination}", write_mode="append",
+            dest_table="orders_copy", create_if_missing=True,
+        ),
+    )
+    return state, msg
+
+
+@pytest.mark.parametrize("user", ["user_a", "user_b"])
+def test_planner_transfers_from_an_unbound_customer_for_any_user(planner_against_onboarding, user):
+    p = planner_against_onboarding
+    state, _msg = _transfer(p, user, source="cust_legacy")
+    entry = state["dta_database_registry"]["cust_legacy"]
+    # Typed from /credentials: /customers does not list a customer bound to nobody.
+    assert entry["db_type"] == "postgresql"
+    assert p.captured["source_type"] == "postgresql"
+    assert p.captured["source_credentials"]["password"] == p.reg.pws["cust_legacy"]
+
+
+@pytest.mark.parametrize("source", ["cust_a", "cust_legacy"])
+def test_planner_transfers_into_an_unbound_destination(planner_against_onboarding, monkeypatch, source):
+    p = planner_against_onboarding
+    monkeypatch.setattr(p.planner, "_list_dest_tables", lambda creds, db_type: None)
+    state, _msg = _transfer_between(p, "user_a", source, "cust_legacy")
+    assert state["dta_database_registry"]["cust_legacy"]["db_type"] == "postgresql"
+    assert p.captured["destination_type"] == "postgresql"
+    assert p.captured["destination_credentials"]["password"] == p.reg.pws["cust_legacy"]
+    assert p.captured["source_credentials"]["password"] == p.reg.pws[source]
+
+
+def test_planner_still_cannot_use_another_users_bound_customer_as_destination(planner_against_onboarding):
+    p = planner_against_onboarding
+    state, msg = _transfer_between(p, "user_b", "cust_legacy", "cust_a")
+    assert "cust_a" not in state["dta_database_registry"]
+    assert p.captured == {}

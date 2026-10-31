@@ -1,7 +1,17 @@
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from langchain_core.messages import HumanMessage, AIMessage
-from app.agents.planner import plan_etl_job, PlannerOutput, ToolCall, NoParams, DeployInfrastructureParams, GatherInformationParams, SuggestAnalysisParams
+from app.agents.planner import (
+    plan_etl_job,
+    PlannerOutput,
+    ToolCall,
+    NoParams,
+    DeployInfrastructureParams,
+    GatherInformationParams,
+    SuggestAnalysisParams,
+    _is_task_operation_request,
+    _detect_fabricated_reference
+)
 from app.graph.etl_state import ETLState
 
 @patch("app.agents.planner.llm")
@@ -79,7 +89,6 @@ def test_planner_schedule_relative_task():
     assert result["task_schedule"].get("second", -1) == 300
     assert result["ready_to_summarize"] is False
     assert result["ready_to_code"] is True
-
 
 def test_planner_schedule_absolute_task():
     """Tests that the planner correctly calls the 'schedule_task' tool."""
@@ -223,3 +232,21 @@ def test_planner_train_plan2():
     result = plan_etl_job(state)
 
     assert result["enable_training"] is True or len(state["messages"]) > 1
+
+@pytest.mark.parametrize("text", [
+    "what is the task list",
+    "what is the status of task scheduled-task-id?",
+    "Cancel task scheduled-task-id",
+    "give me the result for first run of task scheduled-task-id",
+])
+def test_detect_scheduler_op(text):
+    assert _is_task_operation_request(text) is True
+
+@pytest.mark.parametrize("text", [
+    "what is the task list",
+    "what is the status of task scheduled-task-id?",
+    "Cancel task scheduled-task-id",
+    "give me the result for first run of task scheduled-task-id",
+])
+def test_scheduler_bypass_fabrication(text):
+    assert _detect_fabricated_reference(text, {"OrderID": "int64", "Country": "object", "Price": "int64"}) is None

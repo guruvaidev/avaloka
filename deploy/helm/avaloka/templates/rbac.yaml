@@ -51,6 +51,20 @@ rules:
   - apiGroups: [""]
     resources: ["pods/exec"]
     verbs: ["create"]
+  {{- if .Values.celery.rbac.rayJobs }}
+  # Scheduled Ray jobs in KubeRay mode (app/infra/ray_job_runner.py): kubectl
+  # apply of a code ConfigMap + RayJob, status polling, submitter logs, and
+  # deleting the ConfigMap afterwards.
+  - apiGroups: ["ray.io"]
+    resources: ["rayjobs"]
+    verbs: ["get", "list", "watch", "create", "patch"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "create", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

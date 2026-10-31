@@ -334,6 +334,7 @@ cp .env.example .env
 | `AVALOKA_LICENSE_KEY` | licence token; overrides the stored file |
 | `AVALOKA_HOME` | config directory (default `~/.avaloka`) |
 | `AVALOKA_LICENSE_PUBLIC_KEY` | override the verification key (staging only) |
+| `MCP_SERVICE_TOKEN` | shared secret between the API and the MCP server; set the same value on both (`openssl rand -hex 32`). Required for database registration and database-to-database transfers. See [SECURITY.md](../SECURITY.md) |
 | `MLFLOW_TRACKING_URI` | where trained models are recorded and read back. Unset, a local `mlflow.db` (SQLite) in the working directory is used; point it at an MLflow server to share models across machines |
 
 Unknown values fail closed: an unrecognised deployment resolves to

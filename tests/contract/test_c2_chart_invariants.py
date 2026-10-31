@@ -768,3 +768,83 @@ def test_lineage_chart_defaults() -> None:
     assert values["lineage"] == {"enabled": True, "databaseUrl": ""}
     assert values["postgres"]["enabled"] is True, (
         "the default install must give lineage a database, or it ships switched off")
+
+
+# --------------------------------------------------------------------------- celery identity
+# The celery worker runs as its own KSA, so the app KSA's Workload Identity
+# annotation never reached it, and scheduled RayJobs (KubeRay mode) were
+# denied by its Role.
+_GKE_OVERLAY = CHART_ROOT / "values" / "values-gke.yaml"
+_GKE_APP_OVERLAY = CHART_ROOT / "values" / "values-gke-app.yaml"
+
+
+def _celery_rules(docs) -> list:
+    return _one(docs, "Role", "-celery")["rules"]
+
+
+def _grants(rules, group: str, resource: str, verb: str) -> bool:
+    return any(group in r.get("apiGroups", []) and resource in r.get("resources", [])
+               and verb in r.get("verbs", []) for r in rules)
+
+
+def test_celery_ksa_carries_its_own_workload_identity_annotation() -> None:
+    code, docs, err = _render()
+    assert code == 0, err
+    assert not _one(docs, "ServiceAccount", "-celery")["metadata"].get("annotations")
+
+    # test.avaloka.ai renders values-gke.yaml; app.avaloka.ai layers
+    # values-gke-app.yaml on top and must not inherit the test account.
+    for overlays, account in [((_GKE_OVERLAY,), "avaloka-test-celery@"),
+                              ((_GKE_OVERLAY, _GKE_APP_OVERLAY), "avaloka-celery@")]:
+        code, docs, err = _render(*[a for o in overlays for a in ("-f", str(o))])
+        assert code == 0, err
+        celery = _one(docs, "ServiceAccount", "-celery")["metadata"].get("annotations") or {}
+        app = _one(docs, "ServiceAccount", "")["metadata"].get("annotations") or {}
+        assert celery.get("iam.gke.io/gcp-service-account", "").startswith(account), (overlays, celery)
+        assert celery["iam.gke.io/gcp-service-account"] != app.get("iam.gke.io/gcp-service-account")
+        worker = _one(docs, "Deployment", "-celery")["spec"]["template"]["spec"]
+        assert worker["serviceAccountName"] == "avaloka-celery"
+
+
+def test_celery_role_can_run_scheduled_rayjobs_and_the_switch_removes_it() -> None:
+    code, docs, err = _render()
+    assert code == 0, err
+    rules = _celery_rules(docs)
+    # ray_job_runner.py: kubectl apply (ConfigMap + RayJob), get rayjob, logs,
+    # delete configmap.
+    for group, resource, verb in [("ray.io", "rayjobs", "create"), ("ray.io", "rayjobs", "patch"),
+                                  ("ray.io", "rayjobs", "get"), ("", "configmaps", "create"),
+                                  ("", "configmaps", "delete"), ("", "pods/log", "get")]:
+        assert _grants(rules, group, resource, verb), (group, resource, verb)
+    assert not _grants(rules, "ray.io", "rayjobs", "delete"), "the worker never deletes a RayJob"
+    assert not any("rayclusters" in r.get("resources", []) or "rayservices" in r.get("resources", [])
+                   for r in rules)
+
+    code, docs, err = _render("--set", "celery.rbac.rayJobs=false")
+    assert code == 0, err
+    rules = _celery_rules(docs)
+    assert not _grants(rules, "ray.io", "rayjobs", "create")
+    assert not _grants(rules, "", "configmaps", "create")
+    assert _grants(rules, "", "pods/exec", "create"), "the executor-pod grant must survive the switch"
+
+
+def test_gke_test_and_production_use_separate_buckets() -> None:
+    """Each instance's data, MLflow artifacts and celery identity share one bucket.
+
+    The celery service accounts are granted only on their own instance's bucket,
+    so production inheriting the test bucket would fail with permission denied
+    (or, worse, write production artifacts into test).
+    """
+    for overlays, bucket in [((_GKE_OVERLAY,), "avaloka-test-user-filestore"),
+                             ((_GKE_OVERLAY, _GKE_APP_OVERLAY), "avaloka-app-user-filestore")]:
+        code, docs, err = _render(*[a for o in overlays for a in ("-f", str(o))])
+        assert code == 0, err
+        config = _one(docs, "ConfigMap", "-config")["data"]
+        assert bucket in str(config), (overlays, {k: v for k, v in config.items() if "BUCKET" in k})
+        mlflow = next(d for d in docs if d.get("kind") == "Deployment"
+                      and d["metadata"]["labels"].get("app.kubernetes.io/component") == "mlflow")
+        env = {e["name"]: e.get("value") for e in mlflow["spec"]["template"]["spec"]["containers"][0]["env"]}
+        assert env["MLFLOW_ARTIFACTS_DESTINATION"] == f"gs://{bucket}/mlflow-artifacts", (overlays, env)
+        rendered = "\n".join(str(d) for d in docs)
+        other = ({"avaloka-test-user-filestore", "avaloka-app-user-filestore"} - {bucket}).pop()
+        assert other not in rendered and "gs://avaloka-user-filestore" not in rendered, overlays

@@ -452,7 +452,7 @@ def test_t1_11_gke_chart_manages_mlflow_with_gcs_and_no_minio():
     container = mlflow["spec"]["template"]["spec"]["containers"][0]
     env = {entry["name"]: entry for entry in container["env"]}
     assert env["MLFLOW_ARTIFACTS_DESTINATION"]["value"] == (
-        "gs://avaloka-user-filestore/mlflow-artifacts"
+        "gs://avaloka-test-user-filestore/mlflow-artifacts"
     )
     assert "MLFLOW_S3_ENDPOINT_URL" not in env
     assert "AWS_ACCESS_KEY_ID" not in env

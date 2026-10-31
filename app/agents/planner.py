@@ -2018,23 +2018,6 @@ def _sample_numeric_verdict(column: str, state: ETLState) -> Optional[bool]:
     return numeric > total * 0.5
 
 
-# def _extract_preview(state: ETLState) -> tuple[list[str], list[dict]]:
-#     preview = state.get("uploaded_csv_preview") or []
-#     columns = [str(col) for col in state.get("uploaded_csv_columns") or []]
-#     if not columns and preview:
-#         columns = [str(x) for x in preview[0]]
-
-#     rows: list[dict] = []
-#     if columns and preview:
-#         for raw in preview[1:]:
-#             row_dict = {}
-#             for idx, col in enumerate(columns):
-#                 if idx < len(raw):
-#                     row_dict[col] = raw[idx]
-#             if row_dict:
-#                 rows.append(row_dict)
-#     return columns, rows
-
 def _extract_preview(state: ETLState) -> tuple[list[str], list[dict]]:
     preview = state.get("uploaded_csv_preview") or []
 
@@ -2550,6 +2533,24 @@ def _build_fabrication_message(columns: List[str], missing: List[str]) -> dict:
     return {"message": message, "missing_terms": missing}
 
 
+_TASK_ID_RE = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", re.IGNORECASE)
+_TASK_OP_VERBS = (
+    r"(?:cancel|stop|delete|remove|pause|resume|status|state|info|information|details|list|show|"
+    r"how\s+many\s+times|when\s+(?:was|did)|last\s+run|runs?|ran|running|due|scheduled)"
+)
+_TASK_OP_RE = re.compile(
+    rf"\b{_TASK_OP_VERBS}\b[^.?!\n]{{0,60}}\b(?:scheduled\s+)?(?:tasks?|jobs?)\b"
+    rf"|\b(?:scheduled\s+)?(?:tasks?|jobs?)\b[^.?!\n]{{0,60}}\b{_TASK_OP_VERBS}\b",
+    re.IGNORECASE,
+)
+
+
+def _is_task_operation_request(text: str) -> bool:
+    """A chat message about the scheduler (a task id, or a task verb next to
+    "task"/"job") rather than about the dataset."""
+    return bool(_TASK_ID_RE.search(text or "") or _TASK_OP_RE.search(text or ""))
+
+
 def _detect_fabricated_reference(user_input: str, state: ETLState) -> Optional[dict]:
     """
     Detect when a request centers on a metric/entity/category that does NOT exist
@@ -2564,6 +2565,11 @@ def _detect_fabricated_reference(user_input: str, state: ETLState) -> Optional[d
     """
     text = _strip_runtime_context(user_input)
     if not text or len(text.split()) < 3:
+        return None
+    if _is_task_operation_request(text):
+        # "Cancel task f689…", "how many times has task … run": the task id is
+        # not a column, and the question is about the scheduler, not the data.
+        logger.info("Fabrication guard skipped: the request is about a scheduled task")
         return None
     columns = _collect_known_columns(state)
     if not columns:
@@ -3771,8 +3777,10 @@ def _auto_fetch_from_ui(alias: str, user_id: Optional[str] = None) -> Optional[d
                 data = r.json()
                 # db_type lookup is best-effort: the /customers endpoint may return a
                 # bare list or {"customers": [...]}, and a failure here must not
-                # discard the credentials fetched above.
-                db_type = "unknown"
+                # discard the credentials fetched above. /credentials carries the
+                # type itself, which is the only source for a customer bound to
+                # nobody yet: /customers lists only the user's own.
+                db_type = data.get("database_type") or "unknown"
                 try:
                     r2 = session.get(f"{ONBOARDING_API_URL}/customers", headers=headers, timeout=5)
                     if r2.status_code == 200:
@@ -5458,35 +5466,6 @@ def _plan_etl_job_impl(state: ETLState) -> ETLState:
             return _preserve_infra(state)
 
     # ── Recurring-schedule fast-path (deterministic routing) ─────────────────
-    # The reasoning planner sometimes narrates emitting BOTH generate_code and
-    # schedule_task but returns only generate_code in the tool_calls, silently
-    # dropping the recurrence — "… run every minute" then scheduled nothing and
-    # degraded into code that tried to schedule itself. Detect an explicit cadence
-    # here and emit the SAME state the schedule_task(task_type="execute") handler
-    # produces, so a scheduled execute never depends on the model remembering to
-    # call the tool. Runs AFTER the math/fabrication guards (don't schedule a
-    # request that's guaranteed to fail) and only for execute-type work with a
-    # concrete cadence — training schedules and bare/ambiguous "schedule" phrasing
-    # still go through the LLM, which holds the training context.
-    # if not state.get("training_plan"):
-    #     _sched = _parse_task_schedule_from_text(_strip_runtime_context(user_input))
-    #     if _sched is not None:
-    #         _schedule, _concrete = _sched
-    #         if _concrete and _schedule.get("task_type") == "execute":
-    #             logger.info(
-    #                 "Planner: recurring-schedule fast-path fired "
-    #                 "(schedule_type=%s minute=%s max_runs=%s) — routing as scheduled execute.",
-    #                 _schedule.get("schedule_type"), _schedule.get("minute"), _schedule.get("max_runs"),
-    #             )
-    #             new_state = state.copy()
-    #             new_state.update({
-    #                 "task_schedule": _schedule,
-    #                 "ready_to_summarize": False,
-    #                 "ready_to_code": True,
-    #                 "enable_training": False,
-    #             })
-    #             return _preserve_infra(new_state)
-
     _sched = _parse_task_schedule_from_text(_strip_runtime_context(user_input))
     if _sched is not None:
         _schedule, _concrete = _sched
@@ -5918,11 +5897,6 @@ def _plan_etl_job_impl(state: ETLState) -> ETLState:
     try:
         # Adaptive reasoning effort (ours) applied to both the primary call
         # and the context-length retry fallback (develop-1.5).
-        # _invoke_kwargs = {}
-        # if PLANNER_SUPPORTS_REASONING:
-        #     _effort = select_reasoning_effort(user_input)
-        #     _invoke_kwargs["reasoning_effort"] = _effort
-        #     logger.info(f"planner reasoning_effort={_effort}")
         _invoke_kwargs = {}
         if PLANNER_SUPPORTS_REASONING:
             _effort = select_reasoning_effort(user_input)
@@ -5937,7 +5911,6 @@ def _plan_etl_job_impl(state: ETLState) -> ETLState:
             _invoke_kwargs["reasoning_effort"] = _effort
             logger.info(f"planner reasoning_effort={_effort}")
         try:
-            #response = llm.invoke(msgs, tools=tools, tool_choice=_tool_choice, **_invoke_kwargs)
             response = _invoke_planner_with_recovery(msgs, _tool_choice, _invoke_kwargs)
         except Exception as invoke_exc:
             _salvaged_tool = _salvage_noparam_tool_call(invoke_exc)
