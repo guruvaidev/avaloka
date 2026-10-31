@@ -44,10 +44,10 @@ data with its own agents, and the main Avaloka merges what they found into one
 profile and one verdict (`avaloka-fleet/coordination.json`). Your own files
 work the same way — CSV, TSV, Parquet, Excel, JSON, XML, ORC and Avro.
 
-> **Your data stays on your machine.** Everything above runs locally. Add a
-> model key only when you want the conversational planner and richer narration:
-> `OPENROUTER_API_KEY`, `GROQ_API_KEY` or `OPENAI_API_KEY` — or a local Ollama
-> with `INFERENCE_PROVIDER=local`.
+> **Your data stays on your machine.** Everything above runs locally, with no
+> model and no key. Add a model only when you want conversation and richer
+> narration, and pick any provider, or a local one: see
+> [Bring your own model](#bring-your-own-model).
 
 **Want the full platform** — the web UI, the API, Ray and Kubernetes? Follow the
 [Install Guide](docs/INSTALL.md); it also covers
