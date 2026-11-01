@@ -41,9 +41,9 @@ jobs:
           --health-timeout 5s --health-retries 10
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
           cache: pip
@@ -79,9 +79,9 @@ jobs:
       run:
         working-directory: ui
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           # The major ui/Dockerfile builds with.
           node-version: "22"
@@ -112,9 +112,9 @@ jobs:
       E2E_BASE_URL: ${{ vars.E2E_BASE_URL }}
       E2E_API_URL: ${{ vars.E2E_API_URL }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -139,7 +139,7 @@ jobs:
       - name: End-to-end
         run: npm run test:e2e
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: playwright-report
@@ -150,15 +150,15 @@ jobs:
     # The benchmark is the slow stage, so it runs once rather than per version.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
           cache: pip
       - run: PYTHON=python ./scripts/install.sh --no-venv
       - name: Benchmark
         run: python -m avaloka.benchmark run --json scorecard.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: benchmark-scorecard
