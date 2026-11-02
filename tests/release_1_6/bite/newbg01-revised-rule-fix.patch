@@ -1,0 +1,31 @@
+diff --git a/ui/src/lib/use-plan-features.ts b/ui/src/lib/use-plan-features.ts
+index 48fd011..d0dba21 100644
+--- a/ui/src/lib/use-plan-features.ts
++++ b/ui/src/lib/use-plan-features.ts
+@@ -16,7 +16,8 @@ export function usePlanFeatures() {
+   const { data, isLoading } = useActivePlan();
+   const tier = data?.plan ?? "free";
+   const isProfessional = !isLoading && tier === "professional";
+-  const isEnterprise = tier === "enterprise";
++  const isEnterprise = !isLoading && tier === "enterprise";
++  const isPaid = isProfessional || isEnterprise;
+ 
+   return {
+     loading: isLoading,
+@@ -26,13 +27,13 @@ export function usePlanFeatures() {
+     /** Projects section (rail item + /dashboard route). */
+     canUseProjects: true,
+     /** Teams / team members configuration. */
+-    canUseTeams: !isProfessional,
++    canUseTeams: isPaid,
+     /** Creating or managing roles, branches, divisions, users, teams. */
+-    canManageOrgEntities: !isProfessional,
++    canManageOrgEntities: isEnterprise,
+     /** Share panel access (email results + public link). */
+     canShare: true,
+     /** Inviting team members/teams as collaborators on a resource. */
+-    canInviteCollaborators: !isProfessional,
++    canInviteCollaborators: isPaid,
+     /** All configuration sections; professional gets Models only. */
+     canUseAllConfigSections: !isProfessional,
+   };

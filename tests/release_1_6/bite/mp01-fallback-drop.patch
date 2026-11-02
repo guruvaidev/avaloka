@@ -1,0 +1,13 @@
+diff --git a/app/core/inference.py b/app/core/inference.py
+index 8c20ed6..d3bb16c 100644
+--- a/app/core/inference.py
++++ b/app/core/inference.py
+@@ -493,7 +493,7 @@ def _with_fallback(llm, *, model: str, temperature: float, agent: str,
+         from app.core.model_fallback import attach_fallback
+     except Exception:  # noqa: BLE001
+         return llm
+-    return attach_fallback(llm, model, temperature=temperature, agent=(agent or "").lower())
++    return llm
+ 
+ 
+ def build_chat_model(

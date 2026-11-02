@@ -95,13 +95,16 @@ class TestRenderRayjobYaml:
         result = self._render(name="my-unique-job")
         assert "my-unique-job-code" in result
 
+    # K8-10/K8-11: corrected 2026-10-31 — owner decision: idle workers scale to zero (minReplicas 0); previously asserted min==max, which pinned the bug
     def test_replicas_pinned_to_n(self):
         result = self._render(workers=5)
+        values = {}
         for line in result.splitlines():
             stripped = line.strip()
             if stripped.startswith(("replicas:", "minReplicas:", "maxReplicas:")):
-                val = int(stripped.split(":")[1].strip())
-                assert val == 5, f"Expected 5 got {val} in: {line}"
+                key, val = stripped.split(":", 1)
+                values[key] = int(val.strip())
+        assert values == {"replicas": 5, "minReplicas": 0, "maxReplicas": 5}, values
 
     def test_data_uri_injected(self):
         result = self._render(data_uri="gs://my-bucket/dataset.parquet")

@@ -6,8 +6,10 @@ from datetime import date, datetime, timezone
 from typing import Optional
 
 from langchain_core.messages import AIMessage
-from celery import Celery
+from celery import Celery, Task
+from celery.exceptions import SoftTimeLimitExceeded, WorkerLostError
 from celery.signals import worker_init
+from celery.worker.request import Request
 from celery.utils.log import get_logger
 from redbeat.schedulers import RedBeatScheduler, RedBeatSchedulerEntry, RedBeatJSONEncoder, RedBeatJSONDecoder, get_redis, ensure_conf
 from dotenv import load_dotenv
@@ -20,6 +22,7 @@ from app.agents.mta_v2.failure_diagnostics import (
 )
 from app.graph.etl_state import ETLState
 from app.core.scheduled_run_context import scheduled_run_context
+from app.core import run_truth
 from app.utils import convert_message_objects_to_dicts, convert_message_dicts_to_objects
 
 logger = logging.getLogger(__name__)
@@ -30,8 +33,11 @@ celery_app = Celery('celery_app', broker=REDIS_URL, backend=REDIS_URL)
 celery_app.conf.update(
     result_extended=True,
     result_expires=None,
-    task_time_limit=1800,        # Increased timeout as ray jobs can take longer
-    task_soft_time_limit=1860,
+    # The soft limit must fire first: it raises SoftTimeLimitExceeded inside
+    # the task, which agent_task records as a failed run. The hard limit only
+    # kills the process; _ScheduledRunRequest.on_timeout records that one.
+    task_soft_time_limit=1800,   # Ray jobs can take long, so 30 minutes of work
+    task_time_limit=1860,        # then 60 s to write the failure before the kill
     worker_prefetch_multiplier=1,
 )
 ensure_conf(celery_app)
@@ -334,9 +340,38 @@ def _ray_job_from_final(final: dict) -> dict | None:
     }
 
 
+NOTHING_RAN_MESSAGE = "Nothing was executed: the scheduled analysis produced no execution result."
+
+
 def _run_status_from_final(final: dict, task_type: str | None = None):
+    """(status, error) for scheduled_runs; status is derived from run truth."""
+    status, error, _truth = _run_outcome_from_final(final, task_type=task_type)
+    return status, error
+
+
+def _run_outcome_from_final(final: dict, task_type: str | None = None):
+    """(status, error, run_truth) for a scheduled run's final state.
+
+    A run that executed nothing is a failure, never a success: a non-dict
+    final state, or an execute run with no execution_result status.
+    """
+    status, error = _legacy_status_from_final(final, task_type=task_type)
+    truth = run_truth.classify_scheduled(
+        final,
+        task_type=task_type or "execute",
+        training_failure=error if task_type == "training" and status == "failure" else None,
+    )
+    if truth["outcome"] == run_truth.FAILED and status != "failure":
+        error = NOTHING_RAN_MESSAGE if truth["reason_code"] == "nothing_ran" else truth["reason"]
+    elif status == "failure" and truth["outcome"] != run_truth.FAILED:
+        # One outcome per run: the stricter reading wins.
+        truth = run_truth.failed("exception", kind="scheduled", detail=error, scope=truth["scope"])
+    return run_truth.legacy_status(truth["outcome"]), error, truth
+
+
+def _legacy_status_from_final(final: dict, task_type: str | None = None):
     if not isinstance(final, dict):
-        return "success", None
+        return "failure", NOTHING_RAN_MESSAGE
     if task_type == "training":
         failure = _training_failure_from_final(final)
         if failure:
@@ -370,7 +405,7 @@ def _record_run_finish(
 ) -> None:
     schedule_data = (scheduled_state or {}).get("task_schedule") or {}
     task_type = str(schedule_data.get("task_type") or "execute")
-    status, error = _run_status_from_final(final, task_type=task_type)
+    status, error, truth = _run_outcome_from_final(final, task_type=task_type)
     completion_message = None
     if task_type == "training" and status == "failure":
         completion_message = error or TRAINING_FAILURE_MESSAGE
@@ -382,10 +417,15 @@ def _record_run_finish(
             "duration_ms": int((time.perf_counter() - t0) * 1000),
             #"result":      {"output_json": _output_json_from_state(final)},
             "result": {
+                "run_truth": truth,
+                # The output contract's reasons (MAJ-030). A refused result is
+                # run_truth failed/output_contract and has no output_json.
+                "output_contract": ((final or {}).get("execution_result") or {}).get("output_contract"),
                 "output_json": _output_json_from_state(final),
                 "logs": None if task_type == "training" and status == "failure" else _logs_from_final(final),
                 "message": completion_message,
                 "ray_job": _ray_job_from_final(final),
+                "data_scope": ((final or {}).get("execution_result") or {}).get("data_scope"),
             },
             "error":       error,
         }).eq("run_id", execution_id).execute()
@@ -412,6 +452,12 @@ def _record_run_failure(
         safe_message = format_training_failure(failure)
         result = {"logs": None, "message": safe_message}
         error = safe_message
+    timed_out = isinstance(exc, SoftTimeLimitExceeded)
+    result["run_truth"] = run_truth.failed(
+        "timeout" if timed_out else "exception",
+        kind="scheduled",
+        detail="the task's soft time limit was reached" if timed_out else error,
+    )
     def _q():
         client = _supabase()
         client.table(_SCHEDULED_RUNS_TABLE).update({
@@ -426,7 +472,79 @@ def _record_run_failure(
     except Exception:
         logger.warning("[runs] failure-write failed for %s", execution_id, exc_info=True)
 
-@celery_app.task
+
+def _record_run_killed(execution_id: str, json_state, reason_code: str, detail: str,
+                       duration_ms: int | None = None) -> None:
+    """Fail a scheduled run whose task process died before it could write.
+
+    Runs in the worker's parent process (the child is gone). It only moves a
+    row that is still ``running``, so a finish or failure the task already
+    wrote is never overwritten and the run keeps exactly one outcome.
+    """
+    if not (isinstance(json_state, dict) and json_state.get("schedule_id") and execution_id):
+        return
+    truth = run_truth.failed(reason_code, kind="scheduled", detail=detail)
+    try:
+        client = _supabase()
+        # Keep what the run already recorded (the nested Ray job's identity).
+        prior = (client.table(_SCHEDULED_RUNS_TABLE).select("result")
+                 .eq("run_id", execution_id).execute())
+        rows = getattr(prior, "data", None) or []
+        result = dict((rows[0] or {}).get("result") or {}) if rows else {}
+        result["run_truth"] = truth
+        (client.table(_SCHEDULED_RUNS_TABLE).update({
+            "status":      run_truth.legacy_status(truth["outcome"]),
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+            "duration_ms": duration_ms,
+            "result":      result,
+            "error":       truth["reason"],
+        })
+         .eq("run_id", execution_id)
+         .eq("status", "running")
+         .execute())
+    except Exception:
+        logger.warning("[runs] killed-write failed for %s", execution_id, exc_info=True)
+
+
+class _ScheduledRunRequest(Request):
+    """Worker-side request that records runs whose process was killed.
+
+    A hard time limit or a lost worker (OOM kill, segfault) ends the child
+    process, so nothing in agent_task runs; without this the row stays
+    ``running`` forever.
+    """
+
+    def _scheduled_state(self):
+        args = self.args or ()
+        return (self.kwargs or {}).get("json_state") or (args[0] if args else None)
+
+    def _elapsed_ms(self):
+        start = getattr(self, "time_start", None)
+        return int((time.time() - start) * 1000) if start else None
+
+    def on_timeout(self, soft, timeout):
+        super().on_timeout(soft, timeout)
+        if not soft:
+            _record_run_killed(
+                self.id, self._scheduled_state(), "timeout",
+                f"the {timeout}s hard time limit killed the task", self._elapsed_ms(),
+            )
+
+    def on_failure(self, exc_info, send_failed_event=True, return_ok=False):
+        super().on_failure(exc_info, send_failed_event=send_failed_event, return_ok=return_ok)
+        exc = getattr(exc_info, "exception", None)
+        exc = getattr(exc, "exc", exc)  # billiard's ExceptionWithTraceback wrapper
+        if isinstance(exc, WorkerLostError):
+            _record_run_killed(
+                self.id, self._scheduled_state(), "worker_lost", str(exc), self._elapsed_ms(),
+            )
+
+
+class _ScheduledRunTask(Task):
+    Request = _ScheduledRunRequest
+
+
+@celery_app.task(base=_ScheduledRunTask)
 def agent_task(json_state: dict) -> None:
     schedule_id  = (json_state or {}).get("schedule_id")
     execution_id = getattr(getattr(current_task, "request", None), "id", None)
@@ -633,6 +751,11 @@ def _run_agent_task(json_state: dict) -> dict:
                     "size": len(raw_output),
                 }
 
+        # Output contract (MAJ-030/MAJ-031): a result that does not hold the
+        # requested measure, groups and aggregation is not recorded as the
+        # answer. Ray runs were checked by the Ray node already.
+        final_state = execution_agent.apply_scheduled_output_contract(final_state)
+
     # ---------------------------------------------------------
     # Scheduled training
     # ---------------------------------------------------------
@@ -722,7 +845,7 @@ def _run_agent_task(json_state: dict) -> dict:
 
     return final_state
 
-@celery_app.task(name="app.core.celery_app.execution_agent_task")
+@celery_app.task(name="app.core.celery_app.execution_agent_task", base=_ScheduledRunTask)
 def execution_agent_task(json_state: dict) -> None:
     """Alias for agent_task — kept for backward compat with old Redis schedule entries."""
     return agent_task(json_state)

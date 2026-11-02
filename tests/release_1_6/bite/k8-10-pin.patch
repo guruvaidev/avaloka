@@ -1,0 +1,13 @@
+diff --git a/app/agents/execution_agent.py b/app/agents/execution_agent.py
+index fde4d1fc..dee5a552 100644
+--- a/app/agents/execution_agent.py
++++ b/app/agents/execution_agent.py
+@@ -343,7 +343,7 @@ def render_rayjob_yaml(
+     y = re.sub(r"(?m)^(\s*)replicas:\s*\d+\s*$",    rf"\1replicas: {workers}", y)
+     # K8-10/K8-11: idle workers scale to zero. minReplicas used to be pinned to
+     # the worker count (== maxReplicas), which left the autoscaler no room.
+-    y = re.sub(r"(?m)^(\s*)minReplicas:\s*\d+\s*$", r"\1minReplicas: 0", y)
++    y = re.sub(r"(?m)^(\s*)minReplicas:\s*\d+\s*$", rf"\1minReplicas: {workers}", y)
+     y = re.sub(r"(?m)^(\s*)maxReplicas:\s*\d+\s*$", rf"\1maxReplicas: {workers}", y)
+ 
+     y = y.replace("__DATA_SOURCE_URI__", data_uri or "")

@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/primary-auth-middleware";
 import { safeRedirectOrigin } from "@/lib/auth-redirect";
+import { assertPlanFeature, assertTeamMembersAllowed } from "@/lib/org-features";
 
 
 // ---- Invitation delivery over SMTP -------------------------------------
@@ -541,6 +542,7 @@ export const upsertDepartment = createServerFn({ method: "POST" })
     employees?: number;
   }) => input)
   .handler(async ({ data, context }) => {
+    await assertPlanFeature(context.supabase, "enterprise", "upsertDepartment");
     const { id, ...rest } = data;
     const orgId = await getOrgId(context.supabase, context.userId);
 
@@ -580,6 +582,7 @@ export const bulkUpsertDepartments = createServerFn({ method: "POST" })
     }>;
   }) => input)
   .handler(async ({ data, context }) => {
+    await assertPlanFeature(context.supabase, "enterprise", "bulkUpsertDepartments");
     if (!data.rows?.length) return { inserted: 0 };
     const orgId = await getOrgId(context.supabase, context.userId);
 
@@ -659,6 +662,7 @@ export const upsertConfigRole = createServerFn({ method: "POST" })
     permissions: string[];
   }) => input)
   .handler(async ({ data, context }) => {
+    await assertPlanFeature(context.supabase, "enterprise", "upsertConfigRole");
     const { id, ...rest } = data;
     const orgId = await getOrgId(context.supabase, context.userId);
     const payload = { ...rest, organization_id: orgId };
@@ -689,6 +693,7 @@ export const bulkUpsertConfigRoles = createServerFn({ method: "POST" })
     }>;
   }) => input)
   .handler(async ({ data, context }) => {
+    await assertPlanFeature(context.supabase, "enterprise", "bulkUpsertConfigRoles");
     if (!data.rows?.length) return { inserted: 0 };
     const orgId = await getOrgId(context.supabase, context.userId);
     const payload = data.rows.map((r) => ({
@@ -761,6 +766,7 @@ export const upsertBranch = createServerFn({ method: "POST" })
     employees?: number;
   }) => input)
   .handler(async ({ data, context }) => {
+    await assertPlanFeature(context.supabase, "enterprise", "upsertBranch");
     const { id, head_profile_id, ...rest } = data;
     const orgId = await getOrgId(context.supabase, context.userId);
     const headProfileId = await resolveHeadProfileId(head_profile_id ?? null, orgId);
@@ -793,6 +799,7 @@ export const bulkUpsertBranches = createServerFn({ method: "POST" })
     }>;
   }) => input)
   .handler(async ({ data, context }) => {
+    await assertPlanFeature(context.supabase, "enterprise", "bulkUpsertBranches");
     if (!data.rows?.length) return { inserted: 0 };
     const orgId = await getOrgId(context.supabase, context.userId);
 
@@ -921,6 +928,7 @@ export const upsertAppUser = createServerFn({ method: "POST" })
     permissions?: Record<string, Record<string, boolean>>;
   }) => input)
   .handler(async ({ data, context }) => {
+    await assertPlanFeature(context.supabase, "enterprise", "upsertAppUser");
     const { id, name: _name, avatar: _avatar, ...rest } = data;
     const orgId = await getOrgId(context.supabase, context.userId);
     const payload = { ...rest, organization_id: orgId };
@@ -981,6 +989,7 @@ export const inviteAppUser = createServerFn({ method: "POST" })
     redirectTo?: string;
   }) => input)
   .handler(async ({ data, context }) => {
+    await assertPlanFeature(context.supabase, "enterprise", "inviteAppUser");
     const email = data.email.trim().toLowerCase();
     if (!email) throw new Error("Email is required");
 
@@ -1221,6 +1230,7 @@ export const resendAppUserInvite = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((input: { id: string; redirectTo?: string }) => input)
   .handler(async ({ data, context }) => {
+    await assertPlanFeature(context.supabase, "enterprise", "resendAppUserInvite");
     const orgId = await getOrgId(context.supabase, context.userId);
 
     const { data: row, error: rowErr } = await context.supabase
@@ -1532,6 +1542,35 @@ async function enrichAppUsers(
   return map;
 }
 
+/**
+ * NEW-BG-01 (owner ruling 2026-11-01): may each of these app users join a
+ * Professional team? True when the person is on Professional or higher. Only
+ * members of the caller's own organisation are answered, and only with a
+ * boolean -- never the member's plan. Unknown ids are false (fail closed). The
+ * database enforces the same rule on write.
+ */
+export const getTeamMemberEligibility = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: { appUserIds: string[] }) => input)
+  .handler(async ({ data, context }) => {
+    const ids = Array.from(new Set((data.appUserIds ?? []).filter((x) => typeof x === "string" && x)));
+    const out: Record<string, boolean> = Object.fromEntries(ids.map((id) => [id, false]));
+    if (!ids.length) return out;
+    const orgId = await getOrgIdSoft(context.supabase, context.userId);
+    if (!orgId) return out;
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { planTierForAuthUser, isProfessionalOrHigher } = await import("@/lib/plan-tier.server");
+    const { data: rows } = await (supabaseAdmin as any)
+      .from("app_users")
+      .select("id, auth_user_id")
+      .eq("organization_id", orgId)
+      .in("id", ids);
+    for (const r of (rows ?? []) as Array<{ id: string; auth_user_id: string | null }>) {
+      out[r.id] = isProfessionalOrHigher(await planTierForAuthUser(supabaseAdmin, r.auth_user_id));
+    }
+    return out;
+  });
+
 export const listTeams = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .handler(async ({ context }) => {
@@ -1590,6 +1629,8 @@ export const upsertTeam = createServerFn({ method: "POST" })
     status?: "Active" | "Inactive";
   }) => input)
   .handler(async ({ data, context }) => {
+    await assertPlanFeature(context.supabase, "professional", "upsertTeam");
+    if (Array.isArray(data.member_ids)) await assertTeamMembersAllowed(context.supabase, data.member_ids);
     const { id, member_ids, ...rest } = data;
     const orgId = await getOrgId(context.supabase, context.userId);
     const payload = { ...rest, organization_id: orgId };

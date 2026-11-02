@@ -35,6 +35,15 @@ their licenses are:
   - Kubernetes Python client ...................... Apache-2.0
   - boto3 (AWS SDK) ............................... Apache-2.0
   - Model Context Protocol SDK (mcp) .............. MIT
+  - sqlglot ....................................... MIT
+      Copyright (c) 2026 Toby Mao
+
+Model weights are likewise NOT redistributed here. The local-inference
+manifests (deploy/inference/, the Helm chart's localLLM) download them at run
+time from their publishers. The defaults and their licenses are:
+
+  - Qwen3-4B-Instruct-2507 (Ollama: qwen3:4b-instruct-2507-q4_K_M) . Apache-2.0
+  - Qwen2.5-14B-Instruct (vLLM GPU default) ...................... Apache-2.0
 
 For the authoritative and complete list, see `requirements.txt` and the
 metadata of each installed distribution (`pip show <package>`). This NOTICE is

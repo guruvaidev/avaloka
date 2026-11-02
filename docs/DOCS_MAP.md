@@ -12,6 +12,7 @@ to start: **[README.md](../README.md)** for what Avaloka is,
 | [INSTALL.md](INSTALL.md) | anyone installing | Requirements, `scripts/install.sh`, editions, offline/air-gapped install, and the first-run failures that do not name their own cause |
 | [USER_GUIDE.md](USER_GUIDE.md) | people using the product | Signing in, uploading data, asking questions, reading the trust panel. No Kubernetes, no code |
 | [README_CLI.md](../README_CLI.md) | terminal users | The `avaloka` command — analyze, train, chat, batch, infer, deploy, coordinate, benchmark |
+| [DEMO_GUIDE.md](DEMO_GUIDE.md) | anyone presenting Avaloka | Step-by-step 5, 15 and 30-minute demos for data scientists, analysts and data engineers, in the web app and the CLI, with what not to claim |
 
 ## Running it
 

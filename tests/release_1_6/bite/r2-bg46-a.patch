@@ -1,0 +1,13 @@
+diff --git a/ui/src/lib/chat-width.ts b/ui/src/lib/chat-width.ts
+index cff7f333..7a6d2e46 100644
+--- a/ui/src/lib/chat-width.ts
++++ b/ui/src/lib/chat-width.ts
+@@ -20,7 +20,7 @@ function defaultStorage(): StorageLike | null {
+ 
+ /** The pre-existing CSS default: clamp(320px, 26vw, 400px). */
+ export function defaultChatWidth(viewport: number): number {
+-  return Math.round(Math.min(400, Math.max(CHAT_WIDTH_MIN, viewport * 0.26)));
++  return Math.round(Math.min(900, Math.max(CHAT_WIDTH_MIN, viewport * 0.5)));
+ }
+ 
+ /** min(720px, 55% of the window), never squeezing the data area below 480px, never below the minimum. */

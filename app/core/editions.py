@@ -77,8 +77,12 @@ class Capabilities:
     cloud_connectors: bool = False
     cloud_provisioning: bool = False
 
-    # Collaboration.
+    # Collaboration. Owner ruling 2026-11-01 (NEW-BG-01, revised): teams and
+    # collaborator invites are a paid offering from Professional up
+    # (team_collaboration); the organisation's own structure -- departments,
+    # roles, branches and users -- is Enterprise (org_structure).
     team_collaboration: bool = False
+    org_structure: bool = False
     share_analysis: bool = False
     comment_on_analysis: bool = False
     notifications: bool = False
@@ -118,6 +122,7 @@ GATE_REASON: Dict[str, GateReason] = {
     "cloud_connectors": GateReason.COMMERCIAL,
     "cloud_provisioning": GateReason.COMMERCIAL,
     "team_collaboration": GateReason.COMMERCIAL,
+    "org_structure": GateReason.COMMERCIAL,
     "share_analysis": GateReason.COMMERCIAL,
     "comment_on_analysis": GateReason.COMMERCIAL,
     "notifications": GateReason.COMMERCIAL,
@@ -183,6 +188,15 @@ _HOSTED: Dict[Edition, Capabilities] = {
         database_connectors=True,
         cloud_connectors=True,
         cloud_provisioning=True,
+        # Teams (members on Professional or higher) and collaborator invites,
+        # including inviting Free users onto your own resources (referrals).
+        team_collaboration=True,
+        # Owner ruling 2026-11-01: sharing analyses, commenting on them and
+        # notifications are Professional and Enterprise. Free shares reports
+        # by email and public link only, which every plan has and no flag gates.
+        share_analysis=True,
+        comment_on_analysis=True,
+        notifications=True,
         swarm_intelligence=True,
         ml_training=True,
         ml_inference=True,
@@ -200,8 +214,10 @@ _HOSTED: Dict[Edition, Capabilities] = {
         database_connectors=True,
         cloud_connectors=True,
         cloud_provisioning=True,
-        # The defining Enterprise capabilities: a company working as teams.
+        # The defining Enterprise capabilities: a company working as an
+        # organisation -- its structure, and teams of any of its members.
         team_collaboration=True,
+        org_structure=True,
         share_analysis=True,
         comment_on_analysis=True,
         notifications=True,
@@ -308,5 +324,6 @@ def explain(capability: str, capabilities: Capabilities) -> str:
             "provides the compute. Self-host, or upgrade, to enable it."
         )
     if reason is GateReason.COMMERCIAL:
-        return f"{capability} is available in Avaloka Professional and Enterprise."
+        paid = [e.title() for e in ("professional", "enterprise") if getattr(_HOSTED[e], capability)]
+        return f"{capability} is available in Avaloka {' and '.join(paid) or 'Enterprise'}."
     return f"{capability} is available"

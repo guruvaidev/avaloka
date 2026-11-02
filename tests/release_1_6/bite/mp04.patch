@@ -1,0 +1,13 @@
+diff --git a/app/core/inference.py b/app/core/inference.py
+index 171c7f8..d2730a4 100644
+--- a/app/core/inference.py
++++ b/app/core/inference.py
+@@ -263,7 +263,7 @@ _PROVIDER_MODEL_DEFAULTS = {
+     # Laptop/kind default is the small model for BOTH tiers so a CPU-only
+     # dev box never tries to serve a 14B model. Point _LARGE at the GPU-served
+     # model (e.g. qwen2.5-14b/32b) when you run the vLLM GPU deployment.
+-    LOCAL: {"large": DEFAULT_LOCAL_MODEL, "small": DEFAULT_LOCAL_MODEL},
++    LOCAL: {"large": "qwen2.5:7b-instruct", "small": DEFAULT_LOCAL_MODEL},
+     OPENAI: {"large": "gpt-4o", "small": "gpt-4o-mini"},
+     # Same models the Groq path uses, and the ones every measurement in
+     # docs/test-reports was taken on -- openai/gpt-oss-120b routing accuracy

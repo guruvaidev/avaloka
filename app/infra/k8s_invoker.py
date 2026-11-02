@@ -32,9 +32,9 @@ def _probe(command: list, **kwargs) -> subprocess.CompletedProcess:
         )
 
 
-def _run_command(command: list, step_name: str) -> dict:
+def _run_command(command: list, step_name: str, env: dict | None = None) -> dict:
     try:
-        result = subprocess.run(command, capture_output=True, text=True, check=True, shell=False)
+        result = subprocess.run(command, capture_output=True, text=True, check=True, shell=False, env=env)
         print ("----------")
         print (command)
         print (result)
@@ -119,7 +119,9 @@ def provision_cluster(platform: str) -> dict:
                 "details": ""
             }
         
-        # Assume IAM role and set temporary credentials (as done in test_eks_deployment.py)
+        # Assume the IAM role. The temporary credentials go only into the env of
+        # the aws CLI children below, never os.environ: that made them
+        # process-wide for every later request (NEW-RS-02).
         try:
             sts_client = boto3.client('sts', region_name=aws_region)
             assumed_role_object = sts_client.assume_role(
@@ -127,10 +129,13 @@ def provision_cluster(platform: str) -> dict:
                 RoleSessionName="EKSClusterProvisionSession"
             )
             credentials = assumed_role_object['Credentials']
-            os.environ['AWS_ACCESS_KEY_ID'] = credentials['AccessKeyId']
-            os.environ['AWS_SECRET_ACCESS_KEY'] = credentials['SecretAccessKey']
-            os.environ['AWS_SESSION_TOKEN'] = credentials['SessionToken']
-            os.environ["AWS_DEFAULT_REGION"] = aws_region # Configure AWS CLI default region
+            aws_env = {
+                **os.environ,
+                'AWS_ACCESS_KEY_ID': credentials['AccessKeyId'],
+                'AWS_SECRET_ACCESS_KEY': credentials['SecretAccessKey'],
+                'AWS_SESSION_TOKEN': credentials['SessionToken'],
+                'AWS_DEFAULT_REGION': aws_region,
+            }
         except ClientError as e:
             return {
                 "step_name": f"Assume IAM Role for {platform}",
@@ -141,7 +146,7 @@ def provision_cluster(platform: str) -> dict:
 
         # Check if the EKS cluster already exists
         check_cmd = ["aws", "eks", "describe-cluster", "--name", cluster_name, "--region", aws_region]
-        check_result = _probe(check_cmd)
+        check_result = _probe(check_cmd, env=aws_env)
 
         if check_result.returncode == 0:
             print(f"EKS cluster {cluster_name} already exists. Skipping creation.")
@@ -161,13 +166,13 @@ def provision_cluster(platform: str) -> dict:
                 "--role-arn", eks_cluster_role_arn,
                 "--resources-vpc-config", f"subnetIds={aws_subnet_ids},securityGroupIds={aws_security_group_ids}"
             ]
-            create_outcome = _run_command(create_cmd, f"Create {platform} Cluster")
+            create_outcome = _run_command(create_cmd, f"Create {platform} Cluster", env=aws_env)
             if create_outcome["status"] == "FAILED":
                 return create_outcome
             
             # Wait for cluster to become active
             wait_cmd = ["aws", "eks", "wait", "cluster-active", "--name", cluster_name, "--region", aws_region]
-            return _run_command(wait_cmd, f"Wait for {platform} Cluster Active")
+            return _run_command(wait_cmd, f"Wait for {platform} Cluster Active", env=aws_env)
     else:
         return {
             "step_name": f"Provision Cluster",
@@ -196,6 +201,11 @@ def configure_kubectl(platform: str) -> dict:
             "--name", cluster_name,
             "--region", aws_region
         ]
+        role_arn = os.environ.get("AWS_EKS_CLUSTER_ROLE_ARN")
+        if role_arn:
+            # The cluster's creator is the assumed role, whose credentials no
+            # longer sit in os.environ; the kubeconfig's get-token assumes it.
+            cmd += ["--role-arn", role_arn]
     else:
         return {
             "step_name": "Configure Kubectl",

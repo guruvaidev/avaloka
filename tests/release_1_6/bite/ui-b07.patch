@@ -1,0 +1,12 @@
+diff --git a/ui/src/lib/analysis-workspace.ts b/ui/src/lib/analysis-workspace.ts
+--- a/ui/src/lib/analysis-workspace.ts
++++ b/ui/src/lib/analysis-workspace.ts
+@@ -172,7 +172,7 @@ export function workspaceDatasetFromChip(dataset: DatasetChip, samples: Record<s
+   const schema = normalizeDatasetSchema(dataset.schema, samples);
+   return {
+     filename: dataset.name,
+-    schema,
++    schema: ["region", "sales"],
+     samples,
+     rows_sampled: dataset.rowsSampled ?? samples.length,
+     total_rows: dataset.totalRows ?? datasetTotalRows(dataset.visualizationConfig),

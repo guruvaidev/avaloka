@@ -1,0 +1,13 @@
+diff --git a/app/api/server.py b/app/api/server.py
+index c61b6d4a..733a87cd 100644
+--- a/app/api/server.py
++++ b/app/api/server.py
+@@ -9360,7 +9360,7 @@ async def list_models(request: Request):
+     models = await asyncio.to_thread(mlflow_manager.list_models)
+     result = {
+         "models": [
+-            model for model in models if model.get("user_id") == user_id
++            model for model in models
+         ]
+     }
+ 

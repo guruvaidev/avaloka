@@ -68,6 +68,17 @@ export type Slide = {
 
 export const PALETTE = ["#1565ef", "#f97066", "#12b76a", "#f79009", "#7a5af8", "#06aed4", "#ee46bc"];
 
+function ActiveBarTopShadow(props: any) {
+  const { x, y, width, height, fill, plotTop = 0 } = props;
+  if (![x, y, width, height, plotTop].every(Number.isFinite)) return null;
+  return (
+    <g>
+      <rect x={x} y={plotTop} width={width} height={Math.max(0, y - plotTop)} fill={fill} fillOpacity={0.12} />
+      <rect x={x} y={y} width={width} height={height} fill={fill} rx={4} />
+    </g>
+  );
+}
+
 function formatNumberCompact(n: number | string): string {
   return measureLabel(n);
 }
@@ -896,9 +907,9 @@ export function DynamicChart({
                     }
               }
             />
-            <RTooltip {...histogramTooltip} />
+            <RTooltip {...histogramTooltip} cursor={false} />
             {slide.series.map((s) => (
-              <Bar key={s.dataKey} dataKey={s.dataKey} name={s.name} fill={s.color ?? PALETTE[0]} radius={[4, 4, 0, 0]}>
+              <Bar key={s.dataKey} dataKey={s.dataKey} name={s.name} fill={s.color ?? PALETTE[0]} radius={[4, 4, 0, 0]} activeBar={<ActiveBarTopShadow plotTop={margin.top} />}>
                 {stackPresentation &&
                   slide.chartKind !== "histogram" &&
                   slide.data.length >= 2 &&

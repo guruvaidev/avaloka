@@ -12,6 +12,7 @@ from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from app.core.inference import build_chat_model
 from app.agents.state import CodingAgentState
 from app.agents.preparation_agent import parse_numeric_token
+from app.services.memory_actions import analysis_memory_context
 # Re-exported: app/agents/data_transfer_agent/daft_coder.py imports this
 # through app.agents.coder, so the name must stay importable here even
 # though coder.py no longer calls it itself.
@@ -345,13 +346,15 @@ Rules for the contract itself:
     if sample_row:
         human_prompt += f"\nSample row:\n{_json_for_prompt(sample_row)}\n"
 
-    # Inject Context Memory directly into the Pseudocode planner's awareness
-    if state.get("memory_hints"):
-        hints_str = "\n- ".join(state["memory_hints"])
+    # Inject Context Memory directly into the Pseudocode planner's awareness.
+    # A write or transfer in memory never steers a blueprint (memory_actions).
+    memory_hints, logic_signature = analysis_memory_context(state)
+    if memory_hints:
+        hints_str = "\n- ".join(memory_hints)
         human_prompt += f"\n[CONTEXT MEMORY - USER PREFERENCES & PAST INSIGHTS]:\n- {hints_str}\n"
     
-    if state.get("session_logic_signature"):
-        human_prompt += f"\n[SESSION LOGIC SIGNATURE]:\n{state['session_logic_signature']}\n"
+    if logic_signature:
+        human_prompt += f"\n[SESSION LOGIC SIGNATURE]:\n{logic_signature}\n"
 
     human_prompt += (
         "\nRespond with the numbered pseudocode steps, then the fenced json "
@@ -1432,13 +1435,15 @@ if __name__ == "__main__":
         "If you aggregate a column (such as summing Price), keep the resulting column labeled with the original name.\n\n"
     )
 
-    # Inject Context Memory directly into the Coder's awareness
-    if state.get("memory_hints"):
-        hints_str = "\n- ".join(state["memory_hints"])
+    # Inject Context Memory directly into the Coder's awareness. A write or
+    # transfer in memory never steers the code (memory_actions).
+    memory_hints, logic_signature = analysis_memory_context(state)
+    if memory_hints:
+        hints_str = "\n- ".join(memory_hints)
         human_prompt += f"[CONTEXT MEMORY - USER PREFERENCES & PAST INSIGHTS]:\n- {hints_str}\n\n"
     
-    if state.get("session_logic_signature"):
-        human_prompt += f"[SESSION LOGIC SIGNATURE]:\n{state['session_logic_signature']}\n\n"
+    if logic_signature:
+        human_prompt += f"[SESSION LOGIC SIGNATURE]:\n{logic_signature}\n\n"
 
     if pseudocode_plan:
         human_prompt += f"Pseudocode blueprint (follow exactly):\n{pseudocode_plan}\n\n"

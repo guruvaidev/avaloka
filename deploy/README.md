@@ -391,7 +391,16 @@ these volumes, or point the chart at its S3 gateway as external object storage.
 With SeaweedFS enabled and no cloud backend configured, the chart sets
 `STORAGE_BACKEND=s3` and publishes the endpoint and credentials to everything
 that reads `s3://` — the API, LangGraph, the Celery workers, and the Ray head and
-workers (via `envFrom` on `deploy/helm/ray/raycluster.yaml`):
+workers. The Ray pods take `avaloka-config` whole (`envFrom`) but only named keys
+from `avaloka-secrets` (`secretKeyRef` on `deploy/helm/ray/raycluster.yaml` and
+`rayservice.yaml`): `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and, on the
+RayCluster head only, `AVALOKA_PII_KEY`. They run user code, so they never get
+the database, JWT, payment or model-provider keys. An analysis job's own
+connection keys, and a data transfer's database URLs and bucket keys, reach that
+job alone — a Secret owned by its RayJob in KubeRay mode (see
+`rbac.rayJobSecretsNamespace`, which also sets the transfers' `KUBE_NAMESPACE`),
+or the job's env in direct mode; neither the RayJob nor its ConfigMap holds one.
+The platform values the pods get:
 
 | Variable | Value |
 |----------|-------|

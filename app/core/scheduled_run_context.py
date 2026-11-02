@@ -52,6 +52,11 @@ def scheduled_run_context(
         _CURRENT_RUN.reset(token)
 
 
+def current_scheduled_run() -> Optional[ScheduledRunContext]:
+    """The scheduled run this task belongs to, or None outside one."""
+    return _CURRENT_RUN.get()
+
+
 def notify_ray_job_submitted(metadata: Mapping[str, str]) -> bool:
     """Attach a newly submitted Ray job to the active scheduled run, if any."""
     current = _CURRENT_RUN.get()

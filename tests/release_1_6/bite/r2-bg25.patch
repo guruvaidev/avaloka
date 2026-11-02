@@ -1,0 +1,11 @@
+diff --git a/ui/src/lib/upload-review.ts b/ui/src/lib/upload-review.ts
+index 411564e9..39f5ed2b 100644
+--- a/ui/src/lib/upload-review.ts
++++ b/ui/src/lib/upload-review.ts
+@@ -1,5 +1,5 @@
+ /** Display-only upload review helpers. Never infer backend cleaning behavior. */
+-export const CLEANING_DISCLOSURE = "No cleaning options are sent by this action. The backend has not supplied its cleaning rules.";
++export const CLEANING_DISCLOSURE = "Cleaning removes duplicate rows and fills empty cells.";
+ export const CLEANING_TOOLTIP = "Starts with the uploaded dataset; no cleaning options are sent and backend cleaning rules are unavailable.";
+ 
+ export function readableDatasetName(filename: string): string {

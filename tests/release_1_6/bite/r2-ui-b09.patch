@@ -1,0 +1,13 @@
+diff --git a/ui/src/components/insights-avatar/InsightsAvatar.tsx b/ui/src/components/insights-avatar/InsightsAvatar.tsx
+index 10a067ef..7b63c261 100644
+--- a/ui/src/components/insights-avatar/InsightsAvatar.tsx
++++ b/ui/src/components/insights-avatar/InsightsAvatar.tsx
+@@ -290,7 +290,7 @@ export function InsightsAvatar({
+ 
+   return (
+     <>
+-      {!open && (
++      {false && (
+         <button
+           type="button"
+           onClick={() => setOpen(true)}

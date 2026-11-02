@@ -92,6 +92,14 @@ def build_cloud_secret_yaml(
     NOTE:
     - Because your RayJob YAML uses envFrom: secretRef, secret keys must be valid env var names.
     """
+    return _build_secret_yaml(secret_name, namespace, cloud_secret_env(provider, creds))
+
+
+def cloud_secret_env(provider: str, creds: Dict[str, Any]) -> Dict[str, str]:
+    """The env a Ray job needs to read one connection's storage, and nothing else.
+
+    Raises ValueError when the connection lacks the keys its provider needs.
+    """
     p = (provider or "").lower().strip()
 
     # ---- S3 / AWS ----
@@ -113,7 +121,7 @@ def build_cloud_secret_yaml(
         if token:
             sd["AWS_SESSION_TOKEN"] = str(token)
 
-        return _build_secret_yaml(secret_name, namespace, sd)
+        return sd
 
     # ---- GCS ----
     if p in {"gcs", "gcp"}:
@@ -147,7 +155,7 @@ def build_cloud_secret_yaml(
         # Empty keys are allowed but we can drop if blank
         sd = {k: v for k, v in sd.items() if v}
 
-        return _build_secret_yaml(secret_name, namespace, sd)
+        return sd
 
     # ---- Azure ----
     if p in {"az", "azure"}:
@@ -174,7 +182,7 @@ def build_cloud_secret_yaml(
         if not sd:
             raise ValueError("Missing Azure credentials for secret (connection_string or account_name/account_key)+sas_token")
 
-        return _build_secret_yaml(secret_name, namespace, sd)
+        return sd
 
     raise ValueError(f"Unsupported provider for cloud secret: {provider!r}")
 

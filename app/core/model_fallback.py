@@ -34,6 +34,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from langchain_core.runnables.base import Runnable
 
+from app.core.inference import DEFAULT_LOCAL_MODEL
+
 logger = logging.getLogger(__name__)
 
 OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
@@ -450,8 +452,9 @@ def describe_backup() -> Dict[str, object]:
 # is exactly the kind of thing that gets debugged for an afternoon.
 #
 # Model ids verified against the live OpenRouter catalogue on 2026-08-22
-# (google/gemma-4-31b-it, google/gemma-4-26b-a4b-it, qwen/qwen3.8-27b,
-# google/gemma-3-4b-it). The ids your vLLM/Ollama actually serves may differ —
+# (google/gemma-4-31b-it, google/gemma-4-26b-a4b-it, qwen/qwen3.8-27b). The
+# laptop default is the product's default local model instead (see below). The
+# ids your vLLM/Ollama actually serves may differ —
 # every default below is env-overridable, and the serving manifest decides
 # what exists.
 
@@ -464,8 +467,13 @@ LOCAL_MODEL_CLUSTER = os.getenv("AVALOKA_LOCAL_MODEL_CLUSTER", "google/gemma-4-3
 LOCAL_MODEL_CLUSTER_ALT = os.getenv("AVALOKA_LOCAL_MODEL_CLUSTER_ALT", "qwen/qwen3.8-27b")
 
 #: Laptop-profile local model: small enough to serve on CPU/metal without
-#: making the fallback slower than the outage it papers over.
-LOCAL_MODEL_LAPTOP = os.getenv("AVALOKA_LOCAL_MODEL_LAPTOP", "google/gemma-3-4b-it")
+#: making the fallback slower than the outage it papers over. It is the
+#: product's default local model (Qwen3-4B-Instruct-2507, Apache-2.0), which is
+#: what deploy/inference/ollama-cpu.yaml serves. It was google/gemma-3-4b-it,
+#: whose weights are under the Gemma Terms of Use rather than a permissive
+#: licence; tests/test_local_model_licence.py now holds these defaults to the
+#: same licence allowlist as every other shipped local model.
+LOCAL_MODEL_LAPTOP = os.getenv("AVALOKA_LOCAL_MODEL_LAPTOP", DEFAULT_LOCAL_MODEL)
 
 
 def deployment_profile() -> str:

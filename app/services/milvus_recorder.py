@@ -1,10 +1,10 @@
 """
 Milvus Recorder — Celery background task for Layer 4 episodic memory writes.
 
-Environment variables (see embedding_utils.py for the full cascade):
-  OPENAI_API_KEY              – OpenAI embeddings (highest quality)
-  SENTENCE_TRANSFORMER_MODEL  – local fallback model (no API key needed)
-  OPENAI_EMBEDDING_MODEL      – OpenAI model name (default: text-embedding-3-small)
+Environment variables (see embedding_utils.py for provider selection):
+  EMBEDDING_PROVIDER          – local (default) | openai (needs EMBEDDING_OPENAI_API_KEY)
+  SENTENCE_TRANSFORMER_MODEL  – local model (default: all-MiniLM-L6-v2)
+  OPENAI_EMBEDDING_MODEL      – OpenAI model name, opt-in only (default: text-embedding-3-small)
   MILVUS_DEFAULT_NOTEBOOK     – default notebook_id (default: default_notebook)
 """
 import logging
@@ -29,12 +29,8 @@ def _record_impl(
     Core recording logic — separated from the Celery decorator so it can be unit-tested directly.
 
     Delegates embedding resolution to ``app.services.embedding_utils.embed_text``,
-    which walks the provider cascade:
-      1. OpenAI (OPENAI_API_KEY set)
-      2. sentence-transformers (local, no API key)
-      3. Zero-vector last resort with loud WARNING
-
-    Zero vectors are never silently accepted — the cascade is exhausted first.
+    which embeds locally (sentence-transformers) unless the operator opted in
+    to OpenAI, with a zero-vector and a loud WARNING as the last resort.
     """
     effective_notebook = notebook_id or _DEFAULT_NOTEBOOK
     vector_dim         = milvus_client._vector_dim
@@ -44,7 +40,7 @@ def _record_impl(
         f"notebook='{effective_notebook}', role='{agent_role}'"
     )
 
-    # --- Embedding (cascade: OpenAI → sentence-transformers → zero-vector) ---
+    # --- Embedding (local by default; OpenAI only on explicit opt-in) ---
     try:
         from app.services.embedding_utils import embed_text
         vector = embed_text(content, target_dim=vector_dim)

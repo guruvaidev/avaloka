@@ -1,6 +1,5 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { getCachedAuthUser } from "@/lib/auth-user";
-import { SUPPORT_ADMIN_EMAIL } from "@/lib/support-admin";
 
 import { useState } from "react";
 import { toast } from "sonner";
@@ -11,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { sendSupportQueryEmail } from "@/lib/support.functions";
-import { listMySupportTickets } from "@/lib/support-tickets.functions";
+import { amISupportAdmin, listMySupportTickets } from "@/lib/support-tickets.functions";
 import { SupportThreadPanel, SupportStatusPill } from "@/components/support/SupportThreadPanel";
 import { AnalysisPickerModal } from "@/components/support/AnalysisPickerModal";
 
@@ -20,9 +19,11 @@ export const Route = createFileRoute("/_authenticated/support")({
   // The support desk account has no client-facing support page; it goes
   // straight to the support queries dashboard.
   beforeLoad: async () => {
+    // Who that is lives in server configuration (ADMIN_EMAILS), so ask the server.
     const user = await getCachedAuthUser();
-    const email = String(user?.email ?? "").trim().toLowerCase();
-    if (email === SUPPORT_ADMIN_EMAIL) throw redirect({ to: "/support-queries" });
+    if (!user) return;
+    const { isAdmin } = await amISupportAdmin().catch(() => ({ isAdmin: false }));
+    if (isAdmin) throw redirect({ to: "/support-queries" });
   },
 
   head: () => ({

@@ -68,6 +68,12 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+# Every chat model built anywhere in this process sends a sealed credential
+# token as an opaque placeholder, never the token (app/core/typed_secrets.py).
+from app.core.typed_secrets import install_model_scrub as _install_model_scrub  # noqa: E402
+
+_install_model_scrub()
+
 # --------------------------------------------------------------------------
 # Provider names
 # --------------------------------------------------------------------------
@@ -84,8 +90,9 @@ _PROVIDER_ALIASES = {
     # The empty string is what an unset INFERENCE_PROVIDER looks like by the
     # time it reaches here, so this entry -- not the `or` below -- is what
     # actually decides the default. It said GROQ, which is why setting the
-    # fallback alone changed nothing.
-    "": OPENROUTER,
+    # fallback alone changed nothing. MP-01 (2026-10-31): Groq, matching the
+    # Helm chart's inference.provider (deploy/helm/avaloka/values.yaml).
+    "": GROQ,
     "groqcloud": GROQ,
     "groq-cloud": GROQ,
     "vllm": LOCAL,
@@ -133,50 +140,51 @@ def _env_first(*names: str, default: Optional[str] = None) -> Optional[str]:
 
 
 def _default_provider_with_a_usable_key(groq_api_key: Optional[str] = None) -> str:
-    """OpenRouter when it has a key, else a provider that does.
+    """Groq when it has a key (or nothing has one), else a provider that does.
 
-    Only consulted when no provider was configured at all. Order is the
-    preferred default first, then the providers whose keys are a single env var
-    to check; anything needing cloud credentials is out of scope here and must
-    be selected explicitly.
+    Only consulted when no provider was configured at all. Groq is the default
+    the Helm chart ships (deploy/helm/avaloka/values.yaml ``inference.provider``),
+    so an unconfigured install and a chart install pick the same provider
+    (MP-01, owner decision 2026-10-31; it was OpenRouter-first before). The
+    providers whose keys are a single env var are checked next, so an install
+    holding only an OpenRouter or OpenAI key still gets a working LLM; anything
+    needing cloud credentials must be selected explicitly.
     """
-    if _env_first("OPENROUTER_API_KEY", "INFERENCE_OPENROUTER_API_KEY"):
-        return OPENROUTER
     if groq_api_key or _env_first(
         "GROQ_API_KEY", "GROQ_API_KEY_PLANNING_AGENT", "GROQ_API_KEY_CODING_AGENT"
     ):
+        return GROQ
+    if _env_first("OPENROUTER_API_KEY", "INFERENCE_OPENROUTER_API_KEY"):
         logger.info(
-            "No INFERENCE_PROVIDER set and no OpenRouter key; using Groq, which has one. "
+            "No INFERENCE_PROVIDER set and no Groq key; using OpenRouter, which has one. "
             "Set INFERENCE_PROVIDER explicitly to pin this."
         )
-        return GROQ
+        return OPENROUTER
     if _env_first("OPENAI_API_KEY"):
         return OPENAI
-    return OPENROUTER   # nothing usable: keep the documented default and let it report
+    return GROQ   # nothing usable: keep the documented default and let it report
 
 
 def _canonical_provider(raw: Optional[str], groq_api_key: Optional[str] = None) -> str:
-    """Resolve a provider name, defaulting to OpenRouter.
+    """Resolve a provider name, defaulting to Groq.
 
-    The default was Groq, which meant a first run required a Groq account
-    specifically. OpenRouter fronts many providers behind one key -- including
-    Groq itself -- so one credential reaches whatever model a user already has
-    access to, which is the better default for an open-source install.
-
-    Groq remains fully supported and is still the fastest path: set
-    INFERENCE_PROVIDER=groq, or AVALOKA_<AGENT>_PROVIDER=groq per agent.
+    Groq is the default the Helm chart ships, and the code default matches it
+    (MP-01, owner decision 2026-10-31). For a while the code defaulted to
+    OpenRouter while the chart said groq, so a chart install and a bare install
+    picked different providers. OpenRouter remains fully supported: set
+    INFERENCE_PROVIDER=openrouter, or AVALOKA_<AGENT>_PROVIDER=openrouter per agent.
     """
     key = (raw or "").strip().lower()
     if not key:
         # Nothing was configured, so this is the implicit default. Prefer
-        # OpenRouter, but only if it can actually be used: selecting a provider
+        # Groq, but fall back to a provider whose key is present: selecting a provider
         # whose key is absent returns no LLM at all, and the only signal is a
         # log line. Anyone who had GROQ_API_KEY set and nothing else -- which is
         # what the older docs tell you to do -- would silently lose the LLM on
         # upgrade. An EXPLICIT setting is never second-guessed below, so
         # INFERENCE_PROVIDER=openrouter with no key still reports itself.
         return _default_provider_with_a_usable_key(groq_api_key)
-    canonical = _PROVIDER_ALIASES.get(key, key or OPENROUTER)
+    canonical = _PROVIDER_ALIASES.get(key, key or GROQ)
     return canonical
 
 
@@ -216,7 +224,7 @@ def resolve_provider(*, role: str, agent: str, groq_api_key: Optional[str] = Non
     1. ``AVALOKA_<AGENT>_PROVIDER``            (per-agent)
     2. ``INFERENCE_PROVIDER_<ROLE>``           (per-role: PLANNING/CODING/VIZ)
     3. ``INFERENCE_PROVIDER``                  (global)
-    4. OpenRouter if it has a key, else a provider that does
+    4. Groq if it has a key (or nothing has one), else a provider that does
     """
     raw = _env_first(
         f"AVALOKA_{agent.upper()}_PROVIDER",
@@ -239,11 +247,23 @@ def resolve_provider(*, role: str, agent: str, groq_api_key: Optional[str] = Non
 #   3. INFERENCE_<PROVIDER>_MODEL           (all agents)
 #   4. built-in default below
 # --------------------------------------------------------------------------
+#: The default locally served model: Qwen3-4B-Instruct-2507 at Q4_K_M, as the
+#: Ollama library publishes it. Apache-2.0 on both the Hugging Face card and the
+#: licence layer of this Ollama tag. It replaced qwen2.5:3b-instruct, whose
+#: weights are under the Qwen RESEARCH licence (non-commercial) -- a commercial
+#: edition must not default to them. This is the Instruct-2507 build, which has
+#: no thinking mode, so tool calls arrive without a <think> preamble and nothing
+#: has to send /no_think. (The bare ``qwen3:4b`` tag is the Thinking-2507 build;
+#: do not swap to it without handling reasoning output.)
+#: tests/test_local_model_licence.py holds every shipped local tag to a licence
+#: allowlist; a new default must be added there with its licence, or CI fails.
+DEFAULT_LOCAL_MODEL = "qwen3:4b-instruct-2507-q4_K_M"
+
 _PROVIDER_MODEL_DEFAULTS = {
     # Laptop/kind default is the small model for BOTH tiers so a CPU-only
     # dev box never tries to serve a 14B model. Point _LARGE at the GPU-served
     # model (e.g. qwen2.5-14b/32b) when you run the vLLM GPU deployment.
-    LOCAL: {"large": "qwen2.5:3b-instruct", "small": "qwen2.5:3b-instruct"},
+    LOCAL: {"large": DEFAULT_LOCAL_MODEL, "small": DEFAULT_LOCAL_MODEL},
     OPENAI: {"large": "gpt-4o", "small": "gpt-4o-mini"},
     # Same models the Groq path uses, and the ones every measurement in
     # docs/test-reports was taken on -- openai/gpt-oss-120b routing accuracy

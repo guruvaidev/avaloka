@@ -2,26 +2,29 @@
 # -----------------------------------------------------------------------------
 # Local, CPU-only OpenAI-spec LLM for laptop / kind development.
 #
-# Serves a small (~3B) instruct model through Ollama's OpenAI-compatible API
+# Serves a small (~4B) instruct model through Ollama's OpenAI-compatible API
 # (POST /v1/chat/completions) so the Avaloka agent stack can run end-to-end with
 # NO cloud dependency and NO GPU. Point the app at it with:
 #
 #     INFERENCE_PROVIDER=local
 #     INFERENCE_LOCAL_BASE_URL=http://avaloka-local-llm:11434/v1
-#     INFERENCE_LOCAL_MODEL_LARGE=qwen2.5:3b-instruct
-#     INFERENCE_LOCAL_MODEL_SMALL=qwen2.5:3b-instruct
+#     INFERENCE_LOCAL_MODEL_LARGE=qwen3:4b-instruct-2507-q4_K_M
+#     INFERENCE_LOCAL_MODEL_SMALL=qwen3:4b-instruct-2507-q4_K_M
 #
-# Default model: Qwen2.5-3B-Instruct. Chosen over Nemotron-Nano-3B and
-# Gemma-3-4B as the best ~3B option for THIS workload because the Avaloka
-# agents drive the model almost entirely through OpenAI tool/function calls and
-# strict JSON: Qwen2.5-Instruct has the strongest, most consistent tool-calling
-# and JSON adherence at this size and is first-class in both Ollama and vLLM.
-# Swap it by editing MODEL below (any Ollama tag) — the agents are unchanged.
+# Default model: Qwen3-4B-Instruct-2507 (Ollama tag
+# qwen3:4b-instruct-2507-q4_K_M), licensed Apache-2.0. It replaced
+# Qwen2.5-3B-Instruct, whose weights are under the Qwen Research licence and so
+# cannot be the default of a commercial edition. The Avaloka agents drive the
+# model almost entirely through OpenAI tool/function calls and strict JSON; the
+# Instruct-2507 build has no thinking mode, so tool calls come back clean.
+# Swap it by editing MODEL below (any Ollama tag) — the agents are unchanged —
+# but check the licence first: tests/test_local_model_licence.py holds every
+# shipped tag to an allowlist of permissive licences.
 #
 # Quick start (kind):
 #     kubectl apply -f deploy/inference/ollama-cpu.yaml
 #     kubectl rollout status deploy/avaloka-local-llm --timeout=600s
-# First rollout pulls the model (~2 GB) before it becomes Ready.
+# First rollout pulls the model (~2.5 GB) before it becomes Ready.
 # -----------------------------------------------------------------------------
 apiVersion: apps/v1
 kind: Deployment
@@ -55,7 +58,7 @@ spec:
             - name: OLLAMA_KEEP_ALIVE
               value: "-1"
             - name: MODEL
-              value: "qwen2.5:3b-instruct"
+              value: "qwen3:4b-instruct-2507-q4_K_M"
           command: ["/bin/sh", "-c"]
           args:
             - |

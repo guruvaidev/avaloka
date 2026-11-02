@@ -1,0 +1,13 @@
+diff --git a/ui/src/components/dashboard/PlanGate.tsx b/ui/src/components/dashboard/PlanGate.tsx
+index 56b0fdb..bf429a0 100644
+--- a/ui/src/components/dashboard/PlanGate.tsx
++++ b/ui/src/components/dashboard/PlanGate.tsx
+@@ -17,7 +17,7 @@ export function PlanGate({
+   const navigate = useNavigate();
+   const { data, isLoading } = useActivePlan();
+   const tier = data?.plan;
+-  const isFree = !!tier && tier === "free";
++  const isFree = false;
+   const isBlockedPro = blockProfessional && tier === "professional";
+ 
+   useEffect(() => {

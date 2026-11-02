@@ -5,9 +5,11 @@ An event exists in two forms and they are not the same thing:
 * **stored** -- in this deployment's own database. It holds the question as the
   analyst typed it (after pattern redaction), column and table names included.
   That text identifies the customer's business. It is not anonymous.
-* **exported** -- what may leave the cluster. Behavioural fields only. **No
-  question text, in any form.** The one prompt-derived value is
-  ``prompt_chars_bucket``, a coarse length band.
+* **exported** -- what may leave the cluster. Metadata only: event types,
+  timings, counts, outcomes and error classes, closed-vocabulary feature and
+  route names, versions. **No question text, in any form** (owner decision
+  D16.5, 2026-10-31). The one prompt-derived value is ``prompt_chars_bucket``,
+  a coarse length band -- a count, not text.
 
 ``safe()`` has the shape and the behaviour of ``avaloka/telemetry/allowlist.py``
 (PR #329): build a dict, pass it through, emit only what comes back. An unknown
@@ -41,27 +43,41 @@ STORED_SERVER_KEYS: FrozenSet[str] = frozenset({
 
 STORED_KEYS: FrozenSet[str] = schema.CLIENT_FIELDS | STORED_SERVER_KEYS
 
-#: Everything the wire may carry. Built from the schema minus the sensitive
-#: fields, so a field marked sensitive tomorrow leaves this set without anyone
-#: remembering to remove it.
-EXPORT_KEYS: FrozenSet[str] = (
-    (schema.CLIENT_FIELDS - SENSITIVE_STORED)
+#: Everything the wire may carry: an explicit allowlist of metadata fields,
+#: written out rather than derived from the schema. A field added to the
+#: schema tomorrow does not leave the cluster until someone adds it here, in
+#: review. Every value behind these keys is an enum, a bounded number, a
+#: boolean, an exception class name, an opaque random id or a version; none can
+#: hold typed text, a column, table, dataset or file name, SQL, code or a value.
+EXPORT_KEYS: FrozenSet[str] = frozenset({
+    # what happened, and in what order
+    "event_type", "event_id", "seq", "t_ms",
+    # timings and counts
+    "duration_ms", "first_response_ms", "active_ms", "turn_index", "retry_count",
+    "http_status", "row_count_bucket", "column_count_bucket",
     # prompt_chars_bucket is one of six coarse length bands ("21-80"), not a
-    # length: behavioural, and far too coarse to fingerprint a question.
-    | frozenset({"actor_id", "schema_version", "session_id", "ui_version", "install_id",
-                 "prompt_chars_bucket"})
-)
-
-#: Keys that exist only for the disabled question-text path. They are NOT part
-#: of the exported representation. ``export.to_wire`` admits them only when
-#: ``export.EXPORT_QUESTION_TEXT`` is true, which it is not, and which no
-#: setting can change.
-EXPORT_TEXT_KEYS: FrozenSet[str] = frozenset({
-    "prompt_stripped", "prompt_redactions", "prompt_names_exact",
-    "prompt_names_common_word", "prompt_names_substring",
+    # length and not text: far too coarse to fingerprint a question.
+    "prompt_chars_bucket",
+    # success and failure
+    "outcome", "error_class", "reason",
+    # closed vocabularies: where in the product, which feature, which kind
+    "route", "from_route", "entry", "viewport", "method", "source_kind",
+    "file_format", "input_method", "is_retry", "retry_of", "turn_id",
+    "result_kind", "chart_type", "action", "export_format", "feedback_type",
+    "has_comment", "surface", "feature",
+    # envelope: versions and random, non-persistent ids
+    "schema_version", "ui_version", "session_id", "install_id", "actor_id",
 })
 
-assert not (EXPORT_KEYS & SENSITIVE_STORED), "a sensitive stored field is on the export permit-list"
+#: Keys that may never be on the wire under any circumstances.
+_NEVER_EXPORTED: FrozenSet[str] = SENSITIVE_STORED | schema.NEVER_ACCEPTED | frozenset({
+    "prompt", "prompt_export", "prompt_stripped", "prompt_redactions",
+    "prompt_names_exact", "prompt_names_common_word", "prompt_names_substring",
+    "received_at",
+})
+
+assert not (EXPORT_KEYS & _NEVER_EXPORTED), "a forbidden field is on the export allowlist"
+assert EXPORT_KEYS <= STORED_KEYS | {"install_id"}, "an export key the stored form does not have"
 
 
 def safe(fields: Dict[str, Any], allowed: FrozenSet[str] = EXPORT_KEYS) -> Dict[str, Any]:
@@ -69,3 +85,12 @@ def safe(fields: Dict[str, Any], allowed: FrozenSet[str] = EXPORT_KEYS) -> Dict[
     if not isinstance(fields, dict):
         return {}
     return {k: v for k, v in fields.items() if k in allowed and v is not None}
+
+
+def exportable(record: Dict[str, Any]) -> Dict[str, Any]:
+    """The egress check: what ``export_pending`` hands to the transport.
+
+    ``safe`` against :data:`EXPORT_KEYS`, applied at the one point where records
+    leave, so it holds whatever built the record.
+    """
+    return safe(record, EXPORT_KEYS)

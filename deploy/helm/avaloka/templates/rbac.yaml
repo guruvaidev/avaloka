@@ -81,4 +81,57 @@ roleRef:
   name: {{ include "avaloka.celeryServiceAccountName" . }}
   apiGroup: rbac.authorization.k8s.io
 {{- end }}
+{{- with .Values.rbac.rayJobSecretsNamespace }}
+---
+# Analysis and data transfer RayJobs (kubectl mode). A job's credentials (an
+# analysis connection's keys; a transfer's database URLs and bucket keys) never
+# go into the RayJob CR, its ConfigMap or the shared Ray pods: each job gets a
+# Secret <rayjob>-env holding only its own, read by the job's pods and owned by the RayJob,
+# so Kubernetes garbage-collects it with the job. The app creates the Secret
+# (owner reference included) and deletes it after the job. Scoped to the job
+# namespace only. No "get" (or "patch"/"apply", which kubectl implements as
+# get-then-write) on secrets: the kubelet reads the Secret for the pod, not
+# this service account, so the app can write a job's Secret but never read one.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "avaloka.fullname" $ }}-ray-jobs
+  namespace: {{ . }}
+  labels:
+    {{- include "avaloka.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create", "delete"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create", "get", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list"]
+  - apiGroups: ["ray.io"]
+    resources: ["rayjobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "avaloka.fullname" $ }}-ray-jobs
+  namespace: {{ . }}
+  labels:
+    {{- include "avaloka.labels" $ | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "avaloka.serviceAccountName" $ }}
+    namespace: {{ $.Release.Namespace }}
+  {{- if $.Values.celery.enabled }}
+  - kind: ServiceAccount
+    name: {{ include "avaloka.celeryServiceAccountName" $ }}
+    namespace: {{ $.Release.Namespace }}
+  {{- end }}
+roleRef:
+  kind: Role
+  name: {{ include "avaloka.fullname" $ }}-ray-jobs
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}
 {{- end }}

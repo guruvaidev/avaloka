@@ -56,6 +56,9 @@ NEW_FIELDS = {
     # "model_training" when the hosted plan does not include the feature, so
     # the UI can show an upgrade prompt instead of parsing the chat message.
     "plan_upgrade_required",
+    # Item 8a run truth: outcome (succeeded|failed|partial), reason_code,
+    # reason and scope for the turn, written by app/core/run_truth.py.
+    "run_truth",
 }
 
 

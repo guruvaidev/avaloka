@@ -1,0 +1,12 @@
+diff --git a/ui/src/lib/analysis-workspace.ts b/ui/src/lib/analysis-workspace.ts
+--- a/ui/src/lib/analysis-workspace.ts
++++ b/ui/src/lib/analysis-workspace.ts
+@@ -160,7 +160,7 @@ export function buildAutoInsightsDatasets(
+       name: multi ? chipLabel(d) : d.name,
+       config: ownConfig,
+       status: d.visualizationStatus ?? (ownConfig ? "ready" : undefined),
+-      samples: ownSamples,
++      samples: datasetChips[0]?.samples,
+     });
+   });
+   return Array.from(byId.values());

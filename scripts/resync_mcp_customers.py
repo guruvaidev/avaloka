@@ -15,25 +15,27 @@ Env:
                      without it
 """
 
-import json
 import os
 import sys
 
 import httpx
 
+# Run as `python scripts/resync_mcp_customers.py` from the repo root: the
+# registry is opened with app.mcp_server.credentials.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://127.0.0.1:8010").rstrip("/")
 CUSTOMERS_FILE = os.getenv("CUSTOMERS_FILE", "customers.json")
 
-# Fields the /admin/customers DatabaseConfig model expects.
+# Fields the /admin/customers SealedDatabaseConfig model takes in the clear;
+# connection_string and api_key go as sealed handles (app/mcp_server/credentials.py).
 _CONFIG_FIELDS = (
     "customer_id",
-    "connection_string",
     "database_type",
     "max_rows",
     "query_timeout",
     "created_at",
     "status",
-    "api_key",
 )
 
 
@@ -43,10 +45,11 @@ def main() -> int:
         return 0
 
     try:
-        with open(CUSTOMERS_FILE, "r") as f:
-            customers = json.load(f)
+        # The registry's secrets are sealed under DB_ENCRYPTION_KEY; opened here.
+        from app.mcp_server.credentials import credential_handle, load_registry
+        customers = load_registry(CUSTOMERS_FILE)
     except Exception as e:
-        print(f"[resync] ERROR: could not read '{CUSTOMERS_FILE}': {e}")
+        print(f"[resync] ERROR: could not read '{CUSTOMERS_FILE}': {type(e).__name__}")
         return 1
 
     if not customers:
@@ -75,6 +78,8 @@ def main() -> int:
                 continue
 
             payload = {k: record[k] for k in _CONFIG_FIELDS if k in record}
+            payload["connection_string_enc"] = credential_handle(record["connection_string"])
+            payload["api_key_enc"] = credential_handle(record["api_key"])
             payload.setdefault("status", "active")
             payload.setdefault("max_rows", 1000)
             payload.setdefault("query_timeout", 30)

@@ -76,6 +76,44 @@ def _normalize_schema_for_state(
     return {}
 
 
+def _schema_from_db_rows(columns: List[str], rows: List[Dict[str, Any]]) -> Dict[str, str]:
+    """Column dtypes for a database table, from the typed values its sample came back with.
+
+    The database-table paths typed every column "string", so on a PostgreSQL
+    thread an INTEGER column like ``stroke`` reached the validator as a string
+    and ``df['stroke'] == 1`` was blocked (rc9: 4 of 5 runs failed). The query
+    tool returns JSON-typed values (ints, floats, bools, strings, nulls), so the
+    sample says what each column holds. A column with mixed or no values stays
+    "string", as before.
+    """
+    from decimal import Decimal
+
+    schema: Dict[str, str] = {}
+    for col in columns:
+        kinds = set()
+        for row in rows:
+            v = row.get(col)
+            if v is None:
+                continue
+            if isinstance(v, bool):
+                kinds.add("bool")
+            elif isinstance(v, int):
+                kinds.add("int")
+            elif isinstance(v, (float, Decimal)):
+                kinds.add("float")
+            else:
+                kinds.add("other")
+        if kinds == {"bool"}:
+            schema[col] = "bool"
+        elif kinds == {"int"}:
+            schema[col] = "int64"
+        elif kinds and kinds <= {"int", "float"}:
+            schema[col] = "float64"
+        else:
+            schema[col] = "string"
+    return schema
+
+
 # NEW: tiny-sample -> CSV writer
 def _write_rows_to_csv(rows: List[Dict[str, Any]], path: Path) -> None:
     """Write a list[dict] to CSV with header based on keys of first row."""
@@ -99,9 +137,9 @@ def _ddl_from_schema(table_name: str, schema: Dict[str, str]) -> str:
 
     def map_type(t: str) -> str:
         t = (t or "string").lower()
-        if t in ("int", "integer", "bigint", "smallint"):
+        if t in ("int", "integer", "bigint", "smallint") or re.fullmatch(r"u?int\d+", t):
             return "INTEGER"
-        if t in ("float", "double", "number", "numeric", "real", "decimal"):
+        if t in ("float", "double", "number", "numeric", "real", "decimal") or re.fullmatch(r"float\d+", t):
             return "DOUBLE"
         if t in ("bool", "boolean"):
             return "BOOLEAN"
@@ -357,6 +395,11 @@ def _jsonable_to_lc_msgs(items: Any) -> List[Any]:
         content = it.get("content", "")
         kwargs = {"avaloka_pinned": True} if it.get("pinned") else {}
         if role in ("human", "user"):
+            # History written before typed credentials were sealed still holds
+            # them as typed; they are sealed here, as it is read back.
+            if isinstance(content, str):
+                from app.core.typed_secrets import seal_typed_secrets
+                content, _ = seal_typed_secrets(content)
             msgs.append(HumanMessage(content=content, additional_kwargs=kwargs))
         elif role in ("ai", "assistant"):
             msgs.append(AIMessage(content=content, additional_kwargs=kwargs))

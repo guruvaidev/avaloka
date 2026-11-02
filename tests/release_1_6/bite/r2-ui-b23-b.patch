@@ -1,0 +1,13 @@
+diff --git a/ui/src/routes/_authenticated/settings.tsx b/ui/src/routes/_authenticated/settings.tsx
+index dce36cc5..849fbdd3 100644
+--- a/ui/src/routes/_authenticated/settings.tsx
++++ b/ui/src/routes/_authenticated/settings.tsx
+@@ -500,7 +500,7 @@ function SettingsPage() {
+       TABS.filter((t) => {
+         if (t.ownerOnly && !isOrgOwner) return false;
+         if (t.billing && !canSeeBilling) return false;
+-        if (t.enterpriseOnly && !isEnterprisePlan) return false;
++        if (t.enterpriseOnly) return false;
+         return true;
+       }),
+     [isOrgOwner, canSeeBilling, isEnterprisePlan],

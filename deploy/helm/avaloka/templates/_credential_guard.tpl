@@ -45,3 +45,21 @@ for one database and got another without being told.
 {{- fail (printf "lineage.databaseUrl is set but existingSecret=%q means this chart renders no Secret to carry it, so no pod would receive it. Add the key AVALOKA_LINEAGE_DB_URL to that Secret yourself and leave lineage.databaseUrl empty." .Values.existingSecret) -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+Refuse to render admin.emails together with Supabase email autoconfirm.
+
+With autoconfirm on, gotrue confirms a new account without the owner ever
+clicking a link. An address listed in admin.emails that has no account yet can
+then be registered by anyone, and the migrate hook would grant it admin (and
+the web UI would let it run the support desk). Only the in-cluster gotrue reads
+supabase.auth.autoconfirm, so the check applies when supabase.enabled is true;
+a hosted Supabase project's setting is not visible to the chart.
+*/}}
+{{- define "avaloka.checkAdminAutoconfirm" -}}
+{{- if and .Values.supabase.enabled (include "avaloka.adminEmails" .) -}}
+{{- if eq ((.Values.supabase.auth).autoconfirm | toString | lower) "true" -}}
+{{- fail "admin.emails is set while supabase.auth.autoconfirm is true. With autoconfirm on, anyone can sign up with a listed address that has no account yet, without proving they own it, and would be granted admin. Fix one of: set supabase.auth.autoconfirm=false (and fill supabase.auth.smtp so confirmation mail is delivered), or leave admin.emails empty." -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}

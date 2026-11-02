@@ -55,19 +55,19 @@ def _mk(**over):
 # --------------------------------------------------------------------------
 # provider resolution
 # --------------------------------------------------------------------------
-def test_default_provider_is_openrouter_when_nothing_is_configured(monkeypatch):
-    """OpenRouter is the default: one key fronts many providers, Groq included.
+# MP-01: corrected 2026-10-31 — owner decision: default provider is groq, matching the Helm chart; previously asserted openrouter
+# (renamed from test_default_provider_is_openrouter_when_nothing_is_configured).
+def test_default_provider_is_groq_when_nothing_is_configured(monkeypatch):
+    """Groq is the default, the same provider the Helm chart ships.
 
-    Renamed rather than deleted -- the old name asserted Groq, and a test whose
-    name states the opposite of its assertion is worse than no test. Groq is
-    still fully supported via INFERENCE_PROVIDER=groq, and is still chosen
-    automatically when it is the only key present (see
+    OpenRouter is still fully supported via INFERENCE_PROVIDER=openrouter, and
+    is still chosen automatically when it is the only key present (see
     test_implicit_default_prefers_a_usable_key).
     """
     monkeypatch.delenv("INFERENCE_PROVIDER", raising=False)
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-    assert resolve_provider(role="planning", agent="PLANNER") == "openrouter"
+    assert resolve_provider(role="planning", agent="PLANNER") == "groq"
 
 
 def test_provider_precedence_agent_over_role_over_global(monkeypatch):
@@ -88,11 +88,11 @@ def test_provider_precedence_agent_over_role_over_global(monkeypatch):
         ("gcp", "vertex"),
         ("vertexai", "vertex"),
         ("azure-openai", "azure"),
-        # Unset means the implicit default. That is OpenRouter now, and with no
-        # OPENROUTER_API_KEY and no Groq key in the environment it stays
-        # OpenRouter so the missing credential reports itself. The key-aware
-        # fallback to Groq is covered by test_implicit_default_prefers_a_usable_key.
-        ("", "openrouter"),
+        # Unset means the implicit default: Groq, and with no key in the
+        # environment it stays Groq so the missing credential reports itself.
+        # The key-aware fallback is covered by test_implicit_default_prefers_a_usable_key.
+        # MP-01: corrected 2026-10-31 — owner decision: default provider is groq, matching the Helm chart; previously asserted openrouter
+        ("", "groq"),
     ],
 )
 def test_provider_aliases(monkeypatch, raw, expected):
@@ -137,7 +137,9 @@ def test_local_returns_chatopenai_at_incluster_default(monkeypatch):
     monkeypatch.setenv("INFERENCE_PROVIDER", "local")
     llm = _mk()
     assert type(llm).__name__ == "ChatOpenAI"
-    assert llm.model_name == "qwen2.5:3b-instruct"
+    from app.core.inference import DEFAULT_LOCAL_MODEL
+
+    assert llm.model_name == DEFAULT_LOCAL_MODEL == "qwen3:4b-instruct-2507-q4_K_M"
     assert str(llm.openai_api_base) == "http://avaloka-local-llm:11434/v1"
 
 
@@ -247,11 +249,14 @@ def test_implicit_default_prefers_a_usable_key(monkeypatch):
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.delenv("INFERENCE_OPENROUTER_API_KEY", raising=False)
 
-    monkeypatch.setenv("GROQ_API_KEY", "gsk_test")
-    assert resolve_provider(role="planning", agent="X") == "groq"
-
+    # MP-01: corrected 2026-10-31 — owner decision: default provider is groq, matching the Helm chart; previously asserted openrouter
+    # (previously: Groq-only -> groq, then adding an OpenRouter key -> openrouter).
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
     monkeypatch.setenv("OPENROUTER_API_KEY", "or_test")
-    assert resolve_provider(role="planning", agent="X") == "openrouter"
+    assert resolve_provider(role="planning", agent="X") == "openrouter"   # only key present
+
+    monkeypatch.setenv("GROQ_API_KEY", "gsk_test")
+    assert resolve_provider(role="planning", agent="X") == "groq"         # default wins when usable
 
     # An explicit choice wins even when its key is absent, so the missing
     # credential is reported rather than silently swapped.

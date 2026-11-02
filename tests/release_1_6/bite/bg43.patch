@@ -1,0 +1,12 @@
+diff --git a/ui/src/components/dashboard/data-view/DataViewTabs.tsx b/ui/src/components/dashboard/data-view/DataViewTabs.tsx
+--- a/ui/src/components/dashboard/data-view/DataViewTabs.tsx
++++ b/ui/src/components/dashboard/data-view/DataViewTabs.tsx
+@@ -32,7 +32,7 @@ export function DataViewTabs({
+               : "Analysis results",
+           ],
+           ["chart", "Chart"],
+-          ["preview", "Column Summary"],
++          ["preview", "Data Preview"],
+         ] as const
+       ).map(([key, label]) => (
+         <button

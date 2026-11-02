@@ -45,12 +45,17 @@ spec:
                 - configMapRef:
                     name: avaloka-config
                     optional: true
-                - secretRef:
-                    name: avaloka-secrets
-                    optional: true
+              # Named keys only, never the whole avaloka-secrets: the Serve app
+              # loads model artifacts from the object store and needs nothing else.
               env:
                 - name: RAY_DASHBOARD_SUBPROCESS_MODULE_WAIT_READY_TIMEOUT
                   value: "180"
+                - name: AWS_ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef: { name: avaloka-secrets, key: AWS_ACCESS_KEY_ID, optional: true }
+                - name: AWS_SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef: { name: avaloka-secrets, key: AWS_SECRET_ACCESS_KEY, optional: true }
               ports:
                 - { containerPort: 6379, name: gcs }
                 - { containerPort: 8265, name: dashboard }
@@ -76,9 +81,13 @@ spec:
                   - configMapRef:
                       name: avaloka-config
                       optional: true
-                  - secretRef:
-                      name: avaloka-secrets
-                      optional: true
+                env:
+                  - name: AWS_ACCESS_KEY_ID
+                    valueFrom:
+                      secretKeyRef: { name: avaloka-secrets, key: AWS_ACCESS_KEY_ID, optional: true }
+                  - name: AWS_SECRET_ACCESS_KEY
+                    valueFrom:
+                      secretKeyRef: { name: avaloka-secrets, key: AWS_SECRET_ACCESS_KEY, optional: true }
                 resources:
                   requests: { cpu: "300m", memory: "1Gi" }
                   limits: { cpu: "2", memory: "3Gi" }

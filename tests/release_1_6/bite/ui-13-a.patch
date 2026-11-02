@@ -1,0 +1,12 @@
+diff --git a/ui/src/lib/runtime-env.ts b/ui/src/lib/runtime-env.ts
+--- a/ui/src/lib/runtime-env.ts
++++ b/ui/src/lib/runtime-env.ts
+@@ -18,7 +18,7 @@ declare global {
+ }
+ 
+ function read(key: Key): string {
+-  if (typeof window !== "undefined") return window.__ENV__?.[key] ?? "";
++  if (typeof window !== "undefined") return ((import.meta as any).env?.["VITE_" + key] as string) ?? "";
+   if (typeof process !== "undefined" && process.env) return process.env[key] ?? "";
+   return "";
+ }

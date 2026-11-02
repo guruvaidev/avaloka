@@ -1,0 +1,13 @@
+diff --git a/ui/src/lib/chart-display.ts b/ui/src/lib/chart-display.ts
+index 0b9a1449..c27e688b 100644
+--- a/ui/src/lib/chart-display.ts
++++ b/ui/src/lib/chart-display.ts
+@@ -2,7 +2,7 @@ import { scalePolicy } from "./chart-semantics";
+ 
+ export function scatterScale(type: string, values: unknown[], choice?: "linear" | "log" | null) {
+   const policy = scalePolicy(values);
+-  return type === "scatter" && policy.automatic && choice !== "linear";
++  return type === "scatter" && policy.automatic && choice === "log";
+ }
+ 
+ export function niceAxis(values: unknown[], startAtZero = false) {

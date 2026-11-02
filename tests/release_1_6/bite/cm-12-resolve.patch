@@ -1,0 +1,13 @@
+diff --git a/app/core/editions.py b/app/core/editions.py
+index cad1777f..5f1c2978 100644
+--- a/app/core/editions.py
++++ b/app/core/editions.py
+@@ -275,7 +275,7 @@ def resolve_capabilities(
+         # capabilities stay off in an open-source build because that code is
+         # not present; a commercial self-hosted build unlocks them by licence.
+         if not commercial:
+-            return OSS_CAPABILITIES
++            return _HOSTED[plan] if plan != "oss" else OSS_CAPABILITIES
+         return _HOSTED[plan] if plan != "oss" else OSS_CAPABILITIES
+ 
+     granted = _HOSTED[plan]

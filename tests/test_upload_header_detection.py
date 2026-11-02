@@ -1,6 +1,6 @@
 """Header-row detection at upload (app/api/server.py: _fix_header_row).
 
-Leela's report: charts on test.avaloka.ai showed "Unnamed: 0, 1, ..." on the
+A user report: charts on test.avaloka.ai showed "Unnamed: 0, 1, ..." on the
 axes. Cause: files whose column names are not on row 1 (a report title, an
 "exported on" line, blank rows) were read with row 1 as the header. Also:
 a blank header cell over real data (the index column DataFrame.to_csv

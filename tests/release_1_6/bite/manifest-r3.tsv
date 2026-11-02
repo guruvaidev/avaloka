@@ -1,0 +1,5 @@
+UI-B12	revert	pytest	uib12-harness-revert.patch	tests/release_1_6/test_uib12_privacy_claim.py::test_uib12_harness_sees_the_coder_prompt
+UI-B12	revert	pytest	uib12-footer-copy-revert.patch	tests/release_1_6/test_uib12_privacy_claim.py::test_uib12_never_shared_claim_matches_default_llm_egress
+UI-B12	revert	pytest	uib12-persist-revert.patch	tests/release_1_6/test_uib12_privacy_claim.py::test_uib12_registration_persists_the_customer
+UI-B12	revert	pytest	uib12-modal-copy-revert.patch	tests/release_1_6/test_uib12_privacy_claim.py::test_uib12_encrypted_credentials_claim_matches_storage
+UI-B12	revert	pytest	uib12-unseal-revert.patch	tests/release_1_6/test_uib12_privacy_claim.py::test_uib12_encrypted_credentials_claim_matches_storage

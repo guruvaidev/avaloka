@@ -37,9 +37,21 @@ spec:
               - configMapRef:
                   name: avaloka-config
                   optional: true
-              - secretRef:
-                  name: avaloka-secrets
-                  optional: true
+            # These pods run user code, so they get named keys from avaloka-secrets,
+            # never the whole Secret (database, JWT, Stripe, model-provider keys).
+            # The object-store keys, plus the PII key MTA training reads in its
+            # driver, which Ray runs on the head. A job's own connection keys
+            # reach it per job (app/infra/ray_job_runner.py), not through the pod.
+            env:
+              - name: AWS_ACCESS_KEY_ID
+                valueFrom:
+                  secretKeyRef: { name: avaloka-secrets, key: AWS_ACCESS_KEY_ID, optional: true }
+              - name: AWS_SECRET_ACCESS_KEY
+                valueFrom:
+                  secretKeyRef: { name: avaloka-secrets, key: AWS_SECRET_ACCESS_KEY, optional: true }
+              - name: AVALOKA_PII_KEY
+                valueFrom:
+                  secretKeyRef: { name: avaloka-secrets, key: AVALOKA_PII_KEY, optional: true }
             volumeMounts:
               - name: gcp-sa
                 mountPath: /var/secrets/gcp
@@ -66,7 +78,7 @@ spec:
   workerGroupSpecs:
     - groupName: cpu-workers
       replicas: 1
-      minReplicas: 1
+      minReplicas: 0     # idle workers scale to zero (K8-11)
       maxReplicas: 4
       rayStartParams: {}
       template:
@@ -89,9 +101,15 @@ spec:
                 - configMapRef:
                     name: avaloka-config
                     optional: true
-                - secretRef:
-                    name: avaloka-secrets
-                    optional: true
+              # Named keys only, as on the head: the object-store keys. The PII
+              # key reaches the workers as a task argument from the driver.
+              env:
+                - name: AWS_ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef: { name: avaloka-secrets, key: AWS_ACCESS_KEY_ID, optional: true }
+                - name: AWS_SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef: { name: avaloka-secrets, key: AWS_SECRET_ACCESS_KEY, optional: true }
               volumeMounts:
                 - name: gcp-sa
                   mountPath: /var/secrets/gcp

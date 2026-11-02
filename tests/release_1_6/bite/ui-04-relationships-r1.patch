@@ -1,0 +1,12 @@
+diff --git a/app/agents/visualization_agent.py b/app/agents/visualization_agent.py
+index 7195c6da..5d743c97 100644
+--- a/app/agents/visualization_agent.py
++++ b/app/agents/visualization_agent.py
+@@ -4369,6 +4369,7 @@ def build_profile_overview(profiling_result: Optional[Dict[str, Any]]) -> Option
+         "domain_reasoning": domain.get("reasoning"),
+         "readiness_score": score,
+         "readiness_reasoning": quick.get("readiness_reasoning"),
++        "key_relationships": quick.get("key_relationships") or [],
+         "red_flags": _str_list(quick.get("red_flags"), 5),
+         "quick_wins": _str_list(quick.get("quick_wins"), 5),
+         "strengths": _str_list(dq.get("strengths"), 5),

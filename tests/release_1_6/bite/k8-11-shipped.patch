@@ -1,0 +1,13 @@
+diff --git a/app/infra/rayjob.yaml b/app/infra/rayjob.yaml
+index 06269764..22633ab0 100644
+--- a/app/infra/rayjob.yaml
++++ b/app/infra/rayjob.yaml
+@@ -132,7 +132,7 @@ spec:
+     workerGroupSpecs:
+       - groupName: small-group
+         replicas: 2           # start with 2 workers
+-        minReplicas: 0        # scale DOWN to 0 when idle (K8-11)
++        minReplicas: 1        # scale DOWN to 1 when idle
+         maxReplicas: 10       # scale UP to 10 for large datasets
+         rayStartParams:
+           num-cpus: "2"

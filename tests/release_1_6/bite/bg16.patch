@@ -1,0 +1,13 @@
+diff --git a/ui/src/components/dashboard/DataSourceGrid.tsx b/ui/src/components/dashboard/DataSourceGrid.tsx
+index 2ec31a14..028e0535 100644
+--- a/ui/src/components/dashboard/DataSourceGrid.tsx
++++ b/ui/src/components/dashboard/DataSourceGrid.tsx
+@@ -108,7 +108,7 @@ export function DataSourceGrid({ onSelect, disabled = false }: { onSelect?: (id:
+           iconTrailing={ArrowRight}
+           isDisabled={disabled}
+           onPress={() => setExpanded(true)}
+-          className="col-span-full mt-1 justify-self-end"
++          className="h-[96px] rounded-xl border border-border bg-card"
+         >
+           View More
+         </Button>

@@ -1,0 +1,13 @@
+diff --git a/app/core/plan_limits.py b/app/core/plan_limits.py
+index 268b50ea..42c2ea02 100644
+--- a/app/core/plan_limits.py
++++ b/app/core/plan_limits.py
+@@ -110,7 +110,7 @@ def limit_error(limits: PlanLimits, reason: str, actual: int) -> Dict[str, Any]:
+         limit_value = limits.max_total_bytes if reason == "total_size" else limits.max_file_bytes
+         scope = "in total" if reason == "total_size" else "per file"
+         message = (f"This upload is {_human(actual)}. The {limits.plan.title()} plan allows "
+-                   f"{_human(limit_value)} {scope}.")
++                   f"a smaller size {scope}.")
+     upgrade = limits.plan == PLAN_FREE and reason != "file_count"
+     if upgrade:
+         message += " Reduce the file size or upgrade to Professional for larger datasets."

@@ -1,0 +1,13 @@
+diff --git a/scripts/check_edition.py b/scripts/check_edition.py
+index 57ed7c4f..c92f0257 100755
+--- a/scripts/check_edition.py
++++ b/scripts/check_edition.py
+@@ -76,7 +76,7 @@ def main() -> int:
+ 
+     print(f"\n{BOLD}Capabilities{OFF}")
+     width = max(len(name) for name in GATE_REASON)
+-    for name in sorted(GATE_REASON):
++    for name in sorted(GATE_REASON)[:1]:
+         on = getattr(caps, name)
+         mark = f"{GREEN}on {OFF}" if on else f"{RED}off{OFF}"
+         reason = GATE_REASON[name]

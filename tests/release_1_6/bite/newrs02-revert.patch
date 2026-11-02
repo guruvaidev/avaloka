@@ -1,0 +1,14 @@
+diff --git a/app/infra/providers/aws_eks.py b/app/infra/providers/aws_eks.py
+index 9f53c97..b85aa2c 100644
+--- a/app/infra/providers/aws_eks.py
++++ b/app/infra/providers/aws_eks.py
+@@ -54,6 +54,9 @@ class AwsEksProvider(ClusterProvider):
+                 aws_session_token=creds["SessionToken"],
+                 region_name=self.region,
+             )
++            os.environ["AWS_ACCESS_KEY_ID"] = creds["AccessKeyId"]
++            os.environ["AWS_SECRET_ACCESS_KEY"] = creds["SecretAccessKey"]
++            os.environ["AWS_SESSION_TOKEN"] = creds["SessionToken"]
+             return None
+         except ClientError as e:
+             return {

@@ -72,8 +72,9 @@ class _Recorder:
 
 @pytest.mark.parametrize(
     "backup_model",
-    ["qwen3.8:27b", "gemma3:27b", "qwen2.5:3b-instruct"],
-    ids=["qwen-27b", "gemma-27b", "qwen-3b"],
+    ["qwen3.8:27b", "gemma3:27b", "qwen2.5:3b-instruct",
+     "qwen3:4b-instruct-2507-q4_K_M"],
+    ids=["qwen-27b", "gemma-27b", "qwen-3b", "qwen3-4b-default"],
 )
 def test_gpt_oss_reasoning_kwargs_never_reach_a_local_model(backup_model):
     """A local model must not be handed `reasoning_effort`.
@@ -124,6 +125,7 @@ def test_every_local_model_is_declared_non_reasoning():
     from app.core.agent_llm import supports_reasoning
 
     for model in ("qwen3.8:27b", "gemma3:27b", "qwen2.5:3b-instruct",
+                  "qwen3:4b-instruct-2507-q4_K_M",
                   "gemma-3-27b-it", "llama3.1:8b"):
         assert not supports_reasoning(model), (
             f"{model} is treated as gpt-oss-compatible; reasoning kwargs would be sent"

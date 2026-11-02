@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import inspect
 import json
 import logging
 import threading
@@ -25,15 +24,12 @@ from fastapi import APIRouter, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 
-from app.analytics import config, export as export_mod, names as names_mod, redact, schema
+from app.analytics import config, redact, schema
 from app.analytics.store import Store, default_store, to_row
 
 logger = logging.getLogger(__name__)
 
 UserResolver = Callable[[Request], Optional[str]]
-#: (request, user_id) -> the column, table and dataset names registered for that
-#: analyst, or None when they cannot be determined completely. May be async.
-NamesProvider = Callable[[Request, str], Any]
 
 #: Events one analyst may send per minute. A runaway render loop in the UI is
 #: the realistic cause; the API shares one node with user workloads.
@@ -79,15 +75,12 @@ class _RateLimiter:
             return True
 
 
-def process_event(raw: Any, *, keep_prompt: bool,
-                  vocabulary: Optional[names_mod.Vocabulary] = None,
-                  prepare_export: bool = False) -> Dict[str, Any]:
+def process_event(raw: Any, *, keep_prompt: bool) -> Dict[str, Any]:
     """Validate one event and apply the capture-time controls. Raises ``schema.Rejected``.
 
-    Produces both representations of the question at once: ``prompt`` (stored,
-    sensitive, local only) and, when export is on and the vocabulary is known,
-    ``prompt_export`` (names removed). With no vocabulary there is no
-    ``prompt_export``, and so nothing for the export path to send.
+    The question is kept only as ``prompt``: stored, sensitive, local only.
+    No exportable form of it is prepared (owner decision D16.5); the export
+    path sends metadata only.
     """
     event = schema.validate_event(raw)
     if "prompt" in event:
@@ -99,18 +92,11 @@ def process_event(raw: Any, *, keep_prompt: bool,
             if cleaned is not None:
                 event["prompt"] = cleaned
                 event["prompt_redactions"] = sum(counts.values())
-                if prepare_export:
-                    stripped = names_mod.strip_names(cleaned, vocabulary)
-                    if stripped is not None:
-                        event["prompt_export"], hits = stripped
-                        for kind in names_mod.HIT_KINDS:
-                            event[f"prompt_names_{kind}"] = hits[kind]
     return event
 
 
 def build_router(resolve_user_id: UserResolver, store: Optional[Store] = None,
                  rate_limit_per_minute: int = RATE_LIMIT_PER_MINUTE,
-                 names_provider: Optional[NamesProvider] = None,
                  clock: Callable[[], float] = time.monotonic) -> APIRouter:
     router = APIRouter(prefix="/analytics", tags=["analytics"])
     limiter = _RateLimiter(rate_limit_per_minute, clock=clock)
@@ -125,22 +111,6 @@ def build_router(resolve_user_id: UserResolver, store: Optional[Store] = None,
         if not user_id:
             return None
         return derive_actor_id(db.identity_secret(), str(user_id))
-
-    async def _vocabulary(request: Request) -> Optional[names_mod.Vocabulary]:
-        """The analyst's registered names, or None. Any doubt is None."""
-        if names_provider is None:
-            return None
-        try:
-            user_id = resolve_user_id(request)
-            found = names_provider(request, str(user_id))
-            if inspect.isawaitable(found):
-                found = await found
-            if found is None:
-                return None
-            return names_mod.Vocabulary(found) or None
-        except Exception as exc:
-            logger.warning("[analytics] name vocabulary unavailable: %s", type(exc).__name__)
-            return None
 
     def _maybe_purge(db: Store) -> None:
         now = time.monotonic()
@@ -228,18 +198,11 @@ def build_router(resolve_user_id: UserResolver, store: Optional[Store] = None,
             return JSONResponse({"error": "rate_limited"}, 429, headers={"Retry-After": "60"})
 
         keep_prompt = config.prompt_text_enabled()
-        # The membership test and its vocabulary lookup run only when question
-        # text could be exported. export.EXPORT_QUESTION_TEXT is False, so in
-        # production this is always False and no lookup is ever made.
-        prepare_export = export_mod.EXPORT_QUESTION_TEXT and keep_prompt and config.export_requested() and any(
-            isinstance(e, dict) and "prompt" in e for e in raw_events)
-        vocabulary = await _vocabulary(request) if prepare_export else None
         rows: List[Dict[str, Any]] = []
         rejected: List[Dict[str, Any]] = []
         for index, raw in enumerate(raw_events):
             try:
-                event = process_event(raw, keep_prompt=keep_prompt, vocabulary=vocabulary,
-                                      prepare_export=prepare_export)
+                event = process_event(raw, keep_prompt=keep_prompt)
             except schema.Rejected as exc:
                 rejected.append({"index": index, "reason": exc.reason})
                 continue

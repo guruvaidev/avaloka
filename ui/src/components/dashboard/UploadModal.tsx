@@ -790,7 +790,7 @@ export function UploadModal({
             </p>
             <p className="mt-1 text-xs text-tertiary">
               {limits
-                ? `CSV, Excel or JSON (max. ${maxFileMb} MB per file, ${maxTotalMb} MB total)`
+                ? `CSV, Excel or JSON (max. ${maxFileMb} MB per file)`
                 : "CSV, Excel or JSON (max. 100MB)"}
             </p>
           </div>

@@ -74,13 +74,50 @@ def test_an_oss_build_cannot_claim_swarm_by_setting_an_edition():
     assert forged.swarm_intelligence is False
 
 
-def test_collaboration_is_the_enterprise_line():
-    pro = caps("avaloka_hosted", "professional")
-    ent = caps("avaloka_hosted", "enterprise")
-    for capability in ("team_collaboration", "share_analysis",
-                       "comment_on_analysis", "notifications", "sso_audit"):
-        assert getattr(pro, capability) is False, capability
-        assert getattr(ent, capability) is True, capability
+def test_teams_and_invites_are_professional_and_up():
+    """Owner ruling 2026-11-01 (NEW-BG-01, revised): Professional forms teams and
+    invites collaborators; Free does neither."""
+    assert caps("avaloka_hosted", "free").team_collaboration is False
+    assert caps("avaloka_hosted", "professional").team_collaboration is True
+    assert caps("avaloka_hosted", "enterprise").team_collaboration is True
+
+
+def test_org_structure_is_the_enterprise_line():
+    """Departments, roles, branches and users stay Enterprise-only."""
+    assert GATE_REASON["org_structure"] is GateReason.COMMERCIAL
+    for edition in ("oss", "free", "professional"):
+        assert caps("avaloka_hosted", edition).org_structure is False, edition
+    assert caps("avaloka_hosted", "enterprise").org_structure is True
+
+
+def test_sharing_comments_and_notifications_follow_the_owner_matrix():
+    """Owner ruling 2026-11-01: share_analysis, comment_on_analysis and
+    notifications are Professional and Enterprise; Free has none of them (it
+    shares reports by email and public link, which no flag gates)."""
+    flags = ("share_analysis", "comment_on_analysis", "notifications")
+    expected = {
+        "free": {"share_analysis": False, "comment_on_analysis": False, "notifications": False},
+        "professional": {"share_analysis": True, "comment_on_analysis": True, "notifications": True},
+        "enterprise": {"share_analysis": True, "comment_on_analysis": True, "notifications": True},
+    }
+    got = {
+        edition: {flag: getattr(caps("avaloka_hosted", edition), flag) for flag in flags}
+        for edition in expected
+    }
+    assert got == expected
+
+
+def test_sso_audit_stays_enterprise_only():
+    assert caps("avaloka_hosted", "professional").sso_audit is False
+    assert caps("avaloka_hosted", "enterprise").sso_audit is True
+
+
+def test_commercial_explanation_names_the_editions_that_grant_it():
+    free = caps("avaloka_hosted", "free")
+    assert explain("team_collaboration", free).endswith("Professional and Enterprise.")
+    assert explain("org_structure", free).endswith("in Avaloka Enterprise.")
+    for capability in ("share_analysis", "comment_on_analysis", "notifications"):
+        assert explain(capability, free).endswith("Professional and Enterprise."), capability
 
 
 # --------------------------------------------------------------------------- #

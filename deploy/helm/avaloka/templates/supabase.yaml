@@ -346,8 +346,14 @@ spec:
             - name: SUPABASE_DB_URL
               value: "postgres://postgres:{{ $pw }}@{{ $dbHost }}:{{ .Values.supabase.db.port }}/postgres"
             # AES-256-GCM key material for encrypt-mcp-credentials / encrypt-cloud-credentials.
-            # Rotating this orphans every existing ciphertext (decrypt fails the auth tag).
-            - { name: DB_ENCRYPTION_KEY, value: {{ .Values.supabase.functions.dbEncryptionKey | quote }} }
+            # The API's own key, from the release Secret (generated when none is
+            # supplied), so both sides always agree. Rotating it orphans every
+            # existing ciphertext (decrypt fails the auth tag).
+            - name: DB_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "avaloka.secretName" . }}
+                  key: DB_ENCRYPTION_KEY
             # Kong already terminates the request; the functions verify the JWT themselves.
             - { name: VERIFY_JWT, value: "false" }
           ports:
@@ -560,6 +566,12 @@ data:
   {{ base $path }}: |
 {{ $.Files.Get $path | indent 4 }}
   {{- end }}
+  # The runner and the frozen list of pre-tracking migrations. Not *.sql, so the
+  # runner never mistakes them for migrations.
+  migrate.sh: |
+{{ .Files.Get "files/db-migrate.sh" | indent 4 }}
+  baseline.txt: |
+{{ .Files.Get "files/db-migrations.baseline" | indent 4 }}
 ---
 apiVersion: batch/v1
 kind: Job
@@ -583,18 +595,22 @@ spec:
           env:
             - name: PGPASSWORD
               value: {{ $pw | quote }}
-          command:
-            - /bin/sh
-            - -c
-            - |
-              set -e
-              echo "waiting for db..."
-              until pg_isready -h {{ $dbHost }} -U postgres -d postgres >/dev/null 2>&1; do sleep 3; done
-              for f in $(ls /migrations/*.sql | sort); do
-                echo "applying $f"
-                psql -h {{ $dbHost }} -U postgres -d postgres -v ON_ERROR_STOP=0 -f "$f" || echo "  (non-fatal errors in $f ignored)"
-              done
-              echo "migrations complete"
+            - { name: PGHOST, value: {{ $dbHost | quote }} }
+            - { name: PGUSER, value: "postgres" }
+            - { name: PGDATABASE, value: "postgres" }
+            - { name: MIGRATIONS_DIR, value: "/migrations" }
+            # Granted 'admin' after the migrations when the account exists; never
+            # revoked. Empty grants nothing. See admin.emails in values.yaml.
+            - name: ADMIN_EMAILS
+              value: {{ include "avaloka.adminEmails" . | quote }}
+            # The bootstrap grants nothing unless this is explicitly false: with
+            # autoconfirm on, a listed address could be registered by anyone.
+            - name: GOTRUE_MAILER_AUTOCONFIRM
+              value: {{ .Values.supabase.auth.autoconfirm | quote }}
+          # Each migration runs once and is recorded in avaloka_meta.schema_migrations;
+          # an existing install is backfilled on the first run instead of re-applied.
+          # The logic and the cases it handles are documented in the script.
+          command: ["/bin/sh", "/migrations/migrate.sh"]
           volumeMounts:
             - { name: migrations, mountPath: /migrations }
       volumes:

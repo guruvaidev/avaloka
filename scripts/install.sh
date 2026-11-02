@@ -230,6 +230,18 @@ if [[ "$EDITION" != "oss" ]]; then
 fi
 
 # --------------------------------------------------------------------------- #
+# Generated secrets (DB_ENCRYPTION_KEY, MCP_SERVICE_TOKEN, AVALOKA_PII_KEY)
+# --------------------------------------------------------------------------- #
+# Generated when unset, empty or a published value, and saved to .env (mode
+# 600) so every service and every later start uses the same ones. Values are
+# never printed. See docs/INSTALL.md, Configuration.
+if [[ "$CHECK_ONLY" -eq 0 ]]; then
+  say ""
+  ( cd "$REPO_ROOT" && "$VENV_PY" -m app.core.provisioning --env-file "${AVALOKA_ENV_FILE:-$REPO_ROOT/.env}" ) \
+    || die "could not generate the secrets into ${AVALOKA_ENV_FILE:-$REPO_ROOT/.env}"
+fi
+
+# --------------------------------------------------------------------------- #
 # Verify
 # --------------------------------------------------------------------------- #
 say ""

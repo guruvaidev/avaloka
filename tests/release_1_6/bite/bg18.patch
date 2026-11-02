@@ -1,0 +1,13 @@
+diff --git a/ui/src/components/dashboard/UploadDropzone.tsx b/ui/src/components/dashboard/UploadDropzone.tsx
+index f994fc41..1552604f 100644
+--- a/ui/src/components/dashboard/UploadDropzone.tsx
++++ b/ui/src/components/dashboard/UploadDropzone.tsx
+@@ -93,7 +93,7 @@ export function UploadDropzone({ projectId, projectName, redirectTo, disabled =
+           <h3 className="mt-6 text-md font-semibold text-primary">
+             Select or drag &amp; drop file to analyze data
+           </h3>
+-          <Button color="primary" size="md" iconLeading={Upload01} isDisabled={disabled} onPress={openPicker} className="mt-4">
++          <Button color="link-gray" size="md" iconLeading={Upload01} isDisabled={disabled} onPress={openPicker} className="mt-4">
+             Browse files
+           </Button>
+           <p className="mt-3 text-sm text-tertiary">CSV, Excel (.xls, .xlsx) or JSON · up to 100MB</p>

@@ -1,0 +1,11 @@
+diff --git a/ui/vitest.config.ts b/ui/vitest.config.ts
+--- a/ui/vitest.config.ts
++++ b/ui/vitest.config.ts
+@@ -25,7 +25,6 @@ export default defineConfig({
+     include: [
+       "tests/unit/**/*.test.{ts,tsx}",
+       "tests/component/**/*.test.{ts,tsx}",
+-      "tests/release_1_6/**/*.test.{ts,tsx}",
+     ],
+     setupFiles: ["tests/setup.ts"],
+     restoreMocks: true,

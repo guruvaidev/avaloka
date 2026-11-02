@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { Search, Settings as SettingsGear, Mail, ChevronDown, HelpCircle, Upload, X, Clock, MoreVertical, Check, Loader2, MessageSquare, AtSign, BellRing, Smartphone, MessageCircle } from "lucide-react";
+import { Settings as SettingsGear, Search as SearchIcon, Mail, ChevronDown, HelpCircle, Upload, X, Clock, MoreVertical, Check, Loader2, MessageSquare, AtSign, BellRing, Smartphone, MessageCircle } from "lucide-react";
 import { toast } from "sonner";
 import { useServerFn } from "@tanstack/react-start";
 import { Logomark } from "@/components/brand/Logomark";
@@ -139,6 +139,7 @@ function SettingsPage() {
     const allowed: TabId[] = ["my-details", "profile", "appearance", "email", "notifications", "integrations", "billing"];
     return (allowed as string[]).includes(t ?? "") ? (t as TabId) : "my-details";
   });
+  const [settingsSearch, setSettingsSearch] = useState("");
   // The SSR pass has no query string, so re-read it after hydration; otherwise a
   // deep link like /settings?tab=billing renders "my-details".
   useEffect(() => {
@@ -154,8 +155,6 @@ function SettingsPage() {
     url.searchParams.set("tab", tab);
     window.history.replaceState(window.history.state, "", url.toString());
   }, [tab]);
-
-  const [search, setSearch] = useState("");
 
   const [userId, setUserId] = useState<string | null>(null);
   const [orgId, setOrgId] = useState<string | null>(null);
@@ -507,6 +506,35 @@ function SettingsPage() {
     [isOrgOwner, canSeeBilling, isEnterprisePlan],
   );
 
+  const settingsSearchResults = useMemo(() => {
+    const query = settingsSearch.trim().toLowerCase();
+    if (!query) return [];
+    const words = query.split(/\s+/).filter(Boolean);
+    const terms: Record<TabId, string> = {
+      "my-details": "my details personal account name email phone avatar user",
+      profile: "profile company organization logo address business",
+      appearance: "appearance theme dark light color",
+      email: "email recovery company preferences updates",
+      notifications: "notifications notification push sms alerts",
+      integrations: "integrations integration api connection apps",
+      billing: "billing plan subscription payment invoice card pricing",
+    };
+    return visibleTabs
+      .map((item) => {
+        const haystack = `${item.label} ${terms[item.id]}`.toLowerCase();
+        const score = words.reduce((total, word) => total + (haystack.includes(word) ? 1 : 0), 0);
+        return { item, score };
+      })
+      .filter(({ score }) => score > 0)
+      .sort((a, b) => b.score - a.score)
+      .map(({ item }) => item);
+  }, [settingsSearch, visibleTabs]);
+
+  const goToSettingsTab = (nextTab: TabId) => {
+    setTab(nextTab);
+    setSettingsSearch("");
+  };
+
   // Redirect away if user lands on a hidden tab — only once ownership and the
   // active plan have actually resolved, otherwise the billing tab flickers
   // back to "my-details" right after a payment redirect.
@@ -525,22 +553,44 @@ function SettingsPage() {
         <main className="flex flex-1 flex-col overflow-y-auto">
           <div className="m-4 flex flex-1 flex-col rounded-2xl border border-border bg-white shadow-sm dark:bg-[#111418] sm:m-6">
             {/* Header */}
-            <header className="flex items-center justify-between border-b border-border px-6 py-4">
+            <header className="flex items-center justify-between gap-4 border-b border-border px-6 py-4">
               <div className="flex items-center gap-2.5">
                 <SettingsGear className="h-5 w-5 text-foreground" strokeWidth={1.75} />
                 <h1 className="text-xl font-semibold tracking-tight">Setting</h1>
               </div>
-              <div className="relative w-[320px]">
-                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <div className="relative w-full max-w-sm">
+                <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search"
-                  className="h-9 pl-9 pr-12 text-sm"
+                  aria-label="Search settings"
+                  aria-expanded={settingsSearch.trim().length > 0}
+                  placeholder="Search settings"
+                  value={settingsSearch}
+                  onChange={(event) => setSettingsSearch(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && settingsSearchResults[0]) {
+                      event.preventDefault();
+                      goToSettingsTab(settingsSearchResults[0].id);
+                    }
+                    if (event.key === "Escape") setSettingsSearch("");
+                  }}
+                  className="pl-9"
                 />
-                <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 rounded border border-border bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-                  ⌘K
-                </span>
+                {settingsSearch.trim() && (
+                  <div className="absolute left-0 right-0 top-full z-20 mt-1 overflow-hidden rounded-lg border border-border bg-white p-1 shadow-lg dark:bg-[#171b20]">
+                    {settingsSearchResults.length ? settingsSearchResults.map((result) => (
+                      <button
+                        key={result.id}
+                        type="button"
+                        onClick={() => goToSettingsTab(result.id)}
+                        className="flex w-full items-center rounded-md px-3 py-2 text-left text-sm hover:bg-muted"
+                      >
+                        {result.label}
+                      </button>
+                    )) : (
+                      <p className="px-3 py-2 text-sm text-muted-foreground">No settings found</p>
+                    )}
+                  </div>
+                )}
               </div>
             </header>
 
@@ -552,7 +602,7 @@ function SettingsPage() {
                   return (
                     <button
                       key={t.id}
-                      onClick={() => setTab(t.id)}
+                      onClick={() => goToSettingsTab(t.id)}
                       className={cn(
                         "relative whitespace-nowrap py-3 text-sm transition-colors",
                         active ? "font-semibold text-[#1565EF] dark:text-white" : "text-muted-foreground hover:text-foreground",
@@ -596,9 +646,11 @@ function SettingsPage() {
             {/* Footer */}
             {showFooter && (
               <footer className="flex items-center justify-end gap-3 border-t border-border px-6 py-4">
-                <Button variant="outline" className="gap-2" onClick={handleCancel} disabled={saving}>
-                  <X className="h-4 w-4" /> Cancel
-                </Button>
+                {tab !== "appearance" && (
+                  <Button variant="outline" className="gap-2" onClick={handleCancel} disabled={saving}>
+                    <X className="h-4 w-4" /> Cancel
+                  </Button>
+                )}
                 <Button className="gap-2 bg-[#1565EF] hover:bg-[#1257d4]" onClick={handleSave} disabled={saving || !userId}>
                   {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <SaveIcon className="h-4 w-4" />} Save
                 </Button>
@@ -1007,9 +1059,6 @@ function AppearanceTab() {
           <h2 className="text-base font-semibold">Appearance</h2>
           <p className="mt-1 text-sm text-muted-foreground">Change how your dashboard looks and feels.</p>
         </div>
-        <button type="button" className="text-muted-foreground hover:text-foreground" aria-label="More">
-          <MoreVertical className="h-5 w-5" />
-        </button>
       </div>
 
       <Row label="Display preference" sublabel="Switch between light and dark modes.">

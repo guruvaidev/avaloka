@@ -1,0 +1,12 @@
+diff --git a/ui/src/lib/uploaded-datasets.ts b/ui/src/lib/uploaded-datasets.ts
+--- a/ui/src/lib/uploaded-datasets.ts
++++ b/ui/src/lib/uploaded-datasets.ts
+@@ -103,7 +103,7 @@ export function formatBytes(bytes: number | null): string {
+ export function groupUploadedDatasets(datasets: UploadedDataset[]): UploadedDatasetGroup[] {
+   const byKey = new Map<string, UploadedDataset[]>();
+   for (const d of datasets) {
+-    const key = d.groupSessionId || d.dataset_id;
++    const key = d.dataset_id;
+     if (!byKey.has(key)) byKey.set(key, []);
+     byKey.get(key)!.push(d);
+   }

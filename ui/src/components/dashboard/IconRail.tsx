@@ -32,7 +32,7 @@ import { ReportIcon } from "./icons/ReportIcon";
 import { ConfigurationsIcon } from "./icons/ConfigurationsIcon";
 import { NotificationsPopover } from "./NotificationsPopover";
 import { getCachedAuthUser } from "@/lib/auth-user";
-import { SUPPORT_ADMIN_EMAIL } from "@/lib/support-admin";
+import { amISupportAdmin } from "@/lib/support-tickets.functions";
 import { Server } from "lucide-react";
 import { canUseRayJobs, rayLimitsOptions } from "@/lib/ray-jobs";
 
@@ -221,9 +221,11 @@ export function ProfileAvatarMenu() {
     gcTime: 30 * 60_000,
     queryFn: async () => {
       const user = await getCachedAuthUser();
-      const email = String(user?.email ?? "").trim().toLowerCase();
-      const isSupportAdmin = email === SUPPORT_ADMIN_EMAIL;
       if (!user) return { name: null as string | null, avatar: null as string | null, isSupportAdmin: false };
+      // Support-desk admins are configured on the server (ADMIN_EMAILS).
+      const isSupportAdmin = await amISupportAdmin()
+        .then((r) => Boolean(r?.isAdmin))
+        .catch(() => false);
 
       const { data: profile } = await supabase
         .from("profiles")

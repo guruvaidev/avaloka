@@ -21,8 +21,11 @@ It is **on by default, disclosed at install, and switchable off in one click or 
 >   pattern redaction. It contains the column and table names the analyst
 >   typed. It is customer-identifying and it is not anonymous. It does not
 >   leave the cluster.
-> - **Exported, only if an operator switches export on:** behavioural events
->   and a rotating pseudonym. No question text in any form.
+> - **Exported, only if an operator switches export on:** metadata only --
+>   event types, timings, counts, outcomes, error class names, versions -- and
+>   a rotating pseudonym. No question text in any form, and no column, table,
+>   dataset or file names (owner decision D16.5, 2026-10-31: prompts stay
+>   local, only metadata is exported).
 >
 > Every other "never sent" statement in this document, including §5.2, has the
 > same scope: process telemetry only.

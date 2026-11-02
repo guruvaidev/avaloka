@@ -1,0 +1,12 @@
+diff --git a/ui/src/lib/analysis-workspace.ts b/ui/src/lib/analysis-workspace.ts
+--- a/ui/src/lib/analysis-workspace.ts
++++ b/ui/src/lib/analysis-workspace.ts
+@@ -129,7 +129,7 @@ export function nextThreadDatasetSelection(
+   // The saved selection (GET selected: true) is authoritative after a reload.
+   const base = serverSelected.length ? serverSelected : prev;
+   const kept = base.filter((id) => !unavailable.has(id));
+-  return selectNew ? Array.from(new Set([...kept, ...newIds])) : kept;
++  return kept;
+ }
+ 
+ export type AutoInsightsDataset = { id: string; name: string; config: any; status?: string; samples?: any[] };

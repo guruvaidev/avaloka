@@ -1,0 +1,13 @@
+diff --git a/ui/src/components/dashboard/BillingTab.tsx b/ui/src/components/dashboard/BillingTab.tsx
+index 18d84eeb..c266c6e6 100644
+--- a/ui/src/components/dashboard/BillingTab.tsx
++++ b/ui/src/components/dashboard/BillingTab.tsx
+@@ -2890,7 +2890,7 @@ function BuyNowBillingModal({
+               />
+               <FieldError message={errors.billing_address} />
+             </Field>
+-            <Field label="VAT Number" required>
++            <Field label="Tax ID (optional)">
+               <Input
+                 value={vat}
+                 onChange={(e) => setVat(e.target.value)}

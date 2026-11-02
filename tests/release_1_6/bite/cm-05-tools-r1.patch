@@ -1,0 +1,12 @@
+diff --git a/app/interfaces/mcp/server.py b/app/interfaces/mcp/server.py
+index 8fe7cfe1..7dfdd6ef 100644
+--- a/app/interfaces/mcp/server.py
++++ b/app/interfaces/mcp/server.py
+@@ -198,7 +198,6 @@ def build_server():  # pragma: no cover - exercised only when the SDK is present
+     def plan_mission_tool(intent: Dict[str, Any]) -> Dict[str, Any]:
+         return tool_plan_mission(intent)
+ 
+-    @server.tool(description=TOOL_SPECS[1]["description"])
+     def estimate_cost(intent: Dict[str, Any]) -> Dict[str, Any]:
+         return tool_estimate_cost(intent)
+ 

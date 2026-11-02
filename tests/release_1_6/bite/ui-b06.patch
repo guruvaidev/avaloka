@@ -1,0 +1,12 @@
+diff --git a/ui/src/components/dashboard/ShareCollaboratorsButton.tsx b/ui/src/components/dashboard/ShareCollaboratorsButton.tsx
+--- a/ui/src/components/dashboard/ShareCollaboratorsButton.tsx
++++ b/ui/src/components/dashboard/ShareCollaboratorsButton.tsx
+@@ -60,7 +60,7 @@ export function ShareCollaboratorsButton({
+           reportId={reportId}
+           onCollaborationChange={onCollaborationChange}
+         />
+-      ) : analysisId ? (
++      ) : analysisId && projectId ? (
+         <AnalysisInviteCollaboratorsPopover
+           open={open}
+           onClose={() => setOpen(false)}

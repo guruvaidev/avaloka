@@ -1,0 +1,13 @@
+diff --git a/ui/src/components/dashboard/AnalysisSidebar.tsx b/ui/src/components/dashboard/AnalysisSidebar.tsx
+index 018fe0f9..42840044 100644
+--- a/ui/src/components/dashboard/AnalysisSidebar.tsx
++++ b/ui/src/components/dashboard/AnalysisSidebar.tsx
+@@ -266,7 +266,7 @@ export function AnalysisSidebar({ analyses: _analysesProp }: AnalysisSidebarProp
+             onClick={() => navigate({ to: "/scheduled-analysis" })}
+             className="w-full justify-start *:data-text:flex-1 *:data-text:text-left"
+           >
+-            Schedule Analysis
++            Schedule analysis
+           </Button>
+           <ButtonUtility
+             size="xs"

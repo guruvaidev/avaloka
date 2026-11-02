@@ -1,0 +1,13 @@
+diff --git a/app/agents/visualization_agent.py b/app/agents/visualization_agent.py
+index 7195c6da..71681a61 100644
+--- a/app/agents/visualization_agent.py
++++ b/app/agents/visualization_agent.py
+@@ -2143,8 +2143,6 @@ def _neutral_title(text: str, ctype: str, enc: Dict[str, Any]) -> str:
+     """A title that only names what is plotted: the data sentence's lead-in
+     ("Average Billing Amount by Medical Condition"), or the axes."""
+     head = text.split(":", 1)[0].strip() if ":" in text[:90] else ""
+-    if head and len(head) <= 80:
+-        return head
+     xf, yf = _enc_field(enc, "x") or _enc_field(enc, "color"), _enc_field(enc, "y")
+     if ctype == "histogram" and xf:
+         return f"Distribution of {xf}"

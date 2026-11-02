@@ -92,6 +92,10 @@ you would any code you commissioned.
 Open source gets all of it. You bring your own Ray cluster, your own cloud
 credentials and your own LLM keys, and you run it at your own risk.
 
+This release does not fine-tune models from user feedback; if a later release
+adds optional per-install fine-tuning, it will run on a GPU that you provide
+and pay for, and will not be offered on Avaloka-hosted Free.
+
 ### Connectivity — the Professional line
 
 | | OSS | Free | Pro | Ent |
@@ -105,25 +109,57 @@ credentials and your own LLM keys, and you run it at your own risk.
 
 Professional is the edition that reaches into **your** cloud and **your**
 databases, on **your** infrastructure and billing — including petabyte-scale
-work that never leaves your environment.
+work.
 
-### Collaboration — the Enterprise line
+### Collaboration — Professional teams, the Enterprise organization
 
 | | OSS | Free | Pro | Ent |
 | --- | :-: | :-: | :-: | :-: |
-| Organizations and teams | ○ | ○ | ○ | ● |
-| Invite and manage members | ○ | ○ | ○ | ● |
-| Share analysis | ○ | ○ | ○ | ● |
-| Comment on analysis and insights | ○ | ○ | ○ | ● |
-| Notifications and team delivery | ○ | ○ | ○ | ● |
-| Roles, departments, permissions | ○ | ○ | ○ | ● |
+| Teams (on Pro, members need Professional or higher) | ○ | ○ | ● | ● |
+| Invite collaborators onto your work, including Free users | ○ | ○ | ● | ● |
+| Organization members (add and manage users) | ○ | ○ | ○ | ● |
+| Share reports by email and public link | ● | ● | ● | ● |
+| Share analysis (the `share_analysis` flag, beyond email and links) | ○ | ○ | ● | ● |
+| Comment on analysis and insights | ○ | ○ | ● | ● |
+| Notifications and team delivery | ○ | ○ | ● | ● |
+| Roles, departments, branches, permissions | ○ | ○ | ○ | ● |
 | SSO and audit log | ○ | ○ | ○ | ● |
 
-The first five rows resolve to one capability flag between them,
-`team_collaboration` (plus `share_analysis`, `comment_on_analysis` and
-`notifications`); roles and departments are schema-level — see the
-`departments` table in `ui/schema.sql:288`. The flags are the contract; the row
-labels describe what they buy you.
+Teams and collaborator invites resolve to `team_collaboration`, which starts at
+Professional (owner ruling, 2026-11-01). The organization's own structure (its
+members, roles, departments and branches) resolves to `org_structure`, which is
+Enterprise only. `share_analysis`, `comment_on_analysis` and `notifications`
+are separate flags, each on Professional and Enterprise (owner ruling,
+2026-11-01). Every plan can share a report by emailing the results or by
+public link; on Free that is the only sharing there is. The flags are the
+contract; the row labels describe what they buy you.
+
+---
+
+## Sharing, collaboration and teams by edition
+
+These are the product rules for the hosted and commercial plans.
+
+| | Free | Professional | Enterprise |
+| --- | :-: | :-: | :-: |
+| Share reports (email and public link) | ● | ● | ● |
+| Invite collaborators | ○ | ● (including Free users) | ● |
+| Form teams | ○ | ● | ● |
+| Share analyses, comment on them, notifications | ○ | ● | ● |
+| Team members' plan | — | Professional or higher | members of the Enterprise organisation |
+| Departments, roles, branches and app users | ○ | ○ | ● |
+
+- **Free** can share reports by email and by public link, and nothing else:
+  no collaborator invites, no teams, no analysis sharing, comments or
+  notifications.
+- **Professional** can invite collaborators, including people on the Free
+  plan, and can form teams. Every team member must be on Professional or
+  higher; adding a Free user to a team is refused with a message to upgrade.
+  Professional also shares analyses, comments on them, and gets notifications.
+- **Enterprise** includes everything above, plus departments, roles, branches
+  and app users.
+
+Avaloka support (support@avaloka.ai) can help organisations add people to teams, form teams, and change plans.
 
 ---
 

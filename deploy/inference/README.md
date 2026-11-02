@@ -26,36 +26,49 @@ Selection precedence (most specific wins): `AVALOKA_<AGENT>_PROVIDER` →
 `groq`. If the selected provider is not configured, the agent falls back to its
 deterministic path — exactly as it did when a `GROQ_API_KEY` was missing.
 
-## Local model choice — Qwen2.5-3B-Instruct
+## Local model choice — Qwen3-4B-Instruct-2507
 
-The default small local model is **Qwen2.5-3B-Instruct**, chosen over
-**Nemotron-Nano-3B** and **Gemma-3-4B** for *this* workload:
+The default small local model is **Qwen3-4B-Instruct-2507**, served from the
+Ollama tag `qwen3:4b-instruct-2507-q4_K_M` (~2.5 GB):
 
+- **Apache-2.0.** The licence is stated on the
+  [Hugging Face model card](https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507)
+  and carried in the licence layer of the
+  [Ollama tag](https://ollama.com/library/qwen3:4b-instruct-2507-q4_K_M). The
+  previous default, Qwen2.5-3B-Instruct, is under the **Qwen Research
+  licence** (non-commercial), so it must not be the default of a commercial
+  edition.
 - The agents drive the model almost entirely through **OpenAI tool/function
-  calls and strict JSON** (`bind_tools`, `tool_choice="required"`). Qwen2.5-
-  Instruct has the most consistent tool-calling + JSON-schema adherence at the
-  ~3B scale, which is what actually determines whether the planner routes
-  correctly on a small model.
-- **First-class in both Ollama and vLLM**, so the same model id works on the
-  CPU (laptop) tier and scales up to the GPU tier with no agent changes.
-- Permissive license and a coherent family (3B → 7B → 14B → 32B → 72B), so
-  "small on my laptop, big on GPU nodes" is one knob, not a model migration.
+  calls and strict JSON** (`bind_tools`, `tool_choice="required"`). The
+  Instruct-2507 build has **no thinking mode**, so tool calls arrive without a
+  `<think>` preamble and nothing needs to send `/no_think`. The bare
+  `qwen3:4b` tag is the *Thinking*-2507 build; do not swap to it without
+  handling reasoning output.
+- **First-class in both Ollama and vLLM** (`Qwen/Qwen3-4B-Instruct-2507`).
 
-Gemma-3-4B is strong and multimodal but historically weaker at strict
-function-calling/JSON tool schemas and is larger; Nemotron-Nano-3B reasons well
-but has less consistent OpenAI-style tool-call formatting and thinner
-Ollama/vLLM support today. Swap the model any time — it is pure configuration
-(`localLLM.model` / `INFERENCE_LOCAL_MODEL_*`); the agents do not change.
+Swap the model any time — it is pure configuration
+(`localLLM.model` / `INFERENCE_LOCAL_MODEL_*`); the agents do not change. A
+tag that ships as a default (code, chart values, manifests) must be on the
+licence allowlist in `tests/test_local_model_licence.py`, with its licence
+beside it; only Apache-2.0, MIT and BSD licences pass.
+
+**Upgrading an existing install.** A cluster that already pulled
+`qwen2.5:3b-instruct` keeps serving it until upgraded: the old tag stays in the
+Ollama model store and any `INFERENCE_LOCAL_MODEL_*` or `localLLM.model`
+override you set still names it. To move, upgrade the chart (or re-apply
+`ollama-cpu.yaml`) so the pod pulls the new tag on start, or pull it by hand
+with `ollama pull qwen3:4b-instruct-2507-q4_K_M`, set `INFERENCE_LOCAL_MODEL_*`
+to that tag, and `ollama rm qwen2.5:3b-instruct` once nothing uses it.
 
 ## Laptop / kind (CPU, no GPU)
 
-Serves the 3B model via Ollama's OpenAI-compatible API.
+Serves the 4B model via Ollama's OpenAI-compatible API.
 
 **Standalone manifests:**
 
 ```bash
 kubectl apply -f deploy/inference/ollama-cpu.yaml
-kubectl rollout status deploy/avaloka-local-llm --timeout=600s   # first run pulls ~2GB
+kubectl rollout status deploy/avaloka-local-llm --timeout=600s   # first run pulls ~2.5GB
 ```
 
 Then point the backend at it:
@@ -63,8 +76,8 @@ Then point the backend at it:
 ```bash
 INFERENCE_PROVIDER=local
 INFERENCE_LOCAL_BASE_URL=http://avaloka-local-llm:11434/v1
-INFERENCE_LOCAL_MODEL_LARGE=qwen2.5:3b-instruct
-INFERENCE_LOCAL_MODEL_SMALL=qwen2.5:3b-instruct
+INFERENCE_LOCAL_MODEL_LARGE=qwen3:4b-instruct-2507-q4_K_M
+INFERENCE_LOCAL_MODEL_SMALL=qwen3:4b-instruct-2507-q4_K_M
 ```
 
 **Via the Helm chart** (wires the backend env automatically):
@@ -81,7 +94,7 @@ helm upgrade --install avaloka deploy/helm/avaloka \
 kubectl port-forward svc/avaloka-local-llm 11434:11434 &
 curl -s http://localhost:11434/v1/chat/completions \
   -H 'Content-Type: application/json' \
-  -d '{"model":"qwen2.5:3b-instruct","messages":[{"role":"user","content":"ping"}]}'
+  -d '{"model":"qwen3:4b-instruct-2507-q4_K_M","messages":[{"role":"user","content":"ping"}]}'
 ```
 
 ## GPU nodes (larger 14B / 32B models)

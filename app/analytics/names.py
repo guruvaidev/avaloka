@@ -22,11 +22,12 @@ one of three counters (``HIT_KINDS``), so a reader of the data can tell a real
 schema reference from the English word "status", and the privacy claim and the
 analytic cost can both be measured after the fact.
 
-**STATUS: not exercised in production.** No question text is exported
-(``export.EXPORT_QUESTION_TEXT`` is ``False``), so nothing calls this module
-outside its tests. It is kept, tested, as the mechanism that would have to
-guard that path if it were ever opened -- see "If question-text export is ever
-enabled" in docs/analytics/DESIGN.md for what must be proven first.
+**STATUS: not called by the product.** Owner decision D16.5 (2026-10-31)
+removed the question-text export path this was built to guard: no question
+text is exported in any form, and the collector no longer prepares an
+exportable form. Nothing imports this module outside its tests. It must not be
+wired into anything that leaves the cluster; a name-stripped question is still
+typed text.
 
 What it cannot do: remove a name the deployment does not know. A column of a
 dataset that was never registered here, typed from memory, passes through.

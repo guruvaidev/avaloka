@@ -1,0 +1,13 @@
+diff --git a/app/agents/avaloka_agent/discovery_tools.py b/app/agents/avaloka_agent/discovery_tools.py
+index 1665fb2f..551e4df0 100644
+--- a/app/agents/avaloka_agent/discovery_tools.py
++++ b/app/agents/avaloka_agent/discovery_tools.py
+@@ -47,7 +47,7 @@ def discover_dataset(redis_context: Dict[str, Any]) -> Dict[str, Any]:
+         "data_source": redis_context.get("data_source_location"),
+         "file_type": redis_context.get("input_data_type"),
+         "file_size_mb": redis_context.get("file_size_mb"),
+-        "columns": _truncate_columns(redis_context.get("schema_columns")),
++        "columns": [],
+         "profiling_summary": redis_context.get("profiling_summary"),
+         "available_samples": redis_context.get("available_samples"),
+         "current_fidelity": redis_context.get("analysis_fidelity"),

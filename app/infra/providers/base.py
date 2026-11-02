@@ -11,10 +11,13 @@ layer so reporting stays uniform with the legacy ``k8s_invoker`` flow::
 """
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from abc import ABC, abstractmethod
-from typing import List
+from contextlib import contextmanager
+from contextvars import ContextVar
+from typing import Dict, Iterator, List, Optional
 
 
 _SENSITIVE_NAME = re.compile(
@@ -54,6 +57,33 @@ def _safe_output(value: object, secret_values: List[str]) -> str:
     ).strip()
 
 
+#: Extra variables for the child processes ``run_command`` starts, set only
+#: inside ``scoped_subprocess_env``. A ContextVar rather than ``os.environ`` so
+#: a provider's temporary credentials reach its own CLI calls and nothing else
+#: in the process: not other threads, not other requests, not cloud_config.
+_SUBPROCESS_ENV: ContextVar[Optional[Dict[str, str]]] = ContextVar(
+    "provider_subprocess_env", default=None
+)
+
+
+@contextmanager
+def scoped_subprocess_env(extra: Optional[Dict[str, str]]) -> Iterator[None]:
+    """Give ``run_command``'s child processes ``extra`` on top of ``os.environ``
+    for the duration of the block. ``os.environ`` itself is never written."""
+    token = _SUBPROCESS_ENV.set(dict(extra) if extra else None)
+    try:
+        yield
+    finally:
+        _SUBPROCESS_ENV.reset(token)
+
+
+def child_env() -> Optional[Dict[str, str]]:
+    """The env for a child process: a copy of ``os.environ`` plus the scoped
+    extras, or None (inherit unchanged) when no scope is active."""
+    extra = _SUBPROCESS_ENV.get()
+    return {**os.environ, **extra} if extra else None
+
+
 def run_command(command: List[str], step_name: str) -> dict:
     """Run a shell command and return a structured outcome dict.
 
@@ -62,7 +92,9 @@ def run_command(command: List[str], step_name: str) -> dict:
     """
     safe_command, secret_values = _safe_command(command)
     try:
-        result = subprocess.run(command, capture_output=True, text=True, check=True)
+        result = subprocess.run(
+            command, capture_output=True, text=True, check=True, env=child_env()
+        )
         return {
             "step_name": step_name,
             "status": "SUCCESS",

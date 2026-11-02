@@ -1,0 +1,13 @@
+diff --git a/app/interfaces/mcp/server.py b/app/interfaces/mcp/server.py
+index 8fe7cfe1..b310a9f3 100644
+--- a/app/interfaces/mcp/server.py
++++ b/app/interfaces/mcp/server.py
+@@ -194,7 +194,7 @@ def build_server():  # pragma: no cover - exercised only when the SDK is present
+ 
+     server = FastMCP(SERVER_NAME, instructions=SERVER_INSTRUCTIONS)
+ 
+-    @server.tool(description=TOOL_SPECS[0]["description"])
++    @server.tool(name=TOOL_SPECS[0]["name"], description=TOOL_SPECS[0]["description"])
+     def plan_mission_tool(intent: Dict[str, Any]) -> Dict[str, Any]:
+         return tool_plan_mission(intent)
+ 

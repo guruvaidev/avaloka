@@ -18,7 +18,15 @@ export default defineConfig({
   },
   test: {
     environment: "jsdom",
-    include: ["tests/unit/**/*.test.{ts,tsx}", "tests/component/**/*.test.{ts,tsx}"],
+    // tests/release_1_6 holds the 1.6 release-readiness suite (see
+    // docs/test-reports/1.6-traceability.csv). A folder missing from this list
+    // never runs and never fails, so tests/release_1_6/vitest-include.test.ts
+    // checks that every *.test.ts(x) under tests/ matches one of these globs.
+    include: [
+      "tests/unit/**/*.test.{ts,tsx}",
+      "tests/component/**/*.test.{ts,tsx}",
+      "tests/release_1_6/**/*.test.{ts,tsx}",
+    ],
     setupFiles: ["tests/setup.ts"],
     restoreMocks: true,
   },

@@ -1,0 +1,13 @@
+diff --git a/ui/src/routes/_authenticated/settings.tsx b/ui/src/routes/_authenticated/settings.tsx
+index dce36cc5..770b3754 100644
+--- a/ui/src/routes/_authenticated/settings.tsx
++++ b/ui/src/routes/_authenticated/settings.tsx
+@@ -32,7 +32,7 @@ type TabId = "my-details" | "profile" | "appearance" | "email" | "notifications"
+ 
+ const TABS: { id: TabId; label: string; ownerOnly?: boolean; billing?: boolean; enterpriseOnly?: boolean;}[] = [
+   { id: "my-details", label: "My details" },
+-  { id: "profile", label: "Profile" , enterpriseOnly: true },
++  { id: "profile", label: "Profile" },
+   { id: "appearance", label: "Appearance" },
+   { id: "email", label: "Email" },
+   { id: "notifications", label: "Notifications" },

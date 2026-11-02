@@ -690,7 +690,7 @@ class TestTaskB_GitPersistence:
     async def test_persist_job_pushes_to_main_not_branch(
         self, user_id, session_id, dataset_id, prompt_ts, sample_planner_definition
     ):
-        """Task B: pushes directly to main per Leela's guidance, no branch creation."""
+        """Task B: pushes directly to main per the owner's guidance, no branch creation."""
         from app.services.persistence_service import persist_job_definition_to_git
 
         mock_repo_response = MagicMock()

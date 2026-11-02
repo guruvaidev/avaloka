@@ -13,6 +13,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { TeamsIcon } from "@/components/dashboard/icons/ConfigSectionIcons";
 import { cn } from "@/lib/utils";
 import { listAppUsers, listBranches, upsertTeam } from "@/lib/configurations.functions";
+import { useTeamMemberGate } from "@/lib/use-team-member-gate";
 
 type Step = "form" | "confirm" | "success";
 
@@ -75,6 +76,7 @@ export function NewTeamModal({ open, onOpenChange }: Props) {
   const [lead, setLead] = useState<UserOpt | null>(null);
   const [branch, setBranch] = useState("");
   const [members, setMembers] = useState<UserOpt[]>([]);
+  const memberGate = useTeamMemberGate(open, AVAILABLE_MEMBERS.map((u) => u.id));
   const [submitting, setSubmitting] = useState(false);
 
   const [leadOpen, setLeadOpen] = useState(false);
@@ -101,6 +103,8 @@ export function NewTeamModal({ open, onOpenChange }: Props) {
   );
 
   const toggleMember = (m: UserOpt) => {
+    const adding = !members.find((x) => x.name === m.name);
+    if (adding && !memberGate.tryAdd(m.id)) return;
     setMembers((prev) =>
       prev.find((x) => x.name === m.name)
         ? prev.filter((x) => x.name !== m.name)
@@ -303,7 +307,12 @@ export function NewTeamModal({ open, onOpenChange }: Props) {
                           <button
                             key={m.email || m.name}
                             onClick={() => toggleMember(m)}
-                            className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-sm hover:bg-muted dark:hover:bg-white/5"
+                            aria-disabled={!memberGate.allowed(m.id)}
+                            data-testid={`team-member-option-${m.id}`}
+                            className={cn(
+                              "flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-sm hover:bg-muted dark:hover:bg-white/5",
+                              !memberGate.allowed(m.id) && "opacity-60",
+                            )}
                           >
                             <Avatar className="h-6 w-6">
                               <AvatarImage src={m.avatar} alt={m.name} />
@@ -313,6 +322,9 @@ export function NewTeamModal({ open, onOpenChange }: Props) {
                               <span className="text-sm text-foreground">{m.name}</span>
                               <span className="text-xs text-muted-foreground">{m.role}</span>
                             </span>
+                            {!memberGate.allowed(m.id) && (
+                              <span className="text-xs text-muted-foreground">Needs Professional</span>
+                            )}
                             {selected && <Check className="h-4 w-4 text-primary" />}
                           </button>
                         );
@@ -320,6 +332,11 @@ export function NewTeamModal({ open, onOpenChange }: Props) {
                     )}
                   </PopoverContent>
                 </Popover>
+                {memberGate.error && (
+                  <p role="alert" className="text-xs text-rose-600">
+                    {memberGate.error}
+                  </p>
+                )}
               </div>
 
               {members.length > 0 && (

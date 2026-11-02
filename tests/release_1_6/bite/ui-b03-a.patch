@@ -1,0 +1,12 @@
+diff --git a/ui/src/lib/analysis-workspace.ts b/ui/src/lib/analysis-workspace.ts
+--- a/ui/src/lib/analysis-workspace.ts
++++ b/ui/src/lib/analysis-workspace.ts
+@@ -148,7 +148,7 @@ export function buildAutoInsightsDatasets(
+   datasetChips.forEach((d) => {
+     if (!d?.id || byId.has(d.id)) return;
+     // Unselected chips stay in the analysis, but their insights are hidden until selected.
+-    if (multi && selectedDatasetIds.length && !selectedDatasetIds.includes(d.id)) return;
++    if (multi && selectedDatasetIds.length < datasetChips.length) return;
+     // Own rows only: chip samples, or the persisted preview when it belongs
+     // to THIS dataset (same filename), otherwise none.
+     const ownSamples =

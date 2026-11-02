@@ -1,0 +1,13 @@
+diff --git a/ui/src/components/database/DatabaseConnectModal.tsx b/ui/src/components/database/DatabaseConnectModal.tsx
+index 8b4a7df..3194c72 100644
+--- a/ui/src/components/database/DatabaseConnectModal.tsx
++++ b/ui/src/components/database/DatabaseConnectModal.tsx
+@@ -282,7 +282,7 @@ export function DatabaseConnectModal({
+             <div>
+               <h2 className="text-base font-semibold">Connect {DB_LABEL[dbType]}</h2>
+               <p className="text-xs text-muted-foreground">
+-                Opens a live connection to your database. Your database password is encrypted at rest and sent to the MCP server sealed.
++                Opens a live connection to your database. Credentials are encrypted server-side.
+               </p>
+             </div>
+           </div>

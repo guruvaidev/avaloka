@@ -41,7 +41,12 @@ def test_missing_alias_returns_none():
 # Registration: case variants update the existing entry, no duplicates
 # -------------------------
 
-def test_reregistering_case_variant_does_not_duplicate():
+def test_reregistering_case_variant_does_not_duplicate(monkeypatch):
+    try:  # the typed credentials go to a stand-in sealed store, not the registry
+        from tests import dta_sealed
+    except ImportError:  # pragma: no cover
+        import dta_sealed
+    dta_sealed.install(monkeypatch)
     state = {"dta_database_registry": {"Prod_DB": dict(MYSQL_ENTRY)}}
     _handle_register_database(
         state,

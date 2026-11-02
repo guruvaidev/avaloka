@@ -1,0 +1,13 @@
+diff --git a/app/agents/execution_agent.py b/app/agents/execution_agent.py
+index fde4d1fc..ba7d0cfe 100644
+--- a/app/agents/execution_agent.py
++++ b/app/agents/execution_agent.py
+@@ -2050,7 +2050,7 @@ def _apply_interactive_profile_to_yaml(yaml_text: str) -> str:
+     """Shrink the RayJob footprint for lightweight portfolio-sample analysis."""
+     y = yaml_text
+     y = re.sub(r'(?m)^(\s*)replicas:\s*\d+\s*$', r'\g<1>replicas: 1', y, count=1)
+-    y = re.sub(r'(?m)^(\s*)minReplicas:\s*\d+\s*$', r'\g<1>minReplicas: 0', y, count=1)
++    y = re.sub(r'(?m)^(\s*)minReplicas:\s*\d+\s*$', r'\g<1>minReplicas: 1', y, count=1)
+     y = re.sub(r'(?m)^(\s*)maxReplicas:\s*\d+\s*$', r'\g<1>maxReplicas: 1', y, count=1)
+     y = y.replace('cpu: "2"', 'cpu: "1"', 2)
+     y = y.replace('memory: "8Gi"', 'memory: "2Gi"', 2)

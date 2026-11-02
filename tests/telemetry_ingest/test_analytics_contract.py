@@ -245,12 +245,16 @@ class TestTheTwoSchemasAgree:
 
 # --------------------------------------------------- what stays in the cluster
 
+#: The keys of the question-text export path that owner decision D16.5 removed.
+RETIRED_TEXT_KEYS = {"prompt_stripped", "prompt_redactions", "prompt_names_exact",
+                     "prompt_names_common_word", "prompt_names_substring"}
+
 #: Everything the deployment stores that must not leave it, by the producer's
 #: own lists, plus the names an analyst's question carries.
 STAYS_LOCAL = sorted(
     set(allowlist.SENSITIVE_STORED)
     | (set(allowlist.STORED_KEYS) - set(allowlist.EXPORT_KEYS))
-    | set(allowlist.EXPORT_TEXT_KEYS)
+    | RETIRED_TEXT_KEYS
     | {"column_names", "table_name", "file_name", "dataset_name"}
 )
 
@@ -279,13 +283,13 @@ class TestTheStoredTierIsRefused:
     def test_every_name_the_producer_refuses_the_ingest_refuses_too(self):
         assert produced.NEVER_ACCEPTED <= accepted.REFUSED_KEYS
         assert allowlist.SENSITIVE_STORED <= accepted.REFUSED_KEYS
-        assert allowlist.EXPORT_TEXT_KEYS <= accepted.REFUSED_KEYS
+        assert RETIRED_TEXT_KEYS <= accepted.REFUSED_KEYS
 
-    def test_the_disabled_question_text_path_is_refused_if_someone_enables_it(self, monkeypatch):
-        """``export.EXPORT_QUESTION_TEXT`` is False and is a constant. If it is
-        ever changed without this ingest being changed too, what it would send
-        is rejected here rather than stored."""
-        assert export.EXPORT_QUESTION_TEXT is False
+    def test_no_question_text_path_exists_to_enable(self, monkeypatch):
+        """Owner decision D16.5: question text is never exported. The old
+        question-text path sat behind ``export.EXPORT_QUESTION_TEXT``; it is
+        gone, so setting that name changes nothing -- and the ingest would
+        refuse what it used to send in any case."""
         row = {
             "event_id": uuid.uuid4().hex, "event_type": "question.submitted",
             "session_id": uuid.uuid4().hex, "schema_version": produced.SCHEMA_VERSION,
@@ -302,11 +306,12 @@ class TestTheStoredTierIsRefused:
         as_shipped = export.to_wire(row, install, b"s" * 32)
         assert validate(dict(as_shipped))
 
-        monkeypatch.setattr(export, "EXPORT_QUESTION_TEXT", True)
-        enabled = export.to_wire(row, install, b"s" * 32)
-        assert "prompt_stripped" in enabled, "the disabled path produced nothing to refuse"
+        monkeypatch.setattr(export, "EXPORT_QUESTION_TEXT", True, raising=False)
+        flipped = export.to_wire(row, install, b"s" * 32)
+        assert not (set(flipped) & RETIRED_TEXT_KEYS), "a question-text key is on the wire"
+        assert flipped == as_shipped
         with pytest.raises(Rejected) as exc:
-            validate(dict(enabled))
+            validate({**as_shipped, "prompt_stripped": "average [name] by [name]"})
         assert "refused" in exc.value.reason
 
 

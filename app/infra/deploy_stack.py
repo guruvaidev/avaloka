@@ -10,6 +10,7 @@ Responsibilities:
 from __future__ import annotations
 
 import os
+import re
 from typing import List, Optional
 
 from app.infra.providers.base import run_command
@@ -48,6 +49,27 @@ DATA_STACK = {
     "neo4j": ("neo4j", "https://helm.neo4j.com/neo4j", "neo4j/neo4j", "avaloka-neo4j"),
     "opensearch": ("opensearch", "https://opensearch-project.github.io/helm-charts/", "opensearch/opensearch", "avaloka-opensearch"),
 }
+
+# One address as Helm's --set list syntax can carry it: no commas, braces,
+# brackets, "=" or whitespace.
+_ADMIN_EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+'-]+@[A-Za-z0-9.-]+$")
+
+
+def admin_emails_set_args(raw: str) -> List[str]:
+    """Helm args carrying ADMIN_EMAILS (comma-separated) into admin.emails.
+
+    Empty means no admin, and no argument is passed: the chart's default is an
+    empty list, with no fallback address. A malformed entry fails the deploy
+    rather than being dropped, so a typo cannot silently leave a site without
+    the administrator the operator asked for.
+    """
+    emails = [e.strip().lower() for e in (raw or "").split(",") if e.strip()]
+    bad = [e for e in emails if not _ADMIN_EMAIL_RE.match(e)]
+    if bad:
+        raise ValueError(f"ADMIN_EMAILS has {len(bad)} malformed entr{'y' if len(bad) == 1 else 'ies'}")
+    if not emails:
+        return []
+    return ["--set", "admin.emails={" + ",".join(emails) + "}"]
 
 
 def build_images(
@@ -214,6 +236,10 @@ def deploy_avaloka(
             value = (os.environ.get(env_var) or "").strip()
             if value:
                 cmd += ["--set-string", f"{flag}={value}"]
+
+    # Administrators come from configuration only (the chart's admin.emails).
+    # Unset means no admin; nothing is defaulted.
+    cmd += admin_emails_set_args(os.environ.get("ADMIN_EMAILS", ""))
 
     # Provision mode installs ``deploy/helm/ray/raycluster.yaml`` immediately
     # after this Helm release. Point all Ray Jobs clients at that shared,

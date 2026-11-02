@@ -1,0 +1,13 @@
+diff --git a/ui/src/components/dashboard/UploadModal.tsx b/ui/src/components/dashboard/UploadModal.tsx
+index 20abbbef..cd89dba2 100644
+--- a/ui/src/components/dashboard/UploadModal.tsx
++++ b/ui/src/components/dashboard/UploadModal.tsx
+@@ -750,7 +750,7 @@ export function UploadModal({
+         </header>
+         <input ref={inputRef} type="file" multiple accept={ACCEPTED.join(",")} className="hidden" onChange={(event) => chooseFiles(Array.from(event.target.files ?? []))} />
+         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pb-5" data-upload-step={step}>
+-          {step === 1 ? <>
++          {true ? <>
+         {/* Dropzone */}
+         <div
+           onClick={uploading ? undefined : () => openPicker()}

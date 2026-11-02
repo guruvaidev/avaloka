@@ -282,7 +282,7 @@ export function DatabaseConnectModal({
             <div>
               <h2 className="text-base font-semibold">Connect {DB_LABEL[dbType]}</h2>
               <p className="text-xs text-muted-foreground">
-                Opens a live connection to your database. Credentials are encrypted server-side.
+                Opens a live connection to your database. Your database password is encrypted at rest and sent to the MCP server sealed.
               </p>
             </div>
           </div>

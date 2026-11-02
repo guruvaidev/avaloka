@@ -1,0 +1,24 @@
+diff --git a/app/infra/providers/aws_eks.py b/app/infra/providers/aws_eks.py
+index cf8cbf92..45c56460 100644
+--- a/app/infra/providers/aws_eks.py
++++ b/app/infra/providers/aws_eks.py
+@@ -80,7 +80,18 @@ class AwsEksProvider(ClusterProvider):
+         if create_outcome["status"] == "FAILED":
+             return create_outcome
+         wait_cmd = ["aws", "eks", "wait", "cluster-active", "--name", self.cluster_name, "--region", self.region]
+-        return run_command(wait_cmd, "Wait for aws Cluster Active")
++        wait_outcome = run_command(wait_cmd, "Wait for aws Cluster Active")
++        if wait_outcome["status"] == "FAILED":
++            return wait_outcome
++        nodegroup_cmd = [
++            "aws", "eks", "create-nodegroup",
++            "--cluster-name", self.cluster_name,
++            "--nodegroup-name", f"{self.cluster_name}-workers",
++            "--region", self.region,
++            "--subnets", *self.subnet_ids.split(","),
++            "--node-role", os.environ.get("AWS_EKS_NODE_ROLE_ARN", self.role_arn),
++        ]
++        return run_command(nodegroup_cmd, "Create aws Nodegroup")
+ 
+     def configure_kubectl(self) -> dict:
+         cmd = ["aws", "eks", "update-kubeconfig", "--name", self.cluster_name, "--region", self.region]

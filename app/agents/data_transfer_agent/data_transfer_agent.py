@@ -24,6 +24,7 @@ from app.agents.data_transfer_agent.dta_state import (
     DaftETLState as ETLState,
     cloud_storage_credentials,
     db_credentials,
+    redact_secrets,
 )
 from app.agents.data_transfer_agent import daft_coder, daft_validator
 from app.agents.data_transfer_agent.daft_coder import (
@@ -239,12 +240,15 @@ def probe_db_connection(
         logger.info("[%s] DB connection successful for %s.", _ts(),label.capitalize(),)
 
     except Exception as exc:
-        logger.error("[%s] DB connection FAILED for %s: %s",_ts(),label.capitalize(),exc,)
+        # A driver or URL-parse error can quote the URL, password included; the
+        # message reaches the log, the pipeline's error_message and the reply.
+        detail = redact_secrets(exc, [connection_string])
+        logger.error("[%s] DB connection FAILED for %s: %s",_ts(),label.capitalize(),detail,)
 
         raise PipelineError(
             f"Cannot connect to {label} database. "
             f"Check host, port, credentials, and firewall rules. "
-            f"Detail: {exc}"
+            f"Detail: {detail}"
         ) from exc
 
 def _url_with_ssl_params(url: str, connect_args: Optional[Dict[str, Any]]) -> str:
@@ -1639,6 +1643,11 @@ def data_transfer_pipeline(
     source_conn_str, source_conn_extra = src_res if isinstance(src_res, tuple) else (src_res, IOConfig())
     destination_conn_str, dest_conn_extra = dst_res if isinstance(dst_res, tuple) else (dst_res, IOConfig())
 
+    def _mask(exc) -> str:
+        # A driver error can quote the URL it was given, password included; the
+        # text reaches the log, error_message and the user's reply.
+        return redact_secrets(exc, [source_conn_str, destination_conn_str])
+
     source_io_config = source_conn_extra if isinstance(source_conn_extra, IOConfig) else IOConfig()
     source_connect_args: Dict[str, Any] = source_conn_extra if isinstance(source_conn_extra, dict) else {}
     dest_io_config = dest_conn_extra if isinstance(dest_conn_extra, IOConfig) else IOConfig()
@@ -1677,8 +1686,8 @@ def data_transfer_pipeline(
         logger.info("[%s] Source schema ready.", _ts())
 
     except Exception as exc:
-        logger.error("[%s] Could not deduce source schema: %s", _ts(), exc)
-        return {"error_message": f"Connection Error: Could not read source schema. Detail: {exc}"}, None
+        logger.error("[%s] Could not deduce source schema: %s", _ts(), _mask(exc))
+        return {"error_message": f"Connection Error: Could not read source schema. Detail: {_mask(exc)}"}, None
 
     # The connection was already probed in Step 2, so for a DB source an empty
     # schema means the named table simply does not exist (mirror of the Case-3
@@ -1731,7 +1740,7 @@ def data_transfer_pipeline(
         # A read/permission error (not an absent table — deduce_schema returns
         # empty for that) means we cannot verify compatibility. Abort with a
         # clear retry message instead of silently skipping the schema check.
-        logger.error("[%s] Could not read destination schema: %s", _ts(), exc)
+        logger.error("[%s] Could not read destination schema: %s", _ts(), _mask(exc))
         # Distinguish "the destination file is unreadable/corrupt" from a
         # genuinely transient fault. Telling someone to retry a malformed
         # destination just reproduces the same error forever -- they need to
@@ -1758,7 +1767,7 @@ def data_transfer_pipeline(
         return {
             "error_message": (
                 "Could not read the destination schema to verify compatibility. "
-                f"{_guidance}\n\nDetail: {exc}"
+                f"{_guidance}\n\nDetail: {_mask(exc)}"
             )
         }, None
 
@@ -1784,9 +1793,9 @@ def data_transfer_pipeline(
         )
 
     except Exception as exc:
-        logger.error("[%s] Failed to fetch sample data: %s", _ts(), exc)
+        logger.error("[%s] Failed to fetch sample data: %s", _ts(), _mask(exc))
         return {
-            "error_message": f"Connection Error: Could not fetch sample data. Detail: {exc}"
+            "error_message": f"Connection Error: Could not fetch sample data. Detail: {_mask(exc)}"
         }, None
 
     # Step 6: Build ETL state

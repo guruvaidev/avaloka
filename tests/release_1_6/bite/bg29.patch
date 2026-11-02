@@ -1,0 +1,13 @@
+diff --git a/ui/src/components/dashboard/auto-insights/AutoInsightsPanels.tsx b/ui/src/components/dashboard/auto-insights/AutoInsightsPanels.tsx
+index 940d8474..deee2ca2 100644
+--- a/ui/src/components/dashboard/auto-insights/AutoInsightsPanels.tsx
++++ b/ui/src/components/dashboard/auto-insights/AutoInsightsPanels.tsx
+@@ -68,7 +68,7 @@ export function AutoInsightsHeader({ groups, active, view, onDataset, onView, on
+   return <header className="ai-header ai-surface">
+     <div className="ai-context"><h2 id="auto-insights-title">Auto Insights</h2><span className="ai-divider" />
+       <div className="ai-dataset">
+-        {groups.length > 1 ? <div className="ai-dataset-select"><select aria-label="Dataset" value={active?.id ?? ""} onChange={(event) => onDataset(event.target.value)}>{groups.map((group) => <option key={group.id} value={group.id}>{group.config?.dataset?.filename ?? group.name}{group.config?.dataset?.sheet_name && !group.name.includes(group.config.dataset.sheet_name) ? ` · ${group.config.dataset.sheet_name}` : ""}</option>)}</select><ChevronDown size={16} /></div> : <strong title={name}>{name}</strong>}
++        {groups.length > 1 ? <div className="ai-dataset-select"><select aria-label="Dataset" value={active?.id ?? ""} onChange={(event) => onDataset(event.target.value)}>{groups.map((group) => <option key={group.id} value={group.id}>{group.config?.dataset?.filename ?? group.name}{group.config?.dataset?.sheet_name && !group.name.includes(group.config.dataset.sheet_name) ? ` · ${group.config.dataset.sheet_name}` : ""}</option>)}</select><ChevronDown size={16} /></div> : <strong title={name}>Dataset</strong>}
+         <p>{number(dataset?.total_rows ?? dataset?.rows_sampled)} {dataset?.total_rows == null && dataset?.rows_sampled != null ? "sample rows" : "rows"} · {number(Array.isArray(dataset?.columns) ? dataset.columns.length : dataset?.column_count ?? (columnsOf(config).length || null))} columns{domain ? ` · ${domain}` : ""}</p>
+       </div>
+     </div>

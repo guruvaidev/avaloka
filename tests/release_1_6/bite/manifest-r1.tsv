@@ -1,0 +1,16 @@
+K8-12	revert	pytest	k8-12-r1.patch	tests/release_1_6/test_settled_backend.py::test_k812_oom_failure_is_classified_with_a_remediation
+DQ-02	revert	pytest	dq-02-r1.patch	tests/release_1_6/test_settled_backend.py::test_dq02_local_training_refuses_a_leaking_dataset
+DQ-09	revert	pytest	dq-09-prose-r1.patch	tests/release_1_6/test_settled_backend.py::test_dq09_prose_count_stays_exempt
+DQ-09	fix	pytest	dq-09-decimal-r1.patch	tests/release_1_6/test_settled_backend.py::test_dq09_decimal_written_statistic_is_verified
+DQ-16	fix	pytest	dq-16-r1.patch	tests/release_1_6/test_settled_backend.py::test_dq16_all_null_column_is_not_dropped_silently
+UI-03	revert	pytest	ui-03-r1.patch	tests/release_1_6/test_settled_backend.py::test_ui03_oversize_message_names_the_per_file_limit
+UI-04	revert	pytest	ui-04-sections-r1.patch	tests/release_1_6/test_settled_backend.py::test_ui04_overview_carries_score_reasoning_flags_and_wins
+UI-04	fix	pytest	ui-04-relationships-r1.patch	tests/release_1_6/test_settled_backend.py::test_ui04_overview_carries_key_relationships
+UI-11	revert	pytest	ui-11-r1.patch	tests/release_1_6/test_settled_backend.py::test_ui11_inference_returns_the_prediction_for_the_requested_run
+CM-03	fix	pytest	cm-03-r1.patch	tests/release_1_6/test_settled_backend.py::test_cm03_small_talk_does_not_launch_a_mission
+CM-05	revert	pytest	cm-05-tools-r1.patch	tests/release_1_6/test_settled_backend.py::test_cm05_built_mcp_server_lists_and_calls_its_tools
+CM-05	fix	pytest	cm-05-names-r1.patch	tests/release_1_6/test_settled_backend.py::test_cm05_listed_tool_names_match_the_specs
+CM-07	revert	pytest	cm-07-dataset-r1.patch	tests/release_1_6/test_settled_backend.py::test_cm07_dataset_discovery_describes_the_bound_dataset
+CM-07	fix	pytest	cm-07-client-r1.patch	tests/release_1_6/test_settled_backend.py::test_cm07_database_discovery_client_exists
+NEW-BG-02	revert	pytest	newbg-02-r1.patch	tests/release_1_6/test_settled_rls.py::test_newbg02_project_creator_sees_own_project
+NEW-BG-05	fix	pytest	newbg-05-r1.patch	tests/release_1_6/test_settled_rls.py::test_newbg05_app_users_reference_roles_and_departments_by_key

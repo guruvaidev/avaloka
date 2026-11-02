@@ -35,7 +35,7 @@ constantly and consistently improve the data science agents.
 - **Yours, wherever it runs.** The same Helm chart runs on GKE, EKS, AKS,
   on-premises Kubernetes or your laptop. There is no lock-in and no cloud
   markup, and Avaloka operates no service that receives your data. Choose a
-  local model and nothing leaves your environment.
+  local model and local embeddings, and nothing leaves your environment.
 - **Bring your own model, or several.** Planning, coding and visualization can
   each use a different model and provider, with an automatic fallback. Swap or
   upgrade models without changing how you work.
@@ -55,9 +55,9 @@ constantly and consistently improve the data science agents.
 - **Built for teams.** Share projects, analyses and reports with view, comment
   or edit access, and build on each other's work.
 - **From question to production.** Turn an analysis into a scheduled job in one
-  step. Large sources run on autoscaling Ray clusters in your own cloud, and
-  Avaloka tells you up front when a job will be large or slow, before the bill
-  arrives.
+  step. Model training runs on autoscaling Ray (KubeRay) clusters in your own
+  cloud, and Avaloka tells you up front when a dataset is large enough to make
+  a job slow.
 - **Connects to what you already have.** PostgreSQL, MySQL, MariaDB, SQL
   Server, Oracle, SQLite, MongoDB, S3, Google Cloud Storage and Azure Blob.
 - **A laptop is enough.** The CLI runs a statistics-grounded analysis on your
@@ -139,7 +139,11 @@ vendor.
   `INFERENCE_PROVIDER=openai` and `OPENAI_API_KEY`, or to Gemini on Google
   Vertex AI with `INFERENCE_PROVIDER=vertex`.
 - **Or any model you like,** including one running on your own hardware. With
-  `INFERENCE_PROVIDER=local` (vLLM or Ollama), nothing leaves your environment.
+  `INFERENCE_PROVIDER=local` (vLLM or Ollama), nothing leaves your
+  environment. (Memory embeddings are local by default. OpenAI embeddings need
+  `EMBEDDING_PROVIDER=openai` plus `EMBEDDING_OPENAI_API_KEY`, and send memory
+  text, including table and column names, to OpenAI; `OPENAI_API_KEY` alone
+  never turns them on.)
 - **Mix them.** Planning, coding and visualization can each use a different
   provider (`INFERENCE_PROVIDER_PLANNING`, `_CODING`, `_VIZ`), and a single
   agent can be overridden with `AVALOKA_<AGENT>_PROVIDER`. With
@@ -315,9 +319,9 @@ Both are tracked in the [CHANGELOG](CHANGELOG.md).
 | --- | --- |
 | **On your laptop** | The [Quickstart](#quickstart) above. |
 | **On your own cluster, fully offline** | [Install Guide → Running completely offline](docs/INSTALL.md#running-avaloka-completely-offline): a local model server, the embedding model baked into the image, and storage, memory and auth deployed by the Helm chart. Nothing calls home, and a `--network none` check lets you prove it rather than trust it. |
-| **Let us run it** | [avaloka.ai](https://avaloka.ai) hosts the Professional and Enterprise editions with auto-scaling compute — nothing to stand up. Enterprise adds team workspaces, the cloud scheduler and connections to your own clusters. |
+| **In your cloud, provisioned by Avaloka** | The Professional and Enterprise editions ([avaloka.ai](https://avaloka.ai)) run in your own cloud, on your billing, and provision and autoscale the clusters there for you. Enterprise adds team workspaces, the cloud scheduler and connections to your own clusters. |
 
-The open-source edition is not a limited trial of the hosted ones. It is the
+The open-source edition is not a limited trial of the commercial ones. It is the
 same engine on your own hardware, and it stays useful with no account, no key
 and no network.
 
@@ -366,7 +370,7 @@ speed that makes the planner feel like a conversation rather than a batch job.
 | Model training, registry, inference serving | **●** | ○ | ● | ● |
 | Cloud / database connectors | ○ | ○ | ● | ● |
 | Provisioning & scheduling onto a cloud cluster | ○ | ○ | ● | ● |
-| Teams, sharing, comments, notifications | ○ | ○ | ○ | ● |
+| Teams, analysis sharing, comments, notifications | ○ | ○ | ● | ● |
 
 The open-source edition is sized for a laptop or a small self-managed cluster.
 That is the target, it is what gets tested, and it is what the capability

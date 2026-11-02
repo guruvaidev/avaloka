@@ -1,0 +1,13 @@
+diff --git a/app/api/workflow.py b/app/api/workflow.py
+index 736feef3..03e1f7ec 100644
+--- a/app/api/workflow.py
++++ b/app/api/workflow.py
+@@ -310,7 +310,7 @@ def route_planner_output(state: ETLState):
+             # No code yet → fall through so planner/coder can generate it, then route_after_code will execute_on_ray.
+ 
+     if state.get("enable_training"):
+-        return "train_models"
++        return "prepare_code"
+ 
+     if _looks_like_direct_inference_request(state):
+         try:

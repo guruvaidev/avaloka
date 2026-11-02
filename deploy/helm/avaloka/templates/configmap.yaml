@@ -1,5 +1,6 @@
 {{- include "avaloka.checkSupabaseCredentials" . -}}
 {{- include "avaloka.checkLineageDatabaseUrl" . -}}
+{{- include "avaloka.checkAdminAutoconfirm" . -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -78,6 +79,9 @@ data:
   # install.
   HF_HUB_OFFLINE: {{ .Values.memory.offlineEmbeddings | ternary "1" "0" | quote }}
   {{- end }}
+  # Memory embeddings stay in the cluster unless the operator opts in to OpenAI
+  # (memory.embeddingProvider=openai plus EMBEDDING_OPENAI_API_KEY in the Secret).
+  EMBEDDING_PROVIDER: {{ .Values.memory.embeddingProvider | default "local" | quote }}
   {{- with (include "avaloka.mcpServerUrl" .) }}
   MCP_SERVER_URL: {{ . | quote }}
   {{- end }}
@@ -92,6 +96,12 @@ data:
   # Service name or *.svc.cluster.local) — a remote Ray cluster cannot resolve those.
   # Cloud-to-cloud transfers keep using RAY_DASHBOARD_URL above.
   RAY_DASHBOARD_URL_INCLUSTER: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.rbac.rayJobSecretsNamespace }}
+  # Where the data transfer agent's KubeRay RayJobs, and their per-job
+  # credentials Secrets, go: the namespace rbac.yaml grants Secret create/delete
+  # in (never get). Unset, app/data_transfer_docker/gke_run.py uses "default".
+  KUBE_NAMESPACE: {{ . | quote }}
   {{- end }}
   {{- with .Values.config.mtaRayDashboardUrl }}
   # Ray Jobs API used only by scheduled/distributed MTA training. This targets

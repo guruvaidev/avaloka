@@ -113,7 +113,9 @@ def _service(token, user):
 
 
 def _on_disk(reg):
-    return json.loads(reg.path.read_text())
+    """The registry as the servers read it: secrets are sealed on disk, opened here (2.0's helper)."""
+    from app.mcp_server.credentials import load_registry
+    return load_registry(str(reg.path), migrate=False)
 
 
 ROUTES = [
@@ -358,12 +360,13 @@ def test_admin_customers_refuses_without_the_service_token(reg, monkeypatch):
 
     monkeypatch.setattr(mts, "CUSTOMERS_FILE", str(reg.path))
     client = TestClient(mts.app)
-    takeover = {
+    from app.mcp_server.credentials import credential_handle
+    takeover = {  # the secrets travel sealed (app/mcp_server/credentials.py)
         "customer_id": "cust_a",
-        "connection_string": "sqlite:///" + str(reg.path.parent / "attacker.db"),
+        "connection_string_enc": credential_handle("sqlite:///" + str(reg.path.parent / "attacker.db")),
         "database_type": "sqlite",
         "created_at": "2026-10-18T00:00:00",
-        "api_key": "ak_" + secrets.token_hex(16),
+        "api_key_enc": credential_handle("ak_" + secrets.token_hex(16)),
     }
     for headers in ({}, {TOKEN_HEADER: "wrong-" + reg.token}):
         r = client.post("/admin/customers", json=takeover, headers=headers)
@@ -392,12 +395,14 @@ def mcp(reg, monkeypatch):
 
 
 def _admin_payload(reg, cid, api_key):
+    """What the onboarding service sends: the secrets as sealed handles (app/mcp_server/credentials.py)."""
+    from app.mcp_server.credentials import credential_handle
     return {
         "customer_id": cid,
-        "connection_string": "sqlite:///" + str(reg.path.parent / f"{cid}.db"),
+        "connection_string_enc": credential_handle("sqlite:///" + str(reg.path.parent / f"{cid}.db")),
         "database_type": "sqlite",
         "created_at": "2026-10-18T00:00:00",
-        "api_key": api_key,
+        "api_key_enc": credential_handle(api_key),
     }
 
 

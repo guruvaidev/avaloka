@@ -1,8 +1,22 @@
 import { DatasetChipName } from "@/components/dashboard/data-view/DatasetChipName";
+import {
+  buildAutoInsightsDatasets,
+  dataViewSource,
+  datasetSizeMb,
+  datasetTotalRows,
+  mergeThreadDatasetChips,
+  nextThreadDatasetSelection,
+  normalizeDatasetSchema,
+  workspaceDatasetFromChip,
+  type DatasetChip,
+  type UploadedDataset,
+} from "@/lib/analysis-workspace";
+import { ChartCarousel, InlineMarkdown } from "@/components/analysis/ChartCarousel";
 import { rayJobMarkdown } from "@/lib/ray-jobs";
 import { RayJobText } from "@/components/ray-jobs/RayJobText";
 import { Link } from "@tanstack/react-router";
 import { DataWorkspaceCard } from "@/components/dashboard/data-view/DataWorkspaceCard";
+import { DataViewTabs } from "@/components/dashboard/data-view/DataViewTabs";
 import { getKeyFindings, keyFindingBullets, messagesWithKeyFindings, splitAtKeyFindings } from "@/lib/workspace-findings";
 import { KeyFindingsCard } from "@/components/dashboard/KeyFindingsCard";
 import { ChatResizeHandle } from "@/components/analysis/ChatResizeHandle";
@@ -93,6 +107,17 @@ import {
 } from "@untitledui/icons";
 import { readChatDock, writeChatDock, type ChatDockSide } from "@/lib/chat-dock";
 import { ChatDockControls } from "@/components/analysis/ChatDockControls";
+import { ChatIntroCard, useChatIntro } from "@/components/analysis/ChatIntroCard";
+import {
+  GoalPlanActions,
+  useGoalFirstGate,
+  type GoalChatLine,
+} from "@/components/analysis/GoalPlanActions";
+import { PageCommentaryCard } from "@/components/analysis/PageCommentaryCard";
+import { pageCommentary } from "@/lib/page-commentary";
+import { verifierNotice, type VerifierNotice } from "@/lib/verifier-notice";
+import { VerifierNoticeBlock } from "@/components/analysis/VerifierNoticeBlock";
+import { isNewChatThread } from "@/lib/chatbot-intro";
 import { Dialog, DialogContent, DialogPortal, DialogOverlay, DialogTitle } from "@/components/ui/dialog";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { Maximize2 } from "lucide-react";
@@ -206,6 +231,8 @@ type ChatMessage = {
   authorName?: string;
   authorAvatar?: string | null;
   isSelf?: boolean;
+  /** The claim verifier did not clear this reply (verification_safe_to_present === false). */
+  verification?: VerifierNotice | null;
 };
 
 const ANALYSIS_COMPLETE_MESSAGE = "Analysis complete. Please check your output table and charts for analysis.";
@@ -231,44 +258,9 @@ function mainSectionId(tabId: string) {
   return `${tabId}-main`;
 }
 
-type DatasetChip = {
-  id: string;
-  name: string;
-  sheetName?: string | null;
-  /** Original workbook file when this dataset is one of its sheets. */
-  sourceWorkbook?: string | null;
-  rows?: number | null;
-  available?: boolean;
-  sessionId?: string;
-  threadId?: string;
-  schema?: unknown;
-  samples?: Record<string, unknown>[];
-  rowsSampled?: number;
-  totalRows?: number;
-  sizeMb?: number;
-  visualizationConfig?: unknown;
-  visualizationStatus?: string;
-};
 
 /** Total dataset size in MB from a register/upload response (0 / missing → undefined). */
-function datasetSizeMb(source: any): number | undefined {
-  const mb =
-    typeof source?.file_size_mb === "number"
-      ? source.file_size_mb
-      : typeof source?.file_size_bytes === "number"
-        ? source.file_size_bytes / (1024 * 1024)
-        : undefined;
-  return mb && mb > 0 ? mb : undefined;
-}
 
-function datasetTotalRows(source: any): number | undefined {
-  const value =
-    source?.total_rows ??
-    source?.visualization_config?.dataset?.total_rows ??
-    source?.visualizationConfig?.dataset?.total_rows;
-  const number = Number(value);
-  return Number.isFinite(number) && number > 0 ? number : undefined;
-}
 
 export function formatDatasetSize(mb?: number): string | null {
   if (!mb || mb <= 0) return null;
@@ -277,25 +269,6 @@ export function formatDatasetSize(mb?: number): string | null {
   return `${mb.toFixed(mb < 10 ? 2 : 1)} MB`;
 }
 
-function normalizeDatasetSchema(schema: unknown, samples: unknown[]): string[] {
-  if (Array.isArray(schema)) {
-    const columns = schema
-      .map((column) =>
-        typeof column === "string"
-          ? column
-          : column && typeof column === "object" && "name" in column
-            ? String((column as { name: unknown }).name)
-            : "",
-      )
-      .filter(Boolean);
-    if (columns.length) return columns;
-  }
-  if (schema && typeof schema === "object") return Object.keys(schema);
-  const first = samples[0];
-  if (first && typeof first === "object" && !Array.isArray(first)) return Object.keys(first);
-  if (Array.isArray(first)) return first.map((_, index) => `col_${index + 1}`);
-  return [];
-}
 
 function populatedDatasetFromResponse(response: any, filename: string): UploadedDataset | null {
   if (
@@ -986,15 +959,7 @@ function AnalysisPage() {
         return;
       }
 
-      const schema = normalizeDatasetSchema(dataset.schema, dataset.samples);
-      setPersistedDataset({
-        filename: dataset.name,
-        schema,
-        samples: dataset.samples,
-        rows_sampled: dataset.rowsSampled ?? dataset.samples.length,
-        total_rows: dataset.totalRows ?? datasetTotalRows(dataset.visualizationConfig),
-        size_mb: dataset.sizeMb,
-      });
+      setPersistedDataset(workspaceDatasetFromChip(dataset, dataset.samples));
       setAutoInsightsSamples(dataset.samples);
 
       const config = dataset.visualizationConfig ?? deriveVizFromRows(dataset.samples);
@@ -1008,29 +973,10 @@ function AnalysisPage() {
   /** Per-dataset tabs for the Auto Insights modal (grouped uploads).
    *  One entry per DISTINCT dataset_id, each carrying its OWN config + OWN rows.
    *  Never pairs one dataset's chart spec with another dataset's rows. */
-  const autoInsightsDatasets = useMemo(() => {
-    const byId = new Map<string, { id: string; name: string; config: any; status?: string; samples?: any[] }>();
-    const multi = datasetChips.length > 1;
-    datasetChips.forEach((d) => {
-      if (!d?.id || byId.has(d.id)) return;
-      // Unselected chips stay in the analysis, but their insights are hidden until selected.
-      if (multi && selectedDatasetIds.length && !selectedDatasetIds.includes(d.id)) return;
-      // Own rows only: chip samples, or the persisted preview when it belongs
-      // to THIS dataset (same filename), otherwise none.
-      const ownSamples =
-        (Array.isArray(d.samples) && d.samples.length ? d.samples : undefined) ??
-        (persistedDataset?.filename && persistedDataset.filename === d.name ? persistedDataset.samples : undefined);
-      const ownConfig = d.visualizationConfig ?? (ownSamples?.length ? deriveVizFromRows(ownSamples) : null);
-      byId.set(d.id, {
-        id: d.id,
-        name: multi ? chipLabel(d) : d.name,
-        config: ownConfig,
-        status: d.visualizationStatus ?? (ownConfig ? "ready" : undefined),
-        samples: ownSamples,
-      });
-    });
-    return Array.from(byId.values());
-  }, [datasetChips, persistedDataset, selectedDatasetIds]);
+  const autoInsightsDatasets = useMemo(
+    () => buildAutoInsightsDatasets(datasetChips, persistedDataset, selectedDatasetIds),
+    [datasetChips, persistedDataset, selectedDatasetIds],
+  );
 
   const vizInsights = useMemo(
     () => collectVizInsights(analysisVizConfig, chartSamples),
@@ -1920,54 +1866,15 @@ function AnalysisPage() {
     async (opts?: { selectNew?: boolean }): Promise<number> => {
       if (!threadId) return 0;
       const items = await backendApi.listThreadDatasets(threadId);
-      const fresh: DatasetChip[] = (items ?? [])
-        .filter((d) => d?.dataset_id)
-        .map((d) => ({
-          id: d.dataset_id,
-          name: d.alias || d.filename || d.dataset_id,
-          sheetName: d.sheet_name ?? null,
-          sourceWorkbook: d.source_workbook ?? null,
-          rows: d.rows ?? null,
-          available: d.available !== false,
-          threadId,
-        }));
-      const serverSelected = (items ?? [])
-        .filter((d) => d?.dataset_id && d.selected === true && d.available !== false)
-        .map((d) => d.dataset_id);
       const prevChips = datasetChipsRef.current;
-      const prevIds = new Set(prevChips.map((c) => c.id));
-      const byId = new Map(prevChips.map((c) => [c.id, c] as const));
-      for (const c of fresh) {
-        const existing = byId.get(c.id);
-        byId.set(
-          c.id,
-          existing
-            ? {
-                ...existing,
-                name: c.name,
-                sheetName: c.sheetName,
-                sourceWorkbook: c.sourceWorkbook,
-                rows: c.rows,
-                available: c.available,
-              }
-            : c,
-        );
-      }
-      const merged = Array.from(byId.values());
-      const newIds = fresh.filter((c) => !prevIds.has(c.id) && c.available !== false).map((c) => c.id);
-      const unavailable = new Set(merged.filter((c) => c.available === false).map((c) => c.id));
+      const { merged, newIds, unavailable, serverSelected } = mergeThreadDatasetChips(prevChips, items, threadId);
       datasetChipsRef.current = merged;
       setDatasetChips(merged);
       storeDatasetBatch(resolvedAnalysisId ?? aidFromUrl ?? null, {
         chips: merged,
         selectedId: newIds[newIds.length - 1] ?? merged[0]?.id ?? null,
       });
-      setSelectedDatasetIds((prev) => {
-        // The saved selection (GET selected: true) is authoritative after a reload.
-        const base = serverSelected.length ? serverSelected : prev;
-        const kept = base.filter((id) => !unavailable.has(id));
-        return opts?.selectNew ? Array.from(new Set([...kept, ...newIds])) : kept;
-      });
+      setSelectedDatasetIds((prev) => nextThreadDatasetSelection(prev, serverSelected, unavailable, newIds, opts?.selectNew));
       return merged.length - prevChips.length;
     },
     [threadId, resolvedAnalysisId, aidFromUrl],
@@ -2924,25 +2831,16 @@ function AnalysisPage() {
     : [];
   // Data sample and chat analysis results are separate views: the sample is
   // always the uploaded dataset's rows; results come from tableRuns only.
-  const sampleRows: Record<string, unknown>[] = viewDataset?.samples ?? [];
-  const sampleColumns: string[] = (() => {
-    if (viewDataset?.schema?.length) return viewDataset.schema;
-    const keys = new Set<string>();
-    sampleRows.slice(0, 50).forEach((row) => Object.keys(row ?? {}).forEach((key) => keys.add(key)));
-    return Array.from(keys);
-  })();
   const selectedRunTables = selectedRun ? tablesForRun(selectedRun) : [];
   const safeResultTableIndex = Math.min(resultTableIndex, Math.max(selectedRunTables.length - 1, 0));
   const selectedResultRows: Record<string, unknown>[] = selectedRunTables[safeResultTableIndex]?.rows ?? [];
   // Chart and Column Summary follow the last active sample/results table.
-  const dataViewRows: Record<string, unknown>[] =
-    lastDataView === "results" && selectedRun ? selectedResultRows : sampleRows;
-  const dataViewColumns: string[] = (() => {
-    if (lastDataView === "sample" && viewDataset?.schema?.length) return viewDataset.schema;
-    const keys = new Set<string>();
-    dataViewRows.slice(0, 50).forEach((row) => Object.keys(row ?? {}).forEach((key) => keys.add(key)));
-    return Array.from(keys);
-  })();
+  const { sampleRows, sampleColumns, dataViewRows, dataViewColumns } = dataViewSource(
+    viewDataset,
+    lastDataView,
+    !!selectedRun,
+    selectedResultRows,
+  );
   const dataSourceLabel =
     lastDataView === "results" && selectedRun ? `Analysis ${selectedRunIndex + 1}` : "Data sample";
   const dataSourceSwitch =
@@ -3517,6 +3415,7 @@ function AnalysisPage() {
         content: extracted.text || ANALYSIS_COMPLETE_MESSAGE,
         time: nowTime,
         sectionId,
+        verification: verifierNotice(res),
       },
     ]);
 
@@ -3576,7 +3475,7 @@ function AnalysisPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [threadId]);
 
-  const send = async (content: string): Promise<boolean> => {
+  const runTurn = async (content: string, opts?: { showUser?: boolean }): Promise<boolean> => {
     content = content.trim();
     if (!content || isSending) return false;
 
@@ -3590,16 +3489,21 @@ function AnalysisPage() {
 
     setMessages((m) => [
       ...m,
-      {
-        id: userId,
-        role: "user",
-        content,
-        time: nowTime,
-        replyTo: carriedReply ?? undefined,
-        sectionId: targetSectionId || undefined,
-        authorId: myProfileId,
-        isSelf: true,
-      },
+      // A goal approved from its plan is already on screen above the plan.
+      ...(opts?.showUser === false
+        ? []
+        : [
+            {
+              id: userId,
+              role: "user" as const,
+              content,
+              time: nowTime,
+              replyTo: carriedReply ?? undefined,
+              sectionId: targetSectionId || undefined,
+              authorId: myProfileId,
+              isSelf: true,
+            },
+          ]),
       { id: placeholderId, role: "ai", content: "Analyzing...", time: nowTime, thinking: true },
     ]);
     setReplyContext(null);
@@ -3768,10 +3672,20 @@ function AnalysisPage() {
 
       // Placeholder only when this turn produced an execution result AND the
       // assistant returned no usable text after stripping tables.
-      const assistantMsgs = lastAssistantText
-        ? [{ id: `${placeholderId}-a0`, role: "ai" as const, content: lastAssistantText, time: nowTime() }]
+      // The verifier's findings ride on the reply they are about.
+      const verification = verifierNotice(res);
+      const assistantMsgs: ChatMessage[] = lastAssistantText
+        ? [{ id: `${placeholderId}-a0`, role: "ai" as const, content: lastAssistantText, time: nowTime(), verification }]
         : hasExecutionResult(res) || lastAssistant || extractedTables.length
-          ? [{ id: `${placeholderId}-a0`, role: "ai" as const, content: ANALYSIS_COMPLETE_MESSAGE, time: nowTime() }]
+          ? [
+              {
+                id: `${placeholderId}-a0`,
+                role: "ai" as const,
+                content: ANALYSIS_COMPLETE_MESSAGE,
+                time: nowTime(),
+                verification,
+              },
+            ]
           : [];
 
       // SCHEDULED TASK SIGNAL: if the backend returns task_info with a
@@ -4088,6 +4002,52 @@ function AnalysisPage() {
     }
   };
 
+  // Goal first: the first message of a new chat gets a plan, and nothing runs
+  // until the user says go. The datasets are the ones the turn would carry.
+  const planDatasets = useMemo(() => {
+    const available = datasetChips.filter((c) => c.available !== false && c.id);
+    const selected = available.filter((c) => selectedDatasetIds.includes(c.id));
+    return (selected.length ? selected : available).map((c) => ({ id: c.id, name: chipLabel(c) }));
+  }, [datasetChips, selectedDatasetIds]);
+  const appendGoalLines = useCallback(
+    (lines: GoalChatLine[]) => {
+      const time = new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+      const stamp = Date.now();
+      setMessages((m) => [
+        ...m,
+        ...lines.map((line, i) => ({
+          id: `g${stamp}-${i}`,
+          role: line.role,
+          content: line.content,
+          time,
+          ...(line.role === "user" ? { authorId: myProfileId, isSelf: true } : {}),
+        })),
+      ]);
+    },
+    [myProfileId],
+  );
+  const isNewChat = isNewChatThread(messages);
+  const goalGate = useGoalFirstGate({
+    runTurn,
+    appendLines: appendGoalLines,
+    datasets: planDatasets,
+    isNewChat,
+  });
+  const resetGoalGate = goalGate.reset;
+  useEffect(() => resetGoalGate(), [threadId, resetGoalGate]);
+  const chatIntro = useChatIntro(myProfileId, threadId);
+  const showChatIntro = !chatIntro.dismissed && isNewChat;
+  const send = async (content: string): Promise<boolean> => {
+    if (!content.trim() || isSending) return false;
+    // The intro is shown once: the first message counts as seeing it.
+    if (!chatIntro.dismissed) chatIntro.dismiss();
+    return goalGate.send(content);
+  };
+  const pageCommentaryLines = useMemo(
+    () => pageCommentary(autoInsightsConfig, { datasetCount: planDatasets.length }),
+    [autoInsightsConfig, planDatasets.length],
+  );
+
   const projectContextLoading = !!analysisId && !ctx;
 
   const isChatFloat = effectiveChatDock === "float";
@@ -4167,6 +4127,8 @@ function AnalysisPage() {
               <span className="text-xs text-tertiary">Today</span>
               <div className="h-px flex-1 bg-border-secondary" />
             </div>
+            {showChatIntro && <ChatIntroCard onDismiss={chatIntro.dismiss} />}
+            <PageCommentaryCard lines={pageCommentaryLines} datasetName={autoInsightsDatasetName} />
             {displayMessages.map((m) => (
               <div
                 key={m.id}
@@ -4215,6 +4177,14 @@ function AnalysisPage() {
                 />
               </div>
             ))}
+            {goalGate.pending && (
+              <GoalPlanActions
+                disabled={isSending}
+                onGo={() => {
+                  void goalGate.approve();
+                }}
+              />
+            )}
           </div>
         </div>
       )}
@@ -4790,43 +4760,7 @@ function AnalysisPage() {
                           >
                             <DataWorkspaceCard>
                               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--workspace-border)] bg-[var(--workspace-header-bg)] px-3 py-2">
-                                <div
-                                  role="tablist"
-                                  aria-label="Dataset views"
-                                  className="inline-flex items-center rounded-lg bg-[var(--workspace-tablist-bg)] p-0.5"
-                                >
-                                  {(
-                                    [
-                                      ["sample", "Data sample"],
-                                      [
-                                        "results",
-                                        tableRuns.length
-                                          ? `Analysis results (${tableRuns.length})`
-                                          : "Analysis results",
-                                      ],
-                                      ["chart", "Chart"],
-                                      ["preview", "Column Summary"],
-                                    ] as const
-                                  ).map(([key, label]) => (
-                                    <button
-                                      key={key}
-                                      role="tab"
-                                      aria-selected={view === key}
-                                      onClick={() => setView(key)}
-                                      title={
-                                        key === "preview" ? "Structure of the dataset: one row per column" : undefined
-                                      }
-                                      className={cx(
-                                        "rounded-md px-3 py-1.5 text-sm font-semibold transition",
-                                        view === key
-                                          ? "bg-primary text-primary shadow-[0_1px_2px_rgba(16,24,40,0.12)]"
-                                          : "text-tertiary hover:text-primary",
-                                      )}
-                                    >
-                                      {label}
-                                    </button>
-                                  ))}
-                                </div>
+                                <DataViewTabs view={view} resultCount={tableRuns.length} onSelect={setView} />
                                 <div className="flex items-center gap-2">
                                   {(view === "sample" && sampleRows.length > 0) ||
                                   (view === "results" && selectedResultRows.length > 0) ? (
@@ -6553,6 +6487,7 @@ function MessageRow({
                 <MarkdownContent content={message.content} />
               )}
             </div>
+            {message.verification && <VerifierNoticeBlock notice={message.verification} />}
             <div className="mt-2 flex items-center gap-3 text-fg-quaternary">
               <button
                 aria-label="Refresh"
@@ -6703,35 +6638,6 @@ function MarkdownContent({ content }: { content: string }) {
   );
 }
 
-function InlineMarkdown({ content }: { content: string }) {
-  return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
-      components={{
-        p: ({ children }) => <>{children}</>,
-        a: ({ children, href }) =>
-          href?.startsWith("/ray-jobs?job=") ? (
-            <Link
-              to="/ray-jobs"
-              search={{ job: href.slice("/ray-jobs?job=".length), status: "", kind: "" }}
-              className="text-brand-secondary underline"
-            >
-              {children}
-            </Link>
-          ) : (
-            <a href={href} className="text-[#1565ef] underline" target="_blank" rel="noreferrer">
-              {children}
-            </a>
-          ),
-        code: ({ children }) => <code className="rounded bg-secondary/60 px-1 py-0.5 text-[12px]">{children}</code>,
-        strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
-        em: ({ children }) => <em className="italic">{children}</em>,
-      }}
-    >
-      {rayJobMarkdown(content)}
-    </ReactMarkdown>
-  );
-}
 
 function workspaceChartCardKey(keyPrefix: string, slide: Slide, index: number) {
   return `${keyPrefix}::${slideFingerprint(slide)}::${index}`;
@@ -6766,217 +6672,6 @@ function WorkspaceChartCards({
   );
   if (!visible.length) return null;
   return <ChartCarousel items={visible} onDismiss={onDismiss} activeRunId={activeRunId} onRunChange={onRunChange} />;
-}
-
-function ChartCarousel({
-  items,
-  onDismiss,
-  activeRunId,
-  onRunChange,
-}: {
-  items: { slide: Slide; index: number; cardKey: string; runId?: string }[];
-  onDismiss?: (cardKey: string) => void;
-  activeRunId?: string | null;
-  onRunChange?: (runId: string) => void;
-}) {
-  const [active, setActive] = useState(0);
-  const [fullscreenOpen, setFullscreenOpen] = useState(false);
-  const total = items.length;
-  const safeActive = Math.min(active, total - 1);
-  const runIdsKey = items.map((item) => item.runId ?? "").join("\u001f");
-  const selectIndex = useCallback(
-    (i: number) => {
-      setActive((current) => (current === i ? current : i));
-      const rid = items[i]?.runId;
-      if (rid && rid !== activeRunId) onRunChange?.(rid);
-    },
-    [items, activeRunId, onRunChange],
-  );
-  const go = (dir: -1 | 1) => selectIndex((safeActive + dir + total) % total);
-  const activeItem = items[safeActive]!;
-  const s = activeItem.slide;
-  const cardKey = activeItem.cardKey;
-
-  // Keep the carousel on the run selected elsewhere (e.g. the Data table pager),
-  // without fighting the user when they page within the same run's charts.
-  useEffect(() => {
-    if (!activeRunId) return;
-    if (items[safeActive]?.runId === activeRunId) return;
-    const i = items.findIndex((it) => it.runId === activeRunId);
-    if (i >= 0) setActive((current) => (current === i ? current : i));
-  }, [activeRunId, runIdsKey, safeActive]);
-
-  // Offset from center: -1 = prev, 0 = active, 1 = next. Only render 3 neighbours.
-  const getOffset = (i: number) => {
-    if (total <= 1) return 0;
-    let d = i - safeActive;
-    if (d > total / 2) d -= total;
-    if (d < -total / 2) d += total;
-    return d;
-  };
-
-  const CHART_H = 320;
-  const STAGE_H = CHART_H + 140; // header + chart + padding
-
-  return (
-    <div className="space-y-3 rounded-2xl bg-secondary/50 p-4">
-      <div className="relative">
-        {total > 1 ? (
-          <button
-            type="button"
-            aria-label="Previous chart"
-            onClick={() => go(-1)}
-            className="absolute left-0 top-1/2 z-30 -translate-y-1/2 rounded-full bg-brand-600 p-2.5 text-white shadow-md hover:bg-brand-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600"
-          >
-            <ChevronLeft className="size-5" strokeWidth={2.5} />
-          </button>
-        ) : null}
-        {total > 1 ? (
-          <button
-            type="button"
-            aria-label="Next chart"
-            onClick={() => go(1)}
-            className="absolute right-0 top-1/2 z-30 -translate-y-1/2 rounded-full bg-brand-600 p-2.5 text-white shadow-md hover:bg-brand-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600"
-          >
-            <ChevronRight className="size-5" strokeWidth={2.5} />
-          </button>
-        ) : null}
-
-        {/* Arrows (40px) sit in 52px gutters: 12px clear of the active card on each side. */}
-        <div
-          className="relative mx-auto overflow-hidden"
-          style={{ height: STAGE_H, perspective: "1600px", width: total > 1 ? "calc(100% - 104px)" : "100%" }}
-        >
-          {items.map((it, i) => {
-            const off = getOffset(i);
-            if (Math.abs(off) > 1) return null; // only render 3 nearest
-            const isActive = off === 0;
-            const translateX = off * 52; // percent
-            const translateY = isActive ? 0 : -10;
-            const scale = isActive ? 1 : 0.86;
-            const rotY = off * -10; // subtle 3D tilt toward center
-            const opacity = isActive ? 1 : 0.4;
-            const z = isActive ? 20 : 10;
-            const filter = isActive ? "none" : "grayscale(1) blur(0.3px)";
-
-            return (
-              <div
-                key={it.cardKey}
-                aria-hidden={!isActive}
-                onClick={() => {
-                  if (!isActive) selectIndex(i);
-                }}
-                className="absolute left-1/2 top-0 w-[88%] will-change-transform"
-                style={{
-                  transform: isActive
-                    ? `translate3d(-50%, 0, 0)`
-                    : `translate3d(calc(-50% + ${translateX}%), ${translateY}px, 0) scale(${scale}) rotateY(${rotY}deg)`,
-                  transformStyle: "preserve-3d",
-                  opacity,
-                  zIndex: z,
-                  filter,
-                  transition: "transform 550ms cubic-bezier(0.22, 1, 0.36, 1), opacity 400ms ease, filter 400ms ease",
-                  pointerEvents: "auto",
-                  cursor: isActive ? "default" : "pointer",
-                }}
-              >
-                <div
-                  className={cx(
-                    "relative rounded-xl p-4",
-                    isActive ? "border border-secondary bg-primary shadow-sm" : "pointer-events-none select-none border border-primary bg-muted/90",
-                  )}
-                >
-                  {isActive && onDismiss ? (
-                    <button
-                      type="button"
-                      aria-label="Close chart"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onDismiss(cardKey);
-                      }}
-                      className="absolute right-3 top-3 z-10 rounded-md p-1 text-fg-quaternary hover:bg-primary_hover hover:text-fg-secondary"
-                    >
-                      <X className="size-4" />
-                    </button>
-                  ) : null}
-                  <div className="flex flex-wrap items-center gap-2 pr-8">
-                    <h3 className="text-sm font-semibold text-primary">{it.slide.title}</h3>
-                    {(it.slide as Slide & { sourceLabel?: string }).sourceLabel ? (
-                      <span className="rounded-full bg-secondary px-2 py-0.5 text-[11px] font-medium text-secondary">
-                        {(it.slide as Slide & { sourceLabel?: string }).sourceLabel}
-                      </span>
-                    ) : null}
-                    {isActive ? <TagPicker size="sm" /> : null}
-                    {isActive ? (
-                      <button
-                        type="button"
-                        aria-label={`Maximize ${it.slide.title} chart`}
-                        title="Maximize chart"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          setFullscreenOpen(true);
-                        }}
-                        className="ml-auto rounded-md border border-secondary bg-primary p-1.5 text-fg-secondary shadow-sm transition hover:bg-secondary hover:text-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600"
-                      >
-                        <Maximize2 className="size-4" aria-hidden="true" />
-                      </button>
-                    ) : null}
-                    {isActive && total > 1 ? (
-                      <span className="text-xs text-tertiary">
-                        {safeActive + 1} / {total}
-                      </span>
-                    ) : null}
-                  </div>
-                  {isActive && it.slide.subtitle ? (
-                    <p className="text-xs text-tertiary">
-                      <InlineMarkdown content={it.slide.subtitle} />
-                    </p>
-                  ) : null}
-                  <div className="mt-3 h-[320px] w-full min-w-0 shrink-0">
-                    <DynamicChart slide={it.slide} height={CHART_H} chartKey={it.cardKey} />
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-      {total > 1 ? (
-        <div className="flex items-center justify-center gap-1.5">
-          {items.map((it, i) => (
-            <button
-              key={it.cardKey}
-              type="button"
-              aria-label={`Go to chart ${i + 1}`}
-              onClick={() => selectIndex(i)}
-              className={
-                i === safeActive
-                  ? "h-2 w-6 rounded-full bg-brand-solid transition-all"
-                  : "h-2 w-2 rounded-full bg-muted-foreground/40 hover:bg-muted-foreground/60 transition-all"
-              }
-            />
-          ))}
-        </div>
-      ) : null}
-      <Dialog open={fullscreenOpen} onOpenChange={setFullscreenOpen}>
-        <DialogContent className="grid h-[90vh] w-[94vw] max-w-none grid-rows-[auto_auto_1fr] gap-3 overflow-hidden rounded-xl border-secondary bg-primary p-5 shadow-2xl">
-          <DialogTitle className="pr-10 text-base font-semibold text-primary">{s.title}</DialogTitle>
-          {s.subtitle ? (
-            <p className="text-sm text-tertiary">
-              <InlineMarkdown content={s.subtitle} />
-            </p>
-          ) : null}
-          <div className="min-h-0 w-full overflow-auto">
-            <DynamicChart
-              slide={s}
-              height={typeof window === "undefined" ? 590 : Math.max(360, window.innerHeight * 0.68)}
-              chartKey={`${cardKey}-fullscreen`}
-            />
-          </div>
-        </DialogContent>
-      </Dialog>
-    </div>
-  );
 }
 
 function CollapsibleInsights({
@@ -7146,14 +6841,6 @@ const tableRows: TableRow[] = (() => {
   return rows;
 })();
 
-type UploadedDataset = {
-  filename: string;
-  schema: string[];
-  samples: Record<string, unknown>[];
-  rows_sampled: number;
-  total_rows?: number;
-  size_mb?: number;
-};
 
 function useUploadedDataset(): UploadedDataset | null {
   const [data, setData] = useState<UploadedDataset | null>(null);

@@ -52,6 +52,10 @@ spec:
             # config.ts); without it the app shows a "Missing ... secret" banner.
             - name: PRIMARY_SUPABASE_SERVICE_ROLE_KEY
               value: {{ .Values.supabase.serviceKey | quote }}
+            # Who may run the support desk (server functions read it; the browser
+            # never sees the list). Empty means no account is an admin.
+            - name: ADMIN_EMAILS
+              value: {{ include "avaloka.adminEmails" . | quote }}
             - name: MCP_API_BASE
               value: {{ include "avaloka.webuiMcpApiBase" . | quote }}
             - name: MCP_TOOL_BASE

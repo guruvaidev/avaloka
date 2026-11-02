@@ -182,6 +182,7 @@ from app.agents.sampling_async import sample_quick
 from app.agents.profiling_agent import profile_full
 from app.agents.sampling_persistence import persist_full_profile, load_portfolio, load_profile, upsert_profile
 from app.agents.execution_agent import execution_agent_node_local, execution_agent_node_ray
+from app.agents.execution_agent import RAY_NO_CONNECTION_REASON
 from app.agents.planner import review_edited_code
 from app.agents.validator import run_code_validation
 from app.core.celery_app import (
@@ -190,6 +191,7 @@ from app.core.celery_app import (
     celery_app,
     _logs_from_final,
     _ray_job_from_final,
+    _run_outcome_from_final,
     _run_status_from_final,
     _training_failure_from_final,
 )
@@ -199,6 +201,7 @@ from app.agents.mta_v2.failure_diagnostics import (
     format_training_failure,
 )
 from app.core.task_metadata import scheduled_task_metadata
+from app.core import run_truth
 from app.utils import convert_message_dicts_to_objects
 from celery.result import AsyncResult
 from celery.schedules import crontab
@@ -263,6 +266,7 @@ from app.api.helpers import (
     _normalize_schema_for_state,
     _write_rows_to_csv,
     _ddl_from_schema,
+    _schema_from_db_rows,
     _fallback_sample_csv,
     _datauri_csv_to_records,
     _compact_messages,
@@ -279,6 +283,7 @@ from app.api.helpers import (
 
 )
 
+from app.core.typed_secrets import seal_typed_secrets
 from app.api.cloud_connections import (
     get_cloud_connection,
     connection_belongs_to_user,
@@ -1267,18 +1272,23 @@ def _carry_pending_kind(cur: Dict[str, Any]) -> str:
 
 
 def _pending_turn_done(deferred_id: str, result: Dict[str, Any]):
+    # "done" means the turn returned; outcome says whether its run succeeded.
+    truth = (result or {}).get("run_truth") or {}
     def _apply(cur: Dict[str, Any]) -> None:
         cur["pending_turn"] = {
             "id": deferred_id, "status": "done", "kind": _carry_pending_kind(cur),
+            "outcome": truth.get("outcome"),
             "result": _json_safe_payload(result), "finished_at": _now_iso(),
         }
     return _apply
 
 
 def _pending_turn_error(deferred_id: str, message: str):
+    truth = run_truth.failed("exception", kind="deferred", detail=message)
     def _apply(cur: Dict[str, Any]) -> None:
         cur["pending_turn"] = {
             "id": deferred_id, "status": "error", "kind": _carry_pending_kind(cur),
+            "outcome": truth["outcome"], "run_truth": truth,
             "message": message, "finished_at": _now_iso(),
         }
     return _apply
@@ -1406,6 +1416,10 @@ async def server_lifespan(app: FastAPI):
     global small_file_persistence_executor, small_file_persistence_semaphore, small_file_persistence_inflight
 
     _validate_auth_config()
+    # Every sealed credential is AES-GCM under DB_ENCRYPTION_KEY: no key, or a
+    # published one, and nothing is sealed. Refuse to start rather than run so.
+    from app.core.encryption_key import require_db_encryption_key
+    require_db_encryption_key("The Avaloka API")
     # A service-role key for the wrong project answers every request with
     # `401 Invalid API key`, which reads like a rotated key rather than a
     # mismatch. Say so once at boot instead of once per failed request.
@@ -1447,6 +1461,13 @@ async def server_lifespan(app: FastAPI):
                 small_file_persistence_executor = None
 
 app = FastAPI(title="Avaloka UI API", lifespan=server_lifespan)
+
+# The final pass on what a person is shown: no sealed credential token, and
+# no fragment of one, in any thread response, history, trace or stream.
+from app.core.typed_secrets import RedactRepliesMiddleware, install_model_scrub  # noqa: E402
+
+install_model_scrub()
+app.add_middleware(RedactRepliesMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
@@ -3827,8 +3848,12 @@ async def task_sse_iter(task_id: str, redbeat_key: str):
             output_file_data = None
             output_json = None
         completion_message = _scheduled_task_completion_message(final, assistant_messages, task_metadata)
+        # The outcome _record_run_finish writes for this run (item 8a): Celery
+        # SUCCESS only means the task returned, not that it answered.
+        _task_truth = _scheduled_task_run_truth(final, task_metadata)
         yield "event: message\ndata: " + json.dumps({
             "status": "SUCCESS",
+            "run_truth": _task_truth,
             "message": completion_message,
             "completion_message": completion_message,
             "messages": assistant_messages,
@@ -3841,6 +3866,8 @@ async def task_sse_iter(task_id: str, redbeat_key: str):
                 "assistant_message": assistant_messages[-1] if assistant_messages else None,
                 "message": completion_message,
                 "completion_message": completion_message,
+                "run_truth": _task_truth,
+                "output_contract": (final.get("execution_result") or {}).get("output_contract"),
             },
             "next_due_at": next_due_at
         }) + "\n\n"
@@ -3890,7 +3917,45 @@ async def delete_thread(request: Request, thread_id: str):
         await session_service.cache.delete(_k_thread_session(thread_id))
     await delete_thread_history(thread_id)
     THREAD_META.pop(thread_id, None)
+    await _forget_thread_memory(user_id, thread_id, sid)
     return Response(status_code=204)
+
+
+async def _forget_thread_memory(user_id: str, thread_id: str, sid: Optional[str] = None) -> None:
+    """Delete what a deleted thread learned (app/services/memory_plane.py).
+    Never raises: a memory store being down must not fail the delete; the
+    memory plane logs which store was not cleared."""
+    try:
+        from app.services.memory_plane import forget_thread_memory
+        await asyncio.to_thread(forget_thread_memory, user_id, thread_id, sid)
+    except Exception:
+        logger.warning("Memory cleanup failed for thread %s", thread_id, exc_info=True)
+
+
+async def forget_account_memory(user_id: str) -> Dict[str, Any]:
+    """Internal API: delete all of a user's learned memory, for account
+    deletion. 1.6 has no account-deletion route; whatever deletes an account
+    calls this. Covers every Milvus insight and Chroma signature filed under
+    the user, rows filed under the user's sessions, and the Redis copies of
+    the threads bound to those sessions. Returns {store: rows removed or
+    "failed: ..."}; never raises."""
+    sids: List[str] = []
+    tids: set = set()
+    cache = session_service.cache
+    try:
+        if cache:
+            sids = sorted(await cache.smembers(_k_user_sessions(user_id)) or [])
+            for sid in sids:
+                tids.update(await cache.smembers(_k_session_threads(sid)) or [])
+    except Exception:
+        logger.warning("forget_account_memory: could not list the sessions of user %s",
+                       user_id, exc_info=True)
+    try:
+        from app.services.memory_plane import forget_user_memory
+        return await asyncio.to_thread(forget_user_memory, user_id, sorted(tids), sids)
+    except Exception:
+        logger.warning("Memory cleanup failed for user %s", user_id, exc_info=True)
+        return {}
 
 
 def _full_cloud_uri(sess: dict) -> str | None:
@@ -4501,6 +4566,12 @@ def _scheduled_task_completion_message(
     return str(task_metadata.get("success_message") or "The scheduled task is complete.")
 
 
+def _scheduled_task_run_truth(final: Dict[str, Any], task_metadata: Dict[str, Any]) -> Dict[str, Any]:
+    """run_truth for a finished task's result: the same call _record_run_finish
+    makes, so the route and the run record cannot disagree."""
+    return _run_outcome_from_final(final, task_type=str(task_metadata.get("task_type") or "execute"))[2]
+
+
 def _scheduled_task_has_chat_result_only(task_metadata: Dict[str, Any]) -> bool:
     return task_metadata.get("task_type") in {"start_inference", "stop_inference"}
 
@@ -4878,6 +4949,14 @@ async def send_message(
             status.HTTP_503_SERVICE_UNAVAILABLE,
             "Session storage (Redis) is not available.",
         )
+
+    # A password, key or token typed into the chat is sealed before anything
+    # reads the message: the history, the logs, every model call and the graph
+    # see a token, and only the data transfer agent opens it, to hand the
+    # connection to the sealed store (app/core/typed_secrets.py).
+    body.content, _sealed_count = seal_typed_secrets(body.content)
+    if _sealed_count:
+        logger.info("[send_message] sealed %d typed credential(s) in thread %s", _sealed_count, thread_id[:8])
 
     # optional hint from UI / frontend (for primary dataset)
     dataset_id_hint = (body.metadata or {}).get("dataset_id")
@@ -5714,6 +5793,7 @@ async def send_message(
     )
     cloud_uri = active_cloud_source or _full_cloud_uri(primary_sess)
 
+    _ray_fallback_reason = None
     if execution_mode == "k8s-ray":
         conn_id = primary_sess.get("connection_id")
         
@@ -5725,7 +5805,11 @@ async def send_message(
                 cloud_uri, conn_id
             )
             execution_mode = "local"
-            # Don't raise — just quietly downgrade to local
+            # Visible, not quiet: the local node labels the reply and the run.
+            _ray_fallback_reason = (
+                RAY_NO_CONNECTION_REASON if cloud_uri
+                else "the dataset has no cloud copy for Ray to read"
+            )
 
 
         if primary_sess.get("work_dir") and not Path(primary_sess["work_dir"]).exists():
@@ -5879,6 +5963,7 @@ async def send_message(
         "ray_namespace": ray_namespace,
         "ray_timeout_s": ray_timeout_s,
         "ray_execution_profile": "batch_heavy",
+        "ray_fallback_reason": _ray_fallback_reason,
 
 
         
@@ -6127,6 +6212,9 @@ async def send_message(
                 "second": 0,
                 "max_runs": 1,
             }
+    if execution_mode == "k8s-ray":
+        # Routing above settled on Ray after all: there is no fallback to label.
+        state_in["ray_fallback_reason"] = None
     logger.info(
         "[fidelity] mode=%s resolved execution_mode=%s cloud_uri=%s task_schedule=%s",
         f"{_current_fidelity}->{_effective_fidelity}" if _current_fidelity != _effective_fidelity else _current_fidelity,
@@ -6849,6 +6937,11 @@ Ready to proceed with model training!"""
                 _assistant_text += " Data preparation: " + " ".join(_multi_notes)
         elif _structured:
             _assistant_text = str((final.get("execution_result") or {}).get("message") or "Incomplete analysis.")
+        # A Ray-to-local fallback is labelled by the local node; a structured
+        # reply rebuilt above would drop that label, so it is restored here.
+        _ray_fallback_note = ((final.get("execution_result") or {}).get("ray_fallback") or {}).get("note")
+        if _ray_fallback_note and isinstance(_assistant_text, str) and _ray_fallback_note.strip() not in _assistant_text:
+            _assistant_text = _assistant_text.rstrip() + _ray_fallback_note
         if _ran_on_partial_sample and isinstance(_assistant_text, str) and _assistant_text.strip():
             _assistant_text = _assistant_text.rstrip() + _sample_fidelity_note(
                 _effective_fidelity, _resolved_rows, primary_sess.get("selected_sample_name"),
@@ -6971,7 +7064,28 @@ Ready to proceed with model training!"""
 
         # If this turn overran the sync window, the HTTP response already went
         # back as a "running" handle — stash the finished result for polling.
-        if (time.monotonic() - _t0) >= TURN_SYNC_DEADLINE_S:
+        _deferred = (time.monotonic() - _t0) >= TURN_SYNC_DEADLINE_S
+        # Run truth comes from code-written fields only; any run_truth the
+        # graph state carries is ignored, and this replaces it on the response.
+        resp.run_truth = run_truth.classify_turn(
+            final,
+            deferred=_deferred,
+            scope_defaults={
+                "rows_processed": (
+                    (_sample_n if _ran_on_partial_sample else _total_rows)
+                    if produced_fresh_output else None
+                ),
+                "rows_total": _total_rows,
+                "rows_total_kind": (
+                    "unknown" if _total_rows is None
+                    else "estimate" if _is_large_dataset else "exact"
+                ),
+                "sample": bool(_ran_on_partial_sample) if produced_fresh_output else None,
+            },
+            entire_on_head=bool(produced_fresh_output and _entire_on_head),
+        )
+        if _deferred:
+            _turn_ok = resp.run_truth["outcome"] != run_truth.FAILED
             _done_mutator = _pending_turn_done(deferred_id, resp.model_dump())
             # In-process copy first: it cannot fail, and the poll falls back to it.
             _remember_pending_turn(thread_id, user_id, _done_mutator)
@@ -6981,9 +7095,10 @@ Ready to proceed with model training!"""
                 logger.warning("[deferred] failed to stash finished turn %s", deferred_id, exc_info=True)
             await _notify_deferred_turn(
                 user_id=user_id, thread_id=thread_id, deferred_id=deferred_id,
-                kind=_turn_holder.get("pending_kind") or "analysis", ok=True,
+                kind=_turn_holder.get("pending_kind") or "analysis", ok=_turn_ok,
                 question=body.content or "", dataset_id=primary_dsid,
                 dataset_label=primary_sess.get("alias") or primary_sess.get("filename") or "",
+                error_message=None if _turn_ok else resp.run_truth["reason"],
             )
 
         return resp
@@ -7027,6 +7142,7 @@ Ready to proceed with model training!"""
                 execution_context=_build_execution_context(
                     _current_fidelity, primary_sess.get("selected_sample_name")
                 ),
+                run_truth=run_truth.failed("exception", kind="interactive", detail=_friendly),
             )
     else:
         # Slow turn (model training): return a handle before the proxy aborts.
@@ -7572,8 +7688,12 @@ async def get_task_result(request: Request, task_id: str, index: int):
             )
 
         completion_message = _scheduled_task_completion_message(final, assistant_messages, task_metadata)
+        # The outcome _record_run_finish writes for this run (item 8a): Celery
+        # SUCCESS only means the task returned, not that it answered.
+        _task_truth = _scheduled_task_run_truth(final, task_metadata)
         return {
             "status": "SUCCESS",
+            "run_truth": _task_truth,
             "message": completion_message,
             "completion_message": completion_message,
             "messages": assistant_messages,
@@ -7586,6 +7706,8 @@ async def get_task_result(request: Request, task_id: str, index: int):
                 "assistant_message": assistant_messages[-1] if assistant_messages else None,
                 "message": completion_message,
                 "completion_message": completion_message,
+                "run_truth": _task_truth,
+                "output_contract": (final.get("execution_result") or {}).get("output_contract"),
             },
             "next_due_at": next_due_at
         }
@@ -8703,6 +8825,13 @@ async def delete_dataset(request: Request, dataset_id: str):
                 THREAD_META.pop(tid, None)
             except Exception:
                 pass
+            await _forget_thread_memory(user_id, tid)
+        # The facts learned about this dataset go with it.
+        try:
+            from app.services.memory_plane import forget_dataset_memory
+            await asyncio.to_thread(forget_dataset_memory, user_id, dataset_id)
+        except Exception:
+            logger.warning("Memory cleanup failed for dataset %s", dataset_id, exc_info=True)
         for sid in target_sids:
             try:
                 if session_service.cache:
@@ -8964,7 +9093,7 @@ async def db_tables_to_analysis(request: Request, response: Response, body: Tabl
             _write_rows_to_csv(dict_rows, sample_input_path)
             output_path = work_dir / "output.csv"
 
-            schema_dict = {c: "string" for c in cols}
+            schema_dict = _schema_from_db_rows(cols, dict_rows)
             ddl = _ddl_from_schema(dsid, schema_dict)
 
             base_alias = "".join(ch if ch.isalnum() else "_" for ch in table).strip("_") or f"table{idx}"
@@ -9587,7 +9716,7 @@ async def _create_or_update_db_sample_session(
 
     output_path = work_dir / "output.csv"
 
-    schema_dict = {c: "string" for c in columns}
+    schema_dict = _schema_from_db_rows(columns, dict_rows)
     ddl = _ddl_from_schema(dsid, schema_dict)
 
     # ---- Build visualization config for DB sample ----
@@ -10508,8 +10637,8 @@ async def refresh_analysis(
     prompt_ts: Optional[str] = Query(None, description="Re-run a specific version; default = latest"),
 ):
     """
-    Re-execute the latest stored code for an analysis (Leela: 'refresh always
-    executes latest code'). Runs the stored .py directly through the execution
+    Re-execute the latest stored code for an analysis (refresh always executes
+    the latest code). Runs the stored .py directly through the execution
     node, then fires _persist_assets_background so the run is versioned for rollback.
     """
     user_id = _resolve_user_id(request)

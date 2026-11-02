@@ -107,18 +107,25 @@ class ChromaClientImpl:
 
         if self.use_mock or not self.collection:
             ns = self._fallback_namespaces.setdefault(user_id, {"signatures": [], "timestamps": []})
-            paired = [
-                (sig, ts)
-                for sig, ts in zip(ns["signatures"], ns.get("timestamps", []))
+            # Ids are kept alongside so a single signature can be deleted;
+            # namespaces written without them get placeholder ids.
+            stamps = ns.get("timestamps", [])
+            ids = ns.get("ids") or [f"{user_id}_{i}" for i in range(len(ns["signatures"]))]
+            kept = [
+                (sig, ts, sid)
+                for sig, ts, sid in zip(ns["signatures"], stamps, ids)
                 if ts >= cutoff
             ]
-            ns["signatures"]  = [p[0] for p in paired]
-            ns["timestamps"]  = [p[1] for p in paired]
+            ns["signatures"]  = [p[0] for p in kept]
+            ns["timestamps"]  = [p[1] for p in kept]
+            ns["ids"]         = [p[2] for p in kept]
             if len(ns["signatures"]) >= self._signature_cap:
                 ns["signatures"].pop(0)
                 ns["timestamps"].pop(0)
+                ns["ids"].pop(0)
             ns["signatures"].append(signature)
             ns["timestamps"].append(now)
+            ns["ids"].append(doc_id)
             logger.debug(
                 f"Appended signature for '{user_id}' in fallback "
                 f"({len(ns['signatures'])}/{self._signature_cap}, retention={self._retention_days}d)."
@@ -177,6 +184,104 @@ class ChromaClientImpl:
             return " ".join(doc for doc, _ in paired[-10:])
 
         return None
+
+    # ------------------------------------------------------------------
+    # Deletion
+    # ------------------------------------------------------------------
+    # Signatures are filed under the key in the "user_id" metadata field
+    # (memory_scope: "<user>#pref", "<user>#thread:<id>", or a bare user or
+    # session id for rows written before the scope rule). Each method returns
+    # how many signatures it removed; failures of the real store raise, so a
+    # caller never takes "nothing deleted" for "deleted".
+
+    def _delete_where_key(self, keep) -> int:
+        """Delete every signature whose key satisfies keep(key)."""
+        if self.use_mock or not self.collection:
+            doomed = [k for k in self._fallback_namespaces if keep(k)]
+            count = sum(len(self._fallback_namespaces[k].get("signatures", [])) for k in doomed)
+            for k in doomed:
+                self._fallback_namespaces.pop(k, None)
+            return count
+        # Chroma's metadata filters have no prefix match, so the keys are
+        # read and matched here. Ids are collected first: deleting while
+        # paging by offset would skip rows.
+        ids, offset = [], 0
+        while True:
+            page = self.collection.get(include=["metadatas"], limit=_DELETE_PAGE, offset=offset)
+            page_ids = (page or {}).get("ids") or []
+            metas = (page or {}).get("metadatas") or []
+            for i, doc_id in enumerate(page_ids):
+                meta = (metas[i] if i < len(metas) else None) or {}
+                if keep(meta.get("user_id")):
+                    ids.append(doc_id)
+            if len(page_ids) < _DELETE_PAGE:
+                break
+            offset += len(page_ids)
+        for start in range(0, len(ids), _DELETE_PAGE):
+            self.collection.delete(ids=ids[start:start + _DELETE_PAGE])
+        return len(ids)
+
+    def delete_keys(self, keys) -> int:
+        """Delete every signature filed under exactly one of `keys`."""
+        wanted = {str(k) for k in keys or [] if k}
+        if not wanted:
+            return 0
+        if self.use_mock or not self.collection:
+            return self._delete_where_key(lambda key: key in wanted)
+        found = self.collection.get(where={"user_id": {"$in": sorted(wanted)}}, include=[])
+        ids = (found or {}).get("ids") or []
+        if ids:
+            self.collection.delete(ids=ids)
+        return len(ids)
+
+    def delete_thread(self, scope: str, thread_id: str) -> int:
+        """Delete the signature parts one thread of this user (scope) learned."""
+        from app.services.memory_scope import thread_key
+        if not scope or not thread_id:
+            return 0
+        return self.delete_keys([thread_key(scope, thread_id)])
+
+    def delete_user(self, scope: str, legacy_keys=None) -> int:
+        """Delete every signature of this user: the bare user key (pre-rule
+        rows), every key built from it, and `legacy_keys` (session ids rows
+        were filed under before user scoping)."""
+        from app.services.memory_scope import owns_key
+        if not scope:
+            return 0
+        legacy = {str(k) for k in legacy_keys or [] if k}
+        return self._delete_where_key(lambda key: owns_key(key, scope) or str(key or "") in legacy)
+
+    def delete_by_ids(self, ids, scope: str) -> int:
+        """Delete single signatures by id -- only those that belong to scope."""
+        from app.services.memory_scope import owns_key
+        wanted = {str(i) for i in ids or [] if i}
+        if not wanted or not scope:
+            return 0
+        if self.use_mock or not self.collection:
+            count = 0
+            for key, ns in self._fallback_namespaces.items():
+                if not owns_key(key, scope):
+                    continue
+                sigs = ns.get("signatures", [])
+                stamps = ns.get("timestamps") or [0] * len(sigs)
+                row_ids = ns.get("ids") or [f"{key}_{i}" for i in range(len(sigs))]
+                kept = [r for r in zip(sigs, stamps, row_ids) if r[2] not in wanted]
+                count += len(sigs) - len(kept)
+                ns["signatures"] = [r[0] for r in kept]
+                ns["timestamps"] = [r[1] for r in kept]
+                ns["ids"] = [r[2] for r in kept]
+            return count
+        found = self.collection.get(ids=sorted(wanted), include=["metadatas"])
+        page_ids = (found or {}).get("ids") or []
+        metas = (found or {}).get("metadatas") or []
+        doomed = [doc_id for i, doc_id in enumerate(page_ids)
+                  if owns_key(((metas[i] if i < len(metas) else None) or {}).get("user_id"), scope)]
+        if doomed:
+            self.collection.delete(ids=doomed)
+        return len(doomed)
+
+
+_DELETE_PAGE = 1000
 
 
 chroma_client = ChromaClientImpl()

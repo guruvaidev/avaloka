@@ -215,14 +215,14 @@ function ConfigurationsPage() {
   const planFeatures = usePlanFeatures();
   const gateUserCreate = section === "user" && !userPerms.canCreate;
 
-  // Professional plan: Models only. Otherwise hide the User tab when the
-  // current user lacks View permission.
+  // Professional plan: Models and Teams (owner ruling 2026-11-01). Otherwise
+  // hide the User tab when the current user lacks View permission.
   const allowedSections = useMemo(
     () =>
       planFeatures.canUseAllConfigSections
         ? SECTIONS.filter((s) => s.id !== "user" || userPerms.canView)
-        : SECTIONS.filter((s) => s.id === "models"),
-    [userPerms.canView, planFeatures.canUseAllConfigSections],
+        : SECTIONS.filter((s) => s.id === "models" || (s.id === "teams" && planFeatures.canUseTeams)),
+    [userPerms.canView, planFeatures.canUseAllConfigSections, planFeatures.canUseTeams],
   );
 
   useEffect(() => {

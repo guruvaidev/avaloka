@@ -30,6 +30,37 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- printf "%s-celery" (include "avaloka.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
+{{/* Secret values that have shipped in this repository (chart defaults, .env.example
+placeholders). A generated secret equal to one of them is replaced, as
+app/core/provisioning.py PUBLISHED_VALUES does. Comma-separated, lower case. */}}
+{{- define "avaloka.publishedSecretValues" -}}
+avaloka-local-dev-encryption-key,<generate-with-openssl-rand-hex-32>,<generate-and-store-a-strong-random-secret>,changeme,change-me,secret,test,dev,development
+{{- end -}}
+
+{{/* True ("true") when the value given for a generated secret is a published one. */}}
+{{- define "avaloka.isPublishedSecret" -}}
+{{- if has (lower (trim (toString .))) (splitList "," (include "avaloka.publishedSecretValues" .)) -}}true{{- end -}}
+{{- end -}}
+
+{{/* A generated secret (app/core/provisioning.py GENERATED_SECRETS): the value
+given, unless it is empty or published; else the value this release's Secret
+already holds (lookup, so an upgrade never rotates it), unless that one is
+published; else a new random one. Call with (dict "ctx" . "key" NAME "value" GIVEN).
+Include it once per key: each call without a value or Secret draws a new random. */}}
+{{- define "avaloka.generatedSecret" -}}
+{{- $ctx := .ctx -}}
+{{- $v := trim (toString (.value | default "")) -}}
+{{- if include "avaloka.isPublishedSecret" $v -}}{{- $v = "" -}}{{- end -}}
+{{- if not $v -}}
+{{- $existing := lookup "v1" "Secret" $ctx.Release.Namespace (include "avaloka.secretName" $ctx) -}}
+{{- if and $existing $existing.data (index $existing.data .key) -}}
+{{- $old := index $existing.data .key | b64dec -}}
+{{- if not (include "avaloka.isPublishedSecret" $old) -}}{{- $v = $old -}}{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- $v | default (randAlphaNum 48) -}}
+{{- end -}}
+
 {{/* Name of the Secret holding the GROQ keys (existing or chart-managed). */}}
 {{- define "avaloka.secretName" -}}
 {{- if .Values.existingSecret -}}
@@ -504,4 +535,27 @@ storage.className commentary in values.yaml, which already states this correctly
 {{- $component := .component | default dict -}}
 {{- $persistence := $component.persistence | default dict -}}
 {{- $persistence.accessMode | default (.ctx.Values.storage).accessMode | default "ReadWriteOnce" -}}
+{{- end -}}
+
+{{/*
+Comma-separated admin addresses from admin.emails (a list, or a comma-separated
+string). Empty when unset: no account is an admin, and nothing falls back to a
+built-in address. Consumers normalise case and whitespace.
+*/}}
+{{- define "avaloka.adminEmails" -}}
+{{- $raw := (.Values.admin).emails | default list -}}
+{{- $list := list -}}
+{{- if kindIs "string" $raw -}}
+{{- $list = splitList "," $raw -}}
+{{- else -}}
+{{- $list = $raw -}}
+{{- end -}}
+{{- $out := list -}}
+{{- range $list -}}
+{{- $e := . | toString | trim | lower -}}
+{{- if $e -}}
+{{- $out = append $out $e -}}
+{{- end -}}
+{{- end -}}
+{{- join "," $out -}}
 {{- end -}}

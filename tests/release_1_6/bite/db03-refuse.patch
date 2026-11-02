@@ -1,0 +1,13 @@
+diff --git a/app/agents/data_transfer_agent/data_transfer_agent.py b/app/agents/data_transfer_agent/data_transfer_agent.py
+index cc6f3fd0..803e852a 100644
+--- a/app/agents/data_transfer_agent/data_transfer_agent.py
++++ b/app/agents/data_transfer_agent/data_transfer_agent.py
+@@ -1494,6 +1494,8 @@ def make_injection_script(final_state: dict) -> str:
+                 f'    {_pw}\n'
+                 f'    return {{"status": "success", "type": "{dest_type}", "file": "{dest_loc}"}}'
+             )
++        elif dest_type:
++            write_body = f'raise ValueError("Unsupported destination type: {dest_type}")'
+         else:
+             write_body = (
+                 f'print(df.show())\n'

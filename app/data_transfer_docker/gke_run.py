@@ -2,31 +2,45 @@ import os
 import logging
 import uuid
 import re
+import traceback
 from pathlib import Path
 
 # Reuse the Chameleon runner from the other workflow!
 from app.infra.ray_job_runner import run_rayjob_from_yaml, RayJobOutcome
 from app.data_transfer_docker.run_result import TransferResult, parse_transfer_result
+from app.agents.data_transfer_agent.dta_state import redact_secrets
 
 logger = logging.getLogger(__name__)
 
 GCS_SA_SECRET_NAME = "gcs-sa-key"
 
-def _render_cloud_env_vars(cloud_env: dict = None) -> str:
-    """Render an env-var dict as YAML lines for the RayJob runtimeEnvYAML block.
+# Secret keys (and so the env var names read through them) must match this.
+_SECRET_KEY_RE = re.compile(r"^[-._a-zA-Z0-9]+$")
 
-    Each key is emitted at the 6-space indent it needs under ``env_vars:``; the
-    replace in launch_gke_pipeline consumes the placeholder's own leading spaces.
-    Returns ``""`` when there are no cloud creds (GCS uses the mounted secret).
+
+def job_secret_name(rayjob_name: str) -> str:
+    """The per-job Secret holding a transfer's database URLs and bucket keys."""
+    return f"{rayjob_name}-env"
+
+
+def _render_secret_env_refs(secret_name: str, secret_env: dict, indent: str) -> str:
+    """``env:`` entries that read each key of the job's Secret through secretKeyRef.
+
+    Only names are rendered; the values never appear in the RayJob CR.
+    ``indent`` is the placeholder's own indentation (the list-item column).
     """
-    if not cloud_env:
-        return ""
-
-    def _esc(v: str) -> str:
-        # YAML double-quoted scalar: escape backslashes then double-quotes.
-        return str(v).replace("\\", "\\\\").replace('"', '\\"')
-
-    return "\n".join(f'      {k}: "{_esc(v)}"' for k, v in cloud_env.items() if v)
+    lines = []
+    for key in sorted(k for k, v in (secret_env or {}).items() if v):
+        if not _SECRET_KEY_RE.match(key):
+            raise ValueError(f"secret env name {key!r} is not a valid Secret key")
+        lines += [
+            f"{indent}- name: {key}",
+            f"{indent}  valueFrom:",
+            f"{indent}    secretKeyRef:",
+            f"{indent}      name: {secret_name}",
+            f"{indent}      key: {key}",
+        ]
+    return "\n".join(lines)
 
 
 def launch_gke_pipeline(injection_script: str, job_id: str = None, cloud_env: dict = None,
@@ -36,8 +50,12 @@ def launch_gke_pipeline(injection_script: str, job_id: str = None, cloud_env: di
     Renders the RayJob YAML with the AI-generated script and hands it
     off to the Chameleon runner (which handles Static vs Ephemeral logic).
 
-    ``cloud_env`` (optional) is a dict of runtime env vars the pods need to reach
-    an S3/Azure bucket (e.g. AWS_ACCESS_KEY_ID). ``gcp_sa_json`` (optional) is the
+    ``cloud_env`` (optional) is the dict of credential env vars the job needs:
+    the database URLs (DTA_SOURCE_CONN_STR / DTA_DEST_CONN_STR) and any S3/Azure
+    keys. It never enters the RayJob CR or its ConfigMap: in KubeRay mode it
+    becomes a per-job Secret owned by the RayJob and read through secretKeyRef;
+    in direct mode it goes to the Job Submission API as the job's env.
+    ``gcp_sa_json`` (optional) is the
     connection's GCS service-account key; it is forwarded to the Ray runner, which
     writes it into the job's working dir and exposes GOOGLE_APPLICATION_CREDENTIALS
     so the job reads/writes GCS as that service account (in direct-submission mode
@@ -101,18 +119,28 @@ def launch_gke_pipeline(injection_script: str, job_id: str = None, cloud_env: di
             "code would not be the generated script."
         )
     yaml_text = yaml_text.replace("__GCS_SECRET_NAME__", GCS_SA_SECRET_NAME)
-    # Same failure mode as the script placeholder, same guard: when this stopped
-    # matching, every S3/Azure transfer was submitted with no credentials in the
-    # pod env and failed against the remote store for no stated reason.
+    # Credentials never go into the CR. Each pod reads them from the per-job
+    # Secret through secretKeyRef; the runner creates that Secret owned by this
+    # RayJob, so Kubernetes deletes it with the job. The guard is the same as the
+    # script's: a placeholder that silently stopped matching would submit a job
+    # with no credentials, which fails against the store for no stated reason.
+    secret_env = {k: str(v) for k, v in (cloud_env or {}).items() if v}
+    secret_name = job_secret_name(rayjob_name)
     yaml_text, _n_env = re.subn(
-        r"[ \t]*__CLOUD_ENV_VARS__", lambda _m: _render_cloud_env_vars(cloud_env), yaml_text
+        r"(?m)^([ \t]*)__SECRET_ENV_REFS__[ \t]*\n",
+        lambda m: (lambda r: r + "\n" if r else "")(
+            _render_secret_env_refs(secret_name, secret_env, m.group(1))),
+        yaml_text,
     )
-    if _n_env != 1:
+    if _n_env != 2:
         raise RuntimeError(
-            f"RayJob template {template_path} has {_n_env} __CLOUD_ENV_VARS__ "
-            "placeholders; expected exactly 1. Refusing to submit a job that "
-            "would reach the remote store with no credentials."
+            f"RayJob template {template_path} has {_n_env} __SECRET_ENV_REFS__ "
+            "placeholders; expected 2 (head and worker). Refusing to submit a job "
+            "that would reach its stores with no credentials."
         )
+
+    def _redact(value) -> str:
+        return redact_secrets(value, [*secret_env.values(), gcp_sa_json, dest_gcp_sa_json])
 
     # 4. Hand off to the reusable Chameleon runner. Forward the connection's GCS
     # service-account key so direct-submission mode authenticates as that SA.
@@ -131,11 +159,14 @@ def launch_gke_pipeline(injection_script: str, job_id: str = None, cloud_env: di
             rayjob_name=rayjob_name,
             cloud_creds=cloud_creds,
             dashboard_url=dashboard_url,
+            secret_env=secret_env,
+            secret_name=secret_name,
         )
 
-        # 5. Output logs fetched natively by the runner
+        # 5. Output logs fetched natively by the runner. A job that failed on a
+        # bad URL can echo it, so the transfer's own secrets are masked first.
         if outcome.logs:
-            print(f"\n--- ☁️ RAY RUNNER LOGS ({outcome.status}) ---\n{outcome.logs}\n" + "-"*40 + "\n")
+            print(f"\n--- ☁️ RAY RUNNER LOGS ({outcome.status}) ---\n{_redact(outcome.logs)}\n" + "-"*40 + "\n")
 
         # 6. Evaluate success based on the RayJobOutcome dataclass
         if outcome.status == "SUCCEEDED":
@@ -144,9 +175,10 @@ def launch_gke_pipeline(injection_script: str, job_id: str = None, cloud_env: di
         else:
             logger.error(f"❌ Pipeline failed with status: {outcome.status}")
             if outcome.details:
-                logger.error(f"Error Details: {outcome.details}")
+                logger.error(f"Error Details: {_redact(outcome.details)}")
             return parse_transfer_result(False, outcome.logs)
 
     except Exception as e:
-        logger.error(f"Critical failure executing RayJob via runner: {e}", exc_info=True)
+        logger.error("Critical failure executing RayJob via runner: %s\n%s",
+                     _redact(e), _redact(traceback.format_exc()))
         return TransferResult(success=False)

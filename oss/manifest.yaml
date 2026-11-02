@@ -53,6 +53,24 @@ exclude:
       publishes whatever the source branch carries, so the first sync after it
       lands would otherwise ship it. This file is itself published, so the
       reason stays general on purpose.
+  - path: docs/design/1.6-CAPABILITY-GAPS.md
+    reason: >-
+      Internal planning document, written for the team scheduling work and not
+      reviewed for publication. Withheld by path before it reaches a sync; the
+      rest of docs/design/ stays published. This file is itself published, so
+      the reason stays general on purpose.
+  - path: docs/design/1.6-CHATBOT-INTRO.md
+    reason: >-
+      Internal planning document, written for the team scheduling work and not
+      reviewed for publication. Withheld by path before it reaches a sync; the
+      rest of docs/design/ stays published. This file is itself published, so
+      the reason stays general on purpose.
+  - path: docs/operations/PLATFORM-ADMIN-AND-SUPPORT.md
+    reason: >-
+      Internal operations runbook, written for the team running the service
+      and not reviewed for publication. Withheld by path; the public product
+      rules are in docs/EDITIONS.md. This file is itself published, so the
+      reason stays general on purpose.
   - path: .claude/
     reason: >-
       Local agent tooling configuration; not part of the product. Untracked
@@ -106,6 +124,9 @@ splice:
 assert_present:
   README.md:
     - "support@avaloka.ai"
+    # Merged on the public repository (GitHub #82); kept so a later sync
+    # cannot quietly revert an outside contribution.
+    - "img.shields.io/github/stars/guruvaidev/avaloka"
     - "at your own risk"
     - "Not tested on"
   app/infra/providers/factory.py:
@@ -132,7 +153,7 @@ assert_absent:
   # a hardcoded version. Assert the hardened state rather than trusting the
   # operator to pass the right SRC_BRANCH.
   tests/kaggle_yellow_taxi_trip_data.py:
-    - "C:/Users/lowta"
+    - "C:/Users/"
   avaloka/version.py:
     - "__version__ = \"0.3.0\""
 
@@ -165,6 +186,9 @@ assert_no_paths:
   # Not in the source tree yet. The guard is here first so that the day the
   # directory lands, a dropped or mistyped exclude entry fails the generation.
   - "docs/evaluations/**/*"   # internal assessments, withheld above
+  - "docs/design/1.6-CAPABILITY-GAPS.md"   # internal planning, withheld above
+  - "docs/design/1.6-CHATBOT-INTRO.md"     # internal planning, withheld above
+  - "docs/operations/PLATFORM-ADMIN-AND-SUPPORT.md"   # internal runbook, withheld above
   - ".claude/**/*"            # agent definitions and skills, withheld above
   - "**/bitbucket-pipelines.yml"   # internal CI configuration, withheld above
   - "deploy/telemetry/**/*"   # hosted-service deployment configuration, withheld above

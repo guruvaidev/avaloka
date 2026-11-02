@@ -1,0 +1,13 @@
+diff --git a/ui/src/lib/billing-details.ts b/ui/src/lib/billing-details.ts
+index 98d34993..485b9913 100644
+--- a/ui/src/lib/billing-details.ts
++++ b/ui/src/lib/billing-details.ts
+@@ -77,7 +77,7 @@ export function validateBillingDetails(
+ 
+   // VAT / tax id — alphanumeric, 6–20 chars once separators are stripped.
+   if (!vat_number) {
+-    errors.vat_number = "VAT number is required.";
++    // optional
+   } else if (!/^[A-Z0-9]+$/.test(vat_number)) {
+     errors.vat_number = "VAT number may only contain letters and digits.";
+   } else if (vat_number.length < 6 || vat_number.length > 20) {

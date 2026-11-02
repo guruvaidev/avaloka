@@ -1,0 +1,13 @@
+diff --git a/ui/src/styles.css b/ui/src/styles.css
+index 23c49935..5ea1393b 100644
+--- a/ui/src/styles.css
++++ b/ui/src/styles.css
+@@ -153,7 +153,7 @@
+ 
+   /* Figma text scale */
+   --text-secondary: #3f3f46;
+-  --text-tertiary: #51525c;
++  --text-tertiary: #a0a0a0;
+   --text-placeholder: #70707b;
+   /* Shared subdued text remains AA-readable on primary/secondary surfaces. */
+   --color-text-tertiary: var(--text-tertiary);

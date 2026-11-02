@@ -3,7 +3,7 @@ Integration tests for the persistence naming + versioning changes.
 
 These exercise _persist_assets_background end-to-end with the cloud store,
 GitHub write, and session service all mocked — so they run offline and assert
-on the KEYS/PATHS produced, which is exactly what Leela's review was about.
+on the KEYS/PATHS produced, which is exactly what the design review was about.
 
 IMPORTANT — adjust these two things to your repo before running:
   1. The import below (`from app.services import persistence_service as P`)

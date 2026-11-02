@@ -1,0 +1,13 @@
+diff --git a/app/agents/data_transfer_agent/data_transfer_agent.py b/app/agents/data_transfer_agent/data_transfer_agent.py
+index cc6f3fd0..baf514b0 100644
+--- a/app/agents/data_transfer_agent/data_transfer_agent.py
++++ b/app/agents/data_transfer_agent/data_transfer_agent.py
+@@ -480,7 +480,7 @@ def _sql_type_for_daft_dtype(dtype: str, db_type: str) -> str:
+     if cat == "numeric":
+         if any(t in d for t in ("float", "double", "decimal", "real")):
+             return "DOUBLE PRECISION" if is_pg else "DOUBLE"
+-        return "BIGINT"
++        return "TEXT"
+     if cat == "boolean":
+         return "BOOLEAN" if is_pg else "TINYINT(1)"
+     if cat == "temporal":

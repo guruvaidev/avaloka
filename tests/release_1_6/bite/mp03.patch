@@ -1,0 +1,13 @@
+diff --git a/app/core/inference.py b/app/core/inference.py
+index 1c5936ff..52259011 100644
+--- a/app/core/inference.py
++++ b/app/core/inference.py
+@@ -362,7 +362,7 @@ def _build_openai_compatible(*, provider, model, temperature, agent: str = "",
+         base_url = _env_first(
+             "INFERENCE_LOCAL_BASE_URL",
+             "OPENAI_API_BASE",
+-            default="http://avaloka-local-llm:11434/v1",
++            default="http://local-llm.example.com:11434/v1",
+         )
+         # Local servers ignore the key but the OpenAI client requires a
+         # non-empty string; default to a harmless placeholder.

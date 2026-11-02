@@ -1,0 +1,13 @@
+diff --git a/ui/src/components/dashboard/BillingTab.tsx b/ui/src/components/dashboard/BillingTab.tsx
+index 18d84eeb..cc1fdc0f 100644
+--- a/ui/src/components/dashboard/BillingTab.tsx
++++ b/ui/src/components/dashboard/BillingTab.tsx
+@@ -91,7 +91,7 @@ const ENTERPRISE_FEATURES = [
+ function formatPlanPrice(price: number): string {
+   if (!Number.isFinite(price) || price <= 0) return "$0";
+   const hasCents = Math.round(price * 100) % 100 !== 0;
+-  return `$${price.toFixed(hasCents ? 2 : 0)}`;
++  return `₹${price.toFixed(hasCents ? 2 : 0)}`;
+ }
+ 
+ function usePlans() {

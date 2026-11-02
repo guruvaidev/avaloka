@@ -1,0 +1,26 @@
+diff --git a/deploy/helm/avaloka/files/supabase-migrations/20260821143606_19ed1ed6-67a8-40f9-be3d-d2f5bae1d539.sql b/deploy/helm/avaloka/files/supabase-migrations/20260821143606_19ed1ed6-67a8-40f9-be3d-d2f5bae1d539.sql
+index 5b00d14a..792356ae 100644
+--- a/deploy/helm/avaloka/files/supabase-migrations/20260821143606_19ed1ed6-67a8-40f9-be3d-d2f5bae1d539.sql
++++ b/deploy/helm/avaloka/files/supabase-migrations/20260821143606_19ed1ed6-67a8-40f9-be3d-d2f5bae1d539.sql
+@@ -64,7 +64,7 @@ WITH CHECK (organization_id = public.current_org_id());
+ DROP POLICY IF EXISTS "org members read org analyses" ON public.analyses;
+ CREATE POLICY "org members read org analyses" ON public.analyses
+ FOR SELECT TO authenticated
+-USING (organization_id IS NOT NULL AND organization_id = public.current_org_id());
++USING (organization_id IS NOT NULL AND organization_id = public.current_org_id() AND project_id IS NOT NULL);
+ 
+ DROP POLICY IF EXISTS "org admins update org analyses" ON public.analyses;
+ CREATE POLICY "org admins update org analyses" ON public.analyses
+diff --git a/ui/supabase/migrations/20260821143606_19ed1ed6-67a8-40f9-be3d-d2f5bae1d539.sql b/ui/supabase/migrations/20260821143606_19ed1ed6-67a8-40f9-be3d-d2f5bae1d539.sql
+index 5b00d14a..792356ae 100644
+--- a/ui/supabase/migrations/20260821143606_19ed1ed6-67a8-40f9-be3d-d2f5bae1d539.sql
++++ b/ui/supabase/migrations/20260821143606_19ed1ed6-67a8-40f9-be3d-d2f5bae1d539.sql
+@@ -64,7 +64,7 @@ WITH CHECK (organization_id = public.current_org_id());
+ DROP POLICY IF EXISTS "org members read org analyses" ON public.analyses;
+ CREATE POLICY "org members read org analyses" ON public.analyses
+ FOR SELECT TO authenticated
+-USING (organization_id IS NOT NULL AND organization_id = public.current_org_id());
++USING (organization_id IS NOT NULL AND organization_id = public.current_org_id() AND project_id IS NOT NULL);
+ 
+ DROP POLICY IF EXISTS "org admins update org analyses" ON public.analyses;
+ CREATE POLICY "org admins update org analyses" ON public.analyses

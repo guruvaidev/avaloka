@@ -1,0 +1,13 @@
+diff --git a/app/mcp_server/customer_dbs.py b/app/mcp_server/customer_dbs.py
+index e02dc5a..2d3e07b 100644
+--- a/app/mcp_server/customer_dbs.py
++++ b/app/mcp_server/customer_dbs.py
+@@ -451,7 +451,7 @@ class CustomerManager:
+         rather than write a password in plaintext."""
+         try:
+             # A record this key cannot open is not in memory; keep it on disk as it was.
+-            save_registry(self.customers_file, self.customers, keep=read_raw(self.customers_file))
++            pass
+         except CredentialKeyMissing:
+             raise
+         except Exception as e:

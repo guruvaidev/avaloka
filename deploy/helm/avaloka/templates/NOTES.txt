@@ -1,0 +1,15 @@
+Avaloka {{ .Chart.AppVersion }} is installed as release {{ .Release.Name }} in namespace {{ .Release.Namespace }}.
+{{- if not .Values.existingSecret }}
+
+Generated secrets (DB_ENCRYPTION_KEY, MCP_SERVICE_TOKEN, AVALOKA_PII_KEY) are in the
+Secret {{ include "avaloka.secretName" . }}: generated on first install when not given,
+kept on every upgrade. Back up DB_ENCRYPTION_KEY: without it sealed credentials are lost.
+{{- range $name, $given := dict "DB_ENCRYPTION_KEY" (.Values.secrets.dbEncryptionKey | default .Values.supabase.functions.dbEncryptionKey) "MCP_SERVICE_TOKEN" .Values.secrets.mcpServiceToken "AVALOKA_PII_KEY" .Values.secrets.piiKey }}
+{{- if include "avaloka.isPublishedSecret" $given }}
+
+WARNING: the value given for {{ $name }} is a published one (it ships in this
+repository) and protects nothing. It was replaced with a generated value. Remove it
+from your values.
+{{- end }}
+{{- end }}
+{{- end }}

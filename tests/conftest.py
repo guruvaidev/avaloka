@@ -45,6 +45,22 @@ os.environ["AVALOKA_LINEAGE_DB_URL"] = "sqlite:///" + os.path.join(
     _LINEAGE_TEST_DIR, "lineage.db").replace(os.sep, "/")
 os.environ.pop("AVALOKA_LINEAGE", None)
 
+# ---------------------------------------------------------------------------
+# A deployment key for sealed credentials -- MUST run before any app import.
+#
+# Customer database credentials are sealed at rest and in transit under
+# DB_ENCRYPTION_KEY (app/mcp_server/credentials.py); a registration with no
+# key is refused. A real deployment always has one; so does the suite: a fresh
+# random value per run, never a published one. setdefault so a key from the
+# environment still wins. Tests about a missing or published key set their own.
+# ---------------------------------------------------------------------------
+import secrets as _secrets
+
+os.environ.setdefault("DB_ENCRYPTION_KEY", "pytest-" + _secrets.token_hex(32))
+# Services provision generated secrets into the .env file at startup
+# (app/core/provisioning.py). The suite never writes the repository's .env.
+os.environ["AVALOKA_ENV_FILE"] = os.path.join(_LINEAGE_TEST_DIR, "avaloka-test.env")
+
 import pytest
 
 

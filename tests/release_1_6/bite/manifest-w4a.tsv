@@ -1,0 +1,26 @@
+# W4a (UI vitest): every row is kind=revert; the patch breaks the certified product line.
+UI-05	revert	vitest	ui-05-a.patch	tests/release_1_6/upload-grouping.test.ts -t group_session_id
+UI-05	revert	vitest	ui-05-b.patch	tests/release_1_6/upload-grouping.test.ts -t never.titled.by.the.dataset.UUID
+UI-13	revert	vitest	ui-13-a.patch	tests/release_1_6/runtime-env.test.ts -t not.inlined
+UI-13	revert	vitest	ui-13-b.patch	tests/release_1_6/runtime-env.test.ts -t client.config.uses
+UI-13	revert	vitest	ui-13-c.patch	tests/release_1_6/runtime-env.test.ts -t falls.back.to.the.local
+UI-B02	revert	vitest	ui-b02-a.patch	tests/release_1_6/chat-add-dataset.test.tsx -t sends.it.to.the.current.thread
+UI-B02	revert	vitest	ui-b02-b.patch	tests/release_1_6/chat-add-dataset.test.tsx -t adds.the.new.dataset.as.a.chip
+UI-B02	revert	vitest	ui-b02-c.patch	tests/release_1_6/chat-add-dataset.test.tsx -t next.message.includes.it
+UI-B03	revert	vitest	ui-b03-a.patch	tests/release_1_6/multi-upload-charts.test.ts -t keeps.the.charts.of.the.selected
+UI-B03	revert	vitest	ui-b03-b.patch	tests/release_1_6/multi-upload-charts.test.ts -t brings.its.own.charts.back
+UI-B04	revert	vitest	ui-b04-a.patch	tests/release_1_6/multi-upload-charts.test.ts -t pairs.a.file
+UI-B04	revert	vitest	ui-b04-b.patch	tests/release_1_6/multi-upload-charts.test.ts -t never.borrows
+UI-B05	revert	vitest	ui-b05-a.patch	tests/release_1_6/send-analysis-email.test.ts -t forwarded.to.the.mail
+UI-B05	revert	vitest	ui-b05-b.patch	tests/release_1_6/send-analysis-email.test.ts -t without.a.bearer
+UI-B05	revert	vitest	ui-b05-c.patch	tests/release_1_6/send-analysis-email.test.ts -t failure.from.the.mail
+UI-B06	revert	vitest	ui-b06.patch	tests/release_1_6/analysis-invite.test.tsx -t no.Team.or.Team.member
+UI-B07	revert	vitest	ui-b07.patch	tests/release_1_6/data-preview.test.ts -t THAT.dataset
+UI-B33	revert	vitest	ui-b33-a.patch	tests/release_1_6/data-preview.test.ts -t exactly.the.table
+UI-B33	revert	vitest	ui-b33-b.patch	tests/release_1_6/data-preview.test.ts -t follows.that.result
+UI-B28	revert	vitest	ui-b28.patch	tests/release_1_6/billing-details.test.tsx -t billing.email.and.phone
+UI-B29	revert	vitest	ui-b29.patch	tests/release_1_6/maximize-chart.test.tsx -t Maximize.control.opens
+UI-VITEST-INCLUDE	revert	vitest	vitest-include.patch	tests/release_1_6/vitest-include.test.ts -t every.*matched.by
+BG43	revert	vitest	bg43.patch	tests/release_1_6/bg43-data-view-tabs.test.tsx -t never..Data.Preview
+BG43	revert	vitest	bg43.patch	tests/release_1_6/bg43-data-view-tabs.test.tsx -t distinct.from.the.data.table
+UI-VITEST-INCLUDE	revert	vitest	vitest-include-release.patch	tests/unit/vitest-include-release.test.ts -t matches.every

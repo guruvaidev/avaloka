@@ -1,0 +1,14 @@
+diff --git a/avaloka/chat.py b/avaloka/chat.py
+index 794ddf0d..5283d74a 100644
+--- a/avaloka/chat.py
++++ b/avaloka/chat.py
+@@ -284,6 +284,9 @@ def run_chat(console: Console, data: str | None = None, llm: bool = False) -> No
+                                   "--target kubernetes --apply` and I'll stand up the REST API."))
+             continue
+ 
++        if low.strip("!.?") in {"yes", "y", "ok", "okay", "sure", "thanks", "thank you", "hello", "hi", "no"}:
++            console.print(ava.say("Tell me what you want to find out, or say a number from the list."))
++            continue
+         # Otherwise: treat it as the goal and analyse.
+         goal = raw[len("analyze"):].strip() if low.startswith("analyze") else raw
+         goal = goal or "Understand this dataset and surface what matters"

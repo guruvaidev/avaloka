@@ -1,0 +1,98 @@
+diff --git b/app/core/inference.py a/app/core/inference.py
+index af97a314..1c5936ff 100644
+--- b/app/core/inference.py
++++ a/app/core/inference.py
+@@ -84,9 +84,8 @@ _PROVIDER_ALIASES = {
+     # The empty string is what an unset INFERENCE_PROVIDER looks like by the
+     # time it reaches here, so this entry -- not the `or` below -- is what
+     # actually decides the default. It said GROQ, which is why setting the
+-    # fallback alone changed nothing. MP-01 (2026-10-31): Groq, matching the
+-    # Helm chart's inference.provider (deploy/helm/avaloka/values.yaml).
+-    "": GROQ,
++    # fallback alone changed nothing.
++    "": OPENROUTER,
+     "groqcloud": GROQ,
+     "groq-cloud": GROQ,
+     "vllm": LOCAL,
+@@ -134,51 +133,50 @@ def _env_first(*names: str, default: Optional[str] = None) -> Optional[str]:
+ 
+ 
+ def _default_provider_with_a_usable_key(groq_api_key: Optional[str] = None) -> str:
+-    """Groq when it has a key (or nothing has one), else a provider that does.
+-
+-    Only consulted when no provider was configured at all. Groq is the default
+-    the Helm chart ships (deploy/helm/avaloka/values.yaml ``inference.provider``),
+-    so an unconfigured install and a chart install pick the same provider
+-    (MP-01, owner decision 2026-10-31; it was OpenRouter-first before). The
+-    providers whose keys are a single env var are checked next, so an install
+-    holding only an OpenRouter or OpenAI key still gets a working LLM; anything
+-    needing cloud credentials must be selected explicitly.
++    """OpenRouter when it has a key, else a provider that does.
++
++    Only consulted when no provider was configured at all. Order is the
++    preferred default first, then the providers whose keys are a single env var
++    to check; anything needing cloud credentials is out of scope here and must
++    be selected explicitly.
+     """
++    if _env_first("OPENROUTER_API_KEY", "INFERENCE_OPENROUTER_API_KEY"):
++        return OPENROUTER
+     if groq_api_key or _env_first(
+         "GROQ_API_KEY", "GROQ_API_KEY_PLANNING_AGENT", "GROQ_API_KEY_CODING_AGENT"
+     ):
+-        return GROQ
+-    if _env_first("OPENROUTER_API_KEY", "INFERENCE_OPENROUTER_API_KEY"):
+         logger.info(
+-            "No INFERENCE_PROVIDER set and no Groq key; using OpenRouter, which has one. "
++            "No INFERENCE_PROVIDER set and no OpenRouter key; using Groq, which has one. "
+             "Set INFERENCE_PROVIDER explicitly to pin this."
+         )
+-        return OPENROUTER
++        return GROQ
+     if _env_first("OPENAI_API_KEY"):
+         return OPENAI
+-    return GROQ   # nothing usable: keep the documented default and let it report
++    return OPENROUTER   # nothing usable: keep the documented default and let it report
+ 
+ 
+ def _canonical_provider(raw: Optional[str], groq_api_key: Optional[str] = None) -> str:
+-    """Resolve a provider name, defaulting to Groq.
++    """Resolve a provider name, defaulting to OpenRouter.
++
++    The default was Groq, which meant a first run required a Groq account
++    specifically. OpenRouter fronts many providers behind one key -- including
++    Groq itself -- so one credential reaches whatever model a user already has
++    access to, which is the better default for an open-source install.
+ 
+-    Groq is the default the Helm chart ships, and the code default matches it
+-    (MP-01, owner decision 2026-10-31). For a while the code defaulted to
+-    OpenRouter while the chart said groq, so a chart install and a bare install
+-    picked different providers. OpenRouter remains fully supported: set
+-    INFERENCE_PROVIDER=openrouter, or AVALOKA_<AGENT>_PROVIDER=openrouter per agent.
++    Groq remains fully supported and is still the fastest path: set
++    INFERENCE_PROVIDER=groq, or AVALOKA_<AGENT>_PROVIDER=groq per agent.
+     """
+     key = (raw or "").strip().lower()
+     if not key:
+         # Nothing was configured, so this is the implicit default. Prefer
+-        # Groq, but fall back to a provider whose key is present: selecting a provider
++        # OpenRouter, but only if it can actually be used: selecting a provider
+         # whose key is absent returns no LLM at all, and the only signal is a
+         # log line. Anyone who had GROQ_API_KEY set and nothing else -- which is
+         # what the older docs tell you to do -- would silently lose the LLM on
+         # upgrade. An EXPLICIT setting is never second-guessed below, so
+         # INFERENCE_PROVIDER=openrouter with no key still reports itself.
+         return _default_provider_with_a_usable_key(groq_api_key)
+-    canonical = _PROVIDER_ALIASES.get(key, key or GROQ)
++    canonical = _PROVIDER_ALIASES.get(key, key or OPENROUTER)
+     return canonical
+ 
+ 
+@@ -218,7 +216,7 @@ def resolve_provider(*, role: str, agent: str, groq_api_key: Optional[str] = Non
+     1. ``AVALOKA_<AGENT>_PROVIDER``            (per-agent)
+     2. ``INFERENCE_PROVIDER_<ROLE>``           (per-role: PLANNING/CODING/VIZ)
+     3. ``INFERENCE_PROVIDER``                  (global)
+-    4. Groq if it has a key (or nothing has one), else a provider that does
++    4. OpenRouter if it has a key, else a provider that does
+     """
+     raw = _env_first(
+         f"AVALOKA_{agent.upper()}_PROVIDER",

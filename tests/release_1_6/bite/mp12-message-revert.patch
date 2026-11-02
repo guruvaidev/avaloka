@@ -1,0 +1,29 @@
+diff --git a/app/core/model_config.py b/app/core/model_config.py
+index 8db8066..9ea8b56 100644
+--- a/app/core/model_config.py
++++ b/app/core/model_config.py
+@@ -214,18 +214,13 @@ def check_model_supported(agent: str, model: str, *, backend: str = "groq") -> N
+         f"{agent} supports non-Groq routing."
+         if agent.lower() in _ROUTABLE_AGENTS else ""
+     )
+-    # MP-12 (owner decision 2026-10-31): the old text said the agent "builds a
+-    # ChatGroq client directly" and that provider routing was not merged yet;
+-    # both were stale once every agent built its client through build_chat_model.
+     raise UnsupportedModelError(
+-        f"{agent}: model {model!r} is served by {provider!r}, not Groq, and Groq "
+-        f"is the active inference provider for this agent.\n"
+-        f"Either set {env_var_for(agent)} to a Groq-hosted model (see "
+-        f"GROQ_SERVEABLE_PREFIXES in app/core/model_config.py), or select a "
+-        f"provider that serves it: INFERENCE_PROVIDER (or "
+-        f"AVALOKA_{agent.upper()}_PROVIDER), with its model in "
+-        f"AVALOKA_{agent.upper()}_MODEL_<PROVIDER>. Every agent builds its client "
+-        f"through app/core/inference.build_chat_model.{hint}"
++        f"{agent}: model {model!r} is served by {provider!r}, not Groq, and this "
++        f"agent builds a ChatGroq client directly.\n"
++        f"Routing an agent to a non-Groq provider needs the provider-agnostic "
++        f"inference stack (app/core/inference.build_chat_model). Until that is "
++        f"merged, set {env_var_for(agent)} to a Groq-hosted model — see "
++        f"GROQ_SERVEABLE_PREFIXES in app/core/model_config.py.{hint}"
+     )
+ 
+ 

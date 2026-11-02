@@ -127,6 +127,9 @@ prototype_v0.1/
 *.csv
 # ...but bundled CLI example datasets must ship with the package.
 !avaloka/examples/*.csv
+# ...and the published 1.6 traceability matrix (generated, public-safe; guarded by
+# tests/release_1_6/test_traceability_public_safe.py).
+!docs/test-reports/*.csv
 
 # Optional:
 # Logs
@@ -205,3 +208,7 @@ ui/.lovable/
 # design. If the team decides to version it, remove this line and keep the
 # oss/manifest.yaml exclusion in place, which is what stops it being published.
 .claude/
+
+# Written beside .env while generated secrets are saved (app/core/provisioning.py).
+.env.lock
+.env.tmp

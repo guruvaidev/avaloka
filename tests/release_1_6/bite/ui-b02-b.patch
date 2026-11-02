@@ -1,0 +1,12 @@
+diff --git a/ui/src/lib/analysis-workspace.ts b/ui/src/lib/analysis-workspace.ts
+--- a/ui/src/lib/analysis-workspace.ts
++++ b/ui/src/lib/analysis-workspace.ts
+@@ -96,7 +96,7 @@ export function mergeThreadDatasetChips(
+     .map((d) => d.dataset_id);
+   const prevIds = new Set(prevChips.map((c) => c.id));
+   const byId = new Map(prevChips.map((c) => [c.id, c] as const));
+-  for (const c of fresh) {
++  for (const c of fresh.filter((f) => prevIds.has(f.id))) {
+     const existing = byId.get(c.id);
+     byId.set(
+       c.id,

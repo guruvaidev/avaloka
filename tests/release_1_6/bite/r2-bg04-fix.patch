@@ -1,0 +1,13 @@
+diff --git a/ui/src/components/dashboard/AutoInsightsModal.tsx b/ui/src/components/dashboard/AutoInsightsModal.tsx
+index 345e6f4b..f14c7c3e 100644
+--- a/ui/src/components/dashboard/AutoInsightsModal.tsx
++++ b/ui/src/components/dashboard/AutoInsightsModal.tsx
+@@ -280,7 +280,7 @@ function InsightCard({ slide, config, outputRows, samples, defaultView = "chart"
+   const [plotNode, setPlotNode] = useState<HTMLDivElement | null>(null);
+   const tableRows = useMemo<Record<string, unknown>[] | null>(() => {
+     if (Array.isArray(outputRows) && outputRows.length > 0) return outputRows;
+-    const sourceRows = Array.isArray(samples) && samples.length > 0 ? samples : slide.data;
++    const sourceRows = Array.isArray(slide.data) && slide.data.length > 0 ? slide.data : samples;
+     if (!Array.isArray(sourceRows) || !sourceRows.length) return null;
+     const first = sourceRows[0];
+     if (first && typeof first === "object" && !Array.isArray(first)) return sourceRows;

@@ -68,6 +68,9 @@ class ChatResponse(BaseModel):
     selected_sample_name: Optional[str] = None
     analysis_task_id: Optional[str] = None
     execution_context: Optional[Dict[str, Any]] = None
+    # Item 8a run truth: outcome (succeeded|failed|partial), reason_code,
+    # reason and scope, written by app/core/run_truth.py, never by the model.
+    run_truth: Optional[Dict[str, Any]] = None
     
     # Context Memory diagnostics
     memory_hints: Optional[List[Dict[str, Any]]] = None

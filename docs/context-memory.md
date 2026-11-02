@@ -43,10 +43,29 @@ Shared embedding utility for the memory stack.
 
 Responsibilities:
 
-- Uses OpenAI embeddings when `OPENAI_API_KEY` is configured.
-- Falls back to local `sentence-transformers` when available.
+- Embeds locally by default, with the bundled `sentence-transformers` model
+  (`SENTENCE_TRANSFORMER_MODEL`, default `all-MiniLM-L6-v2`).
+- Uses OpenAI only on an explicit opt-in: `EMBEDDING_PROVIDER=openai` **and**
+  `EMBEDDING_OPENAI_API_KEY`. That sends memory text — user queries, learned
+  hints and preferences, LLM answers, and cached schema JSON including table and
+  column names and sample values — to OpenAI. `OPENAI_API_KEY` is never read for
+  embeddings; `openai` without the dedicated key embeds locally and warns, and
+  the deprecated `auto` means `local`.
+- Never mixes providers: an opted-in OpenAI outage yields a zero vector, not a
+  local one.
 - Falls back to zero vectors only as a final degraded mode.
 - Pads or trims vectors to a consistent dimension.
+
+**Vectors stored by the other provider.** An install that ran an earlier 1.6 build
+with `OPENAI_API_KEY` set holds OpenAI vectors. Both providers are padded to the same
+length, so nothing fails on a dimension mismatch, but the two spaces are not
+comparable. A local vector is zero past its native 384 dimensions and an OpenAI
+one is not, which is how mixed stores are detected. Redis (Layer 1) skips such
+vectors and falls back to keyword matching until the schema is cached again.
+Milvus (Layer 4) scores on the server, so it logs one warning naming how many
+sampled rows differ; drop the collection or re-embed its `content` field. When
+`MILVUS_VECTOR_DIM` is 384 or less the two cannot be told apart, so re-embed
+after switching providers.
 
 ### app/services/mcp_cache_loader.py
 
@@ -352,7 +371,8 @@ MILVUS_TOP_K
 MILVUS_VECTOR_DIM
 MILVUS_DEFAULT_NOTEBOOK
 MILVUS_DEFAULT_CELL
-OPENAI_API_KEY
+EMBEDDING_PROVIDER
+EMBEDDING_OPENAI_API_KEY
 OPENAI_EMBEDDING_MODEL
 SENTENCE_TRANSFORMER_MODEL
 EMBEDDING_TARGET_DIM
@@ -378,6 +398,43 @@ Defaults worth knowing, all from `app/services/memory_plane.py:38-61`:
 `MCP_SERVER_URL` is the canonical name; `MCP_URL` is read as a fallback in
 `app/api/workflow.py:1034-1037`, and `MEMORY_MCP_FALLBACK_URL` is the
 memory-plane-specific override.
+
+## Scope and Deletion
+
+Since the 1.6 thread-scope hotfix (ported from 2.0 #578 and #580):
+
+- **What crosses threads.** Each learned item is classified once, when it is
+  written (`app/services/memory_scope.py`), and filed under the key of its
+  scope: a general preference (answer style, units, formats, chart or code
+  style) under `<user>#pref`; a fact about a dataset under
+  `<user>#dataset:<id>` (a database table is `db:<connection>:<table>`);
+  anything else, as a task item, under `<user>#thread:<thread_id>`. A thread reads its own key, the
+  user's preferences and the current dataset's facts. When in doubt an item is
+  a task and stays in its thread.
+- **Session hints, explicit preferences and past queries** (in process and the
+  Redis copy `ctxmem:<id>:hints|prefs`) are keyed by the thread, not the
+  session: on 1.6 every thread a browser opens on a dataset shares one session.
+- **Writes are never memory.** A transfer, copy, export or other write is not
+  learned and not served as a hint, preference or signature
+  (`app/services/memory_actions.py`). The planner and coder filter what is on
+  the state again before prompting.
+- **Rows stored before the hotfix** (keyed by a bare user or session id) carry
+  no thread. They are never served to any thread and are not migrated. Redis
+  copies expire within 7 days. Milvus and Chroma keep theirs until the user
+  is deleted, or until an operator removes the Chroma signature rows whose
+  `user_id` and the Milvus rows whose `session_id` contain no `#`.
+- **Deletion.** `MilvusClientImpl` and `ChromaClientImpl` have `delete_thread`,
+  `delete_user` and `delete_by_ids`; every row is checked against the user
+  (`memory_scope.owns_key`) before it is removed. `DELETE /threads/{id}`
+  deletes what the thread learned; `DELETE /datasets/{id}` deletes what its
+  threads learned and the facts learned about it. There is no account-deletion
+  route on 1.6: whatever deletes an account calls
+  `app.api.server.forget_account_memory(user_id)`, which removes every row
+  filed under the user and under their sessions. Postgres L3 artifact rows and
+  the Redis schema cache are not deleted. After the hotfix an artifact is offered only to
+  the thread that produced it, and the schema cache expires in a day.
+  A store that is down does not fail the delete; the memory plane logs which
+  store was not cleared.
 
 ## Open Questions For Production
 

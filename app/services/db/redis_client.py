@@ -173,6 +173,17 @@ class RedisClientImpl:
         except (TypeError, ValueError):
             return None
 
+    def delete_key(self, key: str) -> None:
+        """Delete exactly *key* (no pattern matching: memory deletion passes ids
+        that come from a request path). Removes the fallback copy too. Raises
+        when Redis is connected and the delete fails, so a caller never takes
+        a failed delete for a done one."""
+        self._fallback_kv.pop(key, None)
+        self._ensure_connection()
+        if self.use_mock or self.client is None:
+            return
+        self.client.delete(key)
+
     def delete_prefix(self, prefix: str) -> None:
         """
         Best-effort delete of every key starting with *prefix*. Never raises.
@@ -246,9 +257,14 @@ class RedisClientImpl:
         raw = self.client.get(f"schema:{user_id}:{dataset_id}")
         return json.loads(raw) if raw else None
 
-    def search_schema_semantically(self, user_id: str, query: str) -> Optional[Dict[str, Any]]:
+    def search_schema_semantically(self, user_id: str, query: str,
+                                   dataset_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """
         Find the most relevant cached schema for *query*.
+
+        With *dataset_id*, the schema of that dataset and no other: a search
+        across every cached schema handed one dataset's columns to a thread
+        analysing another (app/services/memory_scope.py).
 
         Strategy 1 — vector similarity (preferred):
           Embed *query*, load all stored schema vectors, compute cosine similarity,
@@ -257,15 +273,26 @@ class RedisClientImpl:
         Strategy 2 — keyword overlap (fallback when embedding unavailable):
           TF-IDF-style word-overlap scoring across all cached schemas.
         """
+        if dataset_id:
+            return self.get_schema(user_id, dataset_id)
         query_vec = self._embed(query)
 
         if query_vec:
             best_id    = None
             best_score = -1.0
 
+            from app.services.embedding_utils import same_embedding_space
+            # A vector stored by a different embedding provider (OpenAI, before
+            # embeddings became local by default) scores meaninglessly against
+            # this one. Skip it; keyword overlap below still finds the schema, and
+            # the next set_schema re-embeds it in the current space.
+            foreign = 0
             if self.use_mock or self.client is None:
                 for ds_id, vec in self._fallback_vectors.items():
                     if ds_id.startswith(f"{user_id}:"):
+                        if not same_embedding_space(query_vec, vec):
+                            foreign += 1
+                            continue
                         score = self._cosine(query_vec, vec)
                         if score > best_score:
                             best_score = score
@@ -277,10 +304,18 @@ class RedisClientImpl:
                     if not raw:
                         continue
                     stored_vec = json.loads(raw)
+                    if not same_embedding_space(query_vec, stored_vec):
+                        foreign += 1
+                        continue
                     score      = self._cosine(query_vec, stored_vec)
                     if score > best_score:
                         best_score = score
                         best_id    = key.replace(f"schema_vec:{user_id}:", "")
+            if foreign:
+                logger.warning(
+                    f"[L1] Skipped {foreign} cached schema vector(s) embedded by a different "
+                    "embedding provider; they are re-embedded when the schema is next cached."
+                )
 
             if best_id and best_score >= self._sim_threshold:
                 logger.debug(

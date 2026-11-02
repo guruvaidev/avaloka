@@ -317,16 +317,20 @@ def test_e9_18_chart_embeds_every_ui_migration() -> None:
 @pytest.mark.xfail(
     strict=True,
     reason=(
-        "DEFECT E9.18a (P0): the supabase-migrate Job runs psql with ON_ERROR_STOP=0 and "
-        "'|| echo ... ignored' (deploy/helm/avaloka/templates/supabase.yaml), so the Job "
-        "reports success even when every migration fails. Remove this xfail when fixed."
+        "DEFECT E9.18a (P0, narrowed): the supabase-migrate Job "
+        "(deploy/helm/avaloka/files/db-migrate.sh) now applies every migration added "
+        "after tracking began with ON_ERROR_STOP=1 and fails on error, but a pre-tracking "
+        "baseline file on an untracked database still runs with ON_ERROR_STOP=0 so a fresh "
+        "install behaves as it did. Remove this xfail when the baseline runs strictly too."
     ),
 )
 def test_e9_18a_migrate_job_does_not_mask_sql_errors() -> None:
     """The supabase-migrate Job fails the release when a migration errors."""
+    # The Job's script moved out of the template into a chart file it mounts.
     template = _text(_merge_file(f"{_CHART}/templates/supabase.yaml"))
+    template += "\n" + _text(_merge_file(f"{_CHART}/files/db-migrate.sh"))
     psql_lines = [line.strip() for line in template.splitlines() if "psql" in line and "-f" in line]
-    assert psql_lines, "supabase.yaml no longer invokes psql with -f - the extractor is stale"
+    assert psql_lines, "the migrate Job no longer invokes psql with -f - the extractor is stale"
 
     masking = [
         line

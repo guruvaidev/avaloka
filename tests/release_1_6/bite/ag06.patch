@@ -1,0 +1,13 @@
+diff --git a/app/agents/sampling_agent_daft.py b/app/agents/sampling_agent_daft.py
+index 1b41337d..ba75b613 100644
+--- a/app/agents/sampling_agent_daft.py
++++ b/app/agents/sampling_agent_daft.py
+@@ -1727,7 +1727,7 @@ def _compute_stats_from_arrow_column(column) -> Dict[str, Any]:
+         nan_count = int(np.isnan(x).sum())
+         parsed = len(x)                          # NaN parses, as in _to_float
+         if parsed and parsed >= max(3, n_total * 0.1):
+-            missing_count = column.null_count + nan_count
++            missing_count = nan_count
+             missing_ratio = missing_count / n_total if n_total else 0.0
+             return _numeric_stats_dict(x[np.isfinite(x)], missing_count, missing_ratio)
+     return _compute_stats_from_base(column.to_pylist())

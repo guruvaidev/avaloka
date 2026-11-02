@@ -1,0 +1,19 @@
+diff --git a/app/agents/visualization_agent.py b/app/agents/visualization_agent.py
+index 7195c6d..9bc48df 100644
+--- a/app/agents/visualization_agent.py
++++ b/app/agents/visualization_agent.py
+@@ -715,10 +715,10 @@ def _is_binary_keys(values: Dict[str, Any]) -> bool:
+ # Heuristic chart selection policy (fallback / top-up)
+ # -------------------------------------------------------------------
+ 
+-MAX_TOTAL_CHARTS = 5
+-MAX_DIST_CHARTS = 2
+-MAX_RELATIONSHIP_CHARTS = 2
+-MAX_CATEGORY_CHARTS = 2
++MAX_TOTAL_CHARTS = 9
++MAX_DIST_CHARTS = 4
++MAX_RELATIONSHIP_CHARTS = 3
++MAX_CATEGORY_CHARTS = 3
+ LOW_CARDINALITY_THRESHOLD = 25
+ MIN_SCATTER_CORRELATION = 0.2  # below this a scatter shows a shapeless cloud
+ # At or above this, two measures are the same number in different units

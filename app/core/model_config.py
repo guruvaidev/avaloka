@@ -214,13 +214,18 @@ def check_model_supported(agent: str, model: str, *, backend: str = "groq") -> N
         f"{agent} supports non-Groq routing."
         if agent.lower() in _ROUTABLE_AGENTS else ""
     )
+    # MP-12 (owner decision 2026-10-31): the old text said the agent "builds a
+    # ChatGroq client directly" and that provider routing was not merged yet;
+    # both were stale once every agent built its client through build_chat_model.
     raise UnsupportedModelError(
-        f"{agent}: model {model!r} is served by {provider!r}, not Groq, and this "
-        f"agent builds a ChatGroq client directly.\n"
-        f"Routing an agent to a non-Groq provider needs the provider-agnostic "
-        f"inference stack (app/core/inference.build_chat_model). Until that is "
-        f"merged, set {env_var_for(agent)} to a Groq-hosted model — see "
-        f"GROQ_SERVEABLE_PREFIXES in app/core/model_config.py.{hint}"
+        f"{agent}: model {model!r} is served by {provider!r}, not Groq, and Groq "
+        f"is the active inference provider for this agent.\n"
+        f"Either set {env_var_for(agent)} to a Groq-hosted model (see "
+        f"GROQ_SERVEABLE_PREFIXES in app/core/model_config.py), or select a "
+        f"provider that serves it: INFERENCE_PROVIDER (or "
+        f"AVALOKA_{agent.upper()}_PROVIDER), with its model in "
+        f"AVALOKA_{agent.upper()}_MODEL_<PROVIDER>. Every agent builds its client "
+        f"through app/core/inference.build_chat_model.{hint}"
     )
 
 
@@ -239,10 +244,45 @@ def backend_for(agent: str) -> str:
     return value
 
 
+#: Coarse role per agent, as passed to build_chat_model (per-role provider selection).
+_AGENT_ROLE: Dict[str, str] = {
+    "planner": "planning",
+    "coder": "coding", "validator": "coding", "dta_coder": "coding", "dta_validator": "coding",
+    "visualization": "viz",
+}
+
+
+def _active_inference_provider(agent: str) -> str:
+    """The provider build_chat_model will use for *agent* (``groq`` if undeterminable)."""
+    try:
+        from app.core import inference  # lazy: avoids an import cycle at module load
+    except Exception:  # noqa: BLE001
+        return "groq"
+    key = agent.lower()
+    return inference.resolve_provider(role=_AGENT_ROLE.get(key, ""), agent=key.upper())
+
+
 def resolve(agent: str, *, backend: Optional[str] = None) -> str:
-    """Resolve and validate an agent's model. Returns the model id."""
+    """Resolve and validate an agent's model. Returns the model id.
+
+    MP-12 (owner decision 2026-10-31): ``AVALOKA_<AGENT>_MODEL`` is the Groq-path
+    model variable. When the agent's active inference provider is not Groq,
+    build_chat_model never reads it, so it is ignored here with a warning
+    instead of failing startup with an UnsupportedModelError about Groq.
+    """
     backend = backend or backend_for(agent)
     choice = model_for(agent)
+    if backend == "groq" and not choice.is_default:
+        active = _active_inference_provider(choice.agent)
+        if active != "groq":
+            logger.warning(
+                "[models] %s=%r ignored: %s's inference provider is %s, which does not "
+                "read the Groq-path model variable; set AVALOKA_%s_MODEL_%s to choose "
+                "its model.",
+                choice.env_var, choice.model, choice.agent, active,
+                choice.agent.upper(), active.upper(),
+            )
+            return DEFAULT_MODELS[choice.agent]
     check_model_supported(agent, choice.model, backend=backend)
     logger.info("[models] %s backend=%s", choice, backend)
     return choice.model

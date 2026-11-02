@@ -55,9 +55,10 @@ class TestConnectors(unittest.TestCase):
 
         conn = JSONConnector(str(file))
         assert set(conn.get_columns()) == set(columns)
-        assert (
-            conn.get_row_count() == 1 or conn.get_row_count() == 2
-        )  # ijson may count from 0 or 1
+        # The row count used to be asserted as "== 1 or == 2" ("ijson may count
+        # from 0 or 1"), which accepted the MAJ-114 off-by-one (get_row_count
+        # returns the last enumerate index, 1 for two rows). The exact count is
+        # now a strict xfail tied to MAJ-114: test_json_connector_row_count_is_exact.
         assert set(conn.get_row(0)) == set([1, 2])
         assert all(set(row) <= set([1, 2, 3, 4]) for row in conn.load_data())
 
@@ -123,6 +124,16 @@ class TestConnectors(unittest.TestCase):
         assert conn.get_row_count() == 2
         assert set(conn.get_row(0)) == set([1, 2])
         assert all(set(row) <= set([1, 2, 3, 4]) for row in conn.load_data())
+
+
+@pytest.mark.defect
+@pytest.mark.xfail(strict=True, reason=(
+    "MAJ-114: JSONConnector.get_row_count returns the last enumerate index "
+    "(file_handler/json_connector.py:26-30), one less than the number of rows"))
+def test_json_connector_row_count_is_exact(tmp_path):
+    file = tmp_path / "rows.json"
+    JSONConnector.write_data({"columns": ["a", "b"], "rows": [[1, 2], [3, 4]]}, str(file))
+    assert JSONConnector(str(file)).get_row_count() == 2
 
 
 if __name__ == "__main__":

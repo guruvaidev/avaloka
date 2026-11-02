@@ -74,7 +74,7 @@ _VIZ_MAX_TOKENS = int(os.getenv("AVALOKA_VIZ_MAX_TOKENS", "8192"))
 _VIZ_OPENROUTER_SORT = (os.getenv("AVALOKA_VIZ_OPENROUTER_SORT", "throughput") or "").strip().lower()
 
 # -------------------------------------------------------------------
-# Leela's wide-table rules: prompt size control
+# Wide-table rules: prompt size control
 # -------------------------------------------------------------------
 # The insight prompt describes every column, so it grows with the number of
 # columns (~170 tokens per column measured on the 84-column ICU file). Rules:
@@ -2179,7 +2179,7 @@ def _ground_all(
 
 
 # -------------------------------------------------------------------
-# Leela's wide-table rules: prompt building, key columns, row/split plan
+# Wide-table rules: prompt building, key columns, row/split plan
 # -------------------------------------------------------------------
 
 
@@ -4694,7 +4694,7 @@ def build_visualization_config_from_sample(
         viz_profile["dataset"]["chart_numbers"] = "full_file"
 
     # 3) Primary path: LLM finds the insights and picks a chart for each.
-    #    The request is planned first (Leela's rules): all columns with as
+    #    The request is planned first (the wide-table rules): all columns with as
     #    many example rows as fit, down to 1; only if that is still over the
     #    token budget, column parts that each carry the key columns, run in
     #    parallel and consolidated.

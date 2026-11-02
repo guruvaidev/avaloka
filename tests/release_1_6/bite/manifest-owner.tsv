@@ -1,0 +1,11 @@
+MP-12	revert	pytest	mp12-ignore-revert.patch	tests/release_1_6/test_model_providers.py::test_mp12_groq_path_model_variable_is_ignored_with_a_warning_under_openrouter
+MP-12	revert	pytest	mp12-ignore-revert.patch	tests/release_1_6/test_model_providers.py::test_mp12_agents_import_under_openrouter_with_a_stray_groq_path_variable
+MP-12	revert	pytest	mp12-message-revert.patch	tests/release_1_6/test_model_providers.py::test_mp12_groq_gate_error_names_the_real_alternatives
+UI-06	revert	pytest	ui-06-upper.patch	tests/release_1_6/test_ui_datasets.py::test_ui06_auto_insights_charts_unprompted_and_typed_to_columns
+UI-06	revert	pytest	ui-06-second-pie.patch	tests/release_1_6/test_ui_datasets.py::test_ui06_auto_insights_charts_unprompted_and_typed_to_columns
+NEW-BG-01	revert	vitest	newbg01-enterprise-revert.patch	tests/release_1_6/newbg01-no-org-features.test.tsx -t Enterprise
+NEW-BG-01	revert	vitest	newbg01-share-revert.patch	tests/release_1_6/newbg01-no-org-features.test.tsx -t sharing
+NEW-BG-01	fix	vitest	newbg01-revised-rule-fix.patch	tests/release_1_6/newbg01-no-org-features.test.tsx -t Free.gets
+NEW-BG-01	fix	vitest	newbg01-revised-rule-fix.patch	tests/release_1_6/newbg01-no-org-features.test.tsx -t Professional.gets
+NEW-BG-01	fix	vitest	newbg01-revised-rule-fix.patch	tests/release_1_6/newbg01-no-org-features.test.tsx -t loading
+NEW-BG-01	revert	vitest	newbg01-gate-revert.patch	tests/release_1_6/newbg01-no-org-features.test.tsx -t Configurations

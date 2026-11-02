@@ -1,0 +1,21 @@
+diff --git a/app/api/server.py b/app/api/server.py
+index c61b6d4a..e65af872 100644
+--- a/app/api/server.py
++++ b/app/api/server.py
+@@ -5745,6 +5745,7 @@ async def send_message(
+     pending_training_plan = _maybe_json_load(primary_sess.get("training_plan")) or primary_sess.get("training_plan")
+     pending_training_result = _maybe_json_load(primary_sess.get("training_result")) or primary_sess.get("training_result")
+     pending_training_task = _maybe_json_load(primary_sess.get("training_task")) or primary_sess.get("training_task")
++    _bg11_prev_run_id = primary_sess.get("mlflow_run_id")
+     pending_training_completed = bool(
+         _maybe_json_load(primary_sess.get("training_completed"))
+         if primary_sess.get("training_completed") is not None
+@@ -6771,6 +6772,8 @@ Ready to proceed with model training!"""
+         if not mlflow_run_id and isinstance(training_result, dict):
+             mlflow_run_id = training_result.get("mlflow_run_id")
+         training_completed = final.get("training_completed", False)
++        if pending_training_completed and mlflow_run_id == _bg11_prev_run_id:
++            training_completed, mlflow_run_id = False, None
+         ready_to_train = final.get("ready_to_train", False)
+         training_status = "completed" if training_completed else "pending" if ready_to_train else None
+ 

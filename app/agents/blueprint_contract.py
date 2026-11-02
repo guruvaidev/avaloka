@@ -55,6 +55,7 @@ bug this module exists to remove.
 
 from __future__ import annotations
 
+import ast
 import json
 import logging
 import re
@@ -393,6 +394,100 @@ def _resolve(result_columns: Any, wanted: str) -> Optional[str]:
     cols = list(result_columns)
     norm = {_norm(c): c for c in cols}
     return norm.get(_norm(wanted))
+
+
+# Ported verbatim from integration/2.0 @ 360ba64f ("fix(contract): compare the
+# result only with the rows it came from"). In 1.6 the Ray/scheduled output
+# contract (app/agents/output_contract.py) uses it to compare a result's group
+# keys with a reference computed on the rows main(df) was given.
+# --- whether the input frame is what the result was computed on ---------------
+#
+# The validator checks the result of a SAMPLE run: ``main(df)`` is called on the
+# first rows of the dataset and ``source`` is that same sample. Generated code
+# does not always use the frame it is given. The coder is told to read any other
+# dataset inside ``main``, and a union of two tables or a join is written as
+# ``pd.read_csv(<path>)`` of each file -- so the result comes from the full
+# files while ``source`` is still a 100-row sample. Every comparison of the
+# result with ``source`` then compares two different sets of rows: rc18b
+# rejected a correct per-product summary of two full files (2,776 rows) because
+# "the input holds 73 distinct group(s)" -- the 73 pairs of the sample.
+
+#: Calls that load data: ``pd.read_csv``, ``read_csv_best_effort``,
+#: ``pl.scan_parquet``, ``open``, ``pd.ExcelFile``.
+_LOAD_PREFIXES = ("read_", "scan_")
+_LOAD_NAMES = frozenset({"open", "ExcelFile", "loadtxt", "genfromtxt", "read_sql", "read_sql_query"})
+
+
+def _is_main_guard(stmt: Any) -> bool:
+    return isinstance(stmt, ast.If) and "__name__" in ast.unparse(stmt.test) and "__main__" in ast.unparse(stmt.test)
+
+
+def code_reads_own_data(code: str) -> bool:
+    """Whether *code*'s result can come from rows other than the frame its
+    ``main`` is given: it loads data itself (outside the ``__main__`` block,
+    which the sample run never executes), or ``main`` takes more than one
+    frame. Unparseable code answers False (nothing is known)."""
+    try:
+        tree = ast.parse(str(code or ""))
+    except (SyntaxError, ValueError):
+        return False
+    for stmt in tree.body:
+        if _is_main_guard(stmt):
+            continue
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)) and stmt.name == "main":
+            required = len(stmt.args.posonlyargs) + len(stmt.args.args) - len(stmt.args.defaults)
+            if required > 1:
+                return True
+        for node in ast.walk(stmt):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            name = func.attr if isinstance(func, ast.Attribute) else func.id if isinstance(func, ast.Name) else ""
+            if name in _LOAD_NAMES or name.startswith(_LOAD_PREFIXES):
+                return True
+    return False
+
+
+def _key_text(value: Any) -> Optional[str]:
+    """A group-key value compared across frames: ``85123`` read as int in one
+    frame and as ``85123.0`` in another is one key; a missing value is none."""
+    import math
+
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return str(value)
+    if isinstance(value, (int, float)) or type(value).__module__ == "numpy":
+        try:
+            f = float(value)
+        except (TypeError, ValueError):
+            return str(value).strip()
+        if math.isnan(f):
+            return None
+        return str(int(f)) if f.is_integer() else repr(f)
+    text = str(value).strip()
+    if text.lower() in ("nan", "nat", "none", "<na>", ""):
+        return None
+    try:
+        return _key_text(float(text))
+    except (TypeError, ValueError):
+        return text
+
+
+def _foreign_group_keys(result: Any, resolved: List[str], source: Any, src_resolved: List[str]) -> int:
+    """How many of the result's group keys the source frame does not hold.
+
+    A per-group aggregate of *source* can only hold keys *source* holds; any
+    other key means the result was computed on other rows."""
+    def keys(frame: Any, cols: List[str]) -> set:
+        out = set()
+        for row in frame[list(cols)].itertuples(index=False, name=None):
+            texts = tuple(_key_text(v) for v in row)
+            if None not in texts:
+                out.add(texts)
+        return out
+
+    return len(keys(result, resolved) - keys(source, src_resolved))
 
 
 def check_contract(contract: BlueprintContract, result: Any, source: Any) -> List[Violation]:

@@ -6,6 +6,66 @@ import pandas as pd
 
 from app.agents.mta_v2.schema import TrainingPlan, TrainingResult
 
+import logging
+import re
+
+_logger = logging.getLogger(__name__)
+
+# dta_database_registry entries are handles: a UI database connection (_source
+# "ui", opened by customer id), a cloud_datasets row (_source "cloud_ui", opened
+# by row id) and a connection typed into chat (_source "chat", registered in the
+# same stores; app/core/typed_secrets.py). The store is read again when a
+# transfer runs, so no credential belongs in the registry, and with it every
+# checkpoint. An entry with no _source is a chat registration from a checkpoint
+# written before chat connections were sealed; it is scrubbed the same way.
+DTA_HANDLE_SOURCES = frozenset({"ui", "cloud_ui", "chat"})
+DTA_SECRET_FIELDS = frozenset({
+    "password", "access_key", "secret_key", "session_token", "gcp_service_account_json",
+    "service_account_json", "az_access_key", "az_sas_token", "az_client_secret",
+    "azure_connection_string", "connection_string", "account_key", "sas_token", "sas",
+})
+# Anything shaped like a credential (2.0's DTA_SECRET_FIELD_HINTS), so a field
+# not listed above still cannot carry one.
+DTA_SECRET_FIELD_HINTS = ("password", "passwd", "pwd", "secret", "key", "token",
+                          "conn_str", "connection_string", "credential", "sas", "private")
+_DSN_WITH_PASSWORD = re.compile(r"[a-z][a-z0-9+.-]*://[^\s/:@]+:[^\s@/]+@", re.IGNORECASE)
+
+
+def _is_secret_field(name: Any) -> bool:
+    n = str(name).lower()
+    return n in DTA_SECRET_FIELDS or any(h in n for h in DTA_SECRET_FIELD_HINTS)
+
+
+def scrub_registry_entry(entry: Any) -> Any:
+    """An entry without its credential fields; the entry itself when it has none.
+
+    Every entry is scrubbed, whatever its source. A secret-named field is
+    dropped, and so is a value that embeds ``user:password@``. The dropped
+    fields' names are logged, never their values.
+    """
+    if not isinstance(entry, dict):
+        return entry
+    dropped = sorted(str(k) for k, v in entry.items()
+                     if _is_secret_field(k) or (isinstance(v, str) and _DSN_WITH_PASSWORD.search(v)))
+    if not dropped:
+        return entry
+    _logger.warning("dta_database_registry: dropped credential field(s) %s from a %s entry",
+                    dropped, entry.get("_source") or "chat (pre-sealing)")
+    return {k: v for k, v in entry.items() if str(k) not in dropped}
+
+
+def scrub_dta_registry(current: Any, update: Any) -> Optional[dict]:
+    """Reducer for ``dta_database_registry``: the update replaces the registry, scrubbed.
+
+    Defence in depth -- the planner writes no credential into a handle entry --
+    and the same scrub runs when the planner reads the registry, for a
+    checkpoint written before this rule.
+    """
+    if not isinstance(update, dict):
+        return update
+    return {alias: scrub_registry_entry(e) for alias, e in update.items()}
+
+
 def filter_messages(x: list, y: list):
     if not x:
         return y
@@ -176,8 +236,10 @@ class ETLState(TypedDict):
     user_plan: Optional[str]
     plan_upgrade_required: Optional[str]
 
-    # Planner-side data transfer state (chat-registered DBs, last transfer)
-    dta_database_registry: Optional[dict]
+    # Planner-side data transfer state (chat-registered DBs, last transfer).
+    # Entries from a store hold its handle and display fields, never a
+    # credential; the reducer strips any from every write.
+    dta_database_registry: Annotated[Optional[dict], scrub_dta_registry]
     dta_injection_script: Optional[str]
     dta_last_transfer: Optional[dict]
     is_dta_request: Optional[bool]
@@ -247,6 +309,7 @@ class ETLState(TypedDict):
     ray_timeout_s: Optional[int]
     ray_secret_name: Optional[str]
     ray_execution_profile: Optional[str]
+    ray_fallback_reason: Optional[str]     # why a turn meant for Ray ran locally (labelled in the reply)
 
     # Dataset identifier for execution nodes
     dataset_id: Optional[str]

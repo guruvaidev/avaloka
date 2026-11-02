@@ -419,6 +419,11 @@ automatically, and you can also tell it explicitly what to remember.
 - **Things you ask it to remember** — any preference or fact you state explicitly. These are **protected**: newer memories never crowd them out.
 - **Your past results** — charts, tables, and model results it can reuse instead of redoing the work.
 
+What a conversation teaches Avaloka stays in that conversation. Only general
+preferences (answer style, units, number and chart formats) and facts about a
+dataset carry over to your other conversations. Deleting a conversation deletes
+what it learned.
+
 > "Preference: always include row counts in any table you show me."
 > "Use the cleaned dataset from before."
 > "What did we find about fraud rates in earlier analyses?"

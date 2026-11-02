@@ -673,3 +673,16 @@ def test_object_path_not_doubled_when_it_includes_the_connection_prefix():
     assert dst.bucket_name == "dest-bucket"
     assert dst.file_path == "transfers/out.json"  # not transfers/transfers/out.json
     assert _last_pipeline_call()["destination_file"] == "gs://dest-bucket/transfers/out.json"
+
+
+# Registry credentials these tests seed live in a stand-in sealed store, not in
+# state: the planner opens them by handle when the transfer runs (tests/dta_sealed.py).
+try:  # tests/ as a package, or tests/ on sys.path
+    from tests import dta_sealed as _dta_sealed
+except ImportError:  # pragma: no cover
+    import dta_sealed as _dta_sealed
+
+
+@pytest.fixture(autouse=True)
+def _sealed_store(monkeypatch):
+    return _dta_sealed.install(monkeypatch)

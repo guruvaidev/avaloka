@@ -1,0 +1,13 @@
+diff --git a/app/api/server.py b/app/api/server.py
+index c61b6d4a..3153918f 100644
+--- a/app/api/server.py
++++ b/app/api/server.py
+@@ -11522,7 +11522,7 @@ async def encrypt_mcp_connection_credentials(
+             )
+         patch[f"{field}_ciphertext"] = blob["ciphertext"]
+         patch[f"{field}_iv"] = blob["iv"]
+-        patch[field] = ""          # never keep plaintext in the row
++        patch[field] = value
+         encrypted.append(field)
+ 
+     if not patch:

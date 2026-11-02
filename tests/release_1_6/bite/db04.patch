@@ -1,0 +1,13 @@
+diff --git a/app/mcp_server/multi_tenant_mcp_server.py b/app/mcp_server/multi_tenant_mcp_server.py
+index b23387dd..823665fc 100644
+--- a/app/mcp_server/multi_tenant_mcp_server.py
++++ b/app/mcp_server/multi_tenant_mcp_server.py
+@@ -759,7 +759,7 @@ def _wrap_with_limit(sql: str, limit: int, database_type: str) -> str:
+         return f"SELECT * FROM ({s}) AS _mcp_sub LIMIT {limit}"
+     elif database_type == 'mssql':
+         if 'SELECT' in s.upper():
+-            return s.replace('SELECT', f'SELECT TOP {limit}', 1)
++            return re.sub(r'(?i)\bselect\b', f'SELECT TOP {limit}', s, count=1)
+         else:
+             return f"SELECT TOP {limit} * FROM ({s}) AS _mcp_sub"
+     elif database_type == 'oracle':

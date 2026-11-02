@@ -1444,6 +1444,47 @@ def test_tables_to_analysis_creates_datasets(client: TestClient, monkeypatch):
     assert "users" in aliases and "orders" in aliases
 
 
+def test_tables_to_analysis_types_columns_from_the_rows(client: TestClient, monkeypatch):
+    # rc9: every database column was typed "string", so an INTEGER `stroke`
+    # compared to 1 was blocked by the static check as a string comparison.
+    async def run_mcp_fake(customer_id, api_key, sql):
+        return {"columns": ["id", "age", "stroke", "gender", "bmi"],
+                "rows": [[9046, 67.0, 1, "Male", 36.6], [51676, 61.0, 0, "Female", None]]}
+
+    monkeypatch.setattr(server, "_run_mcp_db_query", run_mcp_fake, raising=False)
+    resp = client.post(
+        "/api/database/tables-to-analysis",
+        json={"tables": ["patients"], "customer_id": "c1", "api_key": "k1"},
+        headers=make_auth_headers("tta-typed"),
+    )
+    assert resp.status_code == 200, resp.text
+    sess = SESSIONS[resp.json()["session_id"]]
+    schema = sess["schema"] if isinstance(sess["schema"], dict) else json.loads(sess["schema"])
+    assert schema == {"id": "int64", "age": "float64", "stroke": "int64",
+                      "gender": "string", "bmi": "float64"}, schema
+    assert '"stroke" INTEGER' in sess["ddl_schema"], sess["ddl_schema"]
+
+
+def test_db_query_sample_session_types_columns_from_the_rows(client: TestClient, monkeypatch):
+    # "Average age of patients who had a stroke" on a database table: the DB
+    # sample typed every column "string", so an INTEGER `stroke` compared to 1
+    # was blocked by the static check as a string comparison (2.0 #571).
+    _mock_mcp(monkeypatch, {"columns": ["id", "age", "stroke", "gender", "bmi"],
+                            "rows": [[9046, 67.0, 1, "Male", 36.6], [51676, 61.0, 0, "Female", None]]})
+    resp = client.post(
+        "/api/v1/database/query",
+        json={"content": "SELECT * FROM patients", "customer_id": "cust-1",
+              "metadata": {"api_key": "secret"}},
+        headers=make_auth_headers("db-typed"),
+    )
+    assert resp.status_code == 200, resp.text
+    sess = SESSIONS[resp.json()["session_id"]]
+    schema = sess["schema"] if isinstance(sess["schema"], dict) else json.loads(sess["schema"])
+    assert schema == {"id": "int64", "age": "float64", "stroke": "int64",
+                      "gender": "string", "bmi": "float64"}, schema
+    assert '"stroke" INTEGER' in sess["ddl_schema"], sess["ddl_schema"]
+
+
 def test_tables_to_analysis_rejects_invalid_table_name(client: TestClient):
     resp = client.post(
         "/api/database/tables-to-analysis",

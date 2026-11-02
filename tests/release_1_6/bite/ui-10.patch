@@ -1,0 +1,13 @@
+diff --git a/app/api/helpers.py b/app/api/helpers.py
+index f53c1a27..53802f1d 100644
+--- a/app/api/helpers.py
++++ b/app/api/helpers.py
+@@ -318,7 +318,7 @@ def _ensure_thread_local(thread_id: str, metadata: Optional[Dict[str, Any]] = No
+ 
+ def _k_thread_history(thread_id: str) -> str:
+     """Redis key for a thread's serialized chat history."""
+-    return f"thread:{thread_id}:history"
++    return "thread:history"
+ 
+ 
+ def _lc_msgs_to_jsonable(msgs: List[Any]) -> List[Dict[str, Any]]:

@@ -202,6 +202,15 @@ A printed `384` means the model is resolved from the image. An error means the
 image was built without the model baked in, and the memory plane will stall at
 query time rather than fail loudly.
 
+**Memory embeddings are local by default.** `EMBEDDING_PROVIDER` defaults to
+`local` (Helm: `memory.embeddingProvider: local`), which embeds with the model
+baked into the image. `EMBEDDING_PROVIDER=openai` is an explicit opt-in that
+also requires `EMBEDDING_OPENAI_API_KEY`; it sends memory text — user queries,
+learned hints, answers, and cached schema JSON including table and column names
+and sample values — to OpenAI. `OPENAI_API_KEY`, the chat key, never turns it
+on. Earlier 1.6 builds did: their `auto` default embedded with OpenAI whenever
+`OPENAI_API_KEY` was set. `auto` is now deprecated and means `local`.
+
 **What you give up offline**
 
 Only the things that are inherently remote: hosted model providers
@@ -211,11 +220,12 @@ analysis path run locally.
 
 ---
 
-### Prefer not to run the infrastructure yourself?
+### Prefer not to stand up the infrastructure yourself?
 
-**[avaloka.ai](https://avaloka.ai)** hosts the **Professional** and
-**Enterprise** editions with auto-scaling compute, so you do not stand up
-Kubernetes, Ray, object storage or a model provider yourself. Enterprise adds
+The **Professional** and **Enterprise** editions
+(**[avaloka.ai](https://avaloka.ai)**) run in your own cloud, on your billing,
+and provision and autoscale the Kubernetes and Ray clusters there for you, so
+you do not stand them up yourself. Enterprise adds
 shared team workspaces, the cloud scheduler, and connections to your own cloud
 clusters — see [EDITIONS.md](EDITIONS.md) for what each edition includes.
 
@@ -321,21 +331,158 @@ that is skipped says so rather than passing silently.
 
 ## Configuration
 
-Copy the template and fill in what you need:
+One `.env` file drives every install: local processes, Docker Compose
+(`env_file: .env`) and Helm (the same names, as chart values). Avaloka creates
+the secrets it can create for itself; you set only what identifies *your*
+accounts — a model provider key and your Supabase sign-in secret.
 
-```bash
-cp .env.example .env
-```
+### Install with the right parameters
 
-| Variable | Purpose |
-| --- | --- |
-| `AVALOKA_DEPLOYMENT` | `self_hosted` (default) or `avaloka_hosted` |
-| `AVALOKA_EDITION` | `oss`, `professional`, `enterprise` — ignored when a licence is present |
-| `AVALOKA_LICENSE_KEY` | licence token; overrides the stored file |
-| `AVALOKA_HOME` | config directory (default `~/.avaloka`) |
-| `AVALOKA_LICENSE_PUBLIC_KEY` | override the verification key (staging only) |
-| `MCP_SERVICE_TOKEN` | shared secret between the API and the MCP server; set the same value on both (`openssl rand -hex 32`). Required for database registration and database-to-database transfers. See [SECURITY.md](../SECURITY.md) |
-| `MLFLOW_TRACKING_URI` | where trained models are recorded and read back. Unset, a local `mlflow.db` (SQLite) in the working directory is used; point it at an MLflow server to share models across machines |
+1. `cp .env.example .env`, then set the **you set** rows below: a model
+   provider key (`GROQ_API_KEY_*`, or `INFERENCE_PROVIDER` plus that provider's
+   key) and `SUPABASE_JWT_SECRET` (with `SUPABASE_URL` and
+   `SUPABASE_SERVICE_ROLE_KEY` if you use Supabase). If your branch has the admin
+   allow-list (`ADMIN_EMAILS`, #649), set that too.
+2. Leave the **generated automatically** rows empty. `./scripts/install.sh`
+   generates them and saves them to `.env` (mode 600); so does
+   `python -m app.core.provisioning --env-file .env`; and so does the first
+   start of the API, the MCP server or the onboarding service, if neither ran.
+   Every later start reuses what `.env` holds, and nothing is printed except
+   "generated and saved to .env". A value that ships in this repository (the
+   old chart default `avaloka-local-dev-encryption-key`, a placeholder such as
+   `<generate-with-openssl-rand-hex-32>`) protects nothing: it is replaced with
+   a generated one, with a warning.
+3. **Compose:** point every service at the same file (`env_file: .env`) and run
+   step 2 once before `docker compose up`, so all containers share one value.
+   (The compose files in this repository start infrastructure only — Milvus,
+   Postgres, Redis, Celery — and need none of these.)
+4. **Helm:** put the **you set** values in your values file (`secrets.*`) and
+   leave the generated ones empty. The chart generates `DB_ENCRYPTION_KEY`,
+   `MCP_SERVICE_TOKEN` and `AVALOKA_PII_KEY` into the release Secret on first
+   install and keeps them on every upgrade (`lookup` of the existing Secret); a
+   published value is replaced and `helm install` prints a warning. With
+   `existingSecret`, that Secret must carry the three keys itself.
+
+**Generated secrets** (`app/core/provisioning.py` `GENERATED_SECRETS`):
+`DB_ENCRYPTION_KEY` (AES-GCM key for every sealed credential), `MCP_SERVICE_TOKEN`
+(API ↔ MCP/onboarding service secret), `AVALOKA_PII_KEY` (PII pseudonymisation
+HMAC key). Each is `secrets.token_hex(32)` locally, `randAlphaNum 48` in the
+chart. **Back up `DB_ENCRYPTION_KEY`:** changing or losing it makes every sealed
+credential unreadable.
+
+A service refuses to start only when, after all of this, it still has no
+usable `DB_ENCRYPTION_KEY` — a read-only `.env`, `AVALOKA_AUTO_PROVISION=0`, or
+a Kubernetes pod with no key in its Secret (pods never generate their own: they
+must share the release Secret's value). The error says how to fix it.
+
+### Every parameter
+
+Kept in step with `.env.example` (`tests/test_install_configuration.py` fails
+if either has a name the other lacks). Commented-out names in `.env.example`
+are optional.
+
+| Parameter | Purpose | Default | Who provides it | Where it is kept |
+| --- | --- | --- | --- | --- |
+| `PYTHONPATH` | module path for local runs | `.` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `AVALOKA_DEPLOYMENT` | `self_hosted` or `avaloka_hosted` | `self_hosted` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `AVALOKA_EDITION` | edition when no licence is present | `oss` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `AVALOKA_LICENSE_KEY` | licence token (commercial editions) | — | optional — you set it if you use it | `.env` · Helm: `secrets.*` (release Secret), where the chart exposes it |
+| `AVALOKA_HOME` | config directory | `~/.avaloka` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `AVALOKA_LICENSE_PUBLIC_KEY` | licence verification key override (staging only) | — | optional — you set it if you use it | `.env` · Helm: `secrets.*` (release Secret), where the chart exposes it |
+| `AVALOKA_ENV_FILE` | the file generated secrets are read from and saved to | `.env` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `AVALOKA_AUTO_PROVISION` | `0` stops services generating secrets at start | `1` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `GROQ_API_KEY_PLANNING_AGENT` | planner model key (Groq) | — | **you set** (or pick another provider) | `.env` · Helm: `secrets.*` (release Secret), where the chart exposes it |
+| `GROQ_API_KEY_CODING_AGENT` | coder model key (Groq) | — | **you set** (or pick another provider) | `.env` · Helm: `secrets.*` (release Secret), where the chart exposes it |
+| `OPENROUTER_API_KEY` | backup / OpenRouter provider key | — | optional — you set it if you use it | `.env` · Helm: `secrets.*` (release Secret), where the chart exposes it |
+| `OPENROUTER_BASE_URL` | OpenRouter endpoint | `https://openrouter.ai/api/v1` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `AVALOKA_DISABLE_MODEL_FALLBACK` | `1` turns the backup provider off | `0` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `INFERENCE_PROVIDER` | model provider for every role | `openrouter` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `INFERENCE_PROVIDER_PLANNING` | per-role override (planner) | `groq` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `INFERENCE_PROVIDER_CODING` | per-role override (coder) | `local` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `INFERENCE_LOCAL_BASE_URL` | local (Ollama/vLLM) endpoint | `http://avaloka-local-llm:11434/v1` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `INFERENCE_LOCAL_MODEL_LARGE` | local large model id | `qwen2.5:3b-instruct` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `INFERENCE_LOCAL_MODEL_SMALL` | local small model id | `qwen2.5:3b-instruct` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `INFERENCE_LOCAL_API_KEY` | local server key (usually ignored) | `sk-local` | optional — you set it if you use it | `.env` · Helm: `secrets.*` (release Secret), where the chart exposes it |
+| `INFERENCE_OPENROUTER_MODEL_LARGE` | OpenRouter large model | `qwen/qwen-2.5-72b-instruct` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `INFERENCE_OPENROUTER_MODEL_SMALL` | OpenRouter small model | `qwen/qwen-2.5-7b-instruct` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `OPENAI_API_KEY` | OpenAI provider key | — | optional — you set it if you use it | `.env` · Helm: `secrets.*` (release Secret), where the chart exposes it |
+| `INFERENCE_OPENAI_BASE_URL` | OpenAI endpoint | `https://api.openai.com/v1` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `INFERENCE_OPENAI_MODEL_LARGE` | OpenAI large model | `gpt-4o` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `INFERENCE_OPENAI_MODEL_SMALL` | OpenAI small model | `gpt-4o-mini` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `AWS_REGION` | AWS region (Bedrock, AWS infra) | `us-east-1` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `INFERENCE_BEDROCK_MODEL_LARGE` | Bedrock large model | `meta.llama3-1-70b-instruct-v1:0` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `INFERENCE_BEDROCK_MODEL_SMALL` | Bedrock small model | `meta.llama3-1-8b-instruct-v1:0` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `GOOGLE_CLOUD_PROJECT` | GCP project (Vertex, GCP infra) | — | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `GOOGLE_CLOUD_LOCATION` | Vertex location | `us-central1` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `INFERENCE_VERTEX_MODEL_LARGE` | Vertex large model | `gemini-1.5-pro` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `INFERENCE_VERTEX_MODEL_SMALL` | Vertex small model | `gemini-1.5-flash` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `AZURE_OPENAI_ENDPOINT` | Azure OpenAI endpoint | `https://<resource>.openai.azure.com` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `AZURE_OPENAI_API_KEY` | Azure OpenAI key | — | optional — you set it if you use it | `.env` · Helm: `secrets.*` (release Secret), where the chart exposes it |
+| `AZURE_OPENAI_API_VERSION` | Azure OpenAI API version | `2024-10-21` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `AZURE_OPENAI_DEPLOYMENT_LARGE` | Azure large deployment | — | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `AZURE_OPENAI_DEPLOYMENT_SMALL` | Azure small deployment | — | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `EMBEDDING_PROVIDER` | memory embeddings (`local` stays on the machine) | `local` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `EMBEDDING_OPENAI_API_KEY` | key when embeddings use OpenAI | — | optional — you set it if you use it | `.env` · Helm: `secrets.*` (release Secret), where the chart exposes it |
+| `REDIS_URL` | sessions/cache Redis | `redis://127.0.0.1:6379` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `REDIS_CLUSTER` | `1` for a Redis cluster | `0` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `CELERY_REDIS_URL` | scheduler broker | `redis://localhost:6380/0` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `CACHE_DEGRADE_SECONDS` | Redis circuit-breaker window | `2` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `JWT_SECRET` | not read by 1.6 (the API verifies with `SUPABASE_JWT_SECRET`); kept for older docs | — | optional — you set it if you use it | `.env` · Helm: `secrets.*` (release Secret), where the chart exposes it |
+| `COOKIE_SECURE` | `true` behind HTTPS | `false` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `LANGGRAPH_API_URL` | LangGraph API endpoint (localhost by default; set explicitly in deployments) | `http://localhost:2024/` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `UPSTREAM_TIMEOUT` | upstream call timeout (s) | `15.0` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `LOG_LEVEL` | log level | `INFO` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `DEFAULT_SAMPLE_MAX_ROWS` | default sample size | `1000` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `PLANNER_GRAPH_OUTPUT_DIR` | where planner graphs are written | `/tmp/planner_graphs/` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `LANGSMITH_API_KEY` | LangSmith tracing key | — | optional — you set it if you use it | `.env` · Helm: `secrets.*` (release Secret), where the chart exposes it |
+| `LANGSMITH_PROJECT` | LangSmith project | `avaloka` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `CLOUD_PROVIDER` | cloud for artifacts/infra | `gcp` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `CONTAINER_REGISTRY` | image registry | `europe-docker.pkg.dev/<project>/<repo>` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `AWS_ACCOUNT_ID` | AWS account | — | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `AZURE_SUBSCRIPTION_ID` | Azure subscription | — | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `AZURE_RESOURCE_GROUP` | Azure resource group | — | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `AZURE_LOCATION` | Azure region | `eastus` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `AZURE_CONTAINER_REGISTRY` | ACR name | — | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `GOOGLE_APPLICATION_CREDENTIALS` | GCP service-account key path | — | optional — you set it if you use it | `.env` · Helm: `secrets.*` (release Secret), where the chart exposes it |
+| `GCP_PROJECT_ID` | GCP project | — | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `GCP_CLUSTER_NAME` | GKE cluster | — | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `GCP_ZONE` | GKE zone | `us-central1-c` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `GCS_BUCKET` | artifact bucket | — | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `GCS_INFERENCE_BUCKET` | inference bucket | — | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `GCS_INFERENCE_PREFIX` | inference prefix | `tmp-inference` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `AVALOKA_ASSET_BUCKET` | asset registry bucket | — | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `AVALOKA_SIGNED_URL_EXPIRY_MINUTES` | signed URL lifetime | `15` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `DISABLE_MLFLOW` | turn MLflow off | `False` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `MLFLOW_BACKEND_STORE_URI` | MLflow database (holds a password: keep in .env / Secret) | — | optional — you set it if you use it | `.env` · Helm: `secrets.*` (release Secret), where the chart exposes it |
+| `MLFLOW_DEFAULT_ARTIFACT_ROOT` | MLflow artifacts | — | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `MLFLOW_TRACKING_URI` | MLflow server (unset: local SQLite) | `http://localhost:5000` | optional — you set it if you use it | `.env` · Helm: `secrets.*` (release Secret), where the chart exposes it |
+| `MLFLOW_EXPERIMENT_NAME` | MLflow experiment | `avaloka-training` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `INFERENCE_MODE` | model inference mode | `local` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `INFERENCE_IMAGE` | inference image | — | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `INFERENCE_SERVICE_DOCKER_IMAGE` | inference service image | — | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `INFERENCE_SERVICE_GKE_CLUSTER_LOCATION` | inference GKE location | `us-central1` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `K8S_NAMESPACE` | namespace for inference jobs | `default` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `K8S_SERVICE_ACCOUNT` | service account for inference jobs | `gcs-writer` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `INFERENCE_JOB_TTL_SECONDS` | inference job TTL | `600` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `DATASET_SIZE_BYTES_THRESHOLD_FOR_RAY_TRAINING` | size above which training uses Ray | `10485760` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `MTA_RAY_DASHBOARD_URL` | existing RayCluster for training (empty: per-run cluster) | — | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `MTA_RAY_NAMESPACE` | Ray namespace for training | `default` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `MTA_RAY_TRAINING_ENTRYPOINT` | training entrypoint | `python /home/ray/app/app/agents/mta_v2/training_docker_image/ray_job.py` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `AVALOKA_PII_KEY` | HMAC key for PII pseudonymisation | — (generated) | **generated automatically** | `.env` (local, compose) · release Secret (Helm, kept across upgrades) |
+| `MCP_SERVER_URL` | MCP server endpoint | `http://localhost:8010` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `MCP_SERVICE_TOKEN` | shared API ↔ MCP/onboarding service secret | — (generated) | **generated automatically** | `.env` (local, compose) · release Secret (Helm, kept across upgrades) |
+| `DB_ENCRYPTION_KEY` | AES-GCM key for every sealed credential | — (generated) | **generated automatically** | `.env` (local, compose) · release Secret (Helm, kept across upgrades) |
+| `SUPABASE_URL` | Supabase project URL | — | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase service-role key | — | optional — you set it if you use it | `.env` · Helm: `secrets.*` (release Secret), where the chart exposes it |
+| `SUPABASE_JWT_SECRET` | verifies sign-in tokens | — | **you set** — the API will not start without it (or `AVALOKA_ALLOW_INSECURE_AUTH=1`, all requests then 401) | `.env` · Helm: `secrets.*` (release Secret), where the chart exposes it |
+| `GITHUB_SYSTEM_TOKEN` | asset registry token | — | optional — you set it if you use it | `.env` · Helm: `secrets.*` (release Secret), where the chart exposes it |
+| `GITHUB_JOB_REGISTRY_REPO` | asset registry repo | — | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `DEFAULT_INFRA_PLATFORM` | `gcp` / `aws` / `azure` | `gcp` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `ENABLE_AZURE_INFRA` | `1` enables Azure infra | `0` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `OPENCLAW_ENABLED` | `1` enables the openclaw sidecar | `0` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `OPENCLAW_GATEWAY_URL` | openclaw endpoint | `http://localhost:18789` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `OPENCLAW_TIMEOUT_S` | openclaw timeout | `2.0` | optional — you set it if you use it | `.env` · Helm: chart values, where the chart exposes it |
+| `OPENCLAW_API_KEY` | openclaw key | — | optional — you set it if you use it | `.env` · Helm: `secrets.*` (release Secret), where the chart exposes it |
 
 Unknown values fail closed: an unrecognised deployment resolves to
 `self_hosted`, and an unrecognised edition resolves to `oss`.
@@ -384,10 +531,9 @@ Two things about that command worth knowing before you run it.
 **The chart pins the provider to Groq.** `inference.provider` defaults to
 `"groq"` (`deploy/helm/avaloka/values.yaml`) and the ConfigMap always emits
 `INFERENCE_PROVIDER` (`deploy/helm/avaloka/templates/configmap.yaml:31`), so a
-Helm deployment needs Groq keys. This is
-*different* from a local install, where `INFERENCE_PROVIDER` is unset and
-`app/core/inference.py` resolves the default to OpenRouter. To use OpenRouter
-in-cluster, set both:
+Helm deployment needs Groq keys. A local install with `INFERENCE_PROVIDER`
+unset resolves to Groq as well (`app/core/inference.py`; MP-01, owner decision
+2026-10-31). To use OpenRouter in-cluster, set both:
 
 ```bash
   --set inference.provider=openrouter \

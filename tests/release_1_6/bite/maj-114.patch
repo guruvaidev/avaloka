@@ -1,0 +1,14 @@
+diff --git a/file_handler/json_connector.py b/file_handler/json_connector.py
+index 47062a92..a4787e7a 100644
+--- a/file_handler/json_connector.py
++++ b/file_handler/json_connector.py
+@@ -26,8 +26,7 @@ class JSONConnector(BaseConnector):
+     def get_row_count(self) -> int:
+         if self._row_count is None:
+             with open(self.path) as f:
+-                for self._row_count, _ in enumerate(ijson.items(f, "item")):
+-                    ...
++                self._row_count = sum(1 for _ in ijson.items(f, "item"))
+ 
+         return self._row_count
+ 

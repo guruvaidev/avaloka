@@ -378,14 +378,24 @@ def test_c6_11_ray_pods_inherit_the_storage_wiring(group: str) -> None:
         if key in {"configMapRef", "secretRef"}
     }
     assert ("avaloka-config", "configMapRef") in sources, f"ray {group} does not read avaloka-config"
-    assert ("avaloka-secrets", "secretRef") in sources, f"ray {group} does not read avaloka-secrets"
+    # The storage credentials come from avaloka-secrets by name: the pods run
+    # user code, so they no longer load that Secret whole (test_ray_job_secret).
+    keyed = {
+        e["name"]: e["valueFrom"]["secretKeyRef"]
+        for e in containers[0].get("env") or []
+        if "secretKeyRef" in (e.get("valueFrom") or {})
+    }
+    for key in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"):
+        assert keyed.get(key, {}).get("name") == "avaloka-secrets", f"ray {group} lacks {key}"
     # Ray must remain usable without the avaloka chart installed alongside it.
     assert all(
         ref.get("optional") is True
         for entry in env_from
         for key, ref in entry.items()
         if key in {"configMapRef", "secretRef"}
-    ), f"ray {group} hard-requires the avaloka ConfigMap/Secret"
+    ) and all(ref.get("optional") is True for ref in keyed.values()), (
+        f"ray {group} hard-requires the avaloka ConfigMap/Secret"
+    )
 
 
 @pytest.mark.parametrize("group", ["head", "worker"])

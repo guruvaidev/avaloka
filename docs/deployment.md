@@ -228,7 +228,7 @@ branches, and a local `docker build` can use it too — so `develop-1.6` reuses
 > — `ray:` in `values.yaml` carries only `connectExisting`, `address` and
 > `inClusterAddress`. The RayCluster and RayService CRs hard-code the bare name
 > `avaloka-ray:latest`
-> (`deploy/helm/ray/raycluster.yaml:32,80`, `deploy/helm/ray/rayservice.yaml:42,73`),
+> (`deploy/helm/ray/raycluster.yaml:32,92`, `deploy/helm/ray/rayservice.yaml:42,78`),
 > which resolves to Docker Hub, where it does not exist. That is invisible on
 > `kind`, because `make up` side-loads the image and `IfNotPresent` then never
 > pulls — and it is `ImagePullBackOff` on any cluster that cannot side-load.
@@ -366,8 +366,103 @@ Useful flags: `--service-type ClusterIP|NodePort|LoadBalancer`, `--skip-serve`,
 | `inference.provider` | `groq` by default; `local`, `openai`, `openrouter`, `bedrock`, `vertex` or `azure`. Always emitted as `INFERENCE_PROVIDER`, so it overrides the key-aware default in `app/core/inference.py`. |
 | `secrets.openrouterKey` | Optional OpenRouter key arming the planner's backup provider on 429/404/5xx. Omitted from the Secret when empty. |
 | `secrets.mcpServiceToken` | `MCP_SERVICE_TOKEN`, the shared API <-> MCP service secret. Reaches the API through the Secret and the MCP pod through a `secretKeyRef`. Required for DB registration and DB-to-DB transfers; see Safety. |
+| `admin.emails` | Administrator addresses (list). **Empty by default, which means no admin.** See [Administrators](#administrators) below. |
 | `rbac.create` / `serviceAccount` | In-cluster RBAC so the app can submit Ray jobs and patch RayServices. |
 | `resources`, `nodeSelector`/`tolerations`/`affinity` | Standard scheduling/scaling controls. |
+
+### Administrators
+
+No address is an administrator by default, and nothing falls back to a built-in
+address or to "the first user who signs up". Name them at install or upgrade:
+
+```bash
+helm upgrade --install avaloka deploy/helm/avaloka \
+  --set 'admin.emails={ops@example.com,lead@example.com}'
+# or, with make up / cluster_bootstrap:
+export ADMIN_EMAILS=ops@example.com,lead@example.com
+```
+
+The chart passes the list, as the comma-separated `ADMIN_EMAILS` environment
+variable, to two places:
+
+- **The web UI's server functions.** Listed addresses may use the support desk
+  (`/support-queries`). Case and surrounding whitespace are ignored. The browser
+  never sees the list; it asks the server.
+- **The `supabase-migrate` hook** (in-cluster Supabase only). After the
+  migrations it grants the `admin` role in `public.user_roles` to each listed
+  address that already has a confirmed account. It only adds: removing an
+  address from the list does not revoke its grant, and admins granted any other
+  way are left alone. An address with no account yet is granted on the first
+  deploy after the account exists.
+
+**Upgrading from 1.6.x:** set `admin.emails` (or `ADMIN_EMAILS`) on the upgrade.
+Until you do, no account can open the support desk. Existing `user_roles`
+grants are not touched.
+
+**Admins require email confirmation.** With the in-cluster Supabase
+(`supabase.enabled: true`), the chart **refuses to render** a non-empty
+`admin.emails` while `supabase.auth.autoconfirm` is `true` (the chart default).
+With autoconfirm on, gotrue confirms a new account without the owner clicking a
+link, so anyone could sign up with a listed address that has no account yet and
+be granted admin. Either turn autoconfirm off and configure SMTP so confirmation
+mail is delivered:
+
+```bash
+helm upgrade --install avaloka deploy/helm/avaloka \
+  --set supabase.auth.autoconfirm=false \
+  --set-string supabase.auth.smtp.host=smtp.example.com \
+  --set 'admin.emails={ops@example.com}'
+```
+
+or leave `admin.emails` empty. As a second line of defence the migrate hook
+skips the admin grant, with a warning in its log, unless autoconfirm is
+explicitly `false`. With a hosted Supabase project (`supabase.enabled: false`)
+the chart cannot see the project's setting: make sure "Confirm email" is
+enabled in the project's auth settings before listing admins.
+
+### Supabase migrations
+
+The `supabase-migrate` hook applies each file in
+`files/supabase-migrations/` once and records it in
+`avaloka_meta.schema_migrations` (a schema PostgREST does not expose). It used
+to re-run every file on every deploy. On the first upgrade to a chart with
+tracking, an install whose schema already has the objects of the newest
+pre-tracking migrations is backfilled from `files/db-migrations.baseline`
+without re-running anything; any other database runs the baseline files once
+the old way. Migrations added later run inside a transaction and fail the hook
+when they fail. `deploy/helm/avaloka/files/db-migrate.sh` documents the
+cases.
+
+#### Duplicate migration version 20261101120000
+
+Two shipped migrations share the version prefix `20261101120000`:
+`20261101120000_plan_enforced_org_features.sql` and
+`20261101120000_support_admin_from_roles.sql`. **They are kept as they are.**
+
+- **The chart hook is unaffected.** It records each file under its full name,
+  so it applies both, once each.
+- **Renaming either file would break the chart.** The hook would treat the
+  renamed file as new and run it again.
+- **The Supabase CLI keys migrations by the numeric prefix alone**, so it can
+  record only one of the two. `tests/test_migration_versions_unique.py` fails
+  on any new shared prefix.
+
+The plan-enforcement file is superseded by
+`20261101140000_plan_rules_pro_collab.sql`, which does not depend on it. On a
+Supabase-CLI-managed project (`supabase db push`), do this before pushing
+`20261101140000`:
+
+1. Run `supabase migration list` and note whether `20261101120000` is recorded.
+2. Apply the support-admin file by hand. It is idempotent, so it is safe even if it
+   already ran:
+   `psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/20261101120000_support_admin_from_roles.sql`
+3. **Do not run `20261101120000_plan_enforced_org_features.sql` by hand.**
+   `20261101140000` replaces everything it does. Running it after
+   `20261101140000` would put back its Enterprise-only team and invite
+   policies.
+4. If `20261101120000` is not recorded, record it:
+   `supabase migration repair --status applied 20261101120000`.
+5. Run `supabase db push`. It applies `20261101140000` and anything later.
 
 Per-cloud overlays live beside the chart in `deploy/helm/avaloka/values/`
 (`values-gke.yaml`, `values-gke-app.yaml`, `values-eks.yaml`,

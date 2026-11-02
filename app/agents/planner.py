@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import time
+import traceback
 import uuid
 from dotenv import load_dotenv
 from groq import APIError
@@ -27,7 +28,8 @@ from app.agents.suggestions import (MAX_OFFERED_SUGGESTIONS,
 # Rendering the offer lives with parsing and remembering it; this name is kept
 # so existing call sites read unchanged.
 _render_suggestions = render_suggestions
-from app.graph.etl_state import ETLState
+from app.graph.etl_state import DTA_HANDLE_SOURCES, ETLState
+from app.agents.data_transfer_agent.dta_state import redact_secrets
 from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 from typing import List, Literal, Optional, Tuple, Union
 from app.core.celery_app import AvalokaScheduler
@@ -1791,7 +1793,9 @@ tools = [
         "type": "function",
         "description": (
             "Register a database (MySQL, PostgreSQL) or cloud bucket (AWS S3, GCS, Azure Blob) "
-            "credential into the session. Call when the user provides connection details. "
+            "connection. Call when the user provides connection details. Credentials are stored "
+            "sealed; a password or key the user typed is shown to you as \u27e6credential\u27e7 -- "
+            "put \u27e6credential\u27e7 in the matching field and the stored value is used. "
             "For a cloud bucket set `db_type` to 'aws_s3'/'gcs'/'azure_blob' and `bucket_name`, "
             "plus the provider credentials the user gives (S3: `access_key`/`secret_key`/`region`; "
             "GCS: `gcp_service_account_json`; Azure: `az_storage_account` + `az_sas_token` or "
@@ -2564,6 +2568,11 @@ def _detect_fabricated_reference(user_input: str, state: ETLState) -> Optional[d
          values; use LLM adjudication for partial cases. Fails open.
     """
     text = _strip_runtime_context(user_input)
+    # A sealed credential (app/core/typed_secrets.py) is base64 that reads like
+    # camelCase identifiers; it is not a field reference, and judging it as one
+    # refused "register a connection ... password <token>" as a fabrication.
+    from app.core.typed_secrets import TOKEN_RE as _SEALED_TOKEN_RE
+    text = _SEALED_TOKEN_RE.sub(" ", text or "")
     if not text or len(text.split()) < 3:
         return None
     if _is_task_operation_request(text):
@@ -3214,9 +3223,22 @@ def _extract_object_path_from_prompt(text: str, role: str) -> Optional[str]:
 
 
 def _get_db_registry(state: ETLState) -> Dict[str, dict]:
+    """The session registry, scrubbed on read.
+
+    An entry resolved from a store (a UI database or cloud connection) holds its
+    handle and display fields; the credentials are read from the store when a
+    transfer runs. A checkpoint written before that rule may still hold them in
+    such an entry; they are dropped here, before anything reads them.
+    """
+    from app.graph.etl_state import scrub_registry_entry
     if "dta_database_registry" not in state or state["dta_database_registry"] is None:
         state["dta_database_registry"] = {}
-    return state["dta_database_registry"]
+    registry = state["dta_database_registry"]
+    for alias, entry in list(registry.items()):
+        scrubbed = scrub_registry_entry(entry)
+        if scrubbed is not entry:
+            registry[alias] = scrubbed
+    return registry
 
 def _format_registry_for_display(registry: Dict[str, dict]) -> str:
     if not registry:
@@ -3260,9 +3282,327 @@ def _resolve_registry_alias(registry: Dict[str, dict], alias: str) -> Optional[s
     return next((key for key in registry if key.casefold() == folded), None)
 
 
+def _seal_human_message(message) -> None:
+    """Seal typed credentials in a human message, in place. Other messages are left alone."""
+    from app.core.typed_secrets import seal_typed_secrets
+    if isinstance(message, HumanMessage) and isinstance(message.content, str):
+        sealed, n = seal_typed_secrets(message.content)
+        if n:
+            message.content = sealed
+    elif isinstance(message, dict) and (message.get("type") == "human" or message.get("role") == "user"):
+        content = message.get("content")
+        if isinstance(content, str):
+            sealed, n = seal_typed_secrets(content)
+            if n:
+                message["content"] = sealed
+        elif isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and isinstance(part.get("text"), str):
+                    part["text"], _ = seal_typed_secrets(part["text"])
+
+
+# RegisterDatabaseParams fields that carry a secret, and the token label each
+# one takes from the user's message when the model did not copy the token.
+_REGISTER_SECRET_FIELDS = {
+    "password": "password",
+    "secret_key": "secret_key",
+    "access_key": "access_key",
+    "az_sas_token": "az_sas_token",
+    "az_access_key": "az_access_key",
+    "gcp_service_account_json": None,
+    "azure_connection_string": None,
+}
+
+
+#: How many of the user's turns back a registration's typed credentials may be.
+#: "Register X ... password P" is answered at once, or after one clarifying
+#: exchange ("yes", "use port 5433"); further back is a different request.
+_REGISTER_TOKEN_TURNS = 4
+
+
+def _message_role_text(message) -> Tuple[str, str]:
+    if isinstance(message, HumanMessage):
+        return "human", message.content if isinstance(message.content, str) else ""
+    if isinstance(message, AIMessage):
+        return "ai", message.content if isinstance(message.content, str) else ""
+    if isinstance(message, dict):
+        role = message.get("type") or message.get("role") or ""
+        content = message.get("content")
+        role = "human" if role in ("human", "user") else "ai" if role in ("ai", "assistant") else role
+        return role, content if isinstance(content, str) else ""
+    return "", ""
+
+
+_DECLARED_NAME_RE = re.compile(r"\b(?:named|called|alias)\s+[`'\"]?([\w.-]+)", re.IGNORECASE)
+
+
+def _word_in(value: Any, text: str) -> bool:
+    value = str(value or "").strip()
+    return bool(value) and re.search(r"(?<![\w.-])" + re.escape(value) + r"(?![\w-])", text, re.IGNORECASE) is not None
+
+
+def _registration_credentials_text(state: ETLState, params: RegisterDatabaseParams) -> Tuple[str, bool]:
+    """``(the user's message that carried this registration's details, or "",
+    whether any message in scope carried a sealed token at all)``.
+
+    Bound to the registration flow, not to a name the user may never have
+    typed (the model picks one when they don't). Candidates are the user's
+    messages since the last completed registration ("Registered X as" -- its
+    tokens were that registration's), at most _REGISTER_TOKEN_TURNS back,
+    that carry a sealed token. The newest one wins whose details agree with
+    the registration the model built:
+
+    * every one of host, database and user the registration names appears in
+      it, as a word -- so details typed for another connection (another
+      user, another database) never lend it their password;
+    * if it declares a name ("named X", "called X"), that name is this alias.
+
+    A confirming "yes" resolves to the message before it, and re-sending the
+    details (what a refusal asks for) supersedes an earlier attempt.
+    """
+    from app.core.typed_secrets import TOKEN_RE
+    done = re.compile(r"Registered \**`?[\w.-]+`?\** as ", re.IGNORECASE)
+    alias = (params.alias or "").strip()
+    humans, saw = 0, False
+    for message in reversed(state.get("messages") or []):
+        role, text = _message_role_text(message)
+        if role == "ai" and done.search(text):
+            return "", saw
+        if role != "human":
+            continue
+        humans += 1
+        if humans > _REGISTER_TOKEN_TURNS:
+            return "", saw
+        if not TOKEN_RE.search(text):
+            continue
+        saw = True
+        plain = TOKEN_RE.sub(" ", text)
+        if not all(_word_in(v, plain) for v in (params.host, params.database, params.user) if v):
+            continue
+        declared = [m.group(1) for m in _DECLARED_NAME_RE.finditer(plain)]
+        if declared and not any(d.lower() == alias.lower() for d in declared):
+            continue
+        return text, True
+    return "", saw
+
+
+def _open_register_secrets(state: ETLState, params: RegisterDatabaseParams):
+    """The secrets for this registration, opened from the sealed tokens. Locals only.
+
+    Returns a dict, or a refusal string when a credential field cannot be
+    resolved. The model saw ``⟦credential⟧`` where the user typed a secret, so
+    the value comes from the user's own message (see
+    _registration_credentials_text for which one): a field takes that
+    message's token with the same label when there is exactly one; a field
+    still holding a token is opened as is. The placeholder itself is never
+    used as a credential. A plaintext value -- a caller that bypassed both
+    seals -- is used as given, and still goes only to the sealed store.
+    """
+    from app.core.typed_secrets import PLACEHOLDER, has_sealed, open_sealed, sealed_labels
+    flow_text, typed_any = _registration_credentials_text(state, params)
+    labels = sealed_labels(flow_text)
+    out: Dict[str, Any] = {}
+    unresolved = []
+    for field, label in _REGISTER_SECRET_FIELDS.items():
+        value = getattr(params, field, None)
+        if isinstance(value, dict):
+            value = json.dumps(value)
+        if isinstance(value, str) and has_sealed(value):
+            value = open_sealed(value)
+        elif label and len(labels.get(label, [])) == 1:
+            value = open_sealed(labels[label][0])
+        elif isinstance(value, str) and PLACEHOLDER in value and len(labels.get("private_key", [])) == 1:
+            # An SA JSON the model was shown with its private key as the placeholder.
+            value = value.replace(PLACEHOLDER, open_sealed(labels["private_key"][0]) or PLACEHOLDER, 1)
+        if value in (None, ""):
+            if getattr(params, field, None) not in (None, ""):
+                unresolved.append(field)   # a token this key could not open
+            continue
+        if isinstance(value, str) and (PLACEHOLDER in value or "\u27e6sealed:" in value):
+            unresolved.append(field)
+            continue
+        out[field] = value
+    if (params.db_type in ("mysql", "postgresql") and typed_any and not flow_text
+            and not out.get("password") and "password" not in unresolved):
+        # A password was typed recently, but for another connection: never
+        # try this one without its own (nor with that one).
+        unresolved.append("password")
+    if unresolved:
+        logger.warning("DTA: registration of %s has unresolved credential field(s) %s",
+                       params.alias, sorted(unresolved))
+        return (f"❌ **I couldn't find the {', '.join(sorted(unresolved)).replace('_', ' ')} for "
+                f"`{params.alias}`** in what you typed, so nothing was stored. Send the connection "
+                f"details again in one message, including the password. {_QUOTE_PASSWORD_HINT}")
+    return out
+
+
+# Shown with every chat registration that could not log in. Never echoes the
+# value: an unquoted password ends before sentence punctuation (typed_secrets).
+_QUOTE_PASSWORD_HINT = ("If your password ends in punctuation (. , ; : ! ? or a closing "
+                        "bracket), put it in quotes, e.g. password 'secret.' -- otherwise "
+                        "the punctuation is read as the end of the sentence.")
+
+
+def _chat_customer_id(alias: str) -> str:
+    """An onboarding customer id for a chat-registered database: the alias, made unique."""
+    base = re.sub(r"[^a-z0-9_]", "_", (alias or "db").lower()).strip("_") or "db"
+    return f"{base[:40]}_{uuid.uuid4().hex[:8]}"
+
+
+def _seal_chat_database(state: ETLState, params: RegisterDatabaseParams, secrets: Dict[str, Any]):
+    """Register a chat-typed database in the onboarding sealed store. Returns its id, or a refusal.
+
+    The same store the UI's connect modal registers in (/customers/register):
+    the onboarding API tests the connection, binds the customer to this user
+    and keeps the connection string; this session keeps the customer id, which
+    the transfer opens through /customers/{id}/credentials as this user.
+    (1.6: no sealed api_key handle -- the service token plus the user opens it.)
+    """
+    user_id = (state.get("user_id") or "").strip()
+    if not user_id:
+        return "❌ **I can't store database credentials without a signed-in user.** Connect it from the Connections page instead."
+    customer_id = _chat_customer_id(params.alias)
+    registration = {
+        "connection_name": params.alias,
+        "customer_id": customer_id,
+        "customer_name": params.alias,
+        "database_type": params.db_type,
+        "host": params.host,
+        "port": params.port,
+        "database_name": params.database,
+        "username": params.user,
+        "password": secrets.get("password") or "",
+        "contact_email": "",
+        "connection_params": {"sslmode": params.sslmode} if params.sslmode else {},
+    }
+    try:
+        from app.api.db_connections import register_and_save
+        _saved, _ = _run_async(register_and_save(user_id, registration))
+    except Exception as e:
+        detail = str(getattr(e, "detail", None) or type(e).__name__)
+        # The password as typed and URL-encoded, and any user:password@ (#635's redact_secrets).
+        detail = redact_secrets(detail, [registration["password"]])
+        logger.warning("DTA: chat registration of %s failed: %s", params.alias, type(e).__name__)
+        return (f"❌ **Couldn't register `{params.alias}`:** {_dta_customer_text(detail)}\n\n"
+                f"Nothing was stored. {_QUOTE_PASSWORD_HINT}")
+    return {"conn_id": str(_saved.get("customer_id") or customer_id)}
+
+
+_CHAT_CLOUD_PROVIDER = {"aws_s3": "aws", "gcs": "gcp", "azure_blob": "azure"}
+
+
+def _seal_chat_cloud(state: ETLState, params: RegisterDatabaseParams, secrets: Dict[str, Any]):
+    """Store a chat-typed bucket's keys sealed in cloud_datasets. Returns ``{"conn_id"}``, ``{}`` or a refusal.
+
+    ``{}`` when the user gave no keys (the bucket runs on the ambient identity,
+    as before). Keys go in the table's *_ciphertext columns, the same AES-GCM
+    scheme the UI's cloud connections use; get_cloud_connection opens them.
+    """
+    access, secret = None, None
+    if params.db_type == "aws_s3":
+        access, secret = secrets.get("access_key"), secrets.get("secret_key")
+    elif params.db_type == "gcs":
+        secret = secrets.get("gcp_service_account_json")
+        if secret:
+            try:
+                access = (json.loads(secret) or {}).get("client_email") or "service_account"
+            except Exception:
+                return "❌ **That service-account key isn't valid JSON**, so nothing was stored."
+    elif params.db_type == "azure_blob":
+        if secrets.get("az_access_key") or secrets.get("azure_connection_string"):
+            return ("❌ **An Azure account key or connection string can't be stored from chat.** "
+                    "Add the container on the Cloud Datasets page, or give a SAS token. Nothing was stored.")
+        access, secret = params.az_storage_account, secrets.get("az_sas_token")
+    if not (access or secret):
+        return {}
+    if not (access and secret):
+        return "❌ **Both halves of the key are needed** (an access key and its secret). Nothing was stored."
+    user_id = (state.get("user_id") or "").strip()
+    from app.api.cloud_connections import encrypt_secret
+    a_enc, s_enc = encrypt_secret(access), encrypt_secret(secret)
+    if not (user_id and os.getenv("SUPABASE_URL") and os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+            and a_enc and s_enc):
+        return ("❌ **Bucket keys can't be stored from chat on this deployment.** Add it on the "
+                "Cloud Datasets page instead. Nothing was stored.")
+    row = {
+        "user_id": user_id, "name": params.alias, "provider": _CHAT_CLOUD_PROVIDER[params.db_type],
+        "region": params.region, "bucket_name": params.bucket_name, "file_key": params.file_path,
+        "connection_status": "active",
+        "access_key_ciphertext": a_enc["ciphertext"], "access_key_iv": a_enc["iv"],
+        "secret_key_ciphertext": s_enc["ciphertext"], "secret_key_iv": s_enc["iv"],
+    }
+    try:
+        from app.agents.sampling_persistence import get_supabase_client
+        res = get_supabase_client().table("cloud_datasets").insert(
+            {k: v for k, v in row.items() if v is not None}).execute()
+        conn_id = ((getattr(res, "data", None) or [{}])[0] or {}).get("id")
+    except Exception as e:
+        logger.warning("DTA: storing chat cloud connection %s failed: %s", params.alias, type(e).__name__)
+        conn_id = None
+    if not conn_id:
+        return f"❌ **Couldn't store the keys for `{params.alias}`.** Nothing was stored."
+    return {"conn_id": str(conn_id)}
+
+
+def _same_db(a_host, a_port, a_db, a_user, params: RegisterDatabaseParams) -> bool:
+    def norm(v):
+        return str(v or "").strip().casefold()
+    if norm(a_host) != norm(params.host) or norm(a_db) != norm(params.database) or norm(a_user) != norm(params.user):
+        return False
+    try:
+        return not a_port or not params.port or int(a_port) == int(params.port)
+    except (TypeError, ValueError):
+        return norm(a_port) == norm(params.port)
+
+
+def _existing_db_connection(state: ETLState, registry: Dict[str, dict], params: RegisterDatabaseParams):
+    """``(alias, entry)`` of a connection this chat already has to this host, database and user, else None.
+
+    (1.6: this chat's registry only. 2.0 also checks the user's saved
+    connections table, which 1.6 does not have.)
+    """
+    for alias, entry in registry.items():
+        if (isinstance(entry, dict) and entry.get("db_type") == params.db_type and entry.get("conn_id")
+                and _same_db(entry.get("host"), entry.get("port"), entry.get("database"), entry.get("user"), params)):
+            return alias, entry
+    return None
+
+
 def _handle_register_database(state: ETLState, params: RegisterDatabaseParams) -> str:
+    """Register a connection typed into chat. The session keeps its id, never its secret.
+
+    The secret goes straight to the sealed store -- the onboarding API for a
+    database, cloud_datasets for a bucket -- and the registry entry is the
+    handle plus display fields. Nothing this returns repeats a secret.
+    """
     registry = _get_db_registry(state)
-    entry = params.model_dump(exclude_none=True)
+    if params.db_type in ("mysql", "postgresql"):
+        # Re-sending the same details reuses the connection they already made;
+        # it never registers a second copy under a new id.
+        existing = _existing_db_connection(state, registry, params)
+        if existing:
+            alias, entry = existing
+            from app.graph.etl_state import scrub_registry_entry
+            registry[alias] = scrub_registry_entry(entry)
+            state["dta_database_registry"] = registry
+            return (f"✅ **`{alias}` is already registered** for `{params.database}` on "
+                    f"`{params.host}:{params.port}` (user `{params.user}`), so I'll use it. "
+                    f"Nothing new was stored.\n\nUse `\"{alias}\"` as source or destination in a transfer.")
+    secrets = _open_register_secrets(state, params)
+    if isinstance(secrets, str):
+        return secrets
+    if params.db_type in ("mysql", "postgresql"):
+        sealed = _seal_chat_database(state, params, secrets)
+    else:
+        sealed = _seal_chat_cloud(state, params, secrets)
+    secrets = None  # the plaintext goes no further than the sealed store
+    if isinstance(sealed, str):
+        return sealed
+    from app.graph.etl_state import scrub_registry_entry
+    entry = scrub_registry_entry({
+        **params.model_dump(exclude_none=True, exclude={"alias", "az_storage_account", *_REGISTER_SECRET_FIELDS}),
+        **sealed, "_source": "chat",
+    })
     canonical_alias = _resolve_registry_alias(registry, params.alias) or params.alias
     registry[canonical_alias] = entry
     state["dta_database_registry"] = registry
@@ -3284,8 +3624,11 @@ def _handle_register_database(state: ETLState, params: RegisterDatabaseParams) -
             object_note = f" Default object: `{params.file_path}` (name a different file in your transfer request to override)."
         else:
             object_note = " No default object set — name the file to transfer in your request (e.g. `folder/data.csv`)."
-    return (
-        f" Registered **{params.alias}** as `{db_type}` — {detail}.{object_note}\n\n"
+    sealed_note = (" The credentials are stored sealed; this chat keeps only the connection id."
+                   if entry.get("conn_id") else "")
+    from app.core.typed_secrets import redact_sealed
+    return redact_sealed(
+        f" Registered **{params.alias}** as `{db_type}` — {detail}.{object_note}{sealed_note}\n\n"
         f"Use `\"{params.alias}\"` as source or destination in a transfer."
     )
 
@@ -3713,27 +4056,64 @@ def _cloud_conn_to_entry(conn: dict) -> Optional[dict]:
 
     entry: dict = {
         "db_type": db_type,
+        # The handle: the cloud_datasets row the keys live in. The keys
+        # themselves are read from it when the transfer runs
+        # (_cloud_secrets_for), never copied into the session registry.
+        "conn_id": str(conn["id"]) if conn.get("id") else None,
         "name": conn.get("name"),  # display label (e.g. "C2C_Source_GCP")
         "bucket_name": raw_bucket,
         "file_path": default_object,
         "region": conn.get("region") or conn.get("aws_region"),
         "_source": "cloud_ui",
     }
+    return {k: v for k, v in entry.items() if v is not None}
+
+
+def _cloud_conn_secrets(conn: dict, db_type: str) -> dict:
+    """The provider keys of a full cloud_datasets row, in the shape the cloud builders read.
+
+    Only the transfer itself calls this, on a row it has just read by id. The
+    result lives in that call's locals.
+    """
+    secrets: dict = {}
     if db_type == "aws_s3":
-        entry["access_key"] = conn.get("access_key") or conn.get("aws_access_key_id")
-        entry["secret_key"] = conn.get("secret_key") or conn.get("aws_secret_access_key")
+        secrets["access_key"] = conn.get("access_key") or conn.get("aws_access_key_id")
+        secrets["secret_key"] = conn.get("secret_key") or conn.get("aws_secret_access_key")
     elif db_type == "gcs":
         # Schema stores the service-account JSON in service_account_json or secret_key.
-        entry["gcp_service_account_json"] = (
+        secrets["gcp_service_account_json"] = (
             conn.get("service_account_json")
             or conn.get("gcp_service_account_json")
             or conn.get("secret_key")
         )
     elif db_type == "azure_blob":
-        entry["az_storage_account"] = conn.get("account_name") or conn.get("access_key")
-        entry["az_access_key"] = conn.get("account_key")
-        entry["az_sas_token"] = conn.get("sas_token") or conn.get("sas") or conn.get("secret_key")
-    return {k: v for k, v in entry.items() if v is not None}
+        secrets["az_storage_account"] = conn.get("account_name") or conn.get("access_key")
+        secrets["az_access_key"] = conn.get("account_key")
+        secrets["az_sas_token"] = conn.get("sas_token") or conn.get("sas") or conn.get("secret_key")
+    return {k: v for k, v in secrets.items() if v is not None}
+
+
+def _cloud_secrets_for(entry: dict, alias: Optional[str] = None) -> dict:
+    """Open a registry cloud entry's handle: ``entry`` plus its provider keys.
+
+    Reads the cloud_datasets row named by ``conn_id`` (or, for an entry from a
+    checkpoint older than ``conn_id``, the row id it is registered under). An
+    entry with no handle (a bucket typed into chat carries its keys itself) is
+    returned as is; a row that cannot be read yields the entry unchanged, and
+    the job then runs on the ambient identity as an unauthenticated bucket would.
+    """
+    conn_id = (entry or {}).get("conn_id")
+    if not conn_id and (entry or {}).get("_source") == "cloud_ui" and _UUID_RE.match(alias or ""):
+        conn_id = alias
+    if not conn_id:
+        return dict(entry or {})
+    try:
+        from app.api.cloud_connections import get_cloud_connection
+        conn = _run_async(get_cloud_connection(str(conn_id))) or {}
+    except Exception as e:
+        logger.warning("Could not open cloud connection %s: %s", conn_id, type(e).__name__)
+        return dict(entry)
+    return {**entry, **_cloud_conn_secrets(conn, entry.get("db_type", ""))}
 
 
 _UUID_RE = re.compile(
@@ -3760,14 +4140,19 @@ def _auto_fetch_cloud_from_ui(alias: str) -> Optional[dict]:
         return None
     if not conn:
         return None
-    return _cloud_conn_to_entry(conn)
+    entry = _cloud_conn_to_entry(conn)
+    if entry:
+        entry.setdefault("conn_id", alias)  # the id it was read by is its handle
+    return entry
 
 
 def _auto_fetch_from_ui(alias: str, user_id: Optional[str] = None) -> Optional[dict]:
-    """Auto-fetch database credentials from the customer_dbs API by customer_id.
+    """Resolve a database connection from the customer_dbs API by customer_id.
 
     A plain connection NAME (== customer_id) resolves here; cloud connections do
-    not. Returns a registry-style entry dict, or ``None`` when the name is unknown.
+    not. Returns a registry entry -- the handle (``conn_id``) and display fields,
+    no password: the transfer reads the credentials again when it runs
+    (``_fetch_full_creds``) -- or ``None`` when the name is unknown.
     """
     try:
         with requests.Session() as session:
@@ -3796,11 +4181,11 @@ def _auto_fetch_from_ui(alias: str, user_id: Optional[str] = None) -> Optional[d
                     logger.warning("customer_dbs list lookup failed for %s: %s", alias, list_err)
                 return {
                     "db_type":  db_type,
+                    "conn_id":  alias,
                     "host":     data.get("host"),
                     "port":     data.get("port"),
                     "database": data.get("database"),
                     "user":     data.get("username"),
-                    "password": data.get("password"),
                     "table":    data.get("table"),
                     "_source":  "ui",
                 }
@@ -3830,7 +4215,7 @@ def _resolve_cloud_conn_by_name(name: str, user_id: str, role: str = "destinatio
     if not name or not user_id:
         return None
     try:
-        from app.api.cloud_connections import get_cloud_connection, list_cloud_connections
+        from app.api.cloud_connections import list_cloud_connections
         conns = _run_async(list_cloud_connections(user_id)) or []
     except Exception as e:
         logger.warning("Cloud %s name lookup failed for %s: %s", role_word, name, e)
@@ -3843,25 +4228,11 @@ def _resolve_cloud_conn_by_name(name: str, user_id: str, role: str = "destinatio
     matched = [c for c in conns if any(n and n.casefold() == folded for n in _display_names(c))]
 
     if len(matched) == 1:
-        # list_cloud_connections deliberately never copies credential fields, so
-        # the matched row carries no service-account key / access key. Building
-        # the registry entry straight from it yields a credential-less endpoint:
-        # the runner then falls back to ambient cloud auth and the transfer dies
-        # with "storage.objects.get denied". Re-read the full row by id — the
-        # same thing the UUID path (_auto_fetch_cloud_from_ui) already does — so
-        # naming a connection is equivalent to pasting its id.
+        # list_cloud_connections never copies credential fields, and the entry
+        # needs none: it carries the row id as its handle, and the transfer
+        # reads the keys by that id when it runs (_cloud_secrets_for). Naming a
+        # connection is still equivalent to pasting its id.
         conn_row = matched[0]
-        conn_id = conn_row.get("id")
-        if conn_id:
-            try:
-                full = _run_async(get_cloud_connection(str(conn_id)))
-                if full:
-                    conn_row = full
-            except Exception as e:
-                logger.warning(
-                    "Could not load credentials for cloud connection %s (%s): %s",
-                    name, conn_id, e,
-                )
         entry = _cloud_conn_to_entry(conn_row)
         if not entry:
             return (
@@ -4171,7 +4542,8 @@ def _list_dest_tables(creds: dict, db_type: str) -> Optional[List[str]]:
         finally:
             engine.dispose()
     except Exception as e:
-        logger.info("DTA wizard: could not list tables (%s); asking for a name instead.", e)
+        logger.info("DTA wizard: could not list tables (%s); asking for a name instead.",
+                    redact_secrets(e, [(creds or {}).get("password")]))
         return None
 
 
@@ -4252,6 +4624,45 @@ def _resolve_pending_dta(state: ETLState, pending: dict, reply: str) -> str:
         dest_object=collected.get("dest_object") or None,
     )
     return _handle_initiate_transfer(state, params)
+
+
+def _open_db_credentials(state, alias: str, entry: dict) -> Optional[dict]:
+    """Open a database entry's handle (2.0's name): the credentials endpoint first,
+    then, for an entry that is not a handle, the registry entry.
+
+    The result lives in this call's locals and is never written to state. A
+    UI connection's entry is a handle with no password, so it has no
+    fallback: when the endpoint will not open it, this returns ``None`` and
+    the transfer is refused rather than run on what state holds.
+    """
+    handle = str((entry or {}).get("conn_id") or alias)
+    try:
+        with requests.Session() as session:
+            r = session.get(
+                f"{ONBOARDING_API_URL}/customers/{handle}/credentials",
+                headers=_onboarding_headers(state.get("user_id")),
+                timeout=5,
+            )
+            if r.status_code == 200:
+                data = r.json()
+                return {
+                    "host":     data.get("host"),
+                    "port":     data.get("port"),
+                    "database": data.get("database"),
+                    "user":     data.get("username"),
+                    "password": data.get("password"),
+                    # A chat registration names its table; the onboarding
+                    # store only knows the database's first one.
+                    "table":    (entry.get("table") if entry.get("_source") == "chat" else None)
+                                or data.get("table"),
+                    "sslmode":  data.get("sslmode") or data.get("ssl_mode") or entry.get("sslmode"),
+                }
+    except Exception as e:
+        logger.warning("Could not fetch credentials for %s: %s", alias, type(e).__name__)
+    if entry.get("_source") in DTA_HANDLE_SOURCES:
+        return None
+    return {k: v for k, v in entry.items()
+            if k not in ("db_type", "_source", "conn_id") and v is not None}
 
 
 def _handle_initiate_transfer(state: ETLState, params: InitiateTransferParams) -> str:
@@ -4390,29 +4801,8 @@ def _handle_initiate_transfer(state: ETLState, params: InitiateTransferParams) -
     source_entry = registry[params.source_alias]
     dest_entry   = registry[params.destination_alias]
 
-    def _fetch_full_creds(alias: str, entry: dict) -> dict:
-        """Always try credentials endpoint first, fallback to registry entry."""
-        try:
-            with requests.Session() as session:
-                r = session.get(
-                    f"{ONBOARDING_API_URL}/customers/{alias}/credentials",
-                    headers=_onboarding_headers(state.get("user_id")),
-                    timeout=5,
-                )
-                if r.status_code == 200:
-                    data = r.json()
-                    return {
-                        "host":     data.get("host"),
-                        "port":     data.get("port"),
-                        "database": data.get("database"),
-                        "user":     data.get("username"),
-                        "password": data.get("password"),
-                        "table":    data.get("table"),
-                        "sslmode":  data.get("sslmode") or data.get("ssl_mode") or entry.get("sslmode"),
-                    }
-        except Exception as e:
-            logger.warning("Could not fetch credentials for %s: %s", alias, e)
-        return {k: v for k, v in entry.items() if k not in ("db_type", "_source") and v is not None}
+    def _fetch_full_creds(alias: str, entry: dict) -> Optional[dict]:
+        return _open_db_credentials(state, alias, entry)
 
     # ── Resolve each endpoint (database OR cloud object storage) ────────────
     # Returns a dict(creds, type, file_uri, cloud_env) on success, or a
@@ -4462,16 +4852,26 @@ def _handle_initiate_transfer(state: ETLState, params: InitiateTransferParams) -
                     f"`{object_path}` in **`{disp}`** is JSON. Use a `.csv` or `.parquet` "
                     "source object instead (JSON is supported as a destination)."
                 )
-            creds = _build_cloud_credentials(entry, object_path)
+            # The keys are read from the connection's store now, into this
+            # call's locals; the registry entry is only the handle.
+            secret_entry = _cloud_secrets_for(entry, alias)
+            creds = _build_cloud_credentials(secret_entry, object_path)
             return {
                 "creds": creds,
                 "type": file_type,
                 "file_uri": creds.get_cloud_uri(file_type),
-                "cloud_env": _cloud_env_from_entry(entry, role),
+                "cloud_env": _cloud_env_from_entry(secret_entry, role),
+                "secret_entry": secret_entry,
             }
 
         # ── Database endpoint ──
         creds = _fetch_full_creds(alias, entry)
+        if creds is None:
+            return (
+                f"❌ **I can't open the credentials for `{disp}`** — the connection "
+                "isn't available to you right now. Nothing was written. Reconnect it "
+                "(or say **list connections**) and try again."
+            )
         db_type = _normalize_db_type(entry.get("db_type", ""))
         if role == "source" and (entry.get("source_table") or "").strip():
             # The user analyzed a specific table; read from THAT, not the
@@ -4524,7 +4924,7 @@ def _handle_initiate_transfer(state: ETLState, params: InitiateTransferParams) -
                 "Destination table set: alias=%s table=%s create_if_missing=%s",
                 alias, params.dest_table, params.create_if_missing,
             )
-        return {"creds": creds, "type": db_type, "file_uri": None, "cloud_env": {}}
+        return {"creds": creds, "type": db_type, "file_uri": None, "cloud_env": {}, "secret_entry": entry}
 
     source_res = _resolve_endpoint(params.source_alias, source_entry, "source")
     if isinstance(source_res, str):
@@ -4542,12 +4942,28 @@ def _handle_initiate_transfer(state: ETLState, params: InitiateTransferParams) -
     # service account (the cluster's default identity may lack bucket access).
     def _gcs_sa(entry: dict) -> Optional[str]:
         return entry.get("gcp_service_account_json") if entry.get("db_type") == "gcs" else None
-    # Ambient identity used for the source read (and single-SA fallback).
-    gcp_sa_json = _gcs_sa(source_entry) or _gcs_sa(dest_entry)
+    # Ambient identity used for the source read (and single-SA fallback). The
+    # keys come from the opened entries (locals), not the registry's handles.
+    source_secret_entry, dest_secret_entry = source_res["secret_entry"], dest_res["secret_entry"]
+    gcp_sa_json = _gcs_sa(source_secret_entry) or _gcs_sa(dest_secret_entry)
     # The destination write authenticates as the destination's own SA when the
     # destination is GCS; otherwise a cloud->cloud write reuses the source SA,
     # which may lack write access to the destination bucket.
-    dest_gcp_sa_json = _gcs_sa(dest_entry)
+    dest_gcp_sa_json = _gcs_sa(dest_secret_entry)
+
+    def _redact(text) -> str:
+        """``text`` with every credential this transfer carries masked: for replies and logs."""
+        values = [*cloud_env.values(), *(final_runtime_env.values()), gcp_sa_json, dest_gcp_sa_json]
+        for c in (source_creds, dest_creds):
+            if isinstance(c, dict):
+                values.append(c.get("password"))
+            else:
+                for f in ("secret_key", "az_access_key", "az_sas_token", "az_client_secret"):
+                    v = getattr(c, f, None)
+                    values.append(v.get_secret_value() if hasattr(v, "get_secret_value") else v)
+        return redact_secrets(text, values)
+
+    final_runtime_env: Dict[str, str] = {}
 
     try:
         final_state, injection_script = data_transfer_pipeline(
@@ -4562,23 +4978,24 @@ def _handle_initiate_transfer(state: ETLState, params: InitiateTransferParams) -
             create_if_missing=bool(params.create_if_missing),
         )
     except Exception as e:
-        logger.error(f"data_transfer_pipeline failed: {e}", exc_info=True)
-        return f"❌ **Transfer failed (System Error):**\n```\n{e}\n```"
+        logger.error("data_transfer_pipeline failed: %s\n%s", _redact(e), _redact(traceback.format_exc()))
+        return f"❌ **Transfer failed (System Error):**\n```\n{_redact(e)}\n```"
 
     # Database URLs are no longer inlined into the generated script; the pipeline
     # hands them back here so the runners can inject them as environment variables.
     # Keep them out of logs — cloud_env is only ever passed to the runner.
-    cloud_env = {**cloud_env, **(final_state.get("runtime_secret_env") or {})}
+    final_runtime_env.update(final_state.get("runtime_secret_env") or {})
+    cloud_env = {**cloud_env, **final_runtime_env}
 
     error_msg = final_state.get("error_message")
     warnings  = final_state.get("warnings")
 
     if error_msg:
-        return f"❌ **Transfer Setup Failed:**\n\n{error_msg}"
+        return f"❌ **Transfer Setup Failed:**\n\n{_redact(error_msg)}"
 
     warnings_text = ""
     if warnings:
-        warnings_text = "⚠️ **Warnings:**\n- " + "\n- ".join(warnings) + "\n\n"
+        warnings_text = "⚠️ **Warnings:**\n- " + "\n- ".join(_redact(w) for w in warnings) + "\n\n"
 
     # If the wizard created a new destination table, show the schema it used (built
     # from the TRANSFORMED output, not the source) — the user chose auto-create.
@@ -4676,8 +5093,9 @@ def _handle_initiate_transfer(state: ETLState, params: InitiateTransferParams) -
     except Exception as e:
         elapsed = _format_duration(time.monotonic() - _transfer_started)
         # Full traceback to the logs; the customer gets one readable line.
-        logger.error("DTA execution failed for job %s after %s: %s", job_id, elapsed, e, exc_info=True)
-        _reason = str(e).strip().splitlines()[0] if str(e).strip() else "an unexpected error"
+        logger.error("DTA execution failed for job %s after %s: %s\n%s", job_id, elapsed,
+                     _redact(e), _redact(traceback.format_exc()))
+        _reason = _redact(e).strip().splitlines()[0] if str(e).strip() else "an unexpected error"
         if len(_reason) > 220:
             _reason = _reason[:220].rstrip() + "…"
         return (
@@ -4822,6 +5240,13 @@ def _invoke_planner_with_recovery(msgs, tool_choice, invoke_kwargs):
 
 def plan_etl_job(state: ETLState) -> ETLState:
     """Planner node. Plans the turn, then applies the plan gate for model training."""
+    # A credential typed into the chat is sealed before anything here logs the
+    # message or sends it to a model. The API server already did this; a turn
+    # that reached the graph another way is sealed here, in the message itself.
+    # Every human message, not only this turn's: a checkpoint written before
+    # sealing still holds what was typed then, and this is where it is read.
+    for _m in state.get("messages") or []:
+        _seal_human_message(_m)
     # is_dta_request means "THIS planner pass handled a data transfer". It used to
     # be set and never cleared, so it stuck to the thread; reset it on every pass
     # (the router ends the turn on it).
@@ -5542,13 +5967,16 @@ def _plan_etl_job_impl(state: ETLState) -> ETLState:
         "\nDo not force full-dataset analysis unless fidelity is entire_dataset and user explicitly requests deep/full fidelity."
     )
 
-    # Inject Context Memory into the planner's awareness
-    if state.get("memory_hints"):
-        hints_str = "\n- ".join(state["memory_hints"])
+    # Inject Context Memory into the planner's awareness. A write or transfer
+    # in memory never steers a plan (app/services/memory_actions.py).
+    from app.services.memory_actions import analysis_memory_context
+    memory_hints, logic_signature = analysis_memory_context(state)
+    if memory_hints:
+        hints_str = "\n- ".join(memory_hints)
         csv_info += f"\n\n[CONTEXT MEMORY - USER PREFERENCES & PAST INSIGHTS]:\n- {hints_str}"
     
-    if state.get("session_logic_signature"):
-        csv_info += f"\n\n[SESSION LOGIC SIGNATURE]:\n{state['session_logic_signature']}"
+    if logic_signature:
+        csv_info += f"\n\n[SESSION LOGIC SIGNATURE]:\n{logic_signature}"
 
 
     # Pending training-plan replies are classified here so planner owns the
@@ -6083,7 +6511,11 @@ def _plan_etl_job_impl(state: ETLState) -> ETLState:
                     # next turn on, memory_injection re-derives memory_hints with
                     # reserved slots for stored preferences.
                     hints = [h for h in (state.get("memory_hints") or []) if h != preference]
-                    hints.append(preference)
+                    # A preference to write or move data is never a hint
+                    # (app/services/memory_actions.py).
+                    from app.services.memory_actions import describes_write_action
+                    if not describes_write_action(preference):
+                        hints.append(preference)
                     state["memory_hints"] = hints[-3:]
 
                 if not preference:

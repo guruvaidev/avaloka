@@ -1,0 +1,13 @@
+diff --git a/app/agents/visualization_agent.py b/app/agents/visualization_agent.py
+index 7195c6da..9b07a1fb 100644
+--- a/app/agents/visualization_agent.py
++++ b/app/agents/visualization_agent.py
+@@ -856,7 +856,7 @@ def select_charts(
+             {
+                 "id": f"dist_{field}",
+                 "title": f"Distribution of {field}",
+-                "type": "histogram",
++                "type": "bar",
+                 "intent": "distribution",
+                 "rank": len(charts) + 1,
+                 "data_source": "sample",
