@@ -5,6 +5,7 @@
 [![Ray](https://img.shields.io/badge/runs%20on-Ray%20%2F%20KubeRay-028CF0.svg)](https://www.ray.io/)
 [![Claude](https://img.shields.io/badge/runs%20with-Claude-D97757.svg)](#bring-your-own-model)
 [![OpenAI](https://img.shields.io/badge/runs%20with-OpenAI%20GPT-412991.svg)](#bring-your-own-model)
+[![GitHub Stars](https://img.shields.io/github/stars/guruvaidev/avaloka?logo=github&style=flat-square&color=0066cc)](https://github.com/guruvaidev/avaloka)
 
 **A team of specialist AI agents that takes a dataset from raw rows to a served
 model — and checks its own work before it reports a result.**
