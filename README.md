@@ -3,6 +3,8 @@
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue.svg)](docs/versions.md)
 [![Ray](https://img.shields.io/badge/runs%20on-Ray%20%2F%20KubeRay-028CF0.svg)](https://www.ray.io/)
+[![Claude](https://img.shields.io/badge/runs%20with-Claude-D97757.svg)](#bring-your-own-model)
+[![OpenAI](https://img.shields.io/badge/runs%20with-OpenAI%20GPT-412991.svg)](#bring-your-own-model)
 
 **A team of specialist AI agents that takes a dataset from raw rows to a served
 model — and checks its own work before it reports a result.**
@@ -23,8 +25,42 @@ if you need one, and records every artifact along the way.
 An instrument is only as good as its calibration, so three of those agents
 exist to check the work of the others. Avaloka refuses to train on leaked data,
 makes every model beat a trivial baseline, and checks the prose it writes
-against the numbers it computed. Where the evidence is thin,
-[it says so](docs/test-reports/three-pillar-coverage.md).
+against the numbers it computed. Where the evidence is thin, it
+[says so transparently](docs/test-reports/three-pillar-coverage.md), and we
+constantly and consistently improve the data science agents.
+
+## What makes Avaloka different
+
+- **Yours, wherever it runs.** The same Helm chart runs on GKE, EKS, AKS,
+  on-premises Kubernetes or your laptop. There is no lock-in and no cloud
+  markup, and Avaloka operates no service that receives your data. Choose a
+  local model and nothing leaves your environment.
+- **Bring your own model, or several.** Planning, coding and visualization can
+  each use a different model and provider, with an automatic fallback. Swap or
+  upgrade models without changing how you work.
+  [More below.](#bring-your-own-model)
+- **Insight the moment data lands.** Upload a file, and Auto Insights profiles
+  it, picks the right charts and the most informative columns, and suggests
+  next steps before you ask a question.
+- **A team of specialists.** Separate agents plan, write code, move data, train
+  models, visualize and verify, instead of one model doing everything.
+- **Checked before it is shown.** Generated code is validated before it runs,
+  a trained model must beat a trivial baseline before it is called a success,
+  and the numbers in each answer are checked against the results that were
+  actually computed.
+- **Every result has a trail.** Analyses live in a lineage graph and a layered
+  memory, not in loose notebooks. Derived datasets and models trace back to
+  their source data and the analysis that produced them.
+- **Built for teams.** Share projects, analyses and reports with view, comment
+  or edit access, and build on each other's work.
+- **From question to production.** Turn an analysis into a scheduled job in one
+  step. Large sources run on autoscaling Ray clusters in your own cloud, and
+  Avaloka tells you up front when a job will be large or slow, before the bill
+  arrives.
+- **Connects to what you already have.** PostgreSQL, MySQL, MariaDB, SQL
+  Server, Oracle, SQLite, MongoDB, S3, Google Cloud Storage and Azure Blob.
+- **A laptop is enough.** The CLI runs a statistics-grounded analysis on your
+  own machine, fully offline.
 
 🚀 **[Quickstart](#quickstart)** · 📦 **[Install Guide](docs/INSTALL.md)** · 📖 **[Docs](docs/DOCS_MAP.md)** · 📊 **[Benchmarks](docs/benchmarks.md)** · ✍️ **[Blog](https://avaloka.ai/blog)**
 
@@ -76,10 +112,10 @@ data with its own agents, and the main Avaloka merges what they found into one
 profile and one verdict (`avaloka-fleet/coordination.json`). Your own files
 work the same way — CSV, TSV, Parquet, Excel, JSON, XML, ORC and Avro.
 
-> **Your data stays on your machine.** Everything above runs locally. Add a
-> model key only when you want the conversational planner and richer narration:
-> `OPENROUTER_API_KEY`, `GROQ_API_KEY` or `OPENAI_API_KEY` — or a local Ollama
-> with `INFERENCE_PROVIDER=local`.
+> **Your data stays on your machine.** Everything above runs locally, with no
+> model and no key. Add a model only when you want conversation and richer
+> narration, and pick any provider, or a local one: see
+> [Bring your own model](#bring-your-own-model).
 
 **Want the full platform** — the web UI, the API, Ray and Kubernetes? Follow the
 [Install Guide](docs/INSTALL.md); it also covers
@@ -89,6 +125,40 @@ If something does not work, run `python scripts/doctor.py` first, then see
 The full CLI reference is [README_CLI.md](README_CLI.md).
 
 ---
+
+## Bring your own model
+
+Avaloka works with the models you already use. It is not tied to any one model
+vendor.
+
+- **Already using Claude?** Run Avaloka on Claude models with your Anthropic
+  API key. The CLI reads `ANTHROPIC_API_KEY` directly. The platform reaches
+  Claude through OpenRouter or AWS Bedrock.
+- **Prefer GPT or Gemini?** Switch to OpenAI's GPT models with
+  `INFERENCE_PROVIDER=openai` and `OPENAI_API_KEY`, or to Gemini on Google
+  Vertex AI with `INFERENCE_PROVIDER=vertex`.
+- **Or any model you like,** including one running on your own hardware. With
+  `INFERENCE_PROVIDER=local` (vLLM or Ollama), nothing leaves your environment.
+- **Mix them.** Planning, coding and visualization can each use a different
+  provider (`INFERENCE_PROVIDER_PLANNING`, `_CODING`, `_VIZ`), and a single
+  agent can be overridden with `AVALOKA_<AGENT>_PROVIDER`. With
+  `OPENROUTER_API_KEY` set, a failing provider falls back to OpenRouter
+  automatically.
+
+| Provider | `INFERENCE_PROVIDER` | What it needs |
+| --- | --- | --- |
+| Anthropic Claude, via OpenRouter | `openrouter` | `OPENROUTER_API_KEY`; choose the model with `INFERENCE_OPENROUTER_MODEL` (e.g. `anthropic/<claude-model>`) |
+| Anthropic Claude, via AWS Bedrock | `bedrock` | `AWS_REGION` and AWS credentials |
+| OpenAI GPT, or any OpenAI-compatible API | `openai` | `OPENAI_API_KEY` |
+| Google Gemini on Vertex AI | `vertex` | Google Cloud credentials |
+| Azure OpenAI | `azure` | `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, a deployment name |
+| Groq | `groq` | `GROQ_API_KEY` |
+| OpenRouter (hundreds of models) | `openrouter` | `OPENROUTER_API_KEY` |
+| Your own hardware (vLLM, Ollama) | `local` | `INFERENCE_LOCAL_BASE_URL` |
+
+The quickstart above needs no model at all. In 1.6, the CLI's `--llm` option
+uses Claude (`ANTHROPIC_API_KEY`). In 2.0, the CLI takes the same choice of
+providers as the platform.
 
 ## Why a model alone does not solve this
 
@@ -195,37 +265,6 @@ it are on the [blog](https://avaloka.ai/blog).
   database connection strings stored there. See the advisory in
   [SECURITY.md](SECURITY.md).
 
-## Coming in 2.0
-
-The 1.7 development line ships publicly as **2.0**. In development now — not
-in this release. Follow the [blog](https://avaloka.ai/blog)
-for progress.
-
-- **The swarm, in every edition.** A mission clones Avaloka into sub-Avalokas
-  that each work a shard of the same data and converge on one answer; the
-  open-source edition runs two clones per mission, sized for a laptop. Each
-  clone's steps, outputs and hand-offs are recorded separately and served by a
-  local API, so the UI can show the copies at work, and the record can later
-  train the agents themselves.
-- **A planner graph of what actually ran.** Not a generic plan → code → test
-  loop: the loads, filters, group-bys, joins, aggregates, training and
-  evaluation steps that were executed on your prompt, with the columns and
-  metrics involved.
-- **Nested and semi-structured data.** JSON Lines and NDJSON, nested fields
-  flattened into stable dotted columns, and JSON-encoded columns expanded
-  automatically.
-- **MongoDB as a source.** Read-only, with bounded filter, projection and limit,
-  and credentials kept out of the lineage record.
-- **Evidence-driven reasoning.** The agent inspects the schema before querying,
-  checks denominators, join cardinality, units, time windows and aggregation
-  grain, and will not accept a final answer without evidence from a data tool.
-- **Hard budgets.** Every mission is bounded in iterations, time, cost and
-  tokens, so a run that is not converging stops cleanly.
-- **External benchmarks.** A DataAgentBench runner, plus tracks for adaptive
-  sampling, swarm ablation and recovery under injected faults.
-
----
-
 ## What is proven, and where it is thin
 
 We would rather publish the gaps than claim three pillars and evidence one.
@@ -288,18 +327,17 @@ and no network.
 Avaloka is an orchestration layer, not a reimplementation. Compute, storage,
 vector search, experiment tracking and the database are done by projects that
 were load-bearing in production long before Avaloka existed. What Avaloka adds
-is the agent team, the evidence layer and the conversation — and deliberately
-not a homegrown substitute for any of these.
+is the agent team, the evidence layer and the conversation.
 
-| Layer | We use — rather than our own |
+| Layer | Built on |
 | --- | --- |
-| Distributed compute | Ray + KubeRay, Arrow, Daft — not our own scheduler |
-| Storage & formats | PostgreSQL, S3-compatible object storage, Parquet, Delta, Iceberg, Avro — not a bespoke artifact format |
-| Vector & memory | Chroma, Milvus, Redis — not our own index |
-| ML & tracking | PyTorch, scikit-learn, ONNX, MLflow — not our own AutoML |
-| Agent runtime | LangGraph / LangChain, Model Context Protocol — not a proprietary agent protocol |
-| Platform | Kubernetes, Helm, FastAPI, Pydantic, Celery, Supabase — not our own web, job or identity stack |
-| Data engine | pandas, NumPy, SQLAlchemy, SQLite — not our own dataframe |
+| Distributed compute | Ray + KubeRay, Arrow, Daft |
+| Storage & formats | PostgreSQL, S3-compatible object storage, Parquet, Delta, Iceberg, Avro |
+| Vector & memory | Chroma, Milvus, Redis |
+| ML & tracking | PyTorch, scikit-learn, ONNX, MLflow |
+| Agent runtime | LangGraph / LangChain, Model Context Protocol |
+| Platform | Kubernetes, Helm, FastAPI, Pydantic, Celery, Supabase |
+| Data engine | pandas, NumPy, SQLAlchemy, SQLite |
 
 None of it is hidden behind our abstraction: you can verify any number Avaloka
 reports by running the layer underneath it yourself.
@@ -365,6 +403,18 @@ each boundary is enforced in code: [docs/EDITIONS.md](docs/EDITIONS.md).
 Every document, and who it is for: [docs/DOCS_MAP.md](docs/DOCS_MAP.md).
 
 ---
+
+## Coming in 2.0
+
+A preview of the next release; follow the [blog](https://avaloka.ai/blog) for
+progress.
+
+- **The swarm:** Avaloka clones itself, works a dataset in parallel and
+  converges on one answer.
+- **A live planner graph** of exactly what ran on your data.
+- **Answers pitched to whoever is asking,** from a CIO's strategy to an
+  analyst's detail.
+- **Nested and semi-structured data, and fully air-gapped operation.**
 
 ## Contributing
 
