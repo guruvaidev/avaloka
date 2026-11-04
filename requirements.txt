@@ -44,7 +44,7 @@ pydantic>=2.7
 starlette>=0.37
 langchain-core>=0.3.79,<0.4
 redis>=5.0.4
-cachetools>=5.0
+cachetools>=7.2.8
 
 google-cloud-container>=1.0.0
 google-cloud-storage>=3.4
