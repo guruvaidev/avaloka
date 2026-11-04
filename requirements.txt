@@ -155,7 +155,7 @@ PyJWT>=2.8.0
 langchain_anthropic>=0.3.21,<0.4
 # urllib3 / charset-normalizer must be compatible with requests
 urllib3>=1.21.1,<2.0
-charset-normalizer>=3.0.0   # MIT; replaces chardet (LGPL, ASF Category X)
+charset-normalizer>=3.5.2   # MIT; replaces chardet (LGPL, ASF Category X)
 psutil>=5.9.0              # for memory stats in test scripts
 s3fs==2025.9.0
 
