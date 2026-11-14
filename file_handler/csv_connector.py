@@ -76,9 +76,9 @@ class CSVConnector(BaseConnector):
         if self._row_count is None:
             with open(self.path) as f:
                 reader = csv.reader(f, delimiter=self.delimiter)
-                for _row_count, _ in enumerate(reader):
-                    ...
-        return _row_count
+                next(reader, None)
+                self._row_count = sum(1 for _ in reader)
+        return self._row_count
 
     def get_row(self, row: int) -> list[Any]:
         with open(self.path) as f:
@@ -95,11 +95,12 @@ class CSVConnector(BaseConnector):
         self, num_rows: int = 10, random_rows: bool = True
     ) -> list[list[Any]]:
         total_rows = self.get_row_count()
+        n = min(num_rows, total_rows)
 
         rows_to_sample = sorted(
-            random.sample(range(1, total_rows), k=num_rows)
+            random.sample(range(1, total_rows + 1), k=n)
             if random_rows
-            else range(1, num_rows + 1)
+            else range(1, n + 1)
         )
 
         data = []
