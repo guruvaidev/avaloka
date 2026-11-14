@@ -11,6 +11,8 @@ from typing import Any
 
 import pandas as pd
 
+from avaloka.io.loader import NULL_WORDS
+
 
 def _mentioned_columns(goal: str, columns: list[str]) -> list[str]:
     return [
@@ -170,13 +172,23 @@ def analyze_goal(
                     if pd.notna(value) and include:
                         pairs.append({"left": str(left), "right": str(right), "r": _number(value)})
         pairs.sort(key=lambda pair: (-abs(pair["r"]), pair["left"], pair["right"]))
+        # Pearson is pulled around by a few extreme rows; report the rank
+        # correlation beside it so heavy-tailed data does not hide a relationship.
+        rank_pairs: list[dict[str, Any]] = []
+        for pair in pairs[:5]:
+            rho = numeric[pair["left"]].corr(numeric[pair["right"]], method="spearman")
+            rank_pairs.append({
+                "left": pair["left"], "right": pair["right"],
+                "rho": _number(rho) if pd.notna(rho) else None,
+            })
         result.update(
             kind="correlation", status="answered" if pairs else "limited",
-            metrics={"pairs": pairs[:5]},
+            metrics={"pairs": pairs[:5], "rank_pairs": rank_pairs},
         )
         result["findings"] = [
-            f"{pair['left']} and {pair['right']}: Pearson r={pair['r']:.3f}."
-            for pair in pairs[:5]
+            f"{pair['left']} and {pair['right']}: Pearson r={pair['r']:.3f}"
+            + (f", Spearman rho={rank['rho']:.3f}." if rank["rho"] is not None else ".")
+            for pair, rank in zip(pairs[:5], rank_pairs)
         ] or ["No comparable numeric column pair has a defined correlation."]
         result["findings"].append("Correlation alone does not establish causation.")
         return result
@@ -280,10 +292,17 @@ def analyze_goal(
         else:
             aggregation = "count"
             values = grouped.size().sort_values(ascending=False).head(10)
+        sizes = grouped.size()
+
+        def _label(key: Any) -> str:
+            # A true missing value is its own bucket; say so instead of "nan".
+            return "(missing)" if pd.isna(key) else str(key)
+
         rows = [
-            {"group": str(key), "value": _number(value)}
+            {"group": _label(key), "value": _number(value)}
             for key, value in values.items() if pd.notna(value)
         ]
+        group_sizes = {_label(key): int(sizes[key]) for key, value in values.items() if pd.notna(value)}
         result.update(
             kind="group_comparison", status="answered" if rows else "limited",
             metrics={
@@ -291,12 +310,27 @@ def analyze_goal(
                 "value_column": metric,
                 "aggregation": aggregation,
                 "groups": rows,
+                "group_sizes": group_sizes,
             },
         )
         result["findings"] = [
-            f"{group_col}={row['group']}: {aggregation} {metric or 'rows'}={row['value']:.3g}."
+            f"{group_col}={row['group']}: {aggregation} {metric or 'rows'}={row['value']:.3g}"
+            f" (n={group_sizes[row['group']]})."
             for row in rows[:5]
         ] or ["No groups with valid values were available to compare."]
+        if "(missing)" in group_sizes:
+            result["findings"].append(
+                f"{group_sizes['(missing)']} rows have no {group_col} value; they are shown "
+                "as '(missing)' and are not a real category."
+            )
+        # The loader keeps null-like words in text columns as labels (so "NA" can
+        # be Namibia). When one ranks here, say so: it may be missing data.
+        for label in group_sizes:
+            if label in NULL_WORDS:
+                result["findings"].append(
+                    f"'{label}' ({group_sizes[label]} rows) is a null-like word that is counted "
+                    f"as its own group in {group_col}. If it means missing data, exclude it."
+                )
         return result
 
     if mentioned:
