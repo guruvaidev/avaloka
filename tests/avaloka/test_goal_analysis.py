@@ -191,3 +191,50 @@ def test_a_count_goal_is_still_answered_with_a_row_count():
         result = analyze_goal(_two_revenues(), goal, {"columns": []})
         assert result["status"] == "answered", goal
         assert result["metrics"]["aggregation"] == "count", goal
+
+
+def test_a_missing_group_is_labelled_and_every_group_reports_its_size():
+    """A NaN category was printed as the group "nan" and ranked like a real one,
+    and a one-row group could top the ranking with no sign of how thin it was."""
+    frame = pd.DataFrame({
+        "category": ["A", "A", "B", None, None, None],
+        "earnings": [10.0, 20.0, 100.0, 40.0, 50.0, 60.0],
+    })
+    result = analyze_goal(frame, "average earnings by category", {"columns": []})
+    groups = {g["group"]: g["value"] for g in result["metrics"]["groups"]}
+    assert groups == {"B": 100.0, "(missing)": 50.0, "A": 15.0}
+    assert "nan" not in groups
+    assert result["metrics"]["group_sizes"] == {"B": 1, "(missing)": 3, "A": 2}
+    assert "category=B: mean earnings=100 (n=1)." in result["findings"]
+    assert any("3 rows have no category value" in f for f in result["findings"])
+
+
+def test_correlation_reports_rank_correlation_beside_pearson():
+    """One extreme row drags Pearson down while the ranks still move together."""
+    frame = pd.DataFrame({
+        "uploads": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 1_000_000.0],
+        "earnings": [10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 5.0],
+    })
+    result = analyze_goal(frame, "correlation between uploads and earnings", {"columns": []})
+    pair = result["metrics"]["pairs"][0]
+    rank = result["metrics"]["rank_pairs"][0]
+    assert pair["r"] < 0  # Pearson is dominated by the single outlier
+    assert rank["rho"] > pair["r"]
+    assert "Spearman rho=" in result["findings"][0]
+
+
+def test_a_null_like_label_that_ranks_is_flagged_not_silently_counted():
+    """The loader keeps "nan" in a text column as a label by policy. When it ranks
+    among the groups the report must say it may be missing data."""
+    frame = pd.DataFrame({
+        "category": ["A", "A", "nan", "nan", "nan"],
+        "earnings": [10.0, 20.0, 40.0, 50.0, 60.0],
+    })
+    result = analyze_goal(frame, "average earnings by category", {"columns": []})
+    assert any(
+        "'nan' (3 rows) is a null-like word" in f and "exclude it" in f
+        for f in result["findings"]
+    )
+    plain = analyze_goal(frame.assign(category=["A", "A", "B", "B", "B"]),
+                         "average earnings by category", {"columns": []})
+    assert not any("null-like" in f for f in plain["findings"])
