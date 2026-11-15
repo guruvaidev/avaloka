@@ -37,7 +37,21 @@ from app.api.cloud_connections import get_cloud_connection
 from app.infra.k8s_secrets import create_cloud_secret, kubectl_delete_secret
 
 logger = logging.getLogger(__name__)
-AVALOKA_LOCAL_EXEC_TIMEOUT = 120
+AVALOKA_LOCAL_EXEC_TIMEOUT = 180
+AVALOKA_FULL_DATA_EXEC_TIMEOUT = 300
+
+
+def _get_local_exec_timeout(fidelity: Optional[str] = None) -> int:
+    """Resolve local subprocess timeout, honoring AVALOKA_LOCAL_EXEC_TIMEOUT env override."""
+    env_val = os.getenv("AVALOKA_LOCAL_EXEC_TIMEOUT")
+    if env_val:
+        try:
+            return int(env_val)
+        except ValueError:
+            pass
+    if fidelity == "entire_dataset":
+        return AVALOKA_FULL_DATA_EXEC_TIMEOUT
+    return AVALOKA_LOCAL_EXEC_TIMEOUT
 
 
 import os
@@ -54,6 +68,7 @@ try:
 except Exception:
     pass
 import pandas as pd
+import numpy as np
 import json as _avaloka_json
 
 def avaloka_result(value, kind=None, columns=None, **kw):
@@ -925,12 +940,16 @@ def execution_agent_node_local(state: ETLState) -> ETLState:
     if read_path_map:
         logger.info("[local-exec] multi-file read map: %s", read_path_map)
 
-    execution_result = execute_code_on_local(
-        code=code,
-        input_data_location=resolved_input_location,
-        output_location=candidate_output_location,
-        read_path_map=read_path_map,
-    )
+    local_exec_kwargs = {
+        "code": code,
+        "input_data_location": resolved_input_location,
+        "output_location": candidate_output_location,
+        "read_path_map": read_path_map,
+    }
+    if state.get("analysis_fidelity") is not None:
+        local_exec_kwargs["analysis_fidelity"] = state.get("analysis_fidelity")
+
+    execution_result = execute_code_on_local(**local_exec_kwargs)
 
     new_state = state.copy()
 
@@ -2131,6 +2150,7 @@ def _autogenerate_code(state: dict) -> str:
     # ── Detect output column names from "Return X, Y, Z" pattern ─────
     # e.g. "Return product_id, brand, category_code, purchase_count"
     requested_output_cols = []
+    derived_output_cols = []
     return_match = _re.search(
         r"(?:return|show|output|select|include)\s+([\w_,\s]+?)(?:\.|sort|order|limit|$)",
         user_lower,
@@ -2139,8 +2159,11 @@ def _autogenerate_code(state: dict) -> str:
     if return_match:
         tokens = [t.strip() for t in return_match.group(1).split(",")]
         for token in tokens:
-            if token in columns_lower:
-                requested_output_cols.append(columns_lower[token])
+            ident = token.split()[0] if token else ""
+            if ident in columns_lower:
+                requested_output_cols.append(columns_lower[ident])
+            elif ident:
+                derived_output_cols.append(ident)
 
     # ── Detect group-by column using semantic context ─────────────────
     # Priority 1: "by <col>", "per <col>", "for each <col>", "group by <col>"
@@ -2192,13 +2215,17 @@ def _autogenerate_code(state: dict) -> str:
         if not group_col:
             group_col = columns[0]
 
-    # ── Determine aggregation result column name ──────────────────────
-    # Use name from requested_output_cols if it's not in schema (it's derived)
-    agg_col_name = "count"
-    for col_name in requested_output_cols:
-        if col_name not in columns:  # not a real column → it's the aggregation result
-            agg_col_name = col_name
-            break
+    # ── Determine aggregation result column name & numeric target ─────
+    dtype_map = schema if isinstance(schema, dict) else {}
+    num_cols = [
+        c for c in columns
+        if c != group_col and any(t in str(dtype_map.get(c, "")).lower() for t in ("int", "float", "double", "decimal", "num"))
+    ]
+    target_num_col = next((c for c in num_cols if _re.search(rf"\b{_re.escape(c.lower())}\b", user_lower)), num_cols[0] if num_cols else None)
+
+    agg_col_name = derived_output_cols[0] if derived_output_cols else (
+        f"{target_num_col}_{agg_func}" if agg_func in ("sum", "mean") and target_num_col else "count"
+    )
     if agg_col_name == "count" and "purchase" in user_lower:
         agg_col_name = "purchase_count"
 
@@ -2212,13 +2239,18 @@ def _autogenerate_code(state: dict) -> str:
         extra_cols = [c for c in columns if c != group_col][:3]
 
     # ── Build the script ──────────────────────────────────────────────
+    agg_expr = (
+        f"[{repr(target_num_col)}].{agg_func}()"
+        if agg_func in ("sum", "mean") and target_num_col
+        else ".size()"
+    )
     code = f"""
 import pandas as pd
 
 def main(df):
     result = (
         df.groupby({repr(group_col)})
-        .size()
+        {agg_expr}
         .reset_index(name={repr(agg_col_name)})
         .sort_values({repr(agg_col_name)}, ascending={sort_asc})
         .head({limit})
@@ -2812,6 +2844,7 @@ def execute_code_on_local(
     input_data_location: Optional[np.ndarray] = None,
     output_location: Optional[str] = None,
     read_path_map: Optional[dict] = None,
+    analysis_fidelity: Optional[str] = None,
 ) -> Dict[str, Any]:
     out: Dict[str, Any] = {}
 
@@ -2930,13 +2963,14 @@ def execute_code_on_local(
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write(script_to_run)
 
+    timeout_s = _get_local_exec_timeout(analysis_fidelity)
     try:
         result = subprocess.run(
             [sys.executable, temp_script_path],
             capture_output=True,
             text=True,
             check=False,
-            timeout=int(os.getenv("AVALOKA_LOCAL_EXEC_TIMEOUT", "60")),
+            timeout=timeout_s,
         )
 
         stdout = result.stdout or ""
@@ -2966,7 +3000,7 @@ def execute_code_on_local(
         out["execution_stdout"] = (e.stdout or "")
         out["execution_stderr"] = (e.stderr or "")
         out["status"] = "error"
-        out["execution_error"] = f"Script execution timed out after {int(os.getenv('AVALOKA_LOCAL_EXEC_TIMEOUT', '60'))} seconds"
+        out["execution_error"] = f"Script execution timed out after {timeout_s} seconds"
         logger.error(out["execution_error"])
 
     except FileNotFoundError:
@@ -3036,12 +3070,13 @@ def execute_code_on_ssh(code: str, server: str, input_data_location: str, output
             logger.error("Stderr:\n%s", stderr)
             return out
 
+        timeout_s = _get_local_exec_timeout()
         result = subprocess.run(
             ["ssh", server, f"cd {output_location} && bash execute.sh {remote_script_name}"],
             capture_output=True,
             text=True,
             check=False,
-            timeout=int(os.getenv("AVALOKA_LOCAL_EXEC_TIMEOUT", "60")),
+            timeout=timeout_s,
         )
 
         stdout = result.stdout or ""
@@ -3070,7 +3105,7 @@ def execute_code_on_ssh(code: str, server: str, input_data_location: str, output
         out["execution_stdout"] = (e.stdout or "")
         out["execution_stderr"] = (e.stderr or "")
         out["status"] = "error"
-        out["execution_error"] = f"Script execution timed out after {int(os.getenv('AVALOKA_LOCAL_EXEC_TIMEOUT', '60'))} seconds"
+        out["execution_error"] = f"Script execution timed out after {timeout_s} seconds"
         logger.error(out["execution_error"])
 
     except FileNotFoundError:

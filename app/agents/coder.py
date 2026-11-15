@@ -1413,6 +1413,12 @@ SECURITY AND STABILITY (OOM TRAP PREVENTION):
 - If no suitable alternative fits what was asked, say so to the analyst (raise ValueError with a clear message naming the estimator and why it cannot run at this size) rather than silently reducing the input.
 - This does not relax NEVER RE-SAMPLE THE DATAFRAME above: constrain or replace the model, never shrink the dataframe to make it fit.
 
+ALGORITHMIC COMPLEXITY & VECTORIZATION (ANTI-TIMEOUT TRAP):
+- NEVER use `.iterrows()`, `.itertuples()`, or repeated DataFrame boolean filtering (`df[df['col'] == x]`) inside a `for` or `while` loop. Scanning a DataFrame inside a Python loop has O(N^2) time complexity and will exceed the execution timeout on medium and large datasets.
+- Always prefer vectorized pandas/NumPy operations (`groupby`, `merge`, `merge_asof`, `map`, `isin`, boolean masks, `.to_numpy()`, `np.where`, `np.searchsorted`) over row-by-row Python iteration.
+- When matching ordered intervals, time windows, or sequential dependencies across rows, sort once and use `pd.merge_asof` or binary search (`np.searchsorted`) on pre-extracted NumPy arrays rather than nested loops.
+- When comparing or sorting datetime columns, coerce both sides with `pd.to_datetime(..., errors='coerce')` first. NEVER compare `pd.Timestamp` or `datetime64` values against raw integers (`0` or `-1`), which raises `TypeError: '<' not supported between instances of 'int' and 'Timestamp'`.
+
 Example expected output format:
 ```python
 import pandas as pd
