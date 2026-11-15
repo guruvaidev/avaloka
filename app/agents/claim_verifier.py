@@ -16,7 +16,7 @@ check different things.
 | Asks | will this run against this schema? | is this conclusion supported? |
 | Catches | bad column, unsafe join | overreach, causal language, unsupported numbers |
 
-Five checks, each targeting a way an automated analysis misleads:
+Six checks, each targeting a way an automated analysis misleads:
 
 1. **Causal language from correlational evidence** — "drives", "causes",
    "because of" asserted from a correlation. The single most common overreach,
@@ -28,6 +28,9 @@ Five checks, each targeting a way an automated analysis misleads:
 4. **Unhedged extrapolation** — "will", "guarantees", "always" beyond the data.
 5. **Significance asserted without a test** — "significant" used where no test
    was run, which readers hear as statistical significance.
+6. **A method the code never ran** — "the gradient-boosted model achieves…"
+   over a script that fitted a linear regression. The numbers are real, so the
+   other checks pass; what is wrong is the description of how they were made.
 
 Deterministic and dependency-free. The checks are string- and evidence-level,
 so they run without an LLM, cost nothing, and cannot themselves hallucinate.
@@ -93,6 +96,43 @@ _TEST_EVIDENCE_KEYS = ("p_value", "pvalue", "p_val", "confidence_interval",
 _CAUSAL_EVIDENCE_KEYS = ("experiment", "randomized", "randomised", "ab_test",
                          "treatment", "control", "causal", "uplift",
                          "instrument", "did", "difference_in_differences")
+
+#: Evidence key holding the script that produced the result. It is read by
+#: ``check_method_not_in_code`` only: a script is full of literals (a split
+#: ratio, a tree count) that are not results, so it is kept out of the numeric
+#: evidence the invented-number check trusts.
+_CODE_KEY = "executed_code"
+
+#: Model families a narrative can name, as (terms a reader sees, substrings the
+#: script must contain for the name to be true). Markers are matched against
+#: the lower-cased script, so "gradientboosting" covers GradientBoostingRegressor
+#: and HistGradientBoostingClassifier alike, and "xgb" covers both the xgboost
+#: import and XGBRegressor.
+_METHOD_FAMILIES = {
+    "gradient boosting": (
+        ("gradient-boosted", "gradient boosted", "gradient boosting",
+         "gradient-boosting", "boosted tree", "boosted trees",
+         "xgboost", "lightgbm", "catboost"),
+        ("gradientboosting", "xgb", "lightgbm", "lgbm", "catboost"),
+    ),
+    "random forest": (
+        ("random forest", "random-forest"),
+        ("randomforest",),
+    ),
+    "neural network": (
+        ("neural network", "neural net", "deep learning",
+         "multilayer perceptron", "multi-layer perceptron"),
+        ("torch", "keras", "tensorflow", "mlpregressor", "mlpclassifier"),
+    ),
+}
+
+#: Wording that mentions a method without claiming it produced the result:
+#: a suggestion, a comparison, or a report that it was not used.
+_METHOD_NOT_ASSERTED = (
+    "instead of", "rather than", "not", "without", "could", "would", "should",
+    "consider", "try", "recommend", "recommended", "suggest", "suggested",
+    "timed out", "failed", "unable",
+)
 
 # _NUMBER = re.compile(r"-?\d+(?:\.\d+)?%?")
 #
@@ -200,7 +240,9 @@ def _flatten(evidence: Any, prefix: str = "") -> Dict[str, Any]:
 
 def _evidence_numbers(flat: Dict[str, Any]) -> List[float]:
     numbers: List[float] = []
-    for value in flat.values():
+    for key, value in flat.items():
+        if key == _CODE_KEY:
+            continue
         if isinstance(value, bool):
             continue
         if isinstance(value, (int, float)):
@@ -433,8 +475,38 @@ def check_unsupported_significance(claim: str, flat: Dict[str, Any]) -> Optional
     )
 
 
+def check_method_not_in_code(claim: str, flat: Dict[str, Any]) -> Optional[ClaimFinding]:
+    """A model family named in the narrative that the executed script never used.
+
+    "The gradient-boosted tree model achieves a test RMSE of 10.44" passes every
+    other check when 10.44 really is in the result table. It is still false if
+    the script that produced 10.44 fitted ``np.linalg.lstsq``: the reader is told
+    which method earned the number, and that is the part they will repeat.
+
+    Silent without a script to compare against, and silent when the sentence
+    only suggests, compares or rules out a method.
+    """
+    code = flat.get(_CODE_KEY)
+    if not isinstance(code, str) or not code.strip():
+        return None
+    if _mentions(claim, _METHOD_NOT_ASSERTED) or "n't" in claim.lower():
+        return None
+    script = code.lower()
+    for family, (terms, markers) in _METHOD_FAMILIES.items():
+        term = _mentions(claim, terms)
+        if term and not any(marker in script for marker in markers):
+            return ClaimFinding(
+                claim=claim, verdict=Verdict.CONTRADICTED, check="method_not_in_code",
+                detail=(f"names a {family} model ({term!r}), but the executed code "
+                        f"contains no {family} estimator"),
+                evidence_ref=_CODE_KEY,
+            )
+    return None
+
+
 CHECKS = (
     check_contradicted_by_metrics,
+    check_method_not_in_code,
     check_ordering_contradicted,
     check_causal_overreach,
     check_unsupported_significance,
@@ -540,6 +612,18 @@ def claim_verifier_node(state: Dict[str, Any]) -> Dict[str, Any]:
             },
             "verification_safe_to_present": True,
         }
+
+    # Attached after the guard above on purpose: ``generated_code`` survives in
+    # state from an earlier turn, so on its own it is not evidence that this
+    # turn ran anything. It is only offered when the result table came from the
+    # script and no training agent contributed -- a model trained by the MTA is
+    # described by training_metrics, not by the coder's script, and comparing
+    # its narrative to that script would flag a true sentence.
+    code = state.get("generated_code")
+    if (isinstance(code, str) and code.strip() and execution_output
+            and state.get("training_metrics") is None
+            and state.get("evaluation_report") is None):
+        evidence[_CODE_KEY] = code
 
     report = verify_claims(narrative, evidence)
     return {
