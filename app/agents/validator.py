@@ -1925,6 +1925,54 @@ class FilteredMLTrainingVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
 
+class RowIterationComplexityVisitor(ast.NodeVisitor):
+    """Flags O(N^2) row-iteration anti-patterns on full-dataset executions."""
+
+    def __init__(self, enforce_full_data: bool = False):
+        self.enforce_full_data = enforce_full_data
+        self.loop_depth = 0
+        self.errors: list[str] = []
+
+    def _add_error(self, msg: str):
+        if msg not in self.errors:
+            self.errors.append(msg)
+
+    def visit_For(self, node: ast.For):
+        self.loop_depth += 1
+        self.generic_visit(node)
+        self.loop_depth -= 1
+
+    def visit_While(self, node: ast.While):
+        self.loop_depth += 1
+        self.generic_visit(node)
+        self.loop_depth -= 1
+
+    def visit_Call(self, node: ast.Call):
+        if self.enforce_full_data and isinstance(node.func, ast.Attribute):
+            if node.func.attr == "iterrows":
+                self._add_error(
+                    f"PerformanceError on line {node.lineno}: DataFrame.iterrows() is too slow for full-dataset "
+                    "execution and risks hitting the timeout. Use vectorized pandas/NumPy operations, "
+                    "groupby, merge/merge_asof, or pre-extracted NumPy arrays (.to_numpy()) with np.searchsorted."
+                )
+        self.generic_visit(node)
+
+    def visit_Subscript(self, node: ast.Subscript):
+        if (
+            self.enforce_full_data
+            and self.loop_depth > 0
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "df"
+            and isinstance(node.slice, (ast.Compare, ast.BoolOp, ast.BinOp, ast.UnaryOp))
+        ):
+            self._add_error(
+                f"PerformanceError on line {node.lineno}: Filtering DataFrame 'df[...]' inside a loop creates "
+                "an O(N^2) scan that times out on large datasets. Pre-sort/group once outside the loop or use "
+                "np.searchsorted / pd.merge_asof."
+            )
+        self.generic_visit(node)
+
+
 def _prompt_requests_filtered_ml(user_prompt: str) -> bool:
     prompt = (user_prompt or "").lower()
     ml_terms = (
@@ -2057,6 +2105,12 @@ def static_semantic_validator_node(state: CodingAgentState) -> dict:
         deprecated_api_visitor = DeprecatedApiVisitor()
         deprecated_api_visitor.visit(tree)
 
+        # 16) Full-dataset O(N^2) row-iteration / loop-scan guardrail
+        complexity_visitor = RowIterationComplexityVisitor(
+            enforce_full_data=(state.get("analysis_fidelity") == "entire_dataset")
+        )
+        complexity_visitor.visit(tree)
+
         # Combine errors from both checks
         all_errors: list[str] = []
         all_errors.extend(col_visitor.errors)
@@ -2074,6 +2128,7 @@ def static_semantic_validator_node(state: CodingAgentState) -> dict:
         all_errors.extend(label_encoder_visitor.errors)
         all_errors.extend(synthetic_prediction_visitor.errors)
         all_errors.extend(deprecated_api_visitor.errors)
+        all_errors.extend(complexity_visitor.errors)
 
         if (
             _prompt_requests_filtered_ml(state.get("user_prompt", ""))
@@ -2112,12 +2167,34 @@ def static_semantic_validator_node(state: CodingAgentState) -> dict:
         }
 
 import io
+import numpy as np
 import pandas as pd
 from contextlib import redirect_stdout, redirect_stderr
+from file_handler.null_policy import read_csv_best_effort
 
 
 VALIDATION_SAMPLE_ROWS_ENV = "AVALOKA_VALIDATION_SAMPLE_ROWS"
 DEFAULT_VALIDATION_SAMPLE_ROWS = 100
+
+BENIGN_SAMPLE_EXECUTION_ERRORS = frozenset({
+    "Execution returned an empty DataFrame.",
+    "Sample data unavailable for execution",
+    "Sample data unavailable for execution.",
+    "Validation failed.",
+    "main() function not found in the generated code.",
+})
+
+
+def is_fatal_sample_execution_error(err: Any) -> bool:
+    """True when execute_code_node recorded a genuine runtime crash rather than a benign skip."""
+    if not err:
+        return False
+    return str(err).strip() not in BENIGN_SAMPLE_EXECUTION_ERRORS
+
+
+def _noop_avaloka_result(value, kind=None, columns=None, **kw):
+    """Sentinel stub for in-memory sample validation runs."""
+    return None
 
 
 def validation_sample_rows() -> int:
@@ -2206,7 +2283,13 @@ def execute_code_node(state: CodingAgentState) -> dict:
     # Single exec scope so top-level imports/helpers are visible inside main();
     # __name__ is deliberately not "__main__" so the script's entry block
     # (which reads the full dataset and writes the real output) stays inert here.
-    exec_scope = {"pd": pd, "__name__": "avaloka_sample_execution"}
+    exec_scope = {
+        "pd": pd,
+        "np": np,
+        "read_csv_best_effort": read_csv_best_effort,
+        "avaloka_result": _noop_avaloka_result,
+        "__name__": "avaloka_sample_execution",
+    }
 
     # Capture stdout and stderr
     stdout_capture = io.StringIO()
@@ -2234,6 +2317,7 @@ def execute_code_node(state: CodingAgentState) -> dict:
                 "execution_stdout": stdout,
                 "execution_stderr": stderr,
                 "execution_error": message,
+                "code_validation_feedback": f"RuntimeError during sample validation: {message}",
                 "execution_output_data": None
             }
 
@@ -2269,10 +2353,15 @@ def execute_code_node(state: CodingAgentState) -> dict:
         }
     except Exception as e:
         logger.error(f"❌ Code execution failed: {e}")
+        err_str = str(e)
         return {
             "execution_stdout": stdout_capture.getvalue(),
             "execution_stderr": stderr_capture.getvalue(),
-            "execution_error": str(e),
+            "execution_error": err_str,
+            "code_validation_feedback": (
+                f"RuntimeError during sample execution ({type(e).__name__}): {err_str}. "
+                "Fix the runtime bug so main(df) executes cleanly without raising an exception."
+            ),
             "execution_output_data": None
         }
 
@@ -2380,9 +2469,15 @@ def logical_semantic_validator_node(state: CodingAgentState) -> dict:
     logger.info("--- Checking Logic with LLM Reviewer ---")
     logger.info(f"--- CODE TO VALIDATE ---\n{state.get('generated_code')}\n")
 
+    fatal_exec_feedback = (
+        state.get("code_validation_feedback")
+        if is_fatal_sample_execution_error(state.get("execution_error"))
+        else None
+    )
+
     if validator_llm is None:
         logger.info("Skipping LLM review because GROQ_API_KEY_CODING_AGENT is not configured.")
-        return {"logical_semantic_error": False, "code_validation_feedback": "APPROVED",
+        return {"logical_semantic_error": False, "code_validation_feedback": fatal_exec_feedback or "APPROVED",
                 **record_logical_verdict(LogicalReviewDecision.SKIPPED_NO_REVIEWER)}
     
     # strict_mode = os.getenv(STRICT_LOGIC_ENV, "0") == "1"
@@ -2522,7 +2617,7 @@ def logical_semantic_validator_node(state: CodingAgentState) -> dict:
         # handled exactly like an unparseable reply (neither approval nor rejection).
         no_correctness_verdict = {
             "logical_semantic_error": False,
-            "code_validation_feedback": "Reviewer response unparsable; skipping logical validation.",
+            "code_validation_feedback": fatal_exec_feedback or "Reviewer response unparsable; skipping logical validation.",
         }
         # A readable is_fabricated=true stands on its own and still goes to the
         # recheck below; without one there is nothing readable to act on.
@@ -2536,7 +2631,7 @@ def logical_semantic_validator_node(state: CodingAgentState) -> dict:
             }
         if verdict_correct is True:
             logger.info("✅ Logic is correct.")
-            return {"logical_semantic_error": False, "code_validation_feedback": "APPROVED",
+            return {"logical_semantic_error": False, "code_validation_feedback": fatal_exec_feedback or "APPROVED",
                     **record_logical_verdict(
                         LogicalReviewDecision.APPROVED,
                         judged_correct=judged_correct, judged_fabricated=judged_fabricated)}
@@ -2654,9 +2749,14 @@ def logical_semantic_validator_node(state: CodingAgentState) -> dict:
                 }
 
             # DEFAULT MODE (soft flags only): do NOT block pipeline; don't trigger stub fallback
+            default_fb = (
+                (fatal_exec_feedback or feedback)
+                if is_fatal_sample_execution_error(state.get("execution_error"))
+                else "APPROVED"
+            )
             return {
                 "logical_semantic_error": False,
-                "code_validation_feedback": "APPROVED",
+                "code_validation_feedback": default_fb,
                 "logical_review_feedback": feedback,  # store notes separately
                 **record_logical_verdict(
                     LogicalReviewDecision.SOFT_FLAG_FABRICATION_UNREADABLE if fabrication_unreadable
@@ -2668,7 +2768,7 @@ def logical_semantic_validator_node(state: CodingAgentState) -> dict:
         logger.error(f"Reviewer LLM failed to return valid JSON: {exc}")
         return {
             "logical_semantic_error": False,
-            "code_validation_feedback": "Reviewer response unparsable; skipping logical validation.",
+            "code_validation_feedback": fatal_exec_feedback or "Reviewer response unparsable; skipping logical validation.",
             **record_logical_verdict(LogicalReviewDecision.NO_VERDICT_UNPARSEABLE),
         }
 
