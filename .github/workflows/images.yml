@@ -105,6 +105,12 @@ jobs:
           if [[ "${{ inputs.force }}" == "true" ]]; then
             echo "skip=false" >> "$GITHUB_OUTPUT"
             echo "::notice::force requested; rebuilding $image:$tag"
+          elif [[ "${{ github.ref_type }}" == "tag" ]]; then
+            # A release tag points at a commit main has normally built already,
+            # so its content tag exists. Skipping would publish no :<version>
+            # tag at all: the semver tags are only applied by the build below.
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::release tag ${{ github.ref_name }}; building to apply its version tags"
           elif docker manifest inspect "$image:$tag" >/dev/null 2>&1; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "::notice::$image:$tag already exists — nothing in this image changed"

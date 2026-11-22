@@ -226,8 +226,11 @@ class TestExecuteTrainingLocal:
         }
 
         agent = ModelTrainingAgent()
-        # Training runs only on an explicit confirmation of the plan.
-        state = _make_state(training_plan=plan, training_plan_reply_action="confirm")
+        # Training runs only on an explicit confirmation of the plan, and -- since
+        # the enqueue-only change -- only on the worker pass (training_scheduled=True);
+        # the chat turn itself just schedules.
+        state = _make_state(training_plan=plan, training_plan_reply_action="confirm",
+                            training_scheduled=True)
 
         mock_local_trainer = MagicMock()
         mock_local_trainer.train.return_value = mock_result

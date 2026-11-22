@@ -23,8 +23,9 @@ import {
   sendLoginMagicLink,
 } from "@/lib/admin-login.functions";
 
-import { acceptAppUserInvite } from "@/lib/configurations.functions";
+import { acceptAppUserInvite, claimPendingProfessionalTeamInvitations } from "@/lib/configurations.functions";
 import { getMyActivePlan } from "@/lib/plan.functions";
+import { amISupportAdmin } from "@/lib/support-tickets.functions";
 import { ACTIVE_PLAN_KEY } from "@/lib/use-active-plan";
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -90,6 +91,7 @@ const slides = [
 function LoginPage() {
   const navigate = useNavigate();
   const acceptInviteFn = useServerFn(acceptAppUserInvite);
+  const claimTeamInvitesFn = useServerFn(claimPendingProfessionalTeamInvitations);
   const sendLoginMagicLinkFn = useServerFn(sendLoginMagicLink);
   const resolvePlanFn = useServerFn(getMyActivePlan);
   const checkAccountActiveFn = useServerFn(checkMyAccountActive);
@@ -100,10 +102,16 @@ function LoginPage() {
   const [index, setIndex] = useState(0);
   const [theme, setTheme] = useState<"light" | "dark">("light");
 
-  const getPostLoginRoute = (userEmail?: string | null) =>
-    userEmail?.toLowerCase() === "support@avaloka.ai"
-      ? "/support-queries"
-      : "/proanalysis";
+  const amISupportAdminFn = useServerFn(amISupportAdmin);
+  // Support-desk admins (ADMIN_EMAILS, server configuration) land on the queue.
+  const getPostLoginRoute = async () => {
+    try {
+      const { isAdmin } = await amISupportAdminFn();
+      return isAdmin ? "/support-queries" : "/proanalysis";
+    } catch {
+      return "/proanalysis";
+    }
+  };
 
   // When we arrive from a magic link the URL carries the auth hash — render a
 
@@ -205,12 +213,17 @@ function LoginPage() {
             } catch (err) {
               console.error("Failed to activate invited user", err);
             } finally {
+              try {
+                await claimTeamInvitesFn();
+              } catch (err) {
+                console.error("Failed to accept team invitations", err);
+              }
               await primePlan();
               // Clear the hash so we don't re-process it
               history.replaceState(null, "", window.location.pathname + window.location.search);
               localStorage.removeItem("admin-bypass");
               navigate({
-                to: getPostLoginRoute(data.user?.email),
+                to: await getPostLoginRoute(),
                 replace: true,
               });
             }
@@ -236,10 +249,15 @@ function LoginPage() {
         console.error("Failed to activate invited user", err);
       }
       try {
+        await claimTeamInvitesFn();
+      } catch (err) {
+        console.error("Failed to accept team invitations", err);
+      }
+      try {
         await primePlan();
       } finally {
         localStorage.removeItem("admin-bypass");
-        navigate({ to: getPostLoginRoute(email), replace: true });
+        navigate({ to: await getPostLoginRoute(), replace: true });
       }
     };
 
@@ -259,7 +277,7 @@ function LoginPage() {
       }, 0);
     });
     return () => sub.subscription.unsubscribe();
-  }, [acceptInviteFn, checkAccountActiveFn, navigate, queryClient, resolvePlanFn]);
+  }, [acceptInviteFn, claimTeamInvitesFn, checkAccountActiveFn, navigate, queryClient, resolvePlanFn]);
 
   // Safety net: if signing in still hasn't finished after 15 s, reload once (the token
   // is fresh by then). If it is still stuck after that, show the login form instead

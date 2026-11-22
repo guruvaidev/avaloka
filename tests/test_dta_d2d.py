@@ -126,7 +126,7 @@ def run_sequential_tests():
 
     # The source database is the same for all tests
     source_creds = {
-        "host": "10.111.16.10",
+        "host": "10.0.0.10",
         "port": 3306,
         "user": "avaloka",
         "password": "avaL0kap@ssword",
@@ -147,7 +147,7 @@ def run_sequential_tests():
     
     # Base destination credentials (we will copy and update the 'table' per test)
     base_dest_creds = {
-        "host": "10.111.16.4",
+        "host": "10.0.0.4",
         "port": 5432,
         "user": "avaloka",
         "password": "avaL0kapa$$word",

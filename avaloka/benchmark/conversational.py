@@ -131,8 +131,11 @@ DIMENSION_FLOOR = 1.0
 
 #: Local models to try, in preference order: the owner's named first choice,
 #: then Gemma from smallest upward. The server's own tag list decides which of
-#: these exists; nothing here is assumed present.
-LOCAL_MODEL_PREFERENCE = ("qwen2.5:3b-instruct", "gemma3:270m", "gemma3:1b",
+#: these exists; nothing here is assumed present. The first entry is the
+#: product's default local model (app.core.inference.DEFAULT_LOCAL_MODEL); this
+#: package may not import app.*, so tests/test_local_model_licence.py keeps the
+#: two equal.
+LOCAL_MODEL_PREFERENCE = ("qwen3:4b-instruct-2507-q4_K_M", "gemma3:270m", "gemma3:1b",
                           "gemma3:4b", "gemma4:e4b")
 
 #: Hosted fallback, used only when no local model answers.

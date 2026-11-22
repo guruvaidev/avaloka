@@ -423,8 +423,9 @@ EGRESS_CHANNELS: Dict[str, Tuple[re.Pattern, str, Set[str]]] = {
         "third party, but outside the customer's cluster) when an operator sets BOTH "
         "AVALOKA_ANALYTICS_EXPORT=on and an https endpoint. There is no default host and "
         "nothing schedules the export on develop-1.6, so by default this channel carries "
-        "nothing. When enabled it carries behavioural events only -- event types, "
-        "timings, outcomes, error class names, route templates, chart types -- plus a "
+        "nothing. When enabled it carries metadata only (owner decision D16.5) -- event "
+        "types, timings, counts, outcomes, error class names, route templates, chart "
+        "types, versions, held to an explicit allowlist at the one egress point -- plus a "
         "per-analyst pseudonym re-keyed every 28 days with a secret that stays in the "
         "deployment. It carries NO question text in any form: the analyst's question, "
         "which contains column and table names, is stored only in the deployment's own "
@@ -474,10 +475,18 @@ EGRESS_CHANNELS: Dict[str, Tuple[re.Pattern, str, Set[str]]] = {
             "app/services/embedding_utils.py",
         },
     ),
+    # Embeddings are local by default (1.6 hotfix, as 2.0's #579). Before, the "auto" default sent
+    # memory text (raw queries, hints, LLM answers, schema JSON with table and
+    # column names) to OpenAI whenever the CHAT key OPENAI_API_KEY was set. The
+    # pattern now names the dedicated opt-in key separately: \b keeps
+    # OPENAI_API_KEY from matching inside EMBEDDING_OPENAI_API_KEY, so a module
+    # that reads only the opt-in key, or only the chat key, is still seen.
     "embedding_provider": (
-        re.compile(r"OpenAIEmbeddings|OPENAI_API_KEY"),
-        "memory/RAG text is embedded by OpenAI when OPENAI_API_KEY is set, otherwise by "
-        "local sentence-transformers, otherwise a zero-vector -- only the first leaves the cluster",
+        re.compile(r"OpenAIEmbeddings|EMBEDDING_OPENAI_API_KEY|\bOPENAI_API_KEY\b"),
+        "memory/RAG text (queries, hints, answers, schema JSON with table and column names) "
+        "is embedded by the bundled local sentence-transformer by default, a zero-vector as "
+        "the last resort; it goes to OpenAI only on the explicit opt-in "
+        "EMBEDDING_PROVIDER=openai plus EMBEDDING_OPENAI_API_KEY -- OPENAI_API_KEY never selects it",
         {
             # The conversational agent reads OPENAI_API_KEY to decide whether a
             # hosted model is available before it routes a turn.
@@ -486,12 +495,16 @@ EGRESS_CHANNELS: Dict[str, Tuple[re.Pattern, str, Set[str]]] = {
             # model_fallback.py is NOT listed here any more: its only match was
             # the langchain_openai package name, which is the chat client, not
             # OpenAIEmbeddings. It is declared under openai_compatible_llm_prompts.
+            # The one module that can send: it reads EMBEDDING_OPENAI_API_KEY and
+            # calls OpenAIEmbeddings().embed_query, only after the opt-in.
             "app/services/embedding_utils.py",
+            # Reads no key itself now; its production check names the opt-in
+            # key in the message it raises.
             "app/services/memory_runtime.py",
-            # milvus_recorder.py is NOT listed: its only OPENAI_API_KEY mentions are
-            # in docstrings documenting the cascade. It delegates to
-            # embedding_utils.embed_text (above), which is where the key is read
-            # (:79) and OpenAIEmbeddings().embed_query is called (:85). The
+            # milvus_recorder.py is NOT listed: its only key mentions are in
+            # docstrings documenting provider selection. It delegates to
+            # embedding_utils.embed_text (above), which is where the opt-in key is
+            # read and OpenAIEmbeddings().embed_query is called. The
             # third party and the module that reaches it are both still declared;
             # only the module that merely describes the behaviour is not.
         },

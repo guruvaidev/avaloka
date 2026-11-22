@@ -83,13 +83,11 @@ type Step =
 
 const TOTAL_STEPS = 5;
 
-const MOCK_FILES: RemoteFile[] = [
-  { id: "doc-01", name: "Doc.01", type: "CSV", size: "120MB", columns: 12, rows: 10 },
-  { id: "doc-04", name: "Doc.04", type: "XLSX", size: "80MB", columns: 5, rows: 25 },
-  { id: "doc-05", name: "Doc.05", type: "CSV", size: "90MB", columns: 8, rows: 15 },
-  { id: "doc-08", name: "Doc.08", type: "XLSX", size: "45MB", columns: 6, rows: 30 },
-  { id: "doc-12", name: "Doc.12", type: "CSV", size: "210MB", columns: 18, rows: 42 },
-];
+// Tiles with a real backend path in handleTestAuth. Every other provider tile
+// renders "Coming soon" and cannot be selected: they used to "authenticate"
+// on a timer (any password without "fail" passed) and then list mock files.
+// Add a provider here only together with its backend call.
+const LIVE_PROVIDERS: ReadonlySet<Provider> = new Set<Provider>(["bigquery"]);
 
 const STEP_NUMBER: Record<Step, number> = {
   "select-provider": 1,
@@ -265,17 +263,9 @@ export function ConnectCloudModal({ open, onOpenChange }: { open: boolean; onOpe
       return;
     }
 
-    setTimeout(() => {
-      const pw = creds.password ?? "";
-      if (!pw || pw.toLowerCase().includes("fail")) {
-        const msg = "Authentication failed. Check credentials and try again.";
-        setErrorMsg(msg);
-        setStep("auth-error");
-      } else {
-        setRemoteFiles([]);
-        setStep("files");
-      }
-    }, 900);
+    // No backend connector for this provider: never reach "files" without one.
+    setErrorMsg(`${providerMeta?.name ?? "This"} connector is coming soon.`);
+    setStep("auth-error");
   };
 
   const handleStartUpload = () => {
@@ -430,15 +420,26 @@ export function ConnectCloudModal({ open, onOpenChange }: { open: boolean; onOpe
           <div className="min-h-0">
             {step === "select-provider" && (
               <div className="grid grid-cols-3 gap-3">
-                {PROVIDERS.map((p) => (
+                {PROVIDERS.map((p) => {
+                  const comingSoon = !LIVE_PROVIDERS.has(p.id);
+                  return (
                   <button
                     key={p.id}
-                    onClick={() => setProvider(p.id)}
+                    onClick={() => !comingSoon && setProvider(p.id)}
+                    disabled={comingSoon}
+                    aria-disabled={comingSoon}
+                    data-testid={`provider-tile-${p.id}`}
                     className={cn(
-                      "flex h-[96px] flex-col items-center justify-center gap-1.5 rounded-lg border bg-card px-2 py-2 transition hover:border-primary hover:shadow-sm",
-                      provider === p.id ? "border-primary ring-1 ring-primary/30" : "border-border",
+                      "relative flex h-[96px] flex-col items-center justify-center gap-1.5 rounded-lg border bg-card px-2 py-2 transition",
+                      comingSoon ? "cursor-not-allowed border-border opacity-60" : "hover:border-primary hover:shadow-sm",
+                      !comingSoon && provider === p.id ? "border-primary ring-1 ring-primary/30" : "border-border",
                     )}
                   >
+                    {comingSoon && (
+                      <span className="absolute right-1.5 top-1.5 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                        Coming soon
+                      </span>
+                    )}
                     <span className="flex h-10 items-center justify-center">
                       <span className="flex items-center justify-center rounded-md dark:bg-white dark:p-1.5">
                         <img
@@ -450,7 +451,8 @@ export function ConnectCloudModal({ open, onOpenChange }: { open: boolean; onOpe
                     </span>
                     <span className="text-center text-[13px] font-medium leading-tight text-foreground">{p.name}</span>
                   </button>
-                ))}
+                  );
+                })}
                 {STORAGE_TILES.map((t) => (
                   <button
                     key={t.id}
@@ -727,7 +729,7 @@ export function ConnectCloudModal({ open, onOpenChange }: { open: boolean; onOpe
 
             {step === "files" && (
               <FilesStep
-                files={remoteFiles.length ? remoteFiles : MOCK_FILES}
+                files={remoteFiles}
                 selected={selectedFiles}
                 setSelected={setSelectedFiles}
                 uploads={uploads}
@@ -751,7 +753,7 @@ export function ConnectCloudModal({ open, onOpenChange }: { open: boolean; onOpe
               <PreviewStep
                 provider={providerMeta}
                 creds={creds}
-                files={(remoteFiles.length ? remoteFiles : MOCK_FILES).filter((f) => selectedFiles.has(f.id))}
+                files={remoteFiles.filter((f) => selectedFiles.has(f.id))}
                 uploads={uploads.filter((u) => u.status === "done")}
                 meta={meta}
                 saFileName={saFileName}
@@ -779,7 +781,7 @@ export function ConnectCloudModal({ open, onOpenChange }: { open: boolean; onOpe
             step={step}
             isPending={create.isPending || insertFiles.isPending}
             onCancel={requestClose}
-            onContinueProvider={() => provider && setStep("credentials")}
+            onContinueProvider={() => provider && LIVE_PROVIDERS.has(provider) && setStep("credentials")}
             providerSelected={!!provider}
             onAuth={handleTestAuth}
             onContinueFiles={handleStartUpload}

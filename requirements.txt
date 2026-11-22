@@ -139,7 +139,7 @@ gcsfs==2025.9.0
 #data transfer
 sentence_transformers>=3.2.1
 daft>=0.7.1,<0.8
-sqlglot
+sqlglot==30.27.0
 connectorx
 markdownify
 chromadb

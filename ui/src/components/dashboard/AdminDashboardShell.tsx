@@ -37,7 +37,7 @@ export function AdminDashboardShell({
   const [collapsed, setCollapsed] = useState(false);
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 bg-primary text-primary">
+    <div className="flex min-h-0 min-w-0 flex-1 bg-primary text-primary dark:bg-[#131316]">
       {!collapsed && (
         <ProjectsSidebar
           projects={projects}
@@ -53,8 +53,8 @@ export function AdminDashboardShell({
           canEdit={canEdit}
         />
       )}
-      <main className="relative flex flex-1 flex-col overflow-hidden">
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-full bg-[radial-gradient(150%_100%_at_42.83%_20.65%,#4680e400_43.87%,#1565EF_150%,#fff)]" />
+      <main className="relative my-3 mr-3 ml-3 flex flex-1 flex-col overflow-hidden rounded-l-xl rounded-r-none border border-border-secondary bg-primary dark:border-white/10 dark:bg-[#1A1A1E]">
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-full bg-[radial-gradient(150%_100%_at_42.83%_20.65%,#4680e400_43.87%,#1565EF_150%,#fff)] dark:bg-[radial-gradient(100%_80%_at_50%_100%,#1565EF66_0%,transparent_80%)]" />
         <div className="scrollbar-hide relative flex flex-1 flex-col overflow-y-auto">
           <div className="flex items-center justify-between px-6 pt-4">
             {collapsed ? (

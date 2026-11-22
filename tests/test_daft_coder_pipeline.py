@@ -1099,7 +1099,7 @@ def run_sequential_tests():
 
     # Pointing to the Postgres database for the source
     source_creds = {
-        "host": "10.111.16.4",
+        "host": "10.0.0.4",
         "port": 5432,
         "user": "avaloka",
         "password": "avaL0kapa$$word",
@@ -1110,7 +1110,7 @@ def run_sequential_tests():
     
     # Base destination credentials for Postgres
     base_dest_creds = {
-        "host": "10.111.16.4",
+        "host": "10.0.0.4",
         "port": 5432,
         "user": "avaloka",
         "password": "avaL0kapa$$word",

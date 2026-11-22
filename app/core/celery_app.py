@@ -6,8 +6,11 @@ from datetime import date, datetime, timezone
 from typing import Optional
 
 from langchain_core.messages import AIMessage
-from celery import Celery
+from celery import Celery, Task
+from celery.schedules import crontab
+from celery.exceptions import SoftTimeLimitExceeded, WorkerLostError
 from celery.signals import worker_init
+from celery.worker.request import Request
 from celery.utils.log import get_logger
 from redbeat.schedulers import RedBeatScheduler, RedBeatSchedulerEntry, RedBeatJSONEncoder, RedBeatJSONDecoder, get_redis, ensure_conf
 from dotenv import load_dotenv
@@ -20,19 +23,31 @@ from app.agents.mta_v2.failure_diagnostics import (
 )
 from app.graph.etl_state import ETLState
 from app.core.scheduled_run_context import scheduled_run_context
+from app.core import run_truth
+from app.core import celery_results
 from app.utils import convert_message_objects_to_dicts, convert_message_dicts_to_objects
 
 logger = logging.getLogger(__name__)
 
 load_dotenv()
 REDIS_URL = os.getenv("CELERY_REDIS_URL", "redis://avaloka-redis:6379/0")
-celery_app = Celery('celery_app', broker=REDIS_URL, backend=REDIS_URL)
+# Results: Redis is the cache, Postgres the record (app/core/celery_results.py).
+# A finished result is kept in Redis for CELERY_RESULT_EXPIRES seconds (7 days
+# by default) and in public.celery_task_results for CELERY_RESULT_RETENTION_DAYS.
+celery_app = Celery('celery_app', broker=REDIS_URL, backend=celery_results.backend_url(REDIS_URL))
 celery_app.conf.update(
+    # For the task name and date_done; the backend drops args and kwargs.
     result_extended=True,
-    result_expires=None,
-    task_time_limit=1800,        # Increased timeout as ray jobs can take longer
-    task_soft_time_limit=1860,
+    result_expires=celery_results.result_expires_from_env(),
+    # The soft limit must fire first: it raises SoftTimeLimitExceeded inside
+    # the task, which agent_task records as a failed run. The hard limit only
+    # kills the process; _ScheduledRunRequest.on_timeout records that one.
+    task_soft_time_limit=1800,   # Ray jobs can take long, so 30 minutes of work
+    task_time_limit=1860,        # then 60 s to write the failure before the kill
     worker_prefetch_multiplier=1,
+    task_track_started=True,
+    beat_scheduler="app.core.celery_app:AvalokaScheduler",
+    redbeat_redis_url=REDIS_URL,
 )
 ensure_conf(celery_app)
 
@@ -83,6 +98,12 @@ class AvalokaEntry(RedBeatSchedulerEntry):
 
         return self
 
+# Housekeeping entries that run every few minutes for ever: the scheduler does
+# not append their run ids to task_data (which exists for user schedules' run
+# history and would otherwise grow without end).
+_UNTRACKED_BEAT_ENTRIES = {"reap-idle-user-ray-clusters", "purge-celery-task-results"}
+
+
 class AvalokaScheduler(RedBeatScheduler):
     Entry = AvalokaEntry
 
@@ -109,7 +130,7 @@ class AvalokaScheduler(RedBeatScheduler):
             except Exception as exc:
                 logger.exception('Scheduler: Message Error: %s', exc)
             else:
-                if result and hasattr(result, 'id'):
+                if result and hasattr(result, 'id') and entry.name not in _UNTRACKED_BEAT_ENTRIES:
                     with get_redis(self.app).pipeline() as pipe:
                         if entry.max_runs > -1 and entry.total_run_count + 1 >= entry.max_runs:
                             entry.enabled = False
@@ -223,6 +244,21 @@ def _register_side_tasks(**_kwargs):
         import app.services.milvus_recorder  # noqa: F401
     except Exception as exc:  # noqa: BLE001
         logger.warning("[worker] milvus recorder task not registered (%s: %s)", type(exc).__name__, exc)
+    try:
+        from app.infra import training_tasks
+        training_tasks.tasks()
+        training_tasks.poll_task()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[worker] training tasks not registered (%s: %s)", type(exc).__name__, exc)
+
+
+@worker_init.connect
+def _check_result_store_config(**_kwargs):
+    """Say at start-up, not only at 03:17, when the result retention is invalid."""
+    try:
+        celery_results.retention_days()
+    except celery_results.ResultStoreConfigError as exc:
+        logger.error("[results] invalid configuration: %s. The daily purge refuses to run until it is fixed.", exc)
 
 
 def _supabase():
@@ -334,9 +370,38 @@ def _ray_job_from_final(final: dict) -> dict | None:
     }
 
 
+NOTHING_RAN_MESSAGE = "Nothing was executed: the scheduled analysis produced no execution result."
+
+
 def _run_status_from_final(final: dict, task_type: str | None = None):
+    """(status, error) for scheduled_runs; status is derived from run truth."""
+    status, error, _truth = _run_outcome_from_final(final, task_type=task_type)
+    return status, error
+
+
+def _run_outcome_from_final(final: dict, task_type: str | None = None):
+    """(status, error, run_truth) for a scheduled run's final state.
+
+    A run that executed nothing is a failure, never a success: a non-dict
+    final state, or an execute run with no execution_result status.
+    """
+    status, error = _legacy_status_from_final(final, task_type=task_type)
+    truth = run_truth.classify_scheduled(
+        final,
+        task_type=task_type or "execute",
+        training_failure=error if task_type == "training" and status == "failure" else None,
+    )
+    if truth["outcome"] == run_truth.FAILED and status != "failure":
+        error = NOTHING_RAN_MESSAGE if truth["reason_code"] == "nothing_ran" else truth["reason"]
+    elif status == "failure" and truth["outcome"] != run_truth.FAILED:
+        # One outcome per run: the stricter reading wins.
+        truth = run_truth.failed("exception", kind="scheduled", detail=error, scope=truth["scope"])
+    return run_truth.legacy_status(truth["outcome"]), error, truth
+
+
+def _legacy_status_from_final(final: dict, task_type: str | None = None):
     if not isinstance(final, dict):
-        return "success", None
+        return "failure", NOTHING_RAN_MESSAGE
     if task_type == "training":
         failure = _training_failure_from_final(final)
         if failure:
@@ -370,7 +435,22 @@ def _record_run_finish(
 ) -> None:
     schedule_data = (scheduled_state or {}).get("task_schedule") or {}
     task_type = str(schedule_data.get("task_type") or "execute")
-    status, error = _run_status_from_final(final, task_type=task_type)
+    tr = (final or {}).get("training_result") if isinstance(final, dict) else None
+    if task_type == "training" and isinstance(tr, dict) and tr.get("status") == "submitted":
+        # Submit-only Ray training: this Celery run only submitted the RayJob.
+        # The row stays `running`; poll_training_job closes it when the job ends.
+        def _q_running():
+            _supabase().table(_SCHEDULED_RUNS_TABLE).update({
+                "status": "running",
+                "result": {"message": f"Training submitted to the shared Ray cluster (job {tr.get('ray_job_name')}).",
+                           "ray_job": _ray_job_from_final(final)},
+            }).eq("run_id", execution_id).execute()
+        try:
+            _q_running()
+        except Exception:
+            logger.warning("[runs] submitted-write failed for %s", execution_id, exc_info=True)
+        return
+    status, error, truth = _run_outcome_from_final(final, task_type=task_type)
     completion_message = None
     if task_type == "training" and status == "failure":
         completion_message = error or TRAINING_FAILURE_MESSAGE
@@ -382,10 +462,15 @@ def _record_run_finish(
             "duration_ms": int((time.perf_counter() - t0) * 1000),
             #"result":      {"output_json": _output_json_from_state(final)},
             "result": {
+                "run_truth": truth,
+                # The output contract's reasons (MAJ-030). A refused result is
+                # run_truth failed/output_contract and has no output_json.
+                "output_contract": ((final or {}).get("execution_result") or {}).get("output_contract"),
                 "output_json": _output_json_from_state(final),
                 "logs": None if task_type == "training" and status == "failure" else _logs_from_final(final),
                 "message": completion_message,
                 "ray_job": _ray_job_from_final(final),
+                "data_scope": ((final or {}).get("execution_result") or {}).get("data_scope"),
             },
             "error":       error,
         }).eq("run_id", execution_id).execute()
@@ -412,6 +497,12 @@ def _record_run_failure(
         safe_message = format_training_failure(failure)
         result = {"logs": None, "message": safe_message}
         error = safe_message
+    timed_out = isinstance(exc, SoftTimeLimitExceeded)
+    result["run_truth"] = run_truth.failed(
+        "timeout" if timed_out else "exception",
+        kind="scheduled",
+        detail="the task's soft time limit was reached" if timed_out else error,
+    )
     def _q():
         client = _supabase()
         client.table(_SCHEDULED_RUNS_TABLE).update({
@@ -426,7 +517,272 @@ def _record_run_failure(
     except Exception:
         logger.warning("[runs] failure-write failed for %s", execution_id, exc_info=True)
 
-@celery_app.task
+
+def _record_run_killed(execution_id: str, json_state, reason_code: str, detail: str,
+                       duration_ms: int | None = None) -> None:
+    """Fail a scheduled run whose task process died before it could write.
+
+    Runs in the worker's parent process (the child is gone). It only moves a
+    row that is still ``running``, so a finish or failure the task already
+    wrote is never overwritten and the run keeps exactly one outcome.
+    """
+    if not (isinstance(json_state, dict) and json_state.get("schedule_id") and execution_id):
+        return
+    truth = run_truth.failed(reason_code, kind="scheduled", detail=detail)
+    try:
+        client = _supabase()
+        # Keep what the run already recorded (the nested Ray job's identity).
+        prior = (client.table(_SCHEDULED_RUNS_TABLE).select("result")
+                 .eq("run_id", execution_id).execute())
+        rows = getattr(prior, "data", None) or []
+        result = dict((rows[0] or {}).get("result") or {}) if rows else {}
+        result["run_truth"] = truth
+        (client.table(_SCHEDULED_RUNS_TABLE).update({
+            "status":      run_truth.legacy_status(truth["outcome"]),
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+            "duration_ms": duration_ms,
+            "result":      result,
+            "error":       truth["reason"],
+        })
+         .eq("run_id", execution_id)
+         .eq("status", "running")
+         .execute())
+    except Exception:
+        logger.warning("[runs] killed-write failed for %s", execution_id, exc_info=True)
+
+
+_LEDGER_KIND_BY_TASK_TYPE = {
+    "execute": "analysis",            # a one-off run of the user's question; recurring runs become scheduled_run
+    "sample_profile": "sampling",
+    "training": "training",
+    "start_inference": "deploy_endpoint",
+    "stop_inference": "stop_endpoint",
+}
+
+
+def _is_one_off(task_schedule: Optional[dict]) -> bool:
+    """A run-now or single absolute-time schedule, as opposed to a recurring one."""
+    ts = task_schedule or {}
+    st = str(ts.get("schedule_type") or "")
+    if st == "relative":
+        return int(ts.get("max_runs") or 0) == 1
+    if st == "absolute":
+        return int(ts.get("max_runs") or 1) == 1
+    return False
+
+
+def _ledger_kind(task_schedule: Optional[dict]) -> str:
+    ts = task_schedule or {}
+    task_type = str(ts.get("task_type") or "execute")
+    if task_type == "execute" and not _is_one_off(ts):
+        return "scheduled_run"
+    return _LEDGER_KIND_BY_TASK_TYPE.get(task_type, "scheduled_run")
+
+
+def _ledger_job_id(json_state: dict, execution_id: Optional[str]) -> Optional[str]:
+    """The row this run writes: the chat turn's row when the turn handed its
+    work here (ledger_job_id travels in the Celery state), else the Celery
+    task id, which is a uuid."""
+    return (json_state or {}).get("ledger_job_id") or execution_id
+
+
+def _question_label(json_state: dict) -> Optional[str]:
+    question = ""
+    for m in reversed((json_state or {}).get("messages") or []):
+        if isinstance(m, dict) and m.get("role") in ("human", "user"):
+            question = str(m.get("content") or "")
+            break
+    q = " ".join(question.split("\n\n[Analysis context]", 1)[0].split())
+    q = (q[:77] + "…") if len(q) > 80 else q
+    return f"\u201c{q}\u201d" if q else None
+
+
+def _record_ledger_start(json_state: dict, execution_id: Optional[str]) -> Optional[str]:
+    """agent_task's first act: attach to the turn's row or start this run's own.
+    Recurring runs carry no thread_id, so they never write into the chat."""
+    try:
+        from app.core import job_ledger
+        job_id = _ledger_job_id(json_state, execution_id)
+        if not job_id:
+            return None
+        if job_ledger.attach(job_id, celery_task_id=execution_id):
+            return job_id
+        ts = (json_state or {}).get("task_schedule") or {}
+        one_off = _is_one_off(ts)
+        return job_ledger.start(
+            json_state.get("user_id"), _ledger_kind(ts), job_id=job_id, status="running", origin="celery",
+            thread_id=json_state.get("thread_id") if one_off else None,
+            session_id=json_state.get("session_id"), celery_task_id=execution_id,
+            resource_type="schedule" if json_state.get("schedule_id") else None,
+            resource_id=json_state.get("schedule_id"), label=_question_label(json_state),
+        )
+    except Exception:  # noqa: BLE001 - the ledger never fails the run
+        logger.warning("[agent_task] ledger start failed", exc_info=True)
+        return None
+
+
+def _previous_run_succeeded(schedule_id: Optional[str], current_run_id: Optional[str]) -> Optional[bool]:
+    """Did the schedule's previous run succeed? None when there was none or the
+    table cannot be read (then the bell rings: silence must be earned)."""
+    if not schedule_id:
+        return None
+    try:
+        rows = (_supabase().table(_SCHEDULED_RUNS_TABLE).select("run_id,status,started_at")
+                .eq("schedule_id", schedule_id).order("started_at", desc=True).limit(5).execute())
+        for r in (getattr(rows, "data", None) or []):
+            if r.get("run_id") == current_run_id:
+                continue
+            return str(r.get("status") or "") == "success"
+        return None
+    except Exception:  # noqa: BLE001
+        logger.debug("[agent_task] previous run lookup failed for %s", schedule_id, exc_info=True)
+        return None
+
+
+def _fallback_bell(json_state: dict, kind: str, status: str, fail_reason: Optional[str], job_id: Optional[str]) -> None:
+    """The bell without the ledger: same closed-vocabulary text, same ref."""
+    try:
+        import asyncio
+        from app.core import job_ledger
+        from app.services import notification_service
+        job = job_ledger.Job(id=str(job_id or ""), user_id=str(json_state.get("user_id")), kind=kind, status=status,
+                             fail_reason=fail_reason, thread_id=json_state.get("thread_id"),
+                             label=_question_label(json_state))
+        text = job_ledger.notification_text(job)
+        asyncio.run(notification_service.create_notification(
+            job.user_id, text["type"], text["title"], text["body"],
+            thread_id=job.thread_id, ref=f"job:{job.id}" if job.id else json_state.get("schedule_id"),
+            extra=text["extra"],
+        ))
+        logger.warning("[agent_task] ledger unavailable; bell rung directly for job %s (%s)", str(job_id)[:8], text["type"])
+    except Exception:  # noqa: BLE001
+        logger.warning("[agent_task] fallback bell failed", exc_info=True)
+
+
+def _notify_job_finished(json_state: dict, final_state: Optional[dict], error: Optional[str] = None,
+                         execution_id: Optional[str] = None) -> None:
+    """The run's terminal transition in the job ledger: one bell, one chat note.
+
+    Rules (lead's ruling 3): a one-off run always notifies; a recurring
+    schedule notifies on every failure, and on success only for its first
+    success and for a recovery after a failure, so a five-minute schedule
+    stays quiet. The chat note goes only to a one-off run's thread. A result
+    the output contract refused ran but did not answer the question: it fails
+    with reason ``not_answered``. The raw error line goes to the ledger row,
+    never into the notification.
+    """
+    try:
+        from app.core import job_ledger
+        json_state = json_state or {}
+        ts = json_state.get("task_schedule") or {}
+        task_type = str(ts.get("task_type") or "execute")
+        user_id = json_state.get("user_id")
+        if not user_id:
+            return
+        one_off = _is_one_off(ts)
+        job_id = _ledger_job_id(json_state, execution_id)
+        if task_type == "training":
+            tr = (final_state or {}).get("training_result") if isinstance(final_state, dict) else None
+            if isinstance(tr, dict) and tr.get("status") == "submitted":
+                # Submitted to Ray, not finished: the poll chain
+                # (app/infra/training_tasks.py) finishes this row and rings
+                # the bell when the RayJob ends.
+                return
+        if error is None:
+            status, err = _run_status_from_final(final_state or {}, task_type=task_type)
+            ok = status == "success"
+            error_line = None if ok else (str(err) if err else None)
+        else:
+            ok, error_line = False, str(error)
+        refused = ((final_state or {}).get("execution_result") or {}).get("status") == "refused"
+        notify = True
+        if task_type == "execute" and not one_off:
+            notify = job_ledger.scheduled_run_should_notify(
+                one_off=False, succeeded=ok,
+                previous_succeeded=_previous_run_succeeded(json_state.get("schedule_id"), execution_id))
+        if job_ledger.get(job_id) is None:
+            # A run that never recorded itself (an inline run-now, an old message).
+            _record_ledger_start(json_state, execution_id)
+        status = "succeeded" if ok else "failed"
+        fail_reason = None if ok else ("not_answered" if refused else "failed")
+        res = job_ledger.finish(
+            job_id, status, fail_reason=fail_reason, error_line=error_line,
+            notify=notify, chat_note=one_off and bool(json_state.get("thread_id")),
+        )
+        if res.job is None and notify:
+            # The ledger could not be read or written (Supabase down, no env):
+            # that must not silence the bell. Ring directly, with the same
+            # text the ledger would have used; notification_service's ref
+            # dedupe is the only net left, which is what it was before.
+            _fallback_bell(json_state, _ledger_kind(ts), status, fail_reason, job_id)
+            return
+        logger.info("[agent_task] job %s %s: notified=%s note=%s", str(job_id)[:8],
+                    "succeeded" if ok else ("not answered" if refused else "failed"),
+                    bool(res.notification_id), res.note_queued)
+    except Exception:
+        logger.warning("[agent_task] completion notification failed", exc_info=True)
+
+
+def _finish_killed_job(execution_id: str, json_state, fail_reason: str, detail: str) -> None:
+    """A task process that died never reached _notify_job_finished; the parent
+    worker ends its ledger row (a row the task already ended is left alone)."""
+    if not isinstance(json_state, dict):
+        return
+    try:
+        from app.core import job_ledger
+        job_id = _ledger_job_id(json_state, execution_id)
+        if job_ledger.get(job_id) is None:
+            _record_ledger_start(json_state, execution_id)
+        ts = json_state.get("task_schedule") or {}
+        one_off = _is_one_off(ts)
+        job_ledger.finish(job_id, "failed", fail_reason=fail_reason, error_line=detail,
+                          chat_note=one_off and bool(json_state.get("thread_id")))
+    except Exception:  # noqa: BLE001
+        logger.warning("[agent_task] ledger finish for a killed task failed", exc_info=True)
+
+
+class _ScheduledRunRequest(Request):
+    """Worker-side request that records runs whose process was killed.
+
+    A hard time limit or a lost worker (OOM kill, segfault) ends the child
+    process, so nothing in agent_task runs; without this the row stays
+    ``running`` forever.
+    """
+
+    def _scheduled_state(self):
+        args = self.args or ()
+        return (self.kwargs or {}).get("json_state") or (args[0] if args else None)
+
+    def _elapsed_ms(self):
+        start = getattr(self, "time_start", None)
+        return int((time.time() - start) * 1000) if start else None
+
+    def on_timeout(self, soft, timeout):
+        super().on_timeout(soft, timeout)
+        if not soft:
+            _record_run_killed(
+                self.id, self._scheduled_state(), "timeout",
+                f"the {timeout}s hard time limit killed the task", self._elapsed_ms(),
+            )
+            _finish_killed_job(self.id, self._scheduled_state(), "timed_out",
+                               f"the {timeout}s hard time limit killed the task")
+
+    def on_failure(self, exc_info, send_failed_event=True, return_ok=False):
+        super().on_failure(exc_info, send_failed_event=send_failed_event, return_ok=return_ok)
+        exc = getattr(exc_info, "exception", None)
+        exc = getattr(exc, "exc", exc)  # billiard's ExceptionWithTraceback wrapper
+        if isinstance(exc, WorkerLostError):
+            _record_run_killed(
+                self.id, self._scheduled_state(), "worker_lost", str(exc), self._elapsed_ms(),
+            )
+            _finish_killed_job(self.id, self._scheduled_state(), "failed", str(exc))
+
+
+class _ScheduledRunTask(Task):
+    Request = _ScheduledRunRequest
+
+
+@celery_app.task(base=_ScheduledRunTask)
 def agent_task(json_state: dict) -> None:
     schedule_id  = (json_state or {}).get("schedule_id")
     execution_id = getattr(getattr(current_task, "request", None), "id", None)
@@ -434,6 +790,7 @@ def agent_task(json_state: dict) -> None:
 
     if schedule_id and execution_id:
         _record_run_start(schedule_id, execution_id, json_state)
+    _record_ledger_start(json_state, execution_id)
 
     try:
         if schedule_id and execution_id:
@@ -454,6 +811,7 @@ def agent_task(json_state: dict) -> None:
                 _t0,
                 scheduled_state=json_state,
             )
+        _notify_job_finished(json_state, None, error=str(exc), execution_id=execution_id)
         raise
 
     if schedule_id and execution_id:
@@ -464,6 +822,7 @@ def agent_task(json_state: dict) -> None:
             _t0,
             scheduled_state=json_state,
         )
+    _notify_job_finished(json_state, final_state, execution_id=execution_id)
     return final_state
 
 
@@ -577,11 +936,15 @@ def _run_agent_task(json_state: dict) -> dict:
         )
 
         execution_mode = state.get("execution_mode") or "local"
+        # "pod" (default) = k8s executor deployment; "local" = run in this worker (dev).
+        scheduled_executor = os.getenv("AVALOKA_SCHEDULED_EXECUTOR", "pod").strip().lower()
 
         if execution_mode == "k8s-ray":
             state = execution_agent.execution_agent_node_ray(state)
         elif state.get("deploy_on_k8s"):
             state = execution_agent.execution_agent_node(state)
+        elif scheduled_executor == "local":
+            state = execution_agent.execution_agent_node_local(state)
         else:
             state = execution_agent.execution_agent_node_scheduled_pod(state)
 
@@ -633,6 +996,11 @@ def _run_agent_task(json_state: dict) -> dict:
                     "size": len(raw_output),
                 }
 
+        # Output contract (MAJ-030/MAJ-031): a result that does not hold the
+        # requested measure, groups and aggregation is not recorded as the
+        # answer. Ray runs were checked by the Ray node already.
+        final_state = execution_agent.apply_scheduled_output_contract(final_state)
+
     # ---------------------------------------------------------
     # Scheduled training
     # ---------------------------------------------------------
@@ -657,6 +1025,12 @@ def _run_agent_task(json_state: dict) -> dict:
             state
         )
 
+        # Register the model and list its endpoint ready-on-demand. Owned by
+        # the infra layer (app/infra/training_tasks); never raises.
+        from app.infra import training_tasks
+
+        final_state = training_tasks.on_training_finished(final_state)
+
         final_state["messages"] = (
             convert_message_objects_to_dicts(
                 final_state.get("messages") or []
@@ -675,19 +1049,18 @@ def _run_agent_task(json_state: dict) -> dict:
                 state.get("messages") or []
             )
         )
-        state["task_schedule"] = schedule_data
 
-        from app.agents.model_training_agent import (
-            model_training_agent_node,
-        )
+        # These used to re-enter the MTA graph node in the worker; the infra
+        # layer now owns them and writes the endpoint state to Postgres.
+        from app.infra import training_tasks
 
         logger.info(
             "[agent_task] Running scheduled inference "
             "service operation"
         )
 
-        final_state = model_training_agent_node(
-            state
+        final_state = training_tasks.run_scheduled_service_action(
+            state, schedule_data
         )
 
         final_state["messages"] = (
@@ -722,11 +1095,109 @@ def _run_agent_task(json_state: dict) -> dict:
 
     return final_state
 
-@celery_app.task(name="app.core.celery_app.execution_agent_task")
+@celery_app.task(name="app.core.celery_app.execution_agent_task", base=_ScheduledRunTask)
 def execution_agent_task(json_state: dict) -> None:
     """Alias for agent_task — kept for backward compat with old Redis schedule entries."""
     return agent_task(json_state)
     
+# ---------------------------------------------------------
+# Per-user Ray clusters: delete the idle ones
+# ---------------------------------------------------------
+# Runs only when RAY_PER_USER_CLUSTERS=1 (app/infra/user_ray_clusters.py).
+# Registered here so every worker has it without an extra import.
+
+# ignore_result: housekeeping nobody reads; a stored result every few minutes
+# would only fill the result store.
+@celery_app.task(name="app.core.celery_app.reap_idle_user_ray_clusters", ignore_result=True)
+def reap_idle_user_ray_clusters() -> dict:
+    from app.infra import user_ray_clusters
+    return user_ray_clusters.reap_idle()
+
+
+# ---------------------------------------------------------
+# Task results past retention: delete them daily
+# ---------------------------------------------------------
+# ignore_result, so the purge never adds rows of its own to the table it purges.
+
+@celery_app.task(name="app.core.celery_app.purge_celery_task_results", ignore_result=True)
+def purge_celery_task_results() -> dict:
+    return celery_results.purge_expired_results()
+
+
+celery_app.conf.beat_schedule = {
+    **(celery_app.conf.beat_schedule or {}),
+    "purge-celery-task-results": {
+        "task": "app.core.celery_app.purge_celery_task_results",
+        "schedule": crontab(
+            minute=int(os.getenv("CELERY_RESULT_PURGE_MINUTE", "17")),
+            hour=int(os.getenv("CELERY_RESULT_PURGE_HOUR", "3")),
+        ),
+    },
+}
+
+
+if os.getenv("RAY_PER_USER_CLUSTERS", "").strip().lower() in ("1", "true", "yes"):
+    celery_app.conf.beat_schedule = {
+        **(celery_app.conf.beat_schedule or {}),
+        "reap-idle-user-ray-clusters": {
+            "task": "app.core.celery_app.reap_idle_user_ray_clusters",
+            "schedule": float(os.getenv("RAY_USER_CLUSTER_REAP_EVERY_S", "300")),
+        },
+    }
+
+
+# ---------------------------------------------------------
+# Cost and hygiene reapers (app/infra/ray_reaper.py): the model server sleeps
+# after 2 h idle, the shared RayCluster is torn down after 2 h without a job,
+# and legacy per-job leftovers are deleted hourly. Celery beat, not CronJobs.
+# ---------------------------------------------------------
+
+@celery_app.task(name="app.core.celery_app.reap_idle_model_server")
+def reap_idle_model_server() -> dict:
+    from app.infra import ray_reaper
+    return ray_reaper.reap_idle_model_server()
+
+
+@celery_app.task(name="app.core.celery_app.reap_idle_ray_cluster")
+def reap_idle_ray_cluster() -> dict:
+    from app.infra import ray_reaper
+    return {"deleted": ray_reaper.reap_idle_ray_cluster()}
+
+
+@celery_app.task(name="app.core.celery_app.reap_orphan_ray")
+def reap_orphan_ray() -> dict:
+    from app.infra import ray_reaper
+    return {"acted": ray_reaper.reap_orphan_ray()}
+
+
+@celery_app.task(name="app.core.celery_app.resume_stale_training_polls")
+def resume_stale_training_polls() -> dict:
+    from app.infra import training_tasks
+    return {"resumed": training_tasks.resume_stale_training_polls()}
+
+
+if os.getenv("AVALOKA_REAPERS", "1").strip().lower() not in ("0", "false", "no"):
+    celery_app.conf.beat_schedule = {
+        **(celery_app.conf.beat_schedule or {}),
+        "reap-idle-model-server": {
+            "task": "app.core.celery_app.reap_idle_model_server",
+            "schedule": float(os.getenv("MODEL_SERVER_REAP_EVERY_S", "300")),
+        },
+        "reap-idle-ray-cluster": {
+            "task": "app.core.celery_app.reap_idle_ray_cluster",
+            "schedule": float(os.getenv("RAY_IDLE_REAP_EVERY_S", "300")),
+        },
+        "reap-orphan-ray": {
+            "task": "app.core.celery_app.reap_orphan_ray",
+            "schedule": float(os.getenv("RAY_ORPHAN_REAP_EVERY_S", "3600")),
+        },
+        "resume-stale-training-polls": {
+            "task": "app.core.celery_app.resume_stale_training_polls",
+            "schedule": float(os.getenv("AVALOKA_RESUME_POLLS_EVERY_S", "300")),
+        },
+    }
+
+
 def _logs_from_final(final: dict) -> list:
     """Assemble a run log (list of lines) from a finished agent state so the
     UI can show execution logs instead of the output table."""

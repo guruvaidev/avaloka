@@ -49,7 +49,8 @@ def capture_enabled() -> bool:
 
 
 def prompt_text_enabled() -> bool:
-    """Whether question text is stored. Off leaves behavioural events intact."""
+    """Whether question text is stored locally. Off leaves behavioural events
+    intact. It has no effect on export: question text is never exported."""
     own = _flag(ENV_PROMPT_TEXT)
     return True if own is None else own
 
@@ -65,10 +66,8 @@ def retention_days() -> int:
 def export_requested() -> bool:
     """Whether an operator has affirmatively switched export on.
 
-    The collector prepares the exportable form of a question (names removed)
-    only when this is true. With export off, no vocabulary lookup is made and
-    no exportable text exists -- so turning export on later cannot ship
-    questions captured before the operator chose to.
+    Export forwards metadata only, never question text (owner decision
+    D16.5); this switch cannot change that.
     """
     return capture_enabled() and _flag(ENV_EXPORT) is True
 

@@ -1,0 +1,100 @@
+diff --git a/app/mcp_server/customer_dbs.py b/app/mcp_server/customer_dbs.py
+index e02dc5a..c0f66b1 100644
+--- a/app/mcp_server/customer_dbs.py
++++ b/app/mcp_server/customer_dbs.py
+@@ -28,10 +28,6 @@ from fastapi.exceptions import RequestValidationError
+ from fastapi.responses import JSONResponse
+ from urllib.parse import urlparse, unquote
+ 
+-from app.mcp_server.credentials import (
+-    CredentialKeyMissing, credential_handle, load_registry, read_raw, save_registry,
+-)
+-
+ # ---- Optional MongoDB driver (guarded) ----
+ try:
+     from pymongo import MongoClient
+@@ -431,31 +427,25 @@ class CustomerManager:
+         self.db_manager = DatabaseConnectionManager()
+ 
+     def _read_customers_file(self) -> dict:
+-        """Read the customers registry FRESH from disk (see original notes).
+-
+-        Secrets are sealed on disk and opened here, in process
+-        (app/mcp_server/credentials.py). A registry written before secrets
+-        were sealed is re-sealed as it is read, when DB_ENCRYPTION_KEY is set.
+-        """
++        """Read the customers registry FRESH from disk (see original notes)."""
+         try:
+-            return load_registry(self.customers_file)
++            if os.path.exists(self.customers_file):
++                with open(self.customers_file, 'r') as f:
++                    return json.load(f)
++            return {}
+         except Exception as e:
+-            print(f"Error reading customers file: {type(e).__name__}")
++            print(f"Error reading customers file: {e}")
+             return getattr(self, "customers", {})
+ 
+     def load_customers(self):
+         self.customers = self._read_customers_file()
+ 
+     def save_customers(self):
+-        """Write the registry with every secret sealed. Raises CredentialKeyMissing
+-        rather than write a password in plaintext."""
+         try:
+-            # A record this key cannot open is not in memory; keep it on disk as it was.
+-            save_registry(self.customers_file, self.customers, keep=read_raw(self.customers_file))
+-        except CredentialKeyMissing:
+-            raise
++            with open(self.customers_file, 'w') as f:
++                json.dump(self.customers, f, indent=2)
+         except Exception as e:
+-            print(f"Error saving customers: {type(e).__name__}")
++            print(f"Error saving customers: {e}")
+ 
+     def generate_api_key(self, customer_id: str) -> str:
+         timestamp = str(int(datetime.now().timestamp()))
+@@ -517,13 +507,11 @@ class CustomerManager:
+ 
+         try:
+             async with httpx.AsyncClient() as client:
+-                # The secrets travel sealed under DB_ENCRYPTION_KEY; the MCP
+-                # server opens them with its own copy of the key.
+                 mcp_payload = {
+                     "customer_id": registration.customer_id,
+-                    "connection_string_enc": credential_handle(connection_string),
++                    "connection_string": connection_string,
+                     "database_type": registration.database_type,
+-                    "api_key_enc": credential_handle(api_key),
++                    "api_key": api_key,
+                     "created_at": datetime.now().isoformat(),
+                     "status": "active",
+                     "max_rows": registration.max_rows,
+@@ -550,11 +538,7 @@ class CustomerManager:
+             )
+ 
+         self.customers[registration.customer_id] = customer_data
+-        try:
+-            self.save_customers()
+-        except CredentialKeyMissing as e:
+-            del self.customers[registration.customer_id]
+-            raise HTTPException(status_code=500, detail=str(e))
++        self.save_customers()
+ 
+         print(f"Successfully registered {registration.database_type} customer: {registration.customer_id}")
+ 
+@@ -1028,14 +1012,6 @@ async def bind_customer_owner(customer_id: str, request: Request):
+     return {"customer_id": customer_id, "owner_bound": True}
+ 
+ 
+-@app.on_event("startup")
+-async def _require_encryption_key() -> None:
+-    # The standalone onboarding service seals every connection string under
+-    # DB_ENCRYPTION_KEY; without a private one it does not start.
+-    from app.core.encryption_key import require_db_encryption_key
+-    require_db_encryption_key("The onboarding service")
+-
+-
+ @app.get("/health")
+ async def health_check():
+     return {

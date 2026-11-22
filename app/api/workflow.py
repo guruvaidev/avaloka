@@ -334,9 +334,15 @@ def route_planner_output(state: ETLState):
         return "prepare_code"
 
     # ── infra provisioning ─────────────────────────────────────────────────
+    # Only a request the user confirmed (app/agents/infra_confirmation.py sets
+    # "confirmed" on "yes"). A request that arrived any other way -- seeded by
+    # the planner, set by a fallback, left in an old checkpoint -- provisions
+    # nothing.
+    _infra_request = state.get("infrastructure_request")
     if (
         not state.get("infrastructure_provisioned")
-        and state.get("infrastructure_request")
+        and isinstance(_infra_request, dict)
+        and _infra_request.get("confirmed") is True
     ):
         return "provision_infra"
 

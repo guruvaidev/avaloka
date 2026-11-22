@@ -22,6 +22,28 @@ import pytest
 from app.agents import visualization_agent as va
 
 
+# The zero-retention pinning every OpenRouter viz call must carry (a per-call
+# extra_body replaces the client's, so the viz agent re-sends it itself).
+_GPT_OSS = "openai/gpt-oss-120b"
+_PIN = {
+    "only": ["deepinfra/bf16", "together", "crusoe", "parasail"],
+    "allow_fallbacks": False,
+    "data_collection": "deny",
+    "zdr": True,
+}
+_PIN_ENV = (
+    "AVALOKA_OPENROUTER_ONLY", "AVALOKA_VIZ_OPENROUTER_ONLY",
+    "AVALOKA_OPENROUTER_SORT", "AVALOKA_VIZ_OPENROUTER_SORT",
+    "AVALOKA_OPENROUTER_PROVIDERS", "AVALOKA_VIZ_OPENROUTER_PROVIDERS",
+)
+
+
+def _pinned_model(monkeypatch):
+    monkeypatch.setattr(va, "_VIZ_ACTIVE_MODEL", _GPT_OSS)
+    for name in _PIN_ENV:
+        monkeypatch.delenv(name, raising=False)
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -88,6 +110,7 @@ def openrouter(monkeypatch):
     monkeypatch.setattr(va, "_VIZ_IS_REASONING", True)
     monkeypatch.setattr(va, "_VIZ_OPENROUTER_SORT", "throughput")
     monkeypatch.setattr(va, "_VIZ_SORT_ACTIVE", True)
+    _pinned_model(monkeypatch)
 
 
 @pytest.fixture
@@ -118,25 +141,26 @@ class FakeLLM:
 def test_openrouter_sends_reasoning_and_provider_sort_in_extra_body(openrouter):
     kw = va._viz_request_kwargs("high")
     assert kw["max_tokens"] == va._VIZ_MAX_TOKENS
-    assert kw["extra_body"] == {"reasoning": {"effort": "high"}, "provider": {"sort": "throughput"}}
+    assert kw["extra_body"] == {"reasoning": {"effort": "high"}, "provider": {**_PIN, "sort": "throughput"}}
     assert "reasoning_effort" not in kw          # Groq's flag must never reach OpenRouter
 
 
-def test_openrouter_sort_can_be_turned_off(openrouter, monkeypatch):
+def test_openrouter_sort_can_be_turned_off_but_the_pinning_stays(openrouter, monkeypatch):
     monkeypatch.setattr(va, "_VIZ_SORT_ACTIVE", False)
     kw = va._viz_request_kwargs("medium")
-    assert kw["extra_body"] == {"reasoning": {"effort": "medium"}}
+    assert kw["extra_body"] == {"reasoning": {"effort": "medium"}, "provider": _PIN}
 
 
-def test_openrouter_non_reasoning_model_sends_only_the_sort(openrouter, monkeypatch):
+def test_openrouter_non_reasoning_model_sends_only_the_sort_and_the_pinning(openrouter, monkeypatch):
     monkeypatch.setattr(va, "_VIZ_IS_REASONING", False)
-    assert va._viz_request_kwargs("high")["extra_body"] == {"provider": {"sort": "throughput"}}
+    assert va._viz_request_kwargs("high")["extra_body"] == {"provider": {**_PIN, "sort": "throughput"}}
 
 
-def test_openrouter_with_nothing_to_send_has_no_extra_body(openrouter, monkeypatch):
+def test_openrouter_with_no_sort_and_no_reasoning_still_sends_the_pinning(openrouter, monkeypatch):
     monkeypatch.setattr(va, "_VIZ_IS_REASONING", False)
     monkeypatch.setattr(va, "_VIZ_SORT_ACTIVE", False)
-    assert va._viz_request_kwargs("high") == {"max_tokens": va._VIZ_MAX_TOKENS}
+    assert va._viz_request_kwargs("high") == {"max_tokens": va._VIZ_MAX_TOKENS,
+                                              "extra_body": {"provider": _PIN}}
 
 
 def test_groq_uses_top_level_reasoning_effort_and_no_extra_body(groq):
@@ -207,7 +231,7 @@ def test_invoke_passes_the_routing_kwargs(openrouter, monkeypatch):
     llm = FakeLLM()
     monkeypatch.setattr(va, "viz_llm", llm)
     va.invoke_viz_llm("prompt", effort="medium")
-    assert llm.calls[0]["extra_body"]["provider"] == {"sort": "throughput"}
+    assert llm.calls[0]["extra_body"]["provider"] == {**_PIN, "sort": "throughput"}
     assert llm.calls[0]["extra_body"]["reasoning"] == {"effort": "medium"}
 
 

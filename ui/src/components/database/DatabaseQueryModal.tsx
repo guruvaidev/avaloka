@@ -404,7 +404,7 @@ export function DatabaseQueryModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl">
+      <DialogContent className="max-w-3xl dark:border-white/10 dark:bg-[#131316]">
         <div className="flex items-center justify-between border-b px-1 pb-3 pr-8">
           <div className="flex items-center gap-2">
             <Database className="h-5 w-5 text-[#1565EF]" />

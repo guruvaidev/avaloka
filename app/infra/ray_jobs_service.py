@@ -238,3 +238,32 @@ def stop_job(user_id: str, submission_id: str) -> Dict[str, Any]:
     except Exception as exc:
         logger.info("[ray-jobs] could not store stop for %s: %s", submission_id, exc)
     return {"submission_id": submission_id, "stopped": stopped, "status": new_status}
+
+
+# ------------------------------------------------- per-user clusters (/ray/)
+#
+# Called by app/api/ray_jobs.py when it finds them. None from
+# user_ray_cluster means "this user has no cluster of their own": /ray/ goes
+# to the deployment's shared cluster, as before. See app/infra/user_ray_clusters.py.
+
+def user_ray_cluster(user_id: str) -> Optional[Dict[str, str]]:
+    from app.infra import user_ray_clusters as urc
+    if not urc.applies_to(user_id):
+        return None
+    info = urc.describe(user_id)
+    # A cluster being deleted is reported as starting: the next /session call
+    # finds it gone and starts a new one.
+    state = "starting" if info["state"] == "stopping" else info["state"]
+    return {"state": state, "upstream": info["upstream"]}
+
+
+def start_user_ray_cluster(user_id: str) -> None:
+    from app.infra import user_ray_clusters as urc
+    if urc.applies_to(user_id):
+        urc.start(user_id)
+
+
+def touch_user_ray_cluster(user_id: str) -> None:
+    from app.infra import user_ray_clusters as urc
+    if urc.applies_to(user_id):
+        urc.touch(user_id)

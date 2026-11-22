@@ -17,7 +17,8 @@ Key behavioral facts about current infra_agent.py:
      configure_kubectl are injected as inline SKIPPED dicts using "step_name" key.
      k8s_invoker is NOT called for those two steps.
   4. All k8s_invoker mock returns use "step" key. Inline SKIPPED outcomes use "step_name" key.
-  5. get_service_ip_and_port IS called for non-ray path — must always be mocked.
+  5. get_service_ip_and_port is NOT called any more: the python-docker deploy and verify
+     steps locate the chart-deployed execute service; there is no LoadBalancer IP to poll.
   6. app_type propagates from infrastructure_request (defaults to "python-docker").
   7. use_ray is determined by execution_mode == "k8s-ray", not infrastructure_request.type.
   8. cluster and kubectl failure stages CANNOT be triggered when kubectl is already configured
@@ -267,7 +268,7 @@ def test_infra_agent_skips_when_already_provisioned(mock_k8s, base_state):
 @patch("app.agents.infra_agent.k8s_invoker")
 @pytest.mark.parametrize("platform", ["gcp", "aws"])
 def test_node_service_ip_success_makes_overall_provisioned(mock_k8s, base_state, platform):
-    """Service IP SUCCESS → overall status 'provisioned', 6 detail entries."""
+    """Deploy + verify SUCCESS → overall status 'provisioned', 5 detail entries, no LB IP poll."""
     all_success_mock(mock_k8s, include_service_ip=True)
     base_state["infrastructure_request"] = {"type": platform, "app_type": "python-docker"}
 
@@ -277,21 +278,20 @@ def test_node_service_ip_success_makes_overall_provisioned(mock_k8s, base_state,
     assert prov["status"] == "provisioned"
     assert prov["type"] == platform
     assert prov["app_type"] == "python-docker"
-    assert isinstance(prov["details"], list) and len(prov["details"]) == 6
+    assert isinstance(prov["details"], list) and len(prov["details"]) == 5
 
     last = prov["details"][-1]
-    assert last.get("step") == "get_service_ip_and_port"
+    assert last.get("step") == "verify_app"
     assert last.get("status") == "SUCCESS"
-    assert last.get("ip") == "10.0.0.12"
-    assert last.get("port") == 8080
+    mock_k8s.get_service_ip_and_port.assert_not_called()
 
 
 @patch("app.agents.infra_agent.k8s_invoker")
 def test_node_service_ip_failure_sets_overall_failed(mock_k8s, base_state):
-    """Service IP FAILED → overall 'failed', 6 details, last step is service_ip."""
+    """The execute service not found (deploy step FAILED) → overall 'failed'; no LB IP poll."""
     all_success_mock(mock_k8s, include_service_ip=False)
-    mock_k8s.get_service_ip_and_port.return_value = {
-        "status": "FAILED", "step": "get_service_ip_and_port", "message": "", "details": {}
+    mock_k8s.deploy_application.return_value = {
+        "status": "FAILED", "step": "deploy_app", "message": "not configured", "details": ""
     }
     base_state["infrastructure_request"] = {"type": "gcp"}
 
@@ -299,9 +299,9 @@ def test_node_service_ip_failure_sets_overall_failed(mock_k8s, base_state):
     prov = result["infrastructure_provisioned"]
 
     assert prov["status"] == "failed"
-    assert len(prov["details"]) == 6
-    assert prov["details"][-1]["step"] == "get_service_ip_and_port"
+    assert prov["details"][-1]["step"] == "deploy_app"
     assert prov["details"][-1]["status"] == "FAILED"
+    mock_k8s.get_service_ip_and_port.assert_not_called()
 
 
 @patch("app.agents.infra_agent.k8s_invoker")
@@ -309,7 +309,7 @@ def test_node_details_order_and_count(mock_k8s, base_state):
     """
     Step order (kubectl_ready=True):
       details[0/1]: inline SKIPPED (step_name key)
-      details[2..5]: mock returns (step key) = health, deploy, verify, service_ip
+      details[2..4]: mock returns (step key) = health, deploy, verify
     """
     all_success_mock(mock_k8s, include_service_ip=True)
     base_state["infrastructure_request"] = {"type": "aws"}
@@ -317,7 +317,7 @@ def test_node_details_order_and_count(mock_k8s, base_state):
     result = infra_agent_node(base_state)
     details = result["infrastructure_provisioned"]["details"]
 
-    assert len(details) == 6
+    assert len(details) == 5
     assert details[0].get("status") == "SKIPPED"
     assert details[1].get("status") == "SKIPPED"
 
@@ -326,7 +326,6 @@ def test_node_details_order_and_count(mock_k8s, base_state):
         "health_checks",
         "deploy_app",
         "verify_app",
-        "get_service_ip_and_port",
     ]
 
 
@@ -829,10 +828,10 @@ def test_kubectl_not_ready_provision_failure_sets_failed(mock_subprocess, mock_k
 
 @patch("app.agents.infra_agent.k8s_invoker")
 @patch("app.agents.infra_agent.subprocess.run")
-def test_kubectl_not_ready_full_success_six_steps(mock_subprocess, mock_k8s):
+def test_kubectl_not_ready_full_success_five_steps(mock_subprocess, mock_k8s):
     """
-    kubectl_ready=False + all steps succeed → 6 steps, none are inline SKIPPED.
-    All 6 come from k8s_invoker mocks.
+    kubectl_ready=False + all steps succeed → 5 steps, none are inline SKIPPED.
+    All 5 come from k8s_invoker mocks (no LoadBalancer IP step any more).
     """
     mock_subprocess.side_effect = Exception("kubectl: command not found")
     for attr, step in [
@@ -862,7 +861,7 @@ def test_kubectl_not_ready_full_success_six_steps(mock_subprocess, mock_k8s):
     result = infra_agent_node(state)
     details = result["infrastructure_provisioned"]["details"]
 
-    assert len(details) == 6
+    assert len(details) == 5
     # No inline SKIPPED dicts — all come from k8s_invoker
     skipped_inline = [d for d in details if d.get("status") == "SKIPPED"]
     assert len(skipped_inline) == 0

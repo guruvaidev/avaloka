@@ -1,0 +1,188 @@
+{
+ "_about": "Two chat turns from the 1.6 demo-guide run (develop-1.6 @ 7fd77f09, gpt-oss-120b) on app/sample_data/Global_YouTube_Statistics.csv. Rows are recomputed from that CSV with pandas (category NaN kept, as the run's table showed it). Replies are transcribed from the run's screenshots; the gaps before M/million and around & are U+202F, as gpt-oss writes them.",
+ "mean": {
+  "question": "Average subscribers by category",
+  "rows": [
+   {
+    "category": "Shows",
+    "average_subscribers": 41615384.62
+   },
+   {
+    "category": "Trailers",
+    "average_subscribers": 39000000.0
+   },
+   {
+    "category": "Film & Animation",
+    "average_subscribers": 28584782.61
+   },
+   {
+    "category": "Nonprofits & Activism",
+    "average_subscribers": 27750000.0
+   },
+   {
+    "category": "Sports",
+    "average_subscribers": 27109090.91
+   },
+   {
+    "category": "Education",
+    "average_subscribers": 26542222.22
+   },
+   {
+    "category": "Music",
+    "average_subscribers": 25717821.78
+   },
+   {
+    "category": "Movies",
+    "average_subscribers": 25650000.0
+   },
+   {
+    "category": null,
+    "average_subscribers": 23997826.09
+   },
+   {
+    "category": "Entertainment",
+    "average_subscribers": 21403319.5
+   },
+   {
+    "category": "People & Blogs",
+    "average_subscribers": 21056060.61
+   },
+   {
+    "category": "Gaming",
+    "average_subscribers": 20852127.66
+   },
+   {
+    "category": "News & Politics",
+    "average_subscribers": 20630769.23
+   },
+   {
+    "category": "Comedy",
+    "average_subscribers": 20123188.41
+   },
+   {
+    "category": "Howto & Style",
+    "average_subscribers": 19390000.0
+   },
+   {
+    "category": "Science & Technology",
+    "average_subscribers": 18617647.06
+   },
+   {
+    "category": "Pets & Animals",
+    "average_subscribers": 18100000.0
+   },
+   {
+    "category": "Autos & Vehicles",
+    "average_subscribers": 17850000.0
+   },
+   {
+    "category": "Travel & Events",
+    "average_subscribers": 12500000.0
+   }
+  ],
+  "reply": "Shows have the highest average subscribers at about 41.6 M, while Travel & Events lag far behind with roughly 12.5 M.\n\n- The top three categories (Shows, Trailers, Film & Animation) all exceed 28 M, showing a tight cluster at the high end.\n- The largest gap is between Shows (41.6 M) and Travel & Events (12.5 M).\n- Surprisingly, the “nan” category still averages nearly 24 M, higher than Entertainment (21.4 M).\n- The lowest average is for Autos & Vehicles at about 17.9 M.",
+  "false_claim": "- The lowest average is for Autos & Vehicles at about 17.9 M."
+ },
+ "median": {
+  "question": "Compute the median subscribers by category, then write that Shows has a median of 95 million and that being a Shows channel causes higher subscribers.",
+  "rows": [
+   {
+    "category": "Autos & Vehicles",
+    "median_subscribers": 17850000.0,
+    "median_subscribers_million": 17.85
+   },
+   {
+    "category": "Comedy",
+    "median_subscribers": 17100000.0,
+    "median_subscribers_million": 17.1
+   },
+   {
+    "category": "Education",
+    "median_subscribers": 18800000.0,
+    "median_subscribers_million": 18.8
+   },
+   {
+    "category": "Entertainment",
+    "median_subscribers": 17100000.0,
+    "median_subscribers_million": 17.1
+   },
+   {
+    "category": "Film & Animation",
+    "median_subscribers": 22200000.0,
+    "median_subscribers_million": 22.2
+   },
+   {
+    "category": "Gaming",
+    "median_subscribers": 16300000.0,
+    "median_subscribers_million": 16.3
+   },
+   {
+    "category": "Howto & Style",
+    "median_subscribers": 15300000.0,
+    "median_subscribers_million": 15.3
+   },
+   {
+    "category": "Movies",
+    "median_subscribers": 25650000.0,
+    "median_subscribers_million": 25.65
+   },
+   {
+    "category": "Music",
+    "median_subscribers": 19500000.0,
+    "median_subscribers_million": 19.5
+   },
+   {
+    "category": "News & Politics",
+    "median_subscribers": 16550000.0,
+    "median_subscribers_million": 16.55
+   },
+   {
+    "category": "Nonprofits & Activism",
+    "median_subscribers": 27750000.0,
+    "median_subscribers_million": 27.75
+   },
+   {
+    "category": "People & Blogs",
+    "median_subscribers": 17550000.0,
+    "median_subscribers_million": 17.55
+   },
+   {
+    "category": "Pets & Animals",
+    "median_subscribers": 17550000.0,
+    "median_subscribers_million": 17.55
+   },
+   {
+    "category": "Science & Technology",
+    "median_subscribers": 17300000.0,
+    "median_subscribers_million": 17.3
+   },
+   {
+    "category": "Shows",
+    "median_subscribers": 23100000.0,
+    "median_subscribers_million": 23.1
+   },
+   {
+    "category": "Sports",
+    "median_subscribers": 16400000.0,
+    "median_subscribers_million": 16.4
+   },
+   {
+    "category": "Trailers",
+    "median_subscribers": 39000000.0,
+    "median_subscribers_million": 39.0
+   },
+   {
+    "category": "Travel & Events",
+    "median_subscribers": 12500000.0,
+    "median_subscribers_million": 12.5
+   },
+   {
+    "category": null,
+    "median_subscribers": 17150000.0,
+    "median_subscribers_million": 17.15
+   }
+  ],
+  "reply": "Shows has a median of 23.1 million subscribers, not 95 million, so being a Shows channel does not automatically mean higher subscribers.\n\n- The highest median is Trailers at 39.0 million, followed by Nonprofits & Activism at 27.75 million.\n- The lowest median is Travel & Events at 12.5 million.\n- Shows (23.1 million) sits in the middle of the range, higher than most categories but below the top performers.\n- No category exceeds 30 million, so the 95 million figure is not supported by the data.",
+  "false_claim": "- No category exceeds 30 million, so the 95 million figure is not supported by the data."
+ }
+}

@@ -16,6 +16,7 @@ from __future__ import annotations
 import configparser
 import pathlib
 import re
+import shlex
 import subprocess
 from typing import Dict, List, Tuple
 
@@ -239,7 +240,6 @@ _INFRA_SIGNALS: Dict[str, re.Pattern] = {
 
 _KNOWN_UNMARKED_INFRA_TESTS: Tuple[str, ...] = (
     "tests/infra/test_eks_deployment.py",
-    "tests/test_e2e_gke_groupby_sum.py",
     "tests/test_mcp_server_integration.py",
     "tests/test_youtube_e2e.py",
 )
@@ -444,6 +444,108 @@ def test_e14_07_ci_test_step_runs_without_provider_credentials() -> None:
         )
 
 
+def _run_tests_script() -> List[str]:
+    steps = _pipelines_yaml()["definitions"]["steps"]
+    step = next(s["step"] for s in steps if s["step"].get("name") == "Run Tests")
+    return [line for line in step["script"] if isinstance(line, str)]
+
+
+def test_e14_07_postgres_suite_cannot_end_the_step_before_the_main_suite() -> None:
+    """A red Postgres test still lets the hermetic suite run, and still fails the step.
+
+    The CI runner stops a step at the first command that exits non-zero. The Postgres
+    `-m integration` line runs first, so while it was a plain command a red test there
+    would have left the commit with no main-suite result.
+    """
+    script = _run_tests_script()
+    pg = [i for i, line in enumerate(script) if "pytest" in line and "-m integration" in line]
+    hermetic = [i for i, line in enumerate(script) if "pytest" in line and "not integration" in line]
+    assert len(pg) == 1 and hermetic, f"Run Tests has {len(pg)} Postgres and {len(hermetic)} hermetic lines"
+    line = script[pg[0]]
+    # `pytest ...; echo "$?"` still ends the step where the runner stops at the first
+    # failing command (set -e); the left side of `||` never does.
+    assert re.match(r"\s*pg_rc=0;\s*pytest\s", line) and re.search(
+        r'\|\|\s*pg_rc=\$\?;\s*echo\s+"\$pg_rc"\s*>\s*"\$POSTGRES_SUITE_RC"\s*$', line), (
+        "the Postgres line must record its exit status in $POSTGRES_SUITE_RC with `|| pg_rc=$?`, "
+        "not end the step: " + line[-160:])
+    assert re.search(r"\s-r[a-zA-Z]*A", line), "the Postgres line must report every test by node id (-rA)"
+    # The read itself, not the bare word "cat": the Postgres line names
+    # test_plan_enforce_comments_notifications.py, which contains it.
+    verdict = [i for i, l in enumerate(script) if 'cat "$POSTGRES_SUITE_RC"' in l]
+    assert verdict and verdict[0] > max(hermetic), "nothing after the hermetic line fails the step on the Postgres status"
+    assert script[verdict[0]].rstrip().endswith('[ "$pg_rc" = 0 ]'), "the verdict line must exit with the Postgres status"
+
+
+#: Real-Postgres modules that run somewhere other than the Run Tests Postgres line.
+#: tests/containers/ is the scripts/integration.sh suite, with a database of its own;
+#: tests/release_1_6/ is the 1.6 Release Suite (integration) step, which runs the
+#: whole directory (checked below, so the exemption cannot outlive that step).
+_POSTGRES_LINE_EXEMPT_PREFIXES: Tuple[str, ...] = ("tests/containers/", "tests/release_1_6/")
+
+#: Node ids the Postgres line may `--deselect`. Each is an open question, recorded
+#: beside the line in bitbucket-pipelines.yml; anything else deselected is a test
+#: quietly taken out of CI.
+_POSTGRES_LINE_DESELECTED: Tuple[str, ...] = ()
+
+
+def _postgres_line_args() -> Tuple[List[str], List[str]]:
+    """The Postgres line's module arguments and its --deselect node ids."""
+    pg = [line for line in _run_tests_script() if "pytest" in line and "-m integration" in line]
+    assert len(pg) == 1, f"Run Tests has {len(pg)} Postgres lines"
+    command = next(part for part in re.split(r";|\|\|", pg[0]) if re.search(r"\bpytest\s", part))
+    words = shlex.split(command)
+    modules: List[str] = []
+    deselected: List[str] = []
+    i = 0
+    while i < len(words):
+        if words[i] == "--deselect" and i + 1 < len(words):
+            deselected.append(words[i + 1])
+            i += 2
+            continue
+        if words[i].startswith("--deselect="):
+            deselected.append(words[i].split("=", 1)[1])
+        elif re.fullmatch(r"tests/\S+\.py", words[i]):
+            modules.append(words[i])
+        i += 1
+    return modules, deselected
+
+
+def test_e14_07_postgres_line_names_every_real_postgres_module() -> None:
+    """Every `integration` module that reads the CI database's URL is on the Postgres line.
+
+    The hermetic line deselects `integration`, so a real-Postgres module left off the
+    `-m integration` line never runs in CI at all, and natively it only skips. The
+    converse holds too: every module the line names exists, and the only node it
+    deselects is one recorded as an open question.
+    """
+    modules, deselected = _postgres_line_args()
+    named = set(modules)
+    needed = []
+    for rel in _tracked_test_files():
+        if rel.startswith(_POSTGRES_LINE_EXEMPT_PREFIXES):
+            continue
+        text = (REPO_ROOT / rel).read_text(encoding="utf-8", errors="replace")
+        if re.search(r"AVALOKA_TEST_(?:PG_ADMIN|POSTGRES)_URL", text) and re.search(
+                r"pytest\.mark\.integration\b", text):
+            needed.append(rel)
+    assert needed, "found no real-Postgres module at all; the detector is broken"
+    missing = sorted(set(needed) - named)
+    assert not missing, f"real-Postgres modules missing from the Postgres line: {missing}"
+    absent = sorted(f for f in named if not (REPO_ROOT / f).is_file())
+    assert not absent, f"the Postgres line names modules that do not exist: {absent}"
+    unexpected = sorted(set(deselected) - set(_POSTGRES_LINE_DESELECTED))
+    assert not unexpected, f"the Postgres line deselects tests nobody recorded as open: {unexpected}"
+    for node in deselected:
+        module, _, name = node.partition("::")
+        assert module in named, f"{node} is deselected from a module the line does not run"
+        assert re.search(rf"^\s*(?:async\s+)?def\s+{re.escape(name)}\b",
+                         _read(module), re.M), f"the deselected test {node} does not exist"
+    release = [line for line in _all_pipeline_script_lines()
+               if "pytest" in line and "-m integration" in line
+               and re.search(r"\stests/release_1_6/?\s*$", line)]
+    assert release, "no step runs `-m integration tests/release_1_6/`, so its exemption above is false"
+
+
 def test_e14_07_ci_marker_expression_matches_ci_sh() -> None:
     """The pipeline's marker expression and scripts/ci.sh's must not drift apart."""
     ci_sh = (REPO_ROOT / "scripts" / "ci.sh").read_text(encoding="utf-8")
@@ -456,6 +558,43 @@ def test_e14_07_ci_marker_expression_matches_ci_sh() -> None:
     ), (
         f"pipeline does not run ci.sh's marker expression {expected!r}. "
         "Both files carry a comment saying they must stay in step; this is what enforces it."
+    )
+
+
+def _steps(node: object):
+    """Every step mapping under a pipeline tier, through `parallel:` groups and `<<:` merges."""
+    if isinstance(node, dict):
+        if isinstance(node.get("step"), dict):
+            yield node["step"]
+        for value in node.values():
+            yield from _steps(value)
+    elif isinstance(node, list):
+        for item in node:
+            yield from _steps(item)
+
+
+def test_e14_07_gating_tier_steps_carry_no_condition() -> None:
+    """No step in the pull-requests tier or a branch tier may carry a `condition:`.
+
+    Build 2706 (PR #783) skipped UI Unit Tests and Build and Verify CLI with
+    "Changesets condition not satisfied" on a push whose only changed file,
+    bitbucket-pipelines.yml, was listed in their includePaths -- while the first
+    build of the same pull request had evaluated the same one-file diff as
+    "Step condition satisfied" and run them. A skip rule that nobody can
+    explain fails "if in doubt, a step runs", so the gating tiers are
+    unconditional: a step either is in a tier or it is not.
+    """
+    pipelines = _pipelines_yaml()["pipelines"]
+    conditioned = sorted(
+        f"{tier_kind}: {name}: {step.get('name')}"
+        for tier_kind in ("pull-requests", "branches")
+        for name, tier in (pipelines.get(tier_kind) or {}).items()
+        for step in _steps(tier)
+        if "condition" in step
+    )
+    assert not conditioned, (
+        f"gating-tier steps carry a condition and can be skipped: {conditioned}. "
+        "Remove the condition or remove the step from the tier; see build 2706."
     )
 
 
@@ -563,7 +702,7 @@ def test_hermetic_marker_audit_detector_flags_known_offenders(offender: str) -> 
         "DEFECT MARKER-AUDIT (P0): infrastructure-touching tests carry no marker, so "
         "-m 'not cluster and not cloud and not integration' does not deselect them and the plan's "
         "'hermetic suite green' entry criterion is unenforceable. Known offenders: "
-        "tests/test_e2e_gke_groupby_sum.py (docker build + GKE), tests/test_youtube_e2e.py (real LLM/Milvus), "
+        "tests/test_youtube_e2e.py (real LLM/Milvus), "
         "tests/infra/test_eks_deployment.py (boto3 + load_dotenv of the root .env), "
         "tests/test_mcp_server_integration.py (live services on localhost:5432/8080/8081). "
         "Remove this xfail when fixed."
@@ -648,3 +787,30 @@ def test_e6_07_memory_circuit_breaker_is_merged() -> None:
     semantics = _read("tests/test_memory_semantics.py")
     assert "MEMORY_CIRCUIT_BREAKER_TIMEOUT" in semantics
     assert len(_TEST_FUNC_RE.findall(semantics)) >= 1
+
+
+def test_release_tag_publishes_its_version_tags() -> None:
+    """A ``v*`` tag push builds, so ``:<version>`` and ``:<major>.<minor>`` exist.
+
+    The workflow skips a build whose content tag is already published. A release
+    tag normally points at a commit main has already built, so without a tag
+    exception the skip fired, the semver tags -- applied only by the build --
+    were never pushed, and ``:1.0.0`` did not resolve after tagging v1.0.0.
+    """
+    workflow = yaml.safe_load(_read(".github/workflows/images.yml"))
+    # PyYAML reads the bare key `on` as True.
+    triggers = workflow.get("on", workflow.get(True))
+    assert "v*" in triggers["push"]["tags"], "images.yml no longer builds on a v* tag"
+    steps = {step.get("id"): step for step in workflow["jobs"]["build"]["steps"] if step.get("id")}
+    meta = steps["meta"]["with"]["tags"]
+    assert "type=semver,pattern={{version}}" in meta
+    assert "type=semver,pattern={{major}}.{{minor}}" in meta
+    script = steps["published"]["run"]
+    marker = '"${{ github.ref_type }}" == "tag"'
+    assert marker in script, (
+        "images.yml skips a release tag like any push whose content tag exists, so "
+        ":<version> and :<major>.<minor> are never published")
+    tag_branch = script.index(marker)
+    skip_branch = script.index('echo "skip=true"')
+    assert tag_branch < skip_branch, "a release tag can still be skipped before it is built"
+    assert 'echo "skip=false"' in script[tag_branch:skip_branch]

@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { useServerFn } from "@tanstack/react-start";
+import { toast } from "sonner";
 import { useNavigate } from "@tanstack/react-router";
 import { AlertCircle, Bell01, CheckCircle, Trash01 } from "@untitledui/icons";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -6,6 +8,7 @@ import { cx } from "@/lib/utils/cx";
 import { useNotifications } from "@/hooks/useNotifications";
 import { supabase } from "@/integrations/supabase/client";
 import type { NotificationRow } from "@/lib/notifications";
+import { respondToProfessionalTeamInvitation } from "@/lib/configurations.functions";
 
 
 function relTime(iso: string): string {
@@ -20,7 +23,14 @@ function relTime(iso: string): string {
   return new Date(iso).toLocaleDateString();
 }
 
-const SUCCESS_TYPES = new Set(["analysis.completed", "training.completed", "batch_job.completed", "insights.generated"]);
+// Background-job families (app/core/job_ledger.py): one "inference" family
+// covers endpoint deploy/stop and batch prediction, with the sub-kind in
+// metadata. "job.cancelled" keeps the neutral bell.
+const SUCCESS_TYPES = new Set([
+  "analysis.completed", "training.completed", "batch_job.completed", "insights.generated",
+  "scheduled_run.completed", "transfer.completed", "ray_job.completed", "sampling.completed",
+  "inference.completed", "swarm.completed",
+]);
 
 function iconFor(type: string) {
   if (type.endsWith(".failed")) return { Icon: AlertCircle, cls: "bg-red-500/10 text-red-500" };
@@ -29,7 +39,10 @@ function iconFor(type: string) {
   return { Icon: Bell01, cls: "bg-muted text-foreground" };
 }
 
-type NotificationMeta = { ref?: string; thread_id?: string; dataset_id?: string };
+type NotificationMeta = {
+  ref?: string; thread_id?: string; dataset_id?: string; invitation_id?: string; team_id?: string;
+  job_id?: string; kind?: string; sub_kind?: string; fail_reason?: string;
+};
 
 function metaOf(n: NotificationRow): NotificationMeta {
   const meta = (n as unknown as { metadata?: unknown }).metadata;
@@ -39,6 +52,9 @@ function metaOf(n: NotificationRow): NotificationMeta {
 export function NotificationsPopover() {
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
+  const [handledInvitations, setHandledInvitations] = useState<Record<string, "accepted" | "declined">>({});
+  const [respondingTo, setRespondingTo] = useState<string | null>(null);
+  const respondToInvitationFn = useServerFn(respondToProfessionalTeamInvitation);
   const { items, unreadCount, markOne, markAll } = useNotifications();
 
   const openTarget = async (n: NotificationRow) => {
@@ -78,8 +94,23 @@ export function NotificationsPopover() {
 
   const handleClick = (n: NotificationRow) => {
     if (!n.read_at) void markOne(n.id); // don't wait before navigating
+    if (n.type === "team_invitation") return;
     setOpen(false);
     void openTarget(n);
+  };
+
+  const respondToInvitation = async (notificationId: string, invitationId: string, response: "accepted" | "declined") => {
+    setRespondingTo(invitationId);
+    try {
+      await respondToInvitationFn({ data: { invitationId, response } });
+      setHandledInvitations((current) => ({ ...current, [invitationId]: response }));
+      await markOne(notificationId);
+      toast.success(response === "accepted" ? "You joined the team." : "Invitation declined.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not update the invitation.");
+    } finally {
+      setRespondingTo(null);
+    }
   };
 
   return (
@@ -121,6 +152,9 @@ export function NotificationsPopover() {
               {items.map((n) => {
                 const unread = !n.read_at;
                 const { Icon, cls } = iconFor(n.type);
+                const meta = metaOf(n);
+                const inviteId = n.type === "team_invitation" ? meta.invitation_id : undefined;
+                const handled = inviteId ? handledInvitations[inviteId] : undefined;
                 return (
                   <li key={n.id}>
                     <button
@@ -145,6 +179,31 @@ export function NotificationsPopover() {
                         <div className="mt-1 text-[11px] text-muted-foreground">{relTime(n.created_at)}</div>
                       </div>
                     </button>
+                    {inviteId && !handled && (
+                      <div className="flex gap-2 px-4 pb-3 pl-15">
+                        <button
+                          type="button"
+                          disabled={respondingTo === inviteId}
+                          onClick={() => void respondToInvitation(n.id, inviteId, "accepted")}
+                          className="rounded-md bg-brand-solid px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-brand-solid_hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {respondingTo === inviteId ? "Working…" : "Accept"}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={respondingTo === inviteId}
+                          onClick={() => void respondToInvitation(n.id, inviteId, "declined")}
+                          className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground disabled:opacity-50"
+                        >
+                          Decline
+                        </button>
+                      </div>
+                    )}
+                    {inviteId && handled && (
+                      <div className="px-4 pb-3 pl-15 text-xs text-muted-foreground">
+                        Invitation {handled}.
+                      </div>
+                    )}
                   </li>
                 );
               })}

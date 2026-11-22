@@ -10,8 +10,9 @@ Four independent fixes:
    literals; a quote or backslash broke out of them (invalid script, or injection).
 3. _is_transfer_intent gated on the transfer-verb trigger alone, so "move revenue to
    profit" — a column request — skipped the fabrication guards built for it.
-4. gke_run YAML-escapes env values but ray_job_runner's DIRECT-mode extractor never
-   un-escaped them, corrupting secrets containing backslash or quote.
+4. gke_run YAML-escaped env values but ray_job_runner's DIRECT-mode extractor never
+   un-escaped them, corrupting secrets containing backslash or quote. Secrets no
+   longer pass through the YAML at all; they must still reach the job byte for byte.
 """
 import ast
 
@@ -22,8 +23,7 @@ from app.agents.data_transfer_agent.data_transfer_agent import (
     _make_cloud_download_helper_code,
     _unsafe_script_literals,
 )
-from app.data_transfer_docker.gke_run import _render_cloud_env_vars
-from app.infra.ray_job_runner import _extract_runtime_env_from_yaml
+from app.infra import ray_job_runner
 
 
 # ── 1. cross-account creds ────────────────────────────────────────────────────
@@ -110,13 +110,19 @@ def test_real_transfer_phrasings_still_skip_the_guards():
 
 # ── 4. env escape round-trip ──────────────────────────────────────────────────
 
-def test_secrets_with_backslash_and_quote_survive_render_extract():
+def test_secrets_with_backslash_and_quote_reach_the_direct_job_exactly(monkeypatch):
     nasty = {
         "DTA_DEST_CONN_STR": 'postgresql://u:pa"ss\\word@h/db',
         "AWS_SECRET_ACCESS_KEY": 'abc\\def"ghi',
         "PLAIN": "simple-value",
     }
-    rendered = _render_cloud_env_vars(nasty)
-    yaml_doc = "spec:\n  runtimeEnvYAML: |\n    env_vars:\n" + rendered + "\n"
-    out = _extract_runtime_env_from_yaml(yaml_doc)["env_vars"]
-    assert out == nasty
+    seen = {}
+    monkeypatch.setattr(ray_job_runner, "_run_ray_job_direct",
+                        lambda **kw: seen.update(kw) or "ok")
+    yaml_doc = ("kind: RayJob\nmetadata:\n  name: dta-x\nspec:\n  runtimeEnvYAML: |\n"
+                "    env_vars:\n      JOB_ID: \"x\"\n---\nkind: ConfigMap\ndata:\n"
+                "  sample_code.py: |\n    print(1)\n")
+    ray_job_runner.run_rayjob_from_yaml(yaml_doc, rayjob_name="dta-x",
+                                        dashboard_url="http://ray:8265", secret_env=nasty)
+    env = seen["runtime_env"]["env_vars"]
+    assert {k: env[k] for k in nasty} == nasty

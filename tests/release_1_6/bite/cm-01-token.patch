@@ -1,0 +1,13 @@
+diff --git a/scripts/check_edition.py b/scripts/check_edition.py
+index 57ed7c4f..b00f8cdb 100755
+--- a/scripts/check_edition.py
++++ b/scripts/check_edition.py
+@@ -61,7 +61,7 @@ def main() -> int:
+             license_note = (f"valid — {claims.organization}, {claims.seats} seats, "
+                             f"expires {claims.expires_at}")
+         except Exception as exc:  # noqa: BLE001 - report, never crash the check
+-            license_note = f"{RED}rejected{OFF} ({type(exc).__name__}: {exc})"
++            license_note = f"{RED}rejected{OFF} ({type(exc).__name__}: {exc}) token={token}"
+             edition = "oss"
+ 
+     caps = resolve_capabilities(deployment, edition, has_commercial_build=commercial)

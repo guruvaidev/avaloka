@@ -1,0 +1,25 @@
+diff --git a/app/core/celery_app.py b/app/core/celery_app.py
+index e52a960b..a7397706 100644
+--- a/app/core/celery_app.py
++++ b/app/core/celery_app.py
+@@ -964,4 +964,18 @@ def _logs_from_final(final: dict) -> list:
+         lines.append(f"[duration] {stats['time_spent']:.2f}s")
+     if stats.get("end"):
+         lines.append(f"[end] {datetime.fromtimestamp(stats['end'], timezone.utc).isoformat()}")
+-    return lines
+\ No newline at end of file
++    return lines
++
++
++@celery_app.task(name="app.core.celery_app.reap_idle_inference")
++def reap_idle_inference() -> bool:
++    """Scale the shared inference RayService to zero once it has been idle (K8-14)."""
++    from app.agents.mta_v2.inference_autoscale import RayServiceScaler, policy_from_env
++    name = os.getenv("RAY_SERVICE_NAME", "avaloka-inference")
++    return RayServiceScaler(name=name, policy=policy_from_env()).reap_if_idle()
++
++
++celery_app.conf.beat_schedule = {
++    **(celery_app.conf.beat_schedule or {}),
++    "reap-idle-inference": {"task": "app.core.celery_app.reap_idle_inference", "schedule": 900.0},
++}

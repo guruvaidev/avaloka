@@ -64,12 +64,12 @@ spec:
               mountPath: /data
           resources:
             {{- toYaml .Values.redis.resources | nindent 12 }}
-{{- if not .Values.redis.persistence.enabled }}
+{{- if not (.Values.redis.persistence).enabled }}
       volumes:
         - name: data
           emptyDir: {}
 {{- end }}
-{{- if .Values.redis.persistence.enabled }}
+{{- if (.Values.redis.persistence).enabled }}
   volumeClaimTemplates:
     - metadata:
         name: data

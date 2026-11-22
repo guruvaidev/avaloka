@@ -1,7 +1,7 @@
 // Server-only: resolve an auth user's organization id, bypassing RLS.
 //
 // Order: profiles.organization_id -> organization owned by the profile ->
-// app_users membership (profile_id / auth_user_id / email match).
+// app_users membership (profile_id / auth_user_id / verified email match).
 
 export async function resolveOrgIdForAuthUser(
   admin: any,
@@ -11,7 +11,7 @@ export async function resolveOrgIdForAuthUser(
 
   const { data: profile } = await admin
     .from("profiles")
-    .select("id,organization_id,company_email")
+    .select("id,organization_id")
     .or(`id.eq.${authUserId},user_id.eq.${authUserId}`)
     .maybeSingle();
 
@@ -29,7 +29,10 @@ export async function resolveOrgIdForAuthUser(
     if (owned?.id) return owned.id as string;
   }
 
-  let email: string | null = (profile?.company_email as string | null) ?? null;
+  // Only the verified sign-in address. profiles.company_email is written by the
+  // user, so matching a roster row by it would let anyone claim an organisation.
+  // public.current_org_id() stopped matching it too (migration 20261103120000).
+  let email: string | null = null;
   try {
     const { data: authUser } = await admin.auth.admin.getUserById(authUserId);
     email = authUser?.user?.email ?? email;

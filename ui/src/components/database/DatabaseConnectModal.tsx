@@ -275,14 +275,14 @@ export function DatabaseConnectModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="max-w-2xl dark:border-white/10 dark:bg-[#131316]">
         <div className="flex items-center justify-between border-b px-1 pb-3">
           <div className="flex items-center gap-2">
             <Database className="h-5 w-5 text-[#1565EF]" />
             <div>
               <h2 className="text-base font-semibold">Connect {DB_LABEL[dbType]}</h2>
               <p className="text-xs text-muted-foreground">
-                Opens a live connection to your database. Credentials are encrypted server-side.
+                Opens a live connection to your database. Your database password is encrypted at rest and sent to the MCP server sealed.
               </p>
             </div>
           </div>

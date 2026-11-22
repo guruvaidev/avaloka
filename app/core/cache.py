@@ -1,7 +1,9 @@
 from __future__ import annotations
 from abc import ABC, abstractmethod
-from typing import Optional, List
+from typing import Any, Dict, Optional, List, Tuple
+import asyncio
 import os
+import threading
 
 import redis.asyncio as redis
 try:
@@ -39,7 +41,7 @@ def _make_redis():
     Else -> use single-node client.
 
     Notes for cluster:
-    - Use a discovery endpoint like 'redis://10.128.15.238:6379'
+    - Use a discovery endpoint like 'redis://10.0.0.5:6379'
     - Do NOT include '/db' suffix in cluster URLs.
     """
     url = os.getenv("REDIS_URL", "redis://127.0.0.1:6379")
@@ -73,14 +75,53 @@ class RedisCache(ICache):
         if url:
             os.environ["REDIS_URL"] = url
         self.mode = "cluster" if os.getenv("REDIS_CLUSTER", "0").lower() in ("1", "true", "yes") else "single"
-        self._r = _make_redis()
+        # One redis.asyncio client per event loop. A client's pool lock and
+        # sockets belong to the loop that first used them, and this object is
+        # shared process-wide (session_service.cache) while sync LangGraph nodes
+        # call it from worker threads through asyncio.run -- a second loop.
+        # Sharing one client across those loops raised "attached to a different
+        # loop" under asyncio, wedged the pool lock for the main loop, and under
+        # uvloop let a worker thread drive a libuv stream the main thread was
+        # polling: the API's segfaults. Keyed by id() because uvloop.Loop does
+        # not take weak references; the loop is held to tell a reused id apart.
+        self._clients: Dict[int, Tuple[asyncio.AbstractEventLoop, Any]] = {}
+        self._clients_lock = threading.Lock()
+
+    @property
+    def _r(self):
+        """The client for the running loop, created on first use there."""
+        loop = asyncio.get_running_loop()
+        with self._clients_lock:
+            entry = self._clients.get(id(loop))
+            if entry is not None and entry[0] is loop:
+                return entry[1]
+            # Forget clients of loops that have finished (asyncio.run closes
+            # its loop), so short-lived worker loops do not accumulate.
+            for key in [k for k, (lp, _) in self._clients.items() if lp.is_closed()]:
+                del self._clients[key]
+            client = _make_redis()
+            self._clients[id(loop)] = (loop, client)
+            return client
+
+    async def release_loop_client(self) -> None:
+        """Close and forget the running loop's client.
+
+        For callers that run a short-lived loop (``asyncio.run`` in a worker
+        thread): call it before the loop ends so its sockets close on the loop
+        that opened them instead of leaking until garbage collection.
+        """
+        loop = asyncio.get_running_loop()
+        with self._clients_lock:
+            entry = self._clients.pop(id(loop), None)
+        if entry is not None and entry[0] is loop:
+            try:
+                await entry[1].aclose()
+            except Exception:
+                pass
 
     # lifecycle
     async def close(self):
-        try:
-            await self._r.aclose()
-        except Exception:
-            pass
+        await self.release_loop_client()
 
     async def ping(self) -> bool:
         try:

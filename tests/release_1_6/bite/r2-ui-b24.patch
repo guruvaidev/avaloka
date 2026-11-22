@@ -1,0 +1,13 @@
+diff --git a/ui/src/routes/_authenticated/settings.tsx b/ui/src/routes/_authenticated/settings.tsx
+index dce36cc5..1ec74fb0 100644
+--- a/ui/src/routes/_authenticated/settings.tsx
++++ b/ui/src/routes/_authenticated/settings.tsx
+@@ -1718,7 +1718,7 @@ function IntegrationsTab() {
+       <div className={cn("grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3", loading && "animate-pulse opacity-60")}>
+         {visible.map((it) => {
+           const key = PROVIDER_KEY[it.name] ?? "";
+-          const isGithub = key === "github";
++          const isGithub = key === "github" || key === "outlook";
+           return (
+             <IntegrationCard
+               key={it.name}

@@ -1,0 +1,13 @@
+diff --git a/app/agents/avaloka_agent/session_context.py b/app/agents/avaloka_agent/session_context.py
+index d7ffe8f7..b756826d 100644
+--- a/app/agents/avaloka_agent/session_context.py
++++ b/app/agents/avaloka_agent/session_context.py
+@@ -108,8 +108,6 @@ def render_for_prompt(ctx: Dict[str, Any]) -> str:
+         lines.append(f"file_type: {ctx['input_data_type']}")
+     if ctx.get("file_size_mb") is not None:
+         lines.append(f"file_size_mb: {ctx['file_size_mb']}")
+-    if ctx.get("schema_columns"):
+-        lines.append(f"columns: {', '.join(map(str, ctx['schema_columns'][:24]))}")
+     if ctx.get("analysis_fidelity"):
+         lines.append(f"current_fidelity: {ctx['analysis_fidelity']}")
+     if ctx.get("selected_sample_name"):

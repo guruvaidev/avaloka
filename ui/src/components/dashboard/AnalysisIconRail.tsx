@@ -57,6 +57,7 @@ export function AnalysisIconRail({
               className={cx(
                 "size-10 rounded-lg *:data-icon:size-[18px]",
                 isActive && "bg-primary_hover text-fg-primary",
+                "[&_[data-icon]]:text-[#51525C]",
               )}
             />
           );

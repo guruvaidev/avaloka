@@ -1,7 +1,7 @@
 """A data-transfer logic review that cannot be built must not report APPROVED.
 
 The reviewer and the coder were only built when a Groq key was present,
-whatever the provider. OpenRouter is the default provider, so an install with
+whatever the provider. OpenRouter was the default provider then, so an install with
 only an OpenRouter key had neither; and when the reviewer was None the review
 returned ``APPROVED``. An absent gate reporting success is the worst state a
 gate has, because nothing downstream can tell it from a pass.
@@ -30,6 +30,7 @@ import app.agents.data_transfer_agent.daft_coder as dc
 import app.agents.data_transfer_agent.daft_validator as dv
 import app.agents.data_transfer_agent.data_transfer_agent as dta
 from app.core import model_config as mc
+from app.core import model_fallback as mf
 
 _KEY_VARS = (
     "OPENROUTER_API_KEY", "INFERENCE_OPENROUTER_API_KEY", "OPENAI_API_KEY", "OPENAI_API_BASE",
@@ -68,7 +69,13 @@ _CONFIGS = {
     "openrouter-key-only": ({"OPENROUTER_API_KEY": "k"}, "ChatOpenAI"),
     "groq-key-only": ({"GROQ_API_KEY": "k"}, "ChatGroq"),
     "groq-coding-key-only": ({"GROQ_API_KEY_CODING_AGENT": "k"}, "ChatGroq"),
+    # MP-01: re-pinned 2026-11-01 — owner decision: default is openai/gpt-oss-120b via OpenRouter (was groq from 2026-10-31);
+    # with both keys present the default, OpenRouter, wins.
     "both-keys": ({"OPENROUTER_API_KEY": "k", "GROQ_API_KEY": "k"}, "ChatOpenAI"),
+    # Groq chosen explicitly with an OpenRouter key: the Groq primary carries the
+    # OpenRouter backup (the case "both-keys" covered until 2026-11-01).
+    "explicit-groq-with-both-keys":
+        ({"INFERENCE_PROVIDER": "groq", "GROQ_API_KEY": "k", "OPENROUTER_API_KEY": "k"}, "ChatGroq"),
     "no-keys": ({}, None),
     "explicit-groq-with-only-an-openrouter-key":
         ({"INFERENCE_PROVIDER": "groq", "OPENROUTER_API_KEY": "k"}, None),
@@ -77,6 +84,15 @@ _CONFIGS = {
     "explicit-openrouter-with-its-key":
         ({"INFERENCE_PROVIDER": "openrouter", "OPENROUTER_API_KEY": "k"}, "ChatOpenAI"),
 }
+
+#: Configs whose primary is not OpenRouter but which hold an OpenRouter key: the
+#: factory wraps the primary with the OpenRouter backup (app/core/inference.py,
+#: attach_fallback), so both halves of the wrapper are asserted.
+_WITH_OPENROUTER_BACKUP = {"explicit-groq-with-both-keys"}
+
+#: Configs whose primary IS OpenRouter: it carries the next OpenRouter tier
+#: (GPT-6 Luna, owner decision 2026-11-01), not a same-model OpenRouter backup.
+_WITH_OPENROUTER_TIER = {"openrouter-key-only", "both-keys", "explicit-openrouter-with-its-key"}
 
 
 @pytest.mark.parametrize("builder,table_key", [
@@ -97,8 +113,30 @@ def test_the_dta_model_is_built_from_the_active_providers_credentials(
         assert llm is None
         return
     assert llm is not None, f"{config}: not built, although the active provider has a key"
+    model = mc.DEFAULT_MODELS[table_key]
+    if config in _WITH_OPENROUTER_TIER:
+        # MP-01: re-pinned 2026-11-01 — owner decision: default is openai/gpt-oss-120b via OpenRouter (was groq from 2026-10-31).
+        assert type(llm).__name__ == "RunnableWithFallbacks", f"{config}: no OpenRouter tier armed"
+        assert type(llm.runnable).__name__ == expected_class
+        assert llm.runnable.model_name == model
+        assert [b.model for b in llm.fallbacks] == (
+            ["openai/gpt-6-luna"] + (["openai/gpt-oss-120b"] if "GROQ_API_KEY" in env else []))
+        return
+    if config in _WITH_OPENROUTER_BACKUP:
+        # A Groq primary with an OpenRouter key carries the OpenRouter backup, so
+        # BOTH halves of the wrapper are asserted.
+        assert type(llm).__name__ == "RunnableWithFallbacks", f"{config}: no OpenRouter backup armed"
+        assert type(llm.runnable).__name__ == expected_class
+        assert llm.runnable.model_name == model
+        assert len(llm.fallbacks) == 1
+        backup = llm.fallbacks[0]
+        assert backup.model == mf.OPENROUTER_EQUIVALENTS[model]
+        assert type(backup.inner).__name__ == "ChatOpenAI"
+        assert backup.inner.model_name == mf.OPENROUTER_EQUIVALENTS[model]
+        assert str(backup.inner.openai_api_base).rstrip("/") == mf.OPENROUTER_BASE_URL.rstrip("/")
+        return
     assert type(llm).__name__ == expected_class
-    assert llm.model_name == mc.DEFAULT_MODELS[table_key]
+    assert llm.model_name == model
 
 
 def test_with_only_an_openrouter_key_the_reviewer_is_on_the_large_model(no_credentials):
@@ -125,6 +163,7 @@ def test_no_reviewer_blocks_and_names_the_setting(no_credentials):
     assert out["logic_review_unavailable"] is True
     assert "could not run" in out["code_validation_feedback"]
     # No provider configured resolves to the default, so that is the key named.
+    # MP-01: re-pinned 2026-11-01 — owner decision: default is openai/gpt-oss-120b via OpenRouter (was groq from 2026-10-31).
     assert "OPENROUTER_API_KEY" in out["code_validation_feedback"]
 
 
@@ -244,6 +283,7 @@ def test_a_transfer_is_refused_at_preflight_when_there_is_no_reviewer(
 
     message = str(excinfo.value)
     assert "logic-review LLM could not be initialised" in message
+    # MP-01: re-pinned 2026-11-01 — owner decision: default is openai/gpt-oss-120b via OpenRouter (was groq from 2026-10-31).
     assert "OPENROUTER_API_KEY" in message
     assert "AVALOKA_STRICT_LOGIC_VALIDATION=0" in message
     mock_probe.assert_not_called()
@@ -288,6 +328,7 @@ def test_preflight_names_the_active_providers_setting_when_there_is_no_coder(no_
         _transfer()
 
     assert "code-generation LLM could not be initialised" in str(excinfo.value)
+    # MP-01: re-pinned 2026-11-01 — owner decision: default is openai/gpt-oss-120b via OpenRouter (was groq from 2026-10-31).
     assert "OPENROUTER_API_KEY" in str(excinfo.value)
 
 

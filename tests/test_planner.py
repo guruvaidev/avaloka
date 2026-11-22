@@ -270,7 +270,13 @@ def test_gcp_infra_variants(mock_llm, content):
     mock_llm.invoke.return_value = mock_deploy_infra_llm_response
 
     state = ETLState(messages=[HumanMessage(content=content)], planner_definition={})
-    result = plan_etl_job(state)
+    first = plan_etl_job(state)
+    # Provisioning is confirmed first (app/agents/infra_confirmation.py).
+    assert not first.get("infrastructure_request")
+    assert first["pending_clarification"]["type"] == "infrastructure_confirmation"
+    result = plan_etl_job(ETLState(messages=first["messages"] + [HumanMessage(content="yes")],
+                                   planner_definition={},
+                                   pending_clarification=first["pending_clarification"]))
     assert result["infrastructure_request"]["type"] == "gcp"
     assert result["infrastructure_request"]["app_type"] == "python-docker"
 
@@ -287,7 +293,12 @@ def test_csv_upload_triggers_infra_request(mock_llm, mock_coder_llm):
 
     state = ETLState(messages=[HumanMessage(content="Here's my file")],
                      planner_definition={})
-    result = plan_etl_job(state)
+    first = plan_etl_job(state)
+    # The model choosing deploy_infrastructure is not the user confirming it.
+    assert not first.get("infrastructure_request")
+    result = plan_etl_job(ETLState(messages=first["messages"] + [HumanMessage(content="yes")],
+                                   planner_definition={},
+                                   pending_clarification=first["pending_clarification"]))
     assert result.get("infrastructure_request", {}).get("type") == "gcp"
     assert result.get("infrastructure_request", {}).get("app_type") == "python-docker"
 
@@ -305,7 +316,9 @@ def test_csv_upload_triggers_infra_edge():
         coder_definition=state.get("coder_definition", {}),
         data_source_location=state.get("data_source_location", ""),
         output_location=state.get("output_location", ""),
-        infrastructure_request={"type": "gcp", "app-type": "python-docker"},
+        # What the planner returns after the user's "yes": only a confirmed
+        # request reaches provision_infra (route_planner_output).
+        infrastructure_request={"type": "gcp", "app-type": "python-docker", "confirmed": True},
         execution_result=state.get("execution_result", {}),
         input_data_type=state.get("input_data_type", ""),
         output_file_data=state.get("output_file_data", {}),
@@ -453,7 +466,12 @@ def test_user_requests_infra_gcp(mock_llm):
 
     state = ETLState(messages=[HumanMessage(content="Please deploy on GCP")],
                      planner_definition={})
-    result = plan_etl_job(state)
+    first = plan_etl_job(state)
+    # Asked first (app/agents/infra_confirmation.py); "yes" sets the request.
+    assert not first.get("infrastructure_request")
+    result = plan_etl_job(ETLState(messages=first["messages"] + [HumanMessage(content="yes")],
+                                   planner_definition={},
+                                   pending_clarification=first["pending_clarification"]))
     assert result.get("infrastructure_request", {}).get("type") == "gcp"
     assert result.get("infrastructure_request", {}).get("app_type") == "python-docker"
 
@@ -580,7 +598,13 @@ def test_planner_triggers_infra_on_csv_upload():
         state = ETLState(messages=[HumanMessage(content="Here's my file")],
                          planner_definition={},
                          infrastructure_provisioned=None)
-        result = plan_etl_job(state)
+        first = plan_etl_job(state)
+        # The tool call asks for confirmation; the user's "yes" applies it.
+        assert "infrastructure_request" not in first or not first["infrastructure_request"]
+        result = plan_etl_job(ETLState(messages=first["messages"] + [HumanMessage(content="yes")],
+                                       planner_definition={},
+                                       infrastructure_provisioned=None,
+                                       pending_clarification=first["pending_clarification"]))
         assert result["infrastructure_request"]["type"] == "gcp"
         assert result["infrastructure_request"]["app_type"] == "python-docker"
 

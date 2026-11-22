@@ -27,6 +27,9 @@ class ChatResponse(BaseModel):
     # Planner deliberation trace (ChatGPT-style "thinking") — present when
     # the planner model ran with reasoning_format="parsed".
     reasoning: Optional[str] = None
+    # Which model answered this turn when a fallback tier stood in for the
+    # configured model, and why (app/core/model_tiers.py). None otherwise.
+    answered_by: Optional[Dict[str, Any]] = None
     planner_graph_path: Optional[str] = None
     planner_graph_status: Optional[str] = None
     planner_graph_display_url: Optional[str] = None
@@ -46,6 +49,10 @@ class ChatResponse(BaseModel):
     training_completed: Optional[bool] = False
     ready_to_train: Optional[bool] = False
     training_status: Optional[str] = None
+    # Background-job notes delivered at this turn's end (app/core/job_notes.py):
+    # each item is one coalesced, code-written note batch the UI appends after
+    # the assistant reply. The API already wrote its transcript row.
+    job_notes: Optional[List[Dict[str, Any]]] = None
     # Deferred-turn signalling (slow turn returned before the proxy aborts).
     # pending_status="running" means "keep polling" for ANY kind of work;
     # pending_kind says whether it's training or a normal analysis, so the UI
@@ -68,6 +75,9 @@ class ChatResponse(BaseModel):
     selected_sample_name: Optional[str] = None
     analysis_task_id: Optional[str] = None
     execution_context: Optional[Dict[str, Any]] = None
+    # Item 8a run truth: outcome (succeeded|failed|partial), reason_code,
+    # reason and scope, written by app/core/run_truth.py, never by the model.
+    run_truth: Optional[Dict[str, Any]] = None
     
     # Context Memory diagnostics
     memory_hints: Optional[List[Dict[str, Any]]] = None

@@ -24,8 +24,8 @@ data:
             add_header Cache-Control "no-store";
         }
 
-        # Keep in sync with ui/deploy/nginx.conf.template — this ConfigMap is mounted
-        # over the image's copy. An unproxied API path falls through to the SPA
+        # This ConfigMap is mounted over the image's nginx config, so it is the only
+        # config the UI pod uses. An unproxied API path falls through to the SPA
         # catch-all and returns index.html, which callers fail to parse as JSON.
         location ~ ^/(health|version|threads|api|docs|openapi\.json|buckets|datasets|tasks)(/|$) {
             resolver ${NGINX_RESOLVER} valid=10s ipv6=off;
@@ -60,6 +60,31 @@ data:
             proxy_read_timeout 300s;
         }
         {{- end }}
+
+        # Ray's own open-source dashboard, on the UI's own origin (/ray/), so the
+        # /ray session cookie set by POST /api/ray/session (proxied above) is sent
+        # back here. ^~ keeps the regex locations above from taking /ray/ paths.
+        # ray-dashboard-proxy (deploy/helm/ray/ray_dashboard_proxy.yaml) asks the
+        # backend (/api/ray/authz) before every request: sign-in + plan required,
+        # view + stop only, routed to the user's own Ray cluster. Ray itself has
+        # no login and stays ClusterIP.
+        location = /ray {
+            return 301 /ray/;
+        }
+        location ^~ /ray/ {
+            resolver ${NGINX_RESOLVER} valid=10s ipv6=off;
+            set $ray_dashboard "http://ray-dashboard-proxy.{{ .Release.Namespace }}.svc.cluster.local:8080";
+            proxy_pass $ray_dashboard$request_uri;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+            proxy_buffering off;
+            proxy_read_timeout 3600s;
+        }
 
         location / {
             try_files $uri $uri/ /index.html;

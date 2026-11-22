@@ -15,7 +15,8 @@ def _router_state(**extra):
         "messages": [],
         "execution_mode": "k8s-ray",
         "data_source_location_cloud": "",
-        "infrastructure_request": {"type": "gcp", "app_type": "python-docker", "use_ray": True},
+        # A request the user confirmed: only those reach provision_infra.
+        "infrastructure_request": {"type": "gcp", "app_type": "python-docker", "use_ray": True, "confirmed": True},
         "infrastructure_provisioned": None,
         "ready_to_code": False,
         "ready_to_summarize": False,

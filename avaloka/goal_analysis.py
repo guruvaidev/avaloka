@@ -11,6 +11,8 @@ from typing import Any
 
 import pandas as pd
 
+from avaloka.io.loader import NULL_WORDS
+
 
 def _mentioned_columns(goal: str, columns: list[str]) -> list[str]:
     return [
@@ -156,27 +158,47 @@ def analyze_goal(
         numeric = frame.select_dtypes(include="number")
         selected = [col for col in mentioned if col in numeric.columns]
         pairs: list[dict[str, Any]] = []
+        # Every pair carries both coefficients, so the pairs reported are chosen
+        # by the stronger of the two: a relationship one extreme row hides from
+        # Pearson is still picked up by its rank correlation.
+        candidates: list[dict[str, Any]] = []
         if numeric.shape[1] >= 2:
             corr = numeric.corr()
+            rank_corr = numeric.corr(method="spearman")
             for i, left in enumerate(corr.columns):
                 for right in corr.columns[i + 1:]:
                     value = corr.loc[left, right]
+                    rho = rank_corr.loc[left, right]
                     if len(selected) >= 2:
                         include = left in selected and right in selected
                     elif selected:
                         include = left in selected or right in selected
                     else:
                         include = True
-                    if pd.notna(value) and include:
+                    if not include:
+                        continue
+                    if pd.notna(value):
                         pairs.append({"left": str(left), "right": str(right), "r": _number(value)})
+                    if pd.notna(value) or pd.notna(rho):
+                        candidates.append({
+                            "left": str(left), "right": str(right),
+                            "r": _number(value) if pd.notna(value) else None,
+                            "rho": _number(rho) if pd.notna(rho) else None,
+                        })
         pairs.sort(key=lambda pair: (-abs(pair["r"]), pair["left"], pair["right"]))
+        candidates.sort(key=lambda pair: (
+            -max(abs(pair["r"] or 0.0), abs(pair["rho"] or 0.0)), pair["left"], pair["right"],
+        ))
+        rank_pairs = candidates[:5]
         result.update(
-            kind="correlation", status="answered" if pairs else "limited",
-            metrics={"pairs": pairs[:5]},
+            kind="correlation", status="answered" if candidates else "limited",
+            metrics={"pairs": pairs[:5], "rank_pairs": rank_pairs},
         )
         result["findings"] = [
-            f"{pair['left']} and {pair['right']}: Pearson r={pair['r']:.3f}."
-            for pair in pairs[:5]
+            f"{pair['left']} and {pair['right']}: "
+            + (f"Pearson r={pair['r']:.3f}" if pair["r"] is not None else "Pearson r undefined")
+            + (f", Spearman rho={pair['rho']:.3f}." if pair["rho"] is not None else ".")
+            for pair in rank_pairs
         ] or ["No comparable numeric column pair has a defined correlation."]
         result["findings"].append("Correlation alone does not establish causation.")
         return result
@@ -280,10 +302,22 @@ def analyze_goal(
         else:
             aggregation = "count"
             values = grouped.size().sort_values(ascending=False).head(10)
+        sizes = grouped.size()
+
+        # A true missing value is its own bucket; say so instead of "nan". If a
+        # real category already reads "(missing)", the bucket gets a longer
+        # label so the two are never merged.
+        real_labels = {str(key) for key in sizes.index if not pd.isna(key)}
+        missing_label = "(missing)" if "(missing)" not in real_labels else "(missing: no value)"
+
+        def _label(key: Any) -> str:
+            return missing_label if pd.isna(key) else str(key)
+
         rows = [
-            {"group": str(key), "value": _number(value)}
+            {"group": _label(key), "value": _number(value)}
             for key, value in values.items() if pd.notna(value)
         ]
+        group_sizes = {_label(key): int(sizes[key]) for key, value in values.items() if pd.notna(value)}
         result.update(
             kind="group_comparison", status="answered" if rows else "limited",
             metrics={
@@ -291,12 +325,27 @@ def analyze_goal(
                 "value_column": metric,
                 "aggregation": aggregation,
                 "groups": rows,
+                "group_sizes": group_sizes,
             },
         )
         result["findings"] = [
-            f"{group_col}={row['group']}: {aggregation} {metric or 'rows'}={row['value']:.3g}."
+            f"{group_col}={row['group']}: {aggregation} {metric or 'rows'}={row['value']:.3g}"
+            f" (n={group_sizes[row['group']]})."
             for row in rows[:5]
         ] or ["No groups with valid values were available to compare."]
+        if missing_label in group_sizes and missing_label not in real_labels:
+            result["findings"].append(
+                f"{group_sizes[missing_label]} rows have no {group_col} value; they are shown "
+                f"as '{missing_label}' and are not a real category."
+            )
+        # The loader keeps null-like words in text columns as labels (so "NA" can
+        # be Namibia). When one ranks here, say so: it may be missing data.
+        for label in group_sizes:
+            if label in NULL_WORDS:
+                result["findings"].append(
+                    f"'{label}' ({group_sizes[label]} rows) is a null-like word that is counted "
+                    f"as its own group in {group_col}. If it means missing data, exclude it."
+                )
         return result
 
     if mentioned:

@@ -24,7 +24,7 @@ def run_d2c_test():
 
     # ── 1. Define credentials ─────────────────────────────────────────────────
     source_creds = {
-        "host": "10.111.16.10",
+        "host": "10.0.0.10",
         "port": 3306,
         "user": "avaloka",
         "password": "avaL0kap@ssword",

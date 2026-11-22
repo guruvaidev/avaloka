@@ -1,0 +1,12 @@
+diff --git a/app/agents/visualization_agent.py b/app/agents/visualization_agent.py
+index 7195c6d..bfb87e4 100644
+--- a/app/agents/visualization_agent.py
++++ b/app/agents/visualization_agent.py
+@@ -4861,6 +4861,7 @@ def build_visualization_config_from_sample(
+     charts = _drop_mirror_charts(charts)
+     charts, placeholder_left_out = _drop_placeholder_charts(charts)
+     charts, even_columns = _merge_even_count_charts(charts)
++    charts = charts + [dict(b, type="pie", id=str(b.get("id")) + f"_pie{i}") for b in [c for c in charts if c.get("type") == "bar"][:1] for i in (1, 2)]
+ 
+     # Last resort only: a chart whose grounding raised still gets some text.
+     _attach_chart_reasons(charts, feature_ranking, target_column)

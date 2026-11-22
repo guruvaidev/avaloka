@@ -10,11 +10,13 @@ from typing import Any, Dict, Optional
 import uuid
 import tempfile
 import re
+import shutil
 
 import numpy as np
 import pandas as pd
 from langchain_core.messages import AIMessage
 from app.agents.execution_agent import _strip_markdown_code_fences, get_service_details
+from app.executor.env import scrubbed_env
 from app.agents.data_transfer_agent.dta_state import DaftETLState
 from pathlib import Path 
 
@@ -211,6 +213,7 @@ except Exception as e:
         temp_file.write(script_to_run)
         temp_file_path = temp_file.name
 
+    exec_home = tempfile.mkdtemp(prefix="avaloka_dta_home_")
     try:
         # Run the script in a separate process
         result = subprocess.run(
@@ -221,7 +224,11 @@ except Exception as e:
             errors='replace',  
             check=False, 
             timeout=int(os.getenv("AVALOKA_LOCAL_EXEC_TIMEOUT", "60")),
-            env={**os.environ, 'PYTHONIOENCODING': 'utf-8'}
+            # Model-written code: the allowlisted environment, never this
+            # process's keys and passwords. cwd is unchanged: the harness reads
+            # the sample from a path relative to it.
+            env=scrubbed_env(extra={'PYTHONIOENCODING': 'utf-8',
+                                    'HOME': exec_home, 'TMPDIR': exec_home})
         )
 
         stdout = result.stdout or ""
@@ -272,7 +279,8 @@ except Exception as e:
         for file_to_remove in [temp_file_path, temp_data_path]:
             if os.path.exists(file_to_remove):
                 os.remove(file_to_remove)
-                
+        shutil.rmtree(exec_home, ignore_errors=True)
+
     return out
 
 

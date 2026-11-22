@@ -33,6 +33,9 @@ class DataConfig(TypedDict):
     # source values are never stored in the plan or model metadata.
     pii_transformations: NotRequired[Dict[str, Dict[str, str]]]
 
+class CrossValidationConfig(TypedDict):
+    k: int                                              = 5
+
 class TrainingPlan(TypedDict):
     model_type: Literal["classification", "regression"] = "classification"
     model_name: str
@@ -48,6 +51,8 @@ class TrainingPlan(TypedDict):
     execution_reason: NotRequired[str]
     execution_dataset_size_bytes: NotRequired[Optional[int]]
     execution_dataset_uri: NotRequired[str]
+    # k-fold cross-validation on the training split (run on 1.7/1.8; carried from 1.6).
+    cross_validation: NotRequired[CrossValidationConfig]
 
 class TrainingFailure(TypedDict, total=False):
     code: str
@@ -99,7 +104,9 @@ class TrainingResult(TypedDict):
     num_features: int
     num_classes: int
     created_at: str
-    status: NotRequired[str]
+    status: NotRequired[str]            # "submitted" for a RayJob the worker is polling
+    ray_job_name: NotRequired[str]
+    cv_folds: NotRequired[int]
     error: NotRequired[str]
     failure: NotRequired[TrainingFailure]
     integrity_report: NotRequired[Dict[str, Any]]

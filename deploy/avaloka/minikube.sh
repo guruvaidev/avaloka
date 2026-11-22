@@ -85,7 +85,7 @@ Reach the services with port-forward:
   kubectl -n $NAMESPACE port-forward svc/${RELEASE}-avaloka-backend-langgraph 3000:3000 &
 
   curl localhost:9000/health      # FastAPI backend
-  curl localhost:3000/info        # LangGraph server
+  curl localhost:3000/ok          # LangGraph server (internal; every other route needs LANGGRAPH_SERVICE_TOKEN)
 
 Scale the number of instances:
 

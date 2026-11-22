@@ -358,7 +358,7 @@ do not invent a second convention.
 `avaloka/benchmark/conversational.py` already implements the owner's ruling
 exactly **[verified]**:
 
-- `LOCAL_MODEL_PREFERENCE = ("qwen2.5:3b-instruct", "gemma3:270m", "gemma3:1b",
+- `LOCAL_MODEL_PREFERENCE = ("qwen3:4b-instruct-2507-q4_K_M", "gemma3:270m", "gemma3:1b",
   "gemma3:4b", "gemma4:e4b")` — the owner's first choice, then Gemma from
   smallest upward;
 - `_local_model()` reads the server's own tag list, so nothing is assumed

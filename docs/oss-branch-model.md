@@ -13,8 +13,7 @@ tree in a temporary directory, checks it, and lands it as a single commit on
 top of the public `main`. The public repository's own history is the record of
 what was published; nothing else holds a copy of it.
 
-The two remotes this involves are `origin`
-(`git@bitbucket.org:kamaliincteam/avaloka-dev.git`, internal) and `github`
+The two remotes this involves are `origin` (the internal repository) and `github`
 (`git@github.com:guruvaidev/avaloka.git`, public) — `git remote -v` in a
 checkout of this branch shows both. `SRC_BRANCH` defaults to `develop-1.6`
 (`scripts/generate-oss.sh:41`).
@@ -266,6 +265,36 @@ published tree lives.
 
 `oss/manifest.yaml` is the whole contract: what is withheld, what is added,
 what is spliced, what is asserted. Change the manifest, not the output.
+
+### The public tree numbers its own releases
+
+The public repository's first tagged release is 1.0.0; `develop-1.6` keeps the
+1.6 line. The public number is set only in the manifest: `VERSION` is an
+overlay, and splices set `pyproject.toml`, the chart's `version` and
+`appVersion`, the release entry at the top of `CHANGELOG.md`, the advisory in
+`SECURITY.md`, and the docs that name image tags or the chart version. The
+version lines are matched by pattern, so a bump on `develop-1.6` leaves the
+public number alone. `assert_present` requires `1.0.0` in each of those files
+and `assert_absent` refuses `1.6.0` in `VERSION`, `pyproject.toml` and
+`Chart.yaml`.
+
+A splice names one anchor (`section`, `line`, `match` or `before`) and one
+replacement (`with` or `from`). An anchor that matches no line, or more than
+one, fails the generation. A splice that silently did nothing would publish
+the source text it was meant to replace.
+
+Text whose old form must not be published at all -- internal change numbers,
+branch names, commit ids, the 1.6 line's wording -- is replaced from a table,
+`oss/internal/public-text.tsv`, that the public tree does not carry
+(`replace_table:` in the manifest; the path is excluded and asserted absent).
+Each row is a literal replacement that must match exactly as often as it says.
+`assert_no_match` then checks the result with patterns: no "#" followed by three
+or four digits in Markdown, the CSV reports or the manifest, unless written as
+a GitHub reference, and no commit id in the demo guide.
+
+To look at the generated tree, or run its tests, keep a copy:
+`OSS_OUT_DIR=<new dir> scripts/generate-oss.sh`. The copy is written only after
+every check has passed.
 
 ## Flowing work the other way
 

@@ -1,0 +1,5 @@
+BG11	revert	pytest	bg11-revert.patch	tests/release_1_6/test_bugs16_training_runid.py::test_bg11_training_turn_reports_its_run_id
+BG11	fix	pytest	bg11-fix.patch	tests/release_1_6/test_bugs16_training_runid.py::test_bg11_later_unrelated_turn_does_not_reannounce_the_run
+NEW-RS-01	revert	pytest	newrs01-revert.patch	tests/release_1_6/test_rayjob_renderer_finding.py::test_newrs01_requested_worker_count_reaches_the_shipped_template
+MP-01	revert	pytest	mp01-fallback-drop.patch	tests/test_dta_review_unavailable.py::test_the_dta_model_is_built_from_the_active_providers_credentials
+NEW-RS-02	revert	pytest	newrs02-revert.patch	tests/release_1_6/test_eks_env_leak_finding.py::test_newrs02_provision_cluster_leaves_the_process_environment_unchanged

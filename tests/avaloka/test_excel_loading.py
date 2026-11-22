@@ -18,12 +18,12 @@ def plan_workbook(tmp_path):
     path = tmp_path / "plan.xlsx"
     rows = [
         ["R1 Program - M3: Autonomy", None, None, None],
-        ["Proposed by Leela - 12 Sep 2026", None, None, None],
+        ["Proposed by the planning team - 12 Sep 2026", None, None, None],
         [None, None, None, None],
         ["ID", "Task", "Owner", "Effort"],
-        ["M3-00", "Licence + stack decision", "Leela", "0.5 d"],
-        ["M3-01", "Task definition", "Lei", "0.5 d"],
-        ["M3-02", "Dataset contract", "Shyam", "1 d"],
+        ["M3-00", "Licence + stack decision", "Owner A", "0.5 d"],
+        ["M3-01", "Task definition", "Owner B", "0.5 d"],
+        ["M3-02", "Dataset contract", "Owner C", "1 d"],
     ]
     pd.DataFrame(rows).to_excel(path, index=False, header=False)
     return path
@@ -59,5 +59,5 @@ def test_title_rows_do_not_become_data(plan_workbook):
     frame = load_dataset(str(plan_workbook))
     frame = getattr(frame, "frame", frame)
     blob = " ".join(str(v) for v in frame.to_numpy().ravel())
-    assert "Proposed by Leela" not in blob, (
+    assert "Proposed by the planning team" not in blob, (
         "a title row leaked into the data and will be profiled as a value")

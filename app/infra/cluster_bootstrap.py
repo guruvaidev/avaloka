@@ -13,6 +13,7 @@ CLI:
   python -m app.infra.cluster_bootstrap --mode connect --ray-address ray://host:10001
 """
 from __future__ import annotations
+import os
 
 import argparse
 import sys
@@ -96,8 +97,20 @@ def provision(args) -> int:
     if args.provider != "local":
         print("\n[6/6] Deploy RayCluster + Ray Serve")
         results.append(_print(ray_manager.apply_ray_cluster(namespace=args.namespace)))
+        results.append(_print(ray_manager.apply_ray_dashboard_nodeport(namespace=args.namespace)))
         if not _any_failed(results) and not args.skip_serve:
-            results.append(_print(ray_manager.deploy_ray_serve(namespace=args.namespace)))
+            # The RayService (Ray Serve) is opt-in: it keeps a Ray head running 24/7.
+            # The default inference backend is the chart's model-server Deployment.
+            if os.getenv("INFERENCE_BACKEND", "modelserver").strip().lower() == "rayserve":
+                results.append(_print(ray_manager.deploy_ray_serve(namespace=args.namespace)))
+            else:
+                results.append(_print({"step_name": "Deploy Ray Serve (RayService)", "status": "SKIPPED",
+                                       "message": "INFERENCE_BACKEND is not rayserve; the model-server Deployment serves models",
+                                       "details": ""}))
+                # Upgrade path: an install from before 2026-11 runs the avaloka-inference
+                # RayService with a 24/7 head. Remove it; its models are served by the
+                # model server on first use (loaded by run_id from MLflow).
+                results.append(_print(ray_manager.remove_ray_serve(namespace=args.namespace)))
 
     if args.data_stack:
         print("\n[+] Optional data stack")

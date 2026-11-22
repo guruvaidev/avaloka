@@ -76,7 +76,14 @@ def _diagnose_missing_model() -> Optional[str]:
     back to canned text. Saying "no model configured" would have been wrong
     too -- a key WAS present, just not for the selected provider.
     """
-    provider = (os.getenv("INFERENCE_PROVIDER") or "groq").strip().lower()
+    # The provider build_chat_model will actually use, not a second guess: with
+    # INFERENCE_PROVIDER unset that is OpenRouter (MP-01, owner decision
+    # 2026-11-01), or the provider whose key is present.
+    from app.core.inference import resolve_provider
+
+    provider = ((os.getenv("INFERENCE_PROVIDER") or "").strip().lower()
+                or resolve_provider(role="planning", agent="CONVERSATIONAL",
+                                    groq_api_key=os.getenv(_KEY_ENV) or None))
     keys = {
         "groq": ("GROQ_API_KEY", os.getenv(_KEY_ENV) or os.getenv("GROQ_API_KEY")),
         "openrouter": ("OPENROUTER_API_KEY", os.getenv("OPENROUTER_API_KEY")),
@@ -169,22 +176,42 @@ async def _load_redis_context_async(state: Dict[str, Any]) -> Dict[str, Any]:
         return {}
 
 
+async def _load_redis_context_on_private_loop(state: Dict[str, Any]) -> Dict[str, Any]:
+    """The loader as run by ``asyncio.run``: a loop that exists for one call.
+
+    The shared cache hands each loop its own Redis client (app/core/cache.py),
+    so this loop must not touch the API loop's sockets; it closes its own
+    client before ``asyncio.run`` closes the loop under it.
+    """
+    try:
+        return await _load_redis_context_async(state)
+    finally:
+        try:
+            from app.services import session_service
+            release = getattr(session_service.cache, "release_loop_client", None)
+            if release is not None:
+                await release()
+        except Exception as exc:
+            logger.debug("avaloka_agent: releasing loop redis client failed: %s", exc)
+
+
 def _load_redis_context(state: Dict[str, Any]) -> Dict[str, Any]:
     """Sync wrapper around the async loader. Safe both inside and outside an
-    existing event loop (LangGraph nodes run sync by default)."""
+    existing event loop (LangGraph nodes run sync by default, on a worker
+    thread, while the API's own loop keeps serving on the main thread)."""
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
     except RuntimeError:
         loop = None
-    if loop and loop.is_running():
+    if loop is not None:
         # We're inside an event loop already (e.g. tests using pytest-asyncio).
         # Schedule and wait via run_coroutine_threadsafe is non-trivial;
         # safer to spin a fresh loop in a worker thread.
         import concurrent.futures
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            return pool.submit(asyncio.run, _load_redis_context_async(state)).result()
+            return pool.submit(asyncio.run, _load_redis_context_on_private_loop(state)).result()
     try:
-        return asyncio.run(_load_redis_context_async(state))
+        return asyncio.run(_load_redis_context_on_private_loop(state))
     except Exception as exc:
         logger.debug("avaloka_agent: sync redis loader failed: %s", exc)
         return {}
@@ -362,12 +389,10 @@ def _preconfigure_for_planner(
     if intent.intent in ("ml_training", "ml_inference"):
         updates["enable_training"] = True
 
-    if intent.intent == "infrastructure":
-        updates["infrastructure_request"] = state.get("infrastructure_request") or {
-            "type": state.get("default_infra_platform", "gcp"),
-            "app_type": "python-docker",
-            "use_ray": True,
-        }
+    # An "infrastructure" intent no longer pre-sets infrastructure_request: that
+    # sent any message the classifier filed there straight to provision_infra.
+    # The planner asks for confirmation of an explicit request first
+    # (app/agents/infra_confirmation.py).
 
     # A "schedule" intent is routed to the planner and nothing more. This used
     # to pre-set a hard-coded run-once task_schedule (relative, 0 seconds, one
@@ -451,7 +476,7 @@ def avaloka_agent_node(state: ETLState) -> Dict[str, Any]:
     #    reserved for clearly conversational intents.
     pending = state.get("pending_clarification")
     answering_planner = isinstance(pending, dict) and pending.get("type") in {
-        "filter_value", "metric_choice",
+        "filter_value", "metric_choice", "infrastructure_confirmation",
     }
     delegate = intent.should_delegate() or answering_planner
 

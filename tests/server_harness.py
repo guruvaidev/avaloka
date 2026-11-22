@@ -126,6 +126,10 @@ class FakeCache:
     async def srem(self, key: str, member: str) -> None:
         self._sets.get(key, set()).discard(member)
 
+    async def close(self) -> None:
+        # ICache.close; the app's lifespan calls it on shutdown.
+        return None
+
 
 SESSIONS: Dict[str, Dict[str, Any]] = {}
 THREAD_TO_SESSION: Dict[str, str] = {}

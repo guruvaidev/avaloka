@@ -9,7 +9,8 @@ Covers:
   - cell_id / artifact_ref schema fields in insert
   - retrieve_historical_analysis Pydantic parse / tool schema contract
   - circuit breaker: 3-second timeout enforcement
-  - embedding path: mock OPENAI_API_KEY activates OpenAIEmbeddings branch
+  - embedding path: only the explicit opt-in (EMBEDDING_PROVIDER=openai plus
+    EMBEDDING_OPENAI_API_KEY) activates the OpenAIEmbeddings branch
   - embedding fallback: zero-vector when no provider is available, even with a
     cached local model; local-model warm-up skip rules
 
@@ -317,7 +318,7 @@ class TestMilvusClientSchema:
 
 
 # ---------------------------------------------------------------------------
-# 3. Milvus Recorder — embedding path with OPENAI_API_KEY
+# 3. Milvus Recorder — embedding path with the explicit OpenAI opt-in
 # ---------------------------------------------------------------------------
 
 class TestMilvusRecorderEmbedding:
@@ -367,7 +368,7 @@ class TestMilvusRecorderEmbedding:
 
         return mock_client
 
-    def test_uses_openai_embeddings_when_key_set(self):
+    def test_uses_openai_embeddings_on_explicit_opt_in(self):
         fake_vector = [0.42] * 1536
         mock_embedder = MagicMock()
         mock_embedder.embed_query.return_value = fake_vector
@@ -376,7 +377,8 @@ class TestMilvusRecorderEmbedding:
         fake_lo.OpenAIEmbeddings = MagicMock(return_value=mock_embedder)
 
         env = {k: v for k, v in os.environ.items()}
-        env["OPENAI_API_KEY"] = "sk-test"
+        env["EMBEDDING_PROVIDER"] = "openai"
+        env["EMBEDDING_OPENAI_API_KEY"] = "sk-test"
 
         mock_client = self._call_recorder(env, langchain_openai_mod=fake_lo)
 
@@ -412,7 +414,7 @@ class TestMilvusRecorderEmbedding:
                 return [0.5, 0.25]
 
         env = {k: v for k, v in os.environ.items() if k != "OPENAI_API_KEY"}
-        env["EMBEDDING_PROVIDER"] = "auto"
+        env["EMBEDDING_PROVIDER"] = "local"
         with patch.object(eu, "_st_instance", _FakeModel()):
             mock_client = self._call_recorder(env, block_sentence_transformers=True)
 
@@ -429,6 +431,7 @@ class TestLocalModelWarmup:
         import app.services.embedding_utils as eu
 
         monkeypatch.setenv("EMBEDDING_PROVIDER", "openai")
+        monkeypatch.setenv("EMBEDDING_OPENAI_API_KEY", "sk-test")
         monkeypatch.setattr(eu, "_st_instance", None)
 
         assert eu.warmup_local_model() is False
@@ -437,7 +440,7 @@ class TestLocalModelWarmup:
     def test_warmup_reports_false_when_sentence_transformers_is_missing(self, monkeypatch):
         import app.services.embedding_utils as eu
 
-        monkeypatch.setenv("EMBEDDING_PROVIDER", "auto")
+        monkeypatch.setenv("EMBEDDING_PROVIDER", "local")
         monkeypatch.setattr(eu, "_st_instance", None)
         # A None entry in sys.modules makes `import sentence_transformers` raise ImportError.
         monkeypatch.setitem(sys.modules, "sentence_transformers", None)
@@ -450,7 +453,7 @@ class TestLocalModelWarmup:
         loads, encoded = [], []
 
         class _FakeST:
-            def __init__(self, name):
+            def __init__(self, name, **kwargs):   # offline adds local_files_only
                 loads.append(name)
 
             def encode(self, text):
@@ -459,7 +462,7 @@ class TestLocalModelWarmup:
 
         fake_mod = types.ModuleType("sentence_transformers")
         fake_mod.SentenceTransformer = _FakeST
-        monkeypatch.setenv("EMBEDDING_PROVIDER", "auto")
+        monkeypatch.setenv("EMBEDDING_PROVIDER", "local")
         monkeypatch.setenv("SENTENCE_TRANSFORMER_MODEL", "tiny-test-model")
         monkeypatch.setattr(eu, "_st_instance", None)
         monkeypatch.setitem(sys.modules, "sentence_transformers", fake_mod)

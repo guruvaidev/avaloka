@@ -14,12 +14,11 @@ default pin, E2.13 clamp, E2.14 middleware) skip when AVALOKA_API_URL is set.
 
 from __future__ import annotations
 
-import os
 from typing import Any, Dict, FrozenSet, List, Optional
 
 import pytest
 
-from tests.e2e.conftest import MODE, ApiClient, requires_deployed
+from tests.e2e.conftest import MODE, REPO_ROOT, ApiClient, requires_deployed
 
 # --------------------------------------------------------------------------- E2.01
 # The frozen /health body. A new key here is a contract break for every k8s probe
@@ -38,25 +37,66 @@ HEALTH_KEYS: FrozenSet[str] = frozenset(
 )
 
 # --------------------------------------------------------------------------- E2.09
-# Committed OpenAPI surface snapshot: the 32 unique paths served by the 36 route
-# decorators in app/api/server.py (app/api/cloud_connections.py declares none).
+# Committed OpenAPI surface snapshot: the 67 unique paths app.api.server.app
+# serves -- its own route decorators plus the routers it includes (analytics,
+# Ray jobs). Re-pinned for 1.6 from 32: the 30 added since 1.5.2 went unnoticed
+# because tests/conftest.py marks tests/e2e as `integration` and no gate runs it.
+# Being listed here is not a statement that a path authenticates correctly --
+# test_e2_auth.py's E2.05/E2.08 sweeps own that, and some of them fail today.
 # Regenerate with:
 #   python -c "import app.api.server as s; print(sorted(s.app.openapi()['paths']))"
 # and update this literal *in the same commit* that adds or removes a route.
 OPENAPI_PATH_SNAPSHOT: FrozenSet[str] = frozenset(
     {
+        "/analysis/{analysis_id}/code",
+        "/analysis/{analysis_id}/feedback",
+        "/analysis/{analysis_id}/insights/explain",
+        "/analysis/{analysis_id}/refresh",
+        "/analysis/{analysis_id}/restore",
+        "/analysis/{analysis_id}/save-and-execute",
+        "/analysis/{analysis_id}/versions",
+        "/analytics/config",
+        "/analytics/events",
+        "/analytics/opt-out",
         "/api/assets/{session_id}",
         "/api/assets/{session_id}/code",
         "/api/assets/{session_id}/job",
         "/api/assets/{session_id}/output",
+        "/api/cloud-connections",
         "/api/database/connect",
+        "/api/database/tables-to-analysis",
         "/api/datasets/{dataset_id}/background-task-status",
+        "/api/datasets/{dataset_id}/fidelity",
+        "/api/integrations",
+        "/api/integrations/github",
+        "/api/integrations/github/connect",
+        "/api/limits",
+        "/api/llm-models",
+        "/api/mcp-connections/{connection_id}/decrypt",
+        "/api/mcp-connections/{connection_id}/encrypt",
         "/api/missions/plan",
         "/api/models",
         "/api/models/{run_id}",
         "/api/models/{run_id}/configure-inference-service",
         "/api/models/{run_id}/inference",
         "/api/models/{run_id}/stop-inference-service",
+        # trainfer (1.6): Postgres-backed endpoint and job reads, the canonical predict proxy.
+        "/api/models/{run_id}/endpoint",
+        "/api/models/{run_id}/predict",
+        "/api/ml-jobs",
+        "/api/ml-jobs/{job_id}",
+        "/api/ml-jobs/{job_id}/cancel",
+        "/api/notifications",
+        "/api/notifications/read-all",
+        "/api/notifications/{notification_id}/read",
+        "/api/ray/heartbeat",
+        "/api/ray/jobs",
+        "/api/ray/jobs/{submission_id}",
+        "/api/ray/jobs/{submission_id}/logs",
+        "/api/ray/jobs/{submission_id}/stop",
+        "/api/ray/session",
+        "/api/ray/status",
+        "/api/register-existing-folder",
         "/api/register-existing-storage",
         "/api/upload",
         "/api/v1/database/query",
@@ -70,12 +110,17 @@ OPENAPI_PATH_SNAPSHOT: FrozenSet[str] = frozenset(
         "/tasks/{task_id}",
         "/tasks/{task_id}/info",
         "/tasks/{task_id}/result/{index}",
+        "/tasks/{task_id}/runs",
         "/tasks/{task_id}/status",
         "/threads",
         "/threads/{thread_id}",
         "/threads/{thread_id}/code",
+        "/threads/{thread_id}/datasets",
+        "/threads/{thread_id}/job-notes",
         "/threads/{thread_id}/messages",
+        "/threads/{thread_id}/pending-turn",
         "/threads/{thread_id}/planner-graph",
+        "/threads/{thread_id}/selected-datasets",
         "/version",
     }
 )
@@ -211,15 +256,32 @@ def test_e2_03_version_contract(api: ApiClient) -> None:
     assert isinstance(body["version"], str) and body["version"]
 
 
-def test_e2_03_pins_version_is_app_version_env_or_1_2_default(api: ApiClient) -> None:
-    """/version echoes APP_VERSION (server.py:296), defaulting to the literal "1.2"."""
+def test_e2_03_pins_version_is_app_version_env_or_version_file(
+    api: ApiClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """/version echoes APP_VERSION, which is the APP_VERSION env var when set and
+    otherwise the repo's VERSION file -- never a literal baked into server.py.
+
+    This pinned a literal "1.2" default until _read_version() replaced it (the
+    literal had /version answering "1.5" for the whole 1.6 line)."""
     _requires_hermetic("reading the server's APP_VERSION constant needs the in-process app")
 
     import app.api.server as server
 
-    expected = os.getenv("APP_VERSION", "1.2")
-    assert server.APP_VERSION == expected
-    assert api.get("/version").json()["version"] == expected
+    # What /version serves is the constant, and the constant is the resolver's answer.
+    assert api.get("/version").json()["version"] == server.APP_VERSION
+    assert server.APP_VERSION == server._read_version()
+
+    # No env: the VERSION file, whatever line this tree is on.
+    monkeypatch.delenv("APP_VERSION", raising=False)
+    monkeypatch.delenv("AVALOKA_EDITION", raising=False)
+    version_file = (REPO_ROOT / "VERSION").read_text().strip()
+    assert version_file, "VERSION is empty"
+    assert server._read_version() == version_file
+
+    # The env var wins, so a build can stamp something more specific.
+    monkeypatch.setenv("APP_VERSION", "9.9.9-e2-03")
+    assert server._read_version() == "9.9.9-e2-03"
 
 
 # =========================================================================== E2.04
@@ -387,17 +449,33 @@ def test_e2_13_pins_datasets_returns_unbounded_collection(
     """GET /datasets?limit=1 still returns every dataset -- ?limit is silently ignored."""
     _requires_hermetic("seeding the session store needs the in-process fakes")
 
-    from tests import test_server_unit as si
+    import json
 
+    import app.api.server as server
+    from app.services import session_service
+
+    # GET /datasets reads the user's session index and the session blobs straight
+    # from the cache (server.py list_datasets), not through get_session -- so seed
+    # the cache, as tests/test_server_unit.py's /datasets tests do. Seeding the
+    # SESSIONS dict behind the get_session fake would leave /datasets empty.
+    cache = session_service.cache
+    assert cache is not None and hasattr(cache, "_sets"), (
+        "the hermetic FakeCache is not installed; the lifespan replaced it"
+    )
     seeded = 5
     for i in range(seeded):
-        si.SESSIONS[f"sess-e2-13-{i}"] = {
-            "user_id": "user-1",
-            "dataset_id": f"ds-e2-13-{i}",
-            "data_source_location": f"gs://fake-bucket/test/ds-e2-13-{i}.csv",
-            "object_name": f"ds-e2-13-{i}.csv",
-            "schema": {"a": "int"},
-        }
+        sid = f"sess-e2-13-{i}"
+        cache._data[server._k_session(sid)] = json.dumps(
+            {
+                "user_id": "user-1",
+                "dataset_id": f"ds-e2-13-{i}",
+                "data_source_location": f"gs://fake-bucket/test/ds-e2-13-{i}.csv",
+                "object_name": f"ds-e2-13-{i}.csv",
+                "schema": {"a": "int"},
+                "created_at": f"2026-01-0{i + 1}T00:00:00Z",
+            }
+        )
+        cache._sets.setdefault(server._k_user_sessions("user-1"), set()).add(sid)
 
     unpaged = api.get("/datasets", user="user-1")
     limited = api.get("/datasets", user="user-1", params={"limit": 1})
@@ -412,22 +490,39 @@ def test_e2_13_pins_datasets_returns_unbounded_collection(
 
 
 def test_e2_14_pins_no_rate_limiter_installed(api: ApiClient) -> None:
-    """app.user_middleware holds exactly CORS + the PNA preflight handler -- no rate limiter."""
+    """app.user_middleware holds exactly the six known layers -- no rate limiter.
+
+    Outermost first: the upload plan pre-check (413 on a Content-Length over the
+    plan's size limit -- a size cap, not a request-rate limit), upload timing
+    (logs only), the PNA preflight handler, CORS, AuthBeforeBodyMiddleware (401
+    for an anonymous POST/PUT/PATCH/DELETE before the body is read), and
+    RedactRepliesMiddleware (strips sealed credential tokens from responses).
+    Re-pinned for 1.6 from [PNA, CORS]; each layer is named, so a seventh one
+    still fails here."""
     _requires_hermetic("middleware introspection needs the in-process app object")
 
     import app.api.server as server
 
-    installed = [mw.cls.__name__ for mw in server.app.user_middleware]
-    assert installed == ["BaseHTTPMiddleware", "CORSMiddleware"], (
+    installed = [
+        (mw.cls.__name__, getattr(mw.kwargs.get("dispatch"), "__name__", ""))
+        for mw in server.app.user_middleware
+    ]
+    assert installed == [
+        ("BaseHTTPMiddleware", "_upload_plan_precheck"),
+        ("BaseHTTPMiddleware", "_upload_timing_middleware"),
+        ("BaseHTTPMiddleware", "handle_private_network_preflight"),
+        ("CORSMiddleware", ""),
+        ("AuthBeforeBodyMiddleware", ""),
+        ("RedactRepliesMiddleware", ""),
+    ], (
         f"middleware stack changed: {installed}. This test pins the decision that Avaloka ships "
         "with NO rate limiting; update it deliberately when one is added."
     )
 
-    dispatch = server.app.user_middleware[0].kwargs.get("dispatch")
-    assert getattr(dispatch, "__name__", "") == "handle_private_network_preflight"
-
     blob = " ".join(
-        f"{mw.cls.__module__}.{mw.cls.__name__}" for mw in server.app.user_middleware
+        f"{mw.cls.__module__}.{mw.cls.__name__}."
+        f"{getattr(mw.kwargs.get('dispatch'), '__name__', '')}"
+        for mw in server.app.user_middleware
     ).lower()
     hits = [marker for marker in _RATE_LIMIT_MARKERS if marker in blob]
     assert not hits, f"a rate limiter appears to be installed ({hits}); update this pin"

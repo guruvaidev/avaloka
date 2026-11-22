@@ -14,14 +14,15 @@ import { Route as AuthenticatedRouteRouteImport } from './routes/_authenticated/
 import { Route as AnalysisRouteImport } from './routes/analysis'
 import { Route as LogoutRouteImport } from './routes/logout'
 import { Route as ProanalysisRouteImport } from './routes/proanalysis'
+import { Route as RayJobsRouteImport } from './routes/ray-jobs'
 import { Route as ScheduledAnalysisRouteImport } from './routes/scheduled-analysis'
 import { Route as AuthenticatedConfigurationsRouteImport } from './routes/_authenticated/configurations'
 import { Route as AuthenticatedDashboardRouteImport } from './routes/_authenticated/dashboard'
 import { Route as AuthenticatedDatabaseRouteImport } from './routes/_authenticated/database'
 import { Route as AuthenticatedDatasetsRouteImport } from './routes/_authenticated/datasets'
 import { Route as AuthenticatedDbTablesRouteImport } from './routes/_authenticated/db-tables'
+import { Route as AuthenticatedInferenceRouteImport } from './routes/_authenticated/inference'
 import { Route as AuthenticatedPaypalBootstrapRouteImport } from './routes/_authenticated/paypal-bootstrap'
-import { Route as AuthenticatedRayJobsRouteImport } from './routes/_authenticated/ray-jobs'
 import { Route as AuthenticatedReportsRouteImport } from './routes/_authenticated/reports'
 import { Route as AuthenticatedSettingsRouteImport } from './routes/_authenticated/settings'
 import { Route as AuthenticatedSupportRouteImport } from './routes/_authenticated/support'
@@ -68,6 +69,11 @@ const ProanalysisRoute = ProanalysisRouteImport.update({
   path: '/proanalysis',
   getParentRoute: () => rootRouteImport,
 } as any)
+const RayJobsRoute = RayJobsRouteImport.update({
+  id: '/ray-jobs',
+  path: '/ray-jobs',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ScheduledAnalysisRoute = ScheduledAnalysisRouteImport.update({
   id: '/scheduled-analysis',
   path: '/scheduled-analysis',
@@ -99,17 +105,17 @@ const AuthenticatedDbTablesRoute = AuthenticatedDbTablesRouteImport.update({
   path: '/db-tables',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
+const AuthenticatedInferenceRoute = AuthenticatedInferenceRouteImport.update({
+  id: '/inference',
+  path: '/inference',
+  getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
 const AuthenticatedPaypalBootstrapRoute =
   AuthenticatedPaypalBootstrapRouteImport.update({
     id: '/paypal-bootstrap',
     path: '/paypal-bootstrap',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
-const AuthenticatedRayJobsRoute = AuthenticatedRayJobsRouteImport.update({
-  id: '/ray-jobs',
-  path: '/ray-jobs',
-  getParentRoute: () => AuthenticatedRouteRoute,
-} as any)
 const AuthenticatedReportsRoute = AuthenticatedReportsRouteImport.update({
   id: '/reports',
   path: '/reports',
@@ -232,14 +238,15 @@ export interface FileRoutesByFullPath {
   '/analysis': typeof AnalysisRoute
   '/logout': typeof LogoutRoute
   '/proanalysis': typeof ProanalysisRouteWithChildren
+  '/ray-jobs': typeof RayJobsRoute
   '/scheduled-analysis': typeof ScheduledAnalysisRoute
   '/configurations': typeof AuthenticatedConfigurationsRoute
   '/dashboard': typeof AuthenticatedDashboardRoute
   '/database': typeof AuthenticatedDatabaseRoute
   '/datasets': typeof AuthenticatedDatasetsRoute
   '/db-tables': typeof AuthenticatedDbTablesRoute
+  '/inference': typeof AuthenticatedInferenceRoute
   '/paypal-bootstrap': typeof AuthenticatedPaypalBootstrapRoute
-  '/ray-jobs': typeof AuthenticatedRayJobsRoute
   '/reports': typeof AuthenticatedReportsRouteWithChildren
   '/settings': typeof AuthenticatedSettingsRoute
   '/support': typeof AuthenticatedSupportRoute
@@ -266,14 +273,15 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/analysis': typeof AnalysisRoute
   '/logout': typeof LogoutRoute
+  '/ray-jobs': typeof RayJobsRoute
   '/scheduled-analysis': typeof ScheduledAnalysisRoute
   '/configurations': typeof AuthenticatedConfigurationsRoute
   '/dashboard': typeof AuthenticatedDashboardRoute
   '/database': typeof AuthenticatedDatabaseRoute
   '/datasets': typeof AuthenticatedDatasetsRoute
   '/db-tables': typeof AuthenticatedDbTablesRoute
+  '/inference': typeof AuthenticatedInferenceRoute
   '/paypal-bootstrap': typeof AuthenticatedPaypalBootstrapRoute
-  '/ray-jobs': typeof AuthenticatedRayJobsRoute
   '/settings': typeof AuthenticatedSettingsRoute
   '/support': typeof AuthenticatedSupportRoute
   '/support-queries': typeof AuthenticatedSupportQueriesRoute
@@ -302,14 +310,15 @@ export interface FileRoutesById {
   '/analysis': typeof AnalysisRoute
   '/logout': typeof LogoutRoute
   '/proanalysis': typeof ProanalysisRouteWithChildren
+  '/ray-jobs': typeof RayJobsRoute
   '/scheduled-analysis': typeof ScheduledAnalysisRoute
   '/_authenticated/configurations': typeof AuthenticatedConfigurationsRoute
   '/_authenticated/dashboard': typeof AuthenticatedDashboardRoute
   '/_authenticated/database': typeof AuthenticatedDatabaseRoute
   '/_authenticated/datasets': typeof AuthenticatedDatasetsRoute
   '/_authenticated/db-tables': typeof AuthenticatedDbTablesRoute
+  '/_authenticated/inference': typeof AuthenticatedInferenceRoute
   '/_authenticated/paypal-bootstrap': typeof AuthenticatedPaypalBootstrapRoute
-  '/_authenticated/ray-jobs': typeof AuthenticatedRayJobsRoute
   '/_authenticated/reports': typeof AuthenticatedReportsRouteWithChildren
   '/_authenticated/settings': typeof AuthenticatedSettingsRoute
   '/_authenticated/support': typeof AuthenticatedSupportRoute
@@ -339,14 +348,15 @@ export interface FileRouteTypes {
     | '/analysis'
     | '/logout'
     | '/proanalysis'
+    | '/ray-jobs'
     | '/scheduled-analysis'
     | '/configurations'
     | '/dashboard'
     | '/database'
     | '/datasets'
     | '/db-tables'
+    | '/inference'
     | '/paypal-bootstrap'
-    | '/ray-jobs'
     | '/reports'
     | '/settings'
     | '/support'
@@ -373,14 +383,15 @@ export interface FileRouteTypes {
     | '/'
     | '/analysis'
     | '/logout'
+    | '/ray-jobs'
     | '/scheduled-analysis'
     | '/configurations'
     | '/dashboard'
     | '/database'
     | '/datasets'
     | '/db-tables'
+    | '/inference'
     | '/paypal-bootstrap'
-    | '/ray-jobs'
     | '/settings'
     | '/support'
     | '/support-queries'
@@ -408,14 +419,15 @@ export interface FileRouteTypes {
     | '/analysis'
     | '/logout'
     | '/proanalysis'
+    | '/ray-jobs'
     | '/scheduled-analysis'
     | '/_authenticated/configurations'
     | '/_authenticated/dashboard'
     | '/_authenticated/database'
     | '/_authenticated/datasets'
     | '/_authenticated/db-tables'
+    | '/_authenticated/inference'
     | '/_authenticated/paypal-bootstrap'
-    | '/_authenticated/ray-jobs'
     | '/_authenticated/reports'
     | '/_authenticated/settings'
     | '/_authenticated/support'
@@ -445,6 +457,7 @@ export interface RootRouteChildren {
   AnalysisRoute: typeof AnalysisRoute
   LogoutRoute: typeof LogoutRoute
   ProanalysisRoute: typeof ProanalysisRouteWithChildren
+  RayJobsRoute: typeof RayJobsRoute
   ScheduledAnalysisRoute: typeof ScheduledAnalysisRoute
   SharedReportTokenRoute: typeof SharedReportTokenRoute
   SharedTokenRoute: typeof SharedTokenRoute
@@ -496,6 +509,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ProanalysisRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/ray-jobs': {
+      id: '/ray-jobs'
+      path: '/ray-jobs'
+      fullPath: '/ray-jobs'
+      preLoaderRoute: typeof RayJobsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/scheduled-analysis': {
       id: '/scheduled-analysis'
       path: '/scheduled-analysis'
@@ -538,18 +558,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedDbTablesRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/inference': {
+      id: '/_authenticated/inference'
+      path: '/inference'
+      fullPath: '/inference'
+      preLoaderRoute: typeof AuthenticatedInferenceRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/paypal-bootstrap': {
       id: '/_authenticated/paypal-bootstrap'
       path: '/paypal-bootstrap'
       fullPath: '/paypal-bootstrap'
       preLoaderRoute: typeof AuthenticatedPaypalBootstrapRouteImport
-      parentRoute: typeof AuthenticatedRouteRoute
-    }
-    '/_authenticated/ray-jobs': {
-      id: '/_authenticated/ray-jobs'
-      path: '/ray-jobs'
-      fullPath: '/ray-jobs'
-      preLoaderRoute: typeof AuthenticatedRayJobsRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
     '/_authenticated/reports': {
@@ -723,8 +743,8 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedDatabaseRoute: typeof AuthenticatedDatabaseRoute
   AuthenticatedDatasetsRoute: typeof AuthenticatedDatasetsRoute
   AuthenticatedDbTablesRoute: typeof AuthenticatedDbTablesRoute
+  AuthenticatedInferenceRoute: typeof AuthenticatedInferenceRoute
   AuthenticatedPaypalBootstrapRoute: typeof AuthenticatedPaypalBootstrapRoute
-  AuthenticatedRayJobsRoute: typeof AuthenticatedRayJobsRoute
   AuthenticatedReportsRoute: typeof AuthenticatedReportsRouteWithChildren
   AuthenticatedSettingsRoute: typeof AuthenticatedSettingsRoute
   AuthenticatedSupportRoute: typeof AuthenticatedSupportRoute
@@ -737,8 +757,8 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedDatabaseRoute: AuthenticatedDatabaseRoute,
   AuthenticatedDatasetsRoute: AuthenticatedDatasetsRoute,
   AuthenticatedDbTablesRoute: AuthenticatedDbTablesRoute,
+  AuthenticatedInferenceRoute: AuthenticatedInferenceRoute,
   AuthenticatedPaypalBootstrapRoute: AuthenticatedPaypalBootstrapRoute,
-  AuthenticatedRayJobsRoute: AuthenticatedRayJobsRoute,
   AuthenticatedReportsRoute: AuthenticatedReportsRouteWithChildren,
   AuthenticatedSettingsRoute: AuthenticatedSettingsRoute,
   AuthenticatedSupportRoute: AuthenticatedSupportRoute,
@@ -783,6 +803,7 @@ const rootRouteChildren: RootRouteChildren = {
   AnalysisRoute: AnalysisRoute,
   LogoutRoute: LogoutRoute,
   ProanalysisRoute: ProanalysisRouteWithChildren,
+  RayJobsRoute: RayJobsRoute,
   ScheduledAnalysisRoute: ScheduledAnalysisRoute,
   SharedReportTokenRoute: SharedReportTokenRoute,
   SharedTokenRoute: SharedTokenRoute,
@@ -801,13 +822,3 @@ const rootRouteChildren: RootRouteChildren = {
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
-
-import type { getRouter } from './router.tsx'
-import type { startInstance } from './start.ts'
-declare module '@tanstack/react-start' {
-  interface Register {
-    ssr: true
-    router: Awaited<ReturnType<typeof getRouter>>
-    config: Awaited<ReturnType<typeof startInstance.getOptions>>
-  }
-}

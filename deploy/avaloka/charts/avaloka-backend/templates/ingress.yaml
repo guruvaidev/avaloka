@@ -13,17 +13,10 @@ metadata:
     {{- toYaml .Values.ingress.annotations | nindent 4 }}
 spec:
   ingressClassName: {{ .Values.ingress.className }}
+  # The API only. The LangGraph container is internal: the api container in the
+  # same pod is its only caller (LANGGRAPH_API_URL=http://localhost:3000), so it
+  # has no host here and no route in any chart.
   rules:
-    - host: {{ .Values.ingress.langgraph.host }}
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: {{ include "avaloka-backend.fullname" . }}-langgraph
-                port:
-                  number: {{ .Values.service.langgraph.port }}
     - host: {{ .Values.ingress.api.host }}
       http:
         paths:

@@ -2,6 +2,7 @@
 // Backed by public.analysis_comments (author_id → profiles.id).
 
 import { supabase } from "@/integrations/supabase/client";
+import { attachDisplayAuthors, fetchDisplayProfiles } from "@/lib/display-profiles";
 import { requireCurrentProfileId } from "@/lib/current-profile";
 import { getCachedAuthUser } from "@/lib/auth-user";
 
@@ -62,11 +63,13 @@ type Row = {
   created_at: string;
   parent_id: string | null;
   attachments: unknown;
+  author_id?: string | null;
   author: InsightCommentAuthor | InsightCommentAuthor[] | null;
 };
 
-const SELECT_WITH_AUTHOR =
-  "id,content,created_at,parent_id,attachments,analysis_id,author_id,author:profiles!author_id(id,full_name,avatar_url)";
+const SELECT_BASE = "id,content,created_at,parent_id,attachments,analysis_id,author_id";
+// The caller's own profile row is readable, so a new comment can embed its author.
+const SELECT_WITH_AUTHOR = `${SELECT_BASE},author:profiles!author_id(id,full_name,avatar_url)`;
 
 function normalizeAuthor(a: Row["author"]): InsightCommentAuthor | null {
   if (!a) return null;
@@ -131,13 +134,17 @@ function toReply(r: Row): AnalysisInsightCommentReply {
 export async function loadAnalysisInsightComments(
   analysisId: string,
 ): Promise<AnalysisInsightComment[]> {
-  const { data, error } = await supabase
+  // Authors come from display fields (attachDisplayAuthors): a commenter on a
+  // shared analysis may be in another organisation, whose profile row is not
+  // readable, so a profiles embed would come back empty.
+  const { data: bare, error } = await supabase
     .from("analysis_comments" as never)
-    .select(SELECT_WITH_AUTHOR)
+    .select(SELECT_BASE)
     .eq("analysis_id", analysisId)
     .order("created_at", { ascending: true });
 
   if (error) throw error;
+  const data = await attachDisplayAuthors(supabase, (bare ?? []) as unknown as Row[]);
   const rows = await resolveRowAvatars((data ?? []) as unknown as Row[]);
 
   const map = new Map<string, AnalysisInsightComment>();
@@ -242,20 +249,9 @@ async function resolveAppUsersToProfileIds(appUserIds: string[]): Promise<string
     .filter((v): v is string => !!v);
   if (!authUserIds.length) return [];
 
-  const [
-    { data: linkedProfiles, error: linkedError },
-    { data: legacyProfiles, error: legacyError },
-  ] = await Promise.all([
-    supabase.from("profiles").select("id").in("user_id", authUserIds),
-    supabase.from("profiles").select("id").in("id", authUserIds),
-  ]);
-  if (linkedError) throw linkedError;
-  if (legacyError) throw legacyError;
-
-  return [
-    ...((linkedProfiles ?? []) as { id: string }[]),
-    ...((legacyProfiles ?? []) as { id: string }[]),
-  ].map((p) => p.id);
+  // Collaborators may be in other organisations, whose profile rows are not
+  // readable; the display lookup maps auth user ids to profile ids.
+  return (await fetchDisplayProfiles(supabase, authUserIds)).map((p) => p.id);
 }
 
 async function collectResourceCollaboratorProfileIds(

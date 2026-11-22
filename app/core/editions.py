@@ -29,16 +29,25 @@ Two invariants follow, and both are enforced by tests:
 
 from __future__ import annotations
 
+import logging
 import os
+import threading
 from dataclasses import dataclass, fields, replace
 from enum import Enum
 from typing import Dict, Literal
 
 Deployment = Literal["self_hosted", "avaloka_hosted"]
+#: What AVALOKA_DEPLOYMENT declares, see :func:`declared_deployment`.
+DeclaredDeployment = Literal["hosted", "self_hosted", "undeclared"]
 Edition = Literal["oss", "free", "professional", "enterprise"]
 
 DEPLOYMENTS: tuple[Deployment, ...] = ("self_hosted", "avaloka_hosted")
 EDITIONS: tuple[Edition, ...] = ("oss", "free", "professional", "enterprise")
+
+#: Whether a capability's code is on this line. "coming" means the plan is
+#: entitled to it but it has not shipped, so nothing may present it as
+#: available today (the Billing tab shows "Coming soon").
+CapabilityStatus = Literal["shipped", "coming"]
 
 
 class GateReason(str, Enum):
@@ -62,6 +71,7 @@ class Capabilities:
     export_generated_code: bool = False
     local_execution: bool = False
     file_connectors: bool = False
+    auto_insights: bool = False
 
     # Execution and scale.
     ray_distributed: bool = False
@@ -72,13 +82,22 @@ class Capabilities:
     batch_jobs: bool = False
     scheduled_delivery: bool = False
 
+    # The reports workspace (/reports): saved reports, browsed and organised
+    # across projects. Sharing a report by email or public link is not this
+    # flag; every plan has that and nothing gates it.
+    reports: bool = False
+
     # Connectivity to the customer's own estate.
     database_connectors: bool = False
     cloud_connectors: bool = False
     cloud_provisioning: bool = False
 
-    # Collaboration.
+    # Collaboration. Owner ruling 2026-11-01 (NEW-BG-01, revised): teams and
+    # collaborator invites are a paid offering from Professional up
+    # (team_collaboration); the organisation's own structure -- departments,
+    # roles, branches and users -- is Enterprise (org_structure).
     team_collaboration: bool = False
+    org_structure: bool = False
     share_analysis: bool = False
     comment_on_analysis: bool = False
     notifications: bool = False
@@ -109,15 +128,20 @@ GATE_REASON: Dict[str, GateReason] = {
     "export_generated_code": GateReason.OPEN,
     "local_execution": GateReason.OPEN,
     "file_connectors": GateReason.OPEN,
+    "auto_insights": GateReason.OPEN,
     "ray_distributed": GateReason.COST,
     "entire_dataset": GateReason.COST,
     "scheduler": GateReason.COST,
     "batch_jobs": GateReason.COST,
     "scheduled_delivery": GateReason.COMMERCIAL,
+    # COST: the reports workspace ships in the published UI, and on the hosted
+    # service Avaloka stores and serves every saved report.
+    "reports": GateReason.COST,
     "database_connectors": GateReason.COMMERCIAL,
     "cloud_connectors": GateReason.COMMERCIAL,
     "cloud_provisioning": GateReason.COMMERCIAL,
     "team_collaboration": GateReason.COMMERCIAL,
+    "org_structure": GateReason.COMMERCIAL,
     "share_analysis": GateReason.COMMERCIAL,
     "comment_on_analysis": GateReason.COMMERCIAL,
     "notifications": GateReason.COMMERCIAL,
@@ -130,6 +154,38 @@ GATE_REASON: Dict[str, GateReason] = {
     "sso_audit": GateReason.COMMERCIAL,
 }
 
+#: Shipped or coming, per capability. Every capability declares one, like its
+#: gate reason. Entitlement (the matrices below) and status are separate: a
+#: plan can be entitled to something that has not shipped yet.
+CAPABILITY_STATUS: Dict[str, CapabilityStatus] = {
+    "data_analysis": "shipped",
+    "export_generated_code": "shipped",
+    "local_execution": "shipped",
+    "file_connectors": "shipped",
+    "auto_insights": "shipped",
+    "ray_distributed": "shipped",
+    "entire_dataset": "shipped",
+    "scheduler": "shipped",
+    "batch_jobs": "shipped",
+    "scheduled_delivery": "shipped",
+    "reports": "shipped",
+    "database_connectors": "shipped",
+    "cloud_connectors": "shipped",
+    "cloud_provisioning": "shipped",
+    "team_collaboration": "shipped",
+    "org_structure": "shipped",
+    "share_analysis": "shipped",
+    "comment_on_analysis": "shipped",
+    "notifications": "shipped",
+    # develop-1.6 ships no swarm code (see Capabilities); it lands on 1.7.
+    "swarm_intelligence": "coming",
+    "ml_training": "shipped",
+    "ml_inference": "shipped",
+    # Owner ruling 2026-11-02: Enterprise is entitled to SSO and the audit log,
+    # and neither has shipped on this line.
+    "sso_audit": "coming",
+}
+
 #: Everything the *published* code can do. A self-hosted operator gets all of
 #: it: they bring their own Ray cluster, cloud credentials and LLM keys, they
 #: pay their own bill, and they carry their own risk. Nothing here is withheld,
@@ -139,10 +195,12 @@ OSS_CAPABILITIES = Capabilities(
     export_generated_code=True,
     local_execution=True,
     file_connectors=True,
+    auto_insights=True,
     ray_distributed=True,
     entire_dataset=True,
     scheduler=True,
     batch_jobs=True,
+    reports=True,
     # Model training and inference run locally on the operator's own hardware.
     # What open source cannot do is schedule them onto a cloud cluster it did
     # not provision — that is cloud_provisioning + scheduled_delivery, below.
@@ -159,12 +217,14 @@ _HOSTED: Dict[Edition, Capabilities] = {
         export_generated_code=True,
         local_execution=True,
         file_connectors=True,
+        auto_insights=True,
     ),
     "free": Capabilities(
         data_analysis=True,
         export_generated_code=True,
         local_execution=True,
         file_connectors=True,
+        auto_insights=True,
         # No scheduler and no batch jobs: Avaloka pays for every cycle a free
         # hosted user would schedule. This is the COST line, not a value line.
     ),
@@ -173,16 +233,27 @@ _HOSTED: Dict[Edition, Capabilities] = {
         export_generated_code=True,
         local_execution=True,
         file_connectors=True,
+        auto_insights=True,
         ray_distributed=True,
         entire_dataset=True,
         scheduler=True,
         batch_jobs=True,
         scheduled_delivery=True,
+        reports=True,
         # The defining Professional capability: reach the customer's own cloud
         # and databases, on the customer's own infrastructure and billing.
         database_connectors=True,
         cloud_connectors=True,
         cloud_provisioning=True,
+        # Teams (members on Professional or higher) and collaborator invites,
+        # including inviting Free users onto your own resources (referrals).
+        team_collaboration=True,
+        # Owner ruling 2026-11-01: sharing analyses, commenting on them and
+        # notifications are Professional and Enterprise. Free shares reports
+        # by email and public link only, which every plan has and no flag gates.
+        share_analysis=True,
+        comment_on_analysis=True,
+        notifications=True,
         swarm_intelligence=True,
         ml_training=True,
         ml_inference=True,
@@ -192,16 +263,20 @@ _HOSTED: Dict[Edition, Capabilities] = {
         export_generated_code=True,
         local_execution=True,
         file_connectors=True,
+        auto_insights=True,
         ray_distributed=True,
         entire_dataset=True,
         scheduler=True,
         batch_jobs=True,
         scheduled_delivery=True,
+        reports=True,
         database_connectors=True,
         cloud_connectors=True,
         cloud_provisioning=True,
-        # The defining Enterprise capabilities: a company working as teams.
+        # The defining Enterprise capabilities: a company working as an
+        # organisation -- its structure, and teams of any of its members.
         team_collaboration=True,
+        org_structure=True,
         share_analysis=True,
         comment_on_analysis=True,
         notifications=True,
@@ -227,10 +302,48 @@ def deployment_from_env() -> Deployment:
     """This process's deployment, from ``AVALOKA_DEPLOYMENT``.
 
     Read on every call (not at import), so a test or an operator that sets the
-    variable later is honoured. Unset or unknown means ``self_hosted``; the
-    Avaloka-hosted service sets ``AVALOKA_DEPLOYMENT=avaloka_hosted``.
+    variable later is honoured. Unset or unknown (undeclared) means
+    ``self_hosted``; a hosted service sets ``AVALOKA_DEPLOYMENT=avaloka_hosted``.
     """
-    return normalize_deployment(os.getenv("AVALOKA_DEPLOYMENT"))
+    return "avaloka_hosted" if declared_deployment() == "hosted" else "self_hosted"
+
+
+_logger = logging.getLogger(__name__)
+_undeclared_warned = False
+_undeclared_lock = threading.Lock()
+
+
+def declared_deployment() -> DeclaredDeployment:
+    """What ``AVALOKA_DEPLOYMENT`` declares: ``hosted`` (``avaloka_hosted``),
+    ``self_hosted``, or ``undeclared`` when it is unset or unrecognised.
+
+    The one deployment signal. The plan gates (plan_gate.check_feature), the
+    billing switch (plan_limits._billing_disabled) and the plan-lookup fail
+    mode all read it. Undeclared keeps the behaviour from before the signal
+    existed: the gates treat it as self-hosted, billing as billed. The first
+    undeclared read in a process logs a warning, once.
+    """
+    candidate = (os.getenv("AVALOKA_DEPLOYMENT") or "").strip().lower().replace("-", "_")
+    if candidate == "avaloka_hosted":
+        return "hosted"
+    if candidate == "self_hosted":
+        return "self_hosted"
+    _warn_undeclared(candidate)
+    return "undeclared"
+
+
+def _warn_undeclared(value: str) -> None:
+    global _undeclared_warned
+    with _undeclared_lock:
+        if _undeclared_warned:
+            return
+        _undeclared_warned = True
+    _logger.warning(
+        "[editions] AVALOKA_DEPLOYMENT is %s; this deployment is undeclared, so plan "
+        "gates treat it as self-hosted and billing treats it as billed. Set "
+        "AVALOKA_DEPLOYMENT=self_hosted or avaloka_hosted.",
+        repr(value) if value else "unset",
+    )
 
 
 def normalize_edition(value: str | None) -> Edition:
@@ -299,6 +412,10 @@ def explain(capability: str, capabilities: Capabilities) -> str:
     """
     if capability not in GATE_REASON:
         raise KeyError(f"unknown capability: {capability!r}")
+    # Before anything else: a capability that has not shipped is not available,
+    # even to a plan entitled to it, so no branch below may say it is.
+    if CAPABILITY_STATUS[capability] == "coming":
+        return f"{capability} is coming to Avaloka {_sold_on(capability)}; it is not available yet."
     if getattr(capabilities, capability):
         return f"{capability} is available"
     reason = GATE_REASON[capability]
@@ -308,5 +425,11 @@ def explain(capability: str, capabilities: Capabilities) -> str:
             "provides the compute. Self-host, or upgrade, to enable it."
         )
     if reason is GateReason.COMMERCIAL:
-        return f"{capability} is available in Avaloka Professional and Enterprise."
+        return f"{capability} is available in Avaloka {_sold_on(capability)}."
     return f"{capability} is available"
+
+
+def _sold_on(capability: str) -> str:
+    """The paid editions that grant ``capability``, e.g. "Professional and Enterprise"."""
+    paid = [e.title() for e in ("professional", "enterprise") if getattr(_HOSTED[e], capability)]
+    return " and ".join(paid) or "Enterprise"

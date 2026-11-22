@@ -16,8 +16,11 @@ inventory quotes this:
   secret that never leaves the deployment -- and ``session_id``;
 * an ``install_id`` minted for this purpose.
 
-**No question text leaves, in any form.** Not the stored ``prompt``, not a
-redacted or name-stripped version of it, not counts derived from its content.
+**No question text leaves, in any form** (owner decision D16.5, 2026-10-31:
+prompts stay local, only metadata is exported). Not the stored ``prompt``, not
+a redacted or name-stripped version of it, not counts derived from its content.
+Every record is held to ``allowlist.EXPORT_KEYS`` -- an explicit metadata
+allowlist -- at the one egress point in ``export_pending``.
 Also not: user ids, e-mail addresses, file names, column or table names, cell
 values, IP addresses, or any key outside ``allowlist.EXPORT_KEYS``.
 
@@ -42,7 +45,7 @@ import urllib.request
 import uuid
 from typing import Any, Dict, List, Optional
 
-from app.analytics import allowlist, config, redact, schema
+from app.analytics import allowlist, config, schema
 from app.analytics.store import Store, default_store
 
 logger = logging.getLogger(__name__)
@@ -77,18 +80,12 @@ def export_actor_id(secret: bytes, actor_id: str, received_at: Any) -> Optional[
     return hmac.new(secret, message, hashlib.sha256).hexdigest()[:32]
 
 
-#: Whether a name-stripped form of the question may be exported. It may not.
-#:
-#: The owner decided this on a measurement: with the membership test doing its
-#: job, about one word in five is removed and 60% of what is removed is plain
-#: English that happens to be a column name -- so what would arrive centrally is
-#: the question minus its most ordinary vocabulary. Not worth the risk surface.
-#:
-#: A constant, not a setting, on purpose. The path it guards rests on a name
-#: lookup that has never run against a real session store. Turning it on must be
-#: a code change with a review, not an environment variable. The tests flip it
-#: to keep the path proven on constructed data; nothing else may.
-EXPORT_QUESTION_TEXT = False
+#: Owner decision D16.5 (2026-10-31): the typed question is never exported, in
+#: any form -- not the stored ``prompt``, not a redacted or name-stripped
+#: version, not counts derived from its words. The question-text export path
+#: that an earlier decision allowed (and that sat behind a code constant) was
+#: removed, not switched off. Prompts stay in this deployment's own database;
+#: only metadata leaves. Nothing in this module reads question text.
 
 
 #: Prefix that keeps these records apart from PR #329's four process event types.
@@ -97,8 +94,6 @@ _CURSOR_KEY = "export_cursor"
 _INSTALL_KEY = "export_install_id"
 _ID_COLUMNS = ("event_id", "session_id")
 _EVENT_COLUMNS = ("event_id", "seq", "t_ms", "route", "turn_id", "outcome", "error_class", "duration_ms")
-_TEXT_PROPS = ("prompt_redactions", "prompt_names_exact", "prompt_names_common_word",
-               "prompt_names_substring")
 
 
 def to_wire(row: Dict[str, Any], install_id: str, secret: bytes = b"") -> Dict[str, Any]:
@@ -108,9 +103,9 @@ def to_wire(row: Dict[str, Any], install_id: str, secret: bytes = b"") -> Dict[s
     the same discipline as ``avaloka/telemetry``. Three things hold here by
     construction, and ``tests/analytics/test_export_boundary.py`` proves each:
 
-    * the stored ``prompt`` column is never read;
-    * no question text is emitted in any form -- ``prompt_export`` is not read
-      either unless ``EXPORT_QUESTION_TEXT`` is changed in code;
+    * the stored ``prompt`` and ``prompt_export`` columns are never read;
+    * no question text is emitted in any form (D16.5) -- there is no switch,
+      constant or setting that adds it;
     * no key outside ``allowlist.EXPORT_KEYS`` and outside this event type's
       declared fields survives, whatever is in the row.
     """
@@ -147,22 +142,7 @@ def to_wire(row: Dict[str, Any], install_id: str, secret: bytes = b"") -> Dict[s
     # Never the stored actor_id: the per-epoch re-keyed form, or nothing.
     record["actor_id"] = export_actor_id(secret, row.get("actor_id"), row.get("received_at"))
 
-    allowed = allowlist.EXPORT_KEYS
-    if EXPORT_QUESTION_TEXT:
-        # DISABLED PATH. Reached only when the constant above is changed in
-        # code. Kept so the mechanism stays tested; see names.py.
-        allowed = allowed | allowlist.EXPORT_TEXT_KEYS
-        stripped = row.get("prompt_export")
-        if stripped and config.prompt_text_enabled():
-            cleaned, _ = redact.scrub(stripped)
-            if cleaned:
-                record["prompt_stripped"] = cleaned
-                for name in _TEXT_PROPS:
-                    value = props.get(name)
-                    if isinstance(value, int) and not isinstance(value, bool):
-                        record[name] = value
-
-    record = allowlist.safe(record, allowed)
+    record = allowlist.safe(record)
     record["event_type"] = WIRE_PREFIX + event_type
     return record
 
@@ -210,7 +190,11 @@ def export_pending(store: Optional[Store] = None, limit: int = 500, post=_post) 
             return {"exported": 0, "reason": "nothing pending"}
         install_id = _install_id(store)
         secret = store.identity_secret()
-        records = [to_wire(r, install_id, secret) for r in rows if not store.is_opted_out(r.get("actor_id"))]
+        # The single egress point: every record is held to the metadata
+        # allowlist here, after to_wire and immediately before the transport,
+        # so no builder -- present or future -- can put another key on the wire.
+        records = [allowlist.exportable(to_wire(r, install_id, secret))
+                   for r in rows if not store.is_opted_out(r.get("actor_id"))]
         status = post(endpoint, records) if records else 204
         if 200 <= status < 300:
             store.set_meta(_CURSOR_KEY, str(rows[-1]["id"]))

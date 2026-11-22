@@ -1,0 +1,35 @@
+diff --git a/app/agents/sampling_agent_daft.py b/app/agents/sampling_agent_daft.py
+index 1b41337d..16150da6 100644
+--- a/app/agents/sampling_agent_daft.py
++++ b/app/agents/sampling_agent_daft.py
+@@ -847,7 +847,7 @@ def _load_file_with_daft(path: str, source_type: str, **kwargs) -> Tuple[Optiona
+             )
+                     
+         elif source_fmt == "parquet":
+-            df = daft.read_parquet(abs_path, **kwargs)
++            df = daft.read_parquet(abs_path, **kwargs).limit(10)
+         elif source_fmt in ("xls", "xlsx"):
+             from file_handler.excel_connector import ExcelConnector
+             # Read the sheet as a typed DataFrame (dtypes preserved) and honor an
+@@ -868,7 +868,7 @@ def _load_file_with_daft(path: str, source_type: str, **kwargs) -> Tuple[Optiona
+             import pandas as pd
+             df = daft.from_pandas(pd.read_orc(abs_path))
+         elif source_fmt == "json":
+-            df = daft.read_json(abs_path, **kwargs)
++            df = daft.read_json(abs_path, **kwargs).limit(10)
+         elif source_fmt == "xml":
+             # Daft has no XML reader and FileHandler has none either, so this
+             # advertised format used to fall straight to the ValueError below.
+diff --git a/file_handler/excel_connector.py b/file_handler/excel_connector.py
+index 7ff26a75..064bf60d 100644
+--- a/file_handler/excel_connector.py
++++ b/file_handler/excel_connector.py
+@@ -374,7 +374,7 @@ def export_workbook_sheets_to_csv(
+             continue
+         df = _normalize_dataframe(df)
+         csv_path = out_dir / f"sheetcsv_{uuid.uuid4().hex[:12]}_{i}.csv"
+-        df.to_csv(csv_path, index=False)
++        df.head(10).to_csv(csv_path, index=False)
+         exports.append(SheetCsvExport(sheet_name=str(sheet), csv_path=str(csv_path), n_rows=len(df),
+                                       notes=tuple(shape_notes)))
+         del df

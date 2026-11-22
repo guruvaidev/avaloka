@@ -19,3 +19,4 @@ Keep Ray job result parsing, display-only ID normalization and local start/clust
 Keep Ray jobs live refresh in Query options with retained last-good list data; scope visibility/focus listeners to the Ray jobs UI so other pages' refresh policies stay unchanged.
 Keep bucket-picker classification and labels display-only in bucket-picker, with folder-name interaction in BucketFolderName, so existing listing and registration transport remain unchanged.
 Use ui/src as a symlink to the application src directory for bucket-picker tests' ../../src imports, so tests exercise real source without duplicating it.
+Keep backend-owned fidelity transport in analysis-fidelity and selector lifecycle in FidelitySwitch; the analysis route connects chat replies, existing preview reload and deferred-job polling without adding fidelity to chat payloads.

@@ -1,0 +1,44 @@
+{
+  "_about": "claim_verifier_node output for tests/fixtures/verifier_superlatives_16/turns.json (the 1.6 demo's two false replies); regenerate with the verifier, never by hand.",
+  "mean": {
+    "verification_safe_to_present": false,
+    "verification_report": {
+      "safe_to_present": false,
+      "claims_checked": 5,
+      "n_problems": 1,
+      "findings": [
+        {
+          "claim": "- The lowest average is for Autos & Vehicles at about 17.9 M.",
+          "verdict": "contradicted",
+          "check": "superlative_contradicted",
+          "detail": "names Autos & Vehicles as the lowest by average_subscribers (17,850,000), but Travel & Events is lower at 12,500,000 in the computed result",
+          "evidence_ref": "execution_output.average_subscribers"
+        }
+      ]
+    }
+  },
+  "median": {
+    "verification_safe_to_present": false,
+    "verification_report": {
+      "safe_to_present": false,
+      "claims_checked": 5,
+      "n_problems": 2,
+      "findings": [
+        {
+          "claim": "Shows has a median of 23.1 million subscribers, not 95 million, so being a Shows channel does not automatically mean higher subscribers.",
+          "verdict": "unsupported",
+          "check": "invented_number",
+          "detail": "cites 95 million, which does not appear in the computed evidence within tolerance",
+          "evidence_ref": null
+        },
+        {
+          "claim": "- No category exceeds 30 million, so the 95 million figure is not supported by the data.",
+          "verdict": "contradicted",
+          "check": "threshold_contradicted",
+          "detail": "says no category is above 30 million, but Trailers is at 39,000,000 by median_subscribers in the computed result",
+          "evidence_ref": "execution_output.median_subscribers"
+        }
+      ]
+    }
+  }
+}

@@ -69,11 +69,11 @@ async function userId(): Promise<string> {
 }
 
 /**
- * Persist GCP credentials to Supabase `cloud_datasets`.
- * Matches the existing production schema + `check_credentials_format`:
- *   - access_key  → GCP Project ID
- *   - secret_key  → service account JSON (full key file contents)
- * Backend reads these via get_cloud_connection (cloud_connections.py).
+ * Persist a GCP connection. The service-account key goes to the backend,
+ * which seals it (AES-GCM under DB_ENCRYPTION_KEY) and writes only the
+ * *_ciphertext / *_iv columns: `cloud_datasets` refuses plaintext keys since
+ * migration 20261116130000. The backend reads them via get_cloud_connection
+ * (cloud_connections.py), as before.
  */
 export async function createGcpCloudConnection(input: {
   name: string;
@@ -82,46 +82,26 @@ export async function createGcpCloudConnection(input: {
   datasetPath: string;
   serviceAccountJson: string;
 }): Promise<GcpCloudConnection> {
-  const uid = await userId();
+  await userId(); // signed in, or the backend call cannot be made
   const projectId = input.projectId?.trim() ?? "";
   const region = input.region.trim();
   const datasetPath = input.datasetPath.trim().replace(/\/+$/, "");
-  let saJson = input.serviceAccountJson.trim();
+  const saJson = input.serviceAccountJson.trim();
 
   if (!region) throw new Error("Region is required.");
   if (!datasetPath) throw new Error("Dataset path is required.");
   if (!saJson) throw new Error("Service account JSON key is required.");
 
-  try {
-    const parsed = JSON.parse(saJson) as Record<string, unknown>;
-    if (projectId && !parsed.project_id) parsed.project_id = projectId;
-    saJson = JSON.stringify(parsed);
-  } catch {
-    throw new Error("Service account key must be valid JSON.");
-  }
-
-  const { data, error } = await supabase
-    .from("cloud_datasets")
-    .insert({
-      user_id: uid,
-      name: input.name.trim() || "GCP connection",
-      provider: "gcp",
-      region,
-      bucket_name: datasetPath,
-      access_key: projectId,
-      secret_key: saJson,
-    })
-    .select("id,name,provider,bucket_name")
-    .single();
-
-  if (error) throw new Error(error.message);
-
-  // Do not call encrypt_cloud_credentials here: that RPC clears access_key/secret_key
-  // and stores values in *_ciphertext without IVs. The backend reads plaintext secret_key
-  // (or decrypts ciphertext+iv when DB_ENCRYPTION_KEY is set). Leaving plaintext lets
-  // /buckets/list initialize the GCS client with the service account JSON.
-
-  return data as GcpCloudConnection;
+  const { backendApi } = await import("@/lib/api/backendApi");
+  const data = await backendApi.createCloudConnection({
+    name: input.name.trim() || "GCP connection",
+    provider: "gcp",
+    region,
+    project_id: projectId || undefined,
+    bucket_name: datasetPath,
+    secret_key: saJson,
+  });
+  return { ...data, bucket_name: data.bucket_name ?? datasetPath } as GcpCloudConnection;
 }
 
 /** Mark an existing GCP cloud_datasets row as connected after the wizard confirm step. */

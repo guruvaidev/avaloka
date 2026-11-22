@@ -7,7 +7,7 @@ import { Button } from "@/components/base/buttons/button";
 import { Avatar } from "@/components/base/avatar/avatar";
 import { Dropdown } from "@/components/base/dropdown/dropdown";
 import { cx } from "@/lib/utils/cx";
-import { usePlanFeatures } from "@/lib/use-plan-features";
+import { ANALYSIS_LINKS_NEED_PRO, usePlanFeatures } from "@/lib/use-plan-features";
 import { listAppUsers } from "@/lib/configurations.functions";
 import { supabase } from "@/integrations/supabase/client";
 import {
@@ -27,6 +27,7 @@ import {
   type DepartmentMemberPreview,
   type ResourceType,
 } from "@/lib/resource-collaborators";
+import { AnalysisStandaloneSharing } from "./AnalysisStandaloneSharing";
 import { toast } from "sonner";
 
 
@@ -131,7 +132,7 @@ export function InviteCollaboratorsPopover({
   onCollaborationChange,
 }: InviteCollaboratorsPopoverProps) {
   const listAppUsersFn = useServerFn(listAppUsers);
-  const { canInviteCollaborators } = usePlanFeatures();
+  const { canInviteCollaborators, canShareAnalysisLink, isProfessional } = usePlanFeatures();
 
   const resourceType: ResourceType | null = reportId ? "report" : projectId ? "project" : analysisId ? "analysis" : null;
   const resourceId = reportId ?? projectId ?? analysisId ?? null;
@@ -325,16 +326,18 @@ export function InviteCollaboratorsPopover({
   const reload = useCallback(async () => {
     if (!isPersisted || !resourceType || !resourceId) return;
     const [link, rows, users] = await Promise.all([
-      ensureResourceShareLink(resourceType, resourceId),
+      supabase.from("resource_share_links").select("share_token,is_public")
+        .eq("resource_type", resourceType).eq("resource_id", resourceId).maybeSingle(),
       loadResourceCollaboratorRows(resourceType, resourceId),
       listAppUsersFn(),
     ]);
     const normalizedUsers = (users as AppUserRow[]) ?? [];
     setAppUsers(normalizedUsers);
     const cols = mergeCollaboratorMembers(rows, normalizedUsers);
-    setShareToken(link.token);
-    setShareLink(shareLinkDisplayUrl(link.token, resourceType));
-    setShareVisibility(link.isPublic ? "Public" : "Private");
+    if (link.error) throw link.error;
+    setShareToken(link.data?.share_token ?? null);
+    setShareLink(link.data ? shareLinkDisplayUrl(link.data.share_token, resourceType) : "");
+    setShareVisibility(link.data?.is_public ? "Public" : "Private");
 
     setMembers(cols);
     setMemberAccess(Object.fromEntries(cols.map((m) => [m.id, m.access])));
@@ -345,9 +348,9 @@ export function InviteCollaboratorsPopover({
   }, [onCollaborationChange]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || (isProfessional && projectId)) return;
     void loadAppUsers();
-  }, [open, loadAppUsers]);
+  }, [open, loadAppUsers, isProfessional, projectId]);
 
   useEffect(() => {
     if (!open) {
@@ -359,14 +362,14 @@ export function InviteCollaboratorsPopover({
       setTeamPickerOpen(false);
       return;
     }
-    if (!isPersisted) return;
+    if (!isPersisted || (isProfessional && projectId)) return;
     reload()
       .then(() => notifyCollaborationChange())
       .catch((err) => {
         console.error("[InviteCollaboratorsPopover] load failed", err);
         toast.error("Failed to load share settings");
       });
-  }, [open, isPersisted, reload, notifyCollaborationChange]);
+  }, [open, isPersisted, reload, notifyCollaborationChange, isProfessional, projectId]);
 
   useEffect(() => {
     if (!open || !userPickerOpen) return;
@@ -403,10 +406,22 @@ export function InviteCollaboratorsPopover({
   };
 
   const handleCopyLink = async () => {
-    const url = shareToken && resourceType ? shareLinkFullUrl(shareToken, resourceType) : shareLink;
-    const copied = await copyTextToClipboard(url);
-    if (copied) toast.success("Link copied");
-    else toast.error("Could not copy link");
+    try {
+      let token = shareToken;
+      if (!token && isPersisted && resourceType && resourceId) {
+        const link = await ensureResourceShareLink(resourceType, resourceId);
+        token = link.token;
+        setShareToken(token);
+        setShareLink(shareLinkDisplayUrl(token, resourceType));
+      }
+      const url = token && resourceType ? shareLinkFullUrl(token, resourceType) : shareLink;
+      const copied = await copyTextToClipboard(url);
+      if (copied) toast.success("Link copied");
+      else toast.error("Could not copy link");
+    } catch (err) {
+      console.error("[InviteCollaboratorsPopover] share link failed", err);
+      toast.error("Could not create share link");
+    }
   };
 
 
@@ -554,7 +569,7 @@ export function InviteCollaboratorsPopover({
         </div>
       </div>
 
-      {canInviteCollaborators ? (
+      {canInviteCollaborators && !(isProfessional && projectId) ? (
         <>
       <div className="my-4 flex items-center gap-3 px-5">
         <div className="h-px flex-1 bg-border-secondary" />
@@ -779,6 +794,10 @@ export function InviteCollaboratorsPopover({
 
 
 
+      {isProfessional && projectId && (
+        <AnalysisStandaloneSharing analysisId={projectId} resourceType="project" open={open} onChange={onCollaborationChange} />
+      )}
+
       {analysisId ? (
         <div className="mt-5 border-t border-secondary px-5 pt-4">
           <p className="text-sm font-semibold text-primary">Email Results</p>
@@ -867,6 +886,10 @@ export function InviteCollaboratorsPopover({
       {analysisId ? (
         <div className="mt-5 border-t border-secondary px-5 pt-4">
           <p className="text-sm font-semibold text-primary">Generate Public Link</p>
+          {!canShareAnalysisLink ? (
+            <p className="mt-1 text-xs text-tertiary">{ANALYSIS_LINKS_NEED_PRO}</p>
+          ) : (
+          <>
           <p className="mt-1 text-xs text-tertiary">
             Anyone with this link can sign in and view these results.
           </p>
@@ -926,6 +949,8 @@ export function InviteCollaboratorsPopover({
               </div>
             )}
           </div>
+          </>
+          )}
         </div>
       ) : null}
 
@@ -938,7 +963,7 @@ export function InviteCollaboratorsPopover({
         <Button color="secondary" size="md" onClick={onClose}>
           Cancel
         </Button>
-        {canInviteCollaborators ? (
+        {canInviteCollaborators && !(isProfessional && projectId) ? (
           <Button
             color="primary"
             size="md"

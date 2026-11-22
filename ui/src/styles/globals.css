@@ -39,6 +39,12 @@ body {
     font-kerning: normal;
 }
 
+/* Keep the reports canvas in the same deep charcoal palette as Settings when
+   dark mode is active; its light-mode gradient remains unchanged. */
+.dark-mode .reports-page-backdrop {
+    background-image: radial-gradient(150% 100% at 42.83% 20.65%, transparent 43.87%, rgb(21 101 239 / 0.08) 100%, #0b0d10 150%);
+}
+
 /* Hide the default expand arrow on Safari.  */
 details summary::-webkit-details-marker {
     display: none;

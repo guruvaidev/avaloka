@@ -34,7 +34,7 @@ runs nothing and exits 0. `avaloka/benchmark/README.md` documents each task.
 ## Current scorecard
 
 **39/50 passed, 11 failed — overall 0.92; all 11 are declared known defects, so the command exits 0 (`--strict`: 1).**
-Measured on `develop-1.6` (`9e0a9464`) merged with #479, #475 and their fixes, with no API keys set, in the CI image (pandas
+Measured on `develop-1.6` (`9e0a9464`) merged with the CLI null-word and benchmark-check changes and their fixes, with no API keys set, in the CI image (pandas
 2.3.3). The 45 tasks in `avaloka/benchmark/suite.py` expand to 50 runs because several
 are run once per source scheme and the fleet check adds one more. Scores are
 reproducible; the **times are not** — they come from one run on one machine and

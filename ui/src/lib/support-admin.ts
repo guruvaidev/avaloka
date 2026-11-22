@@ -1,6 +1,3 @@
-// Client-safe constant: the single account allowed to run the support desk.
-export const SUPPORT_ADMIN_EMAIL = "support@avaloka.ai";
-
 /** True when the error means the support conversation table isn't provisioned. */
 export function isMissingMessagesTable(err: unknown): boolean {
   const e = err as { code?: string; message?: string } | null;

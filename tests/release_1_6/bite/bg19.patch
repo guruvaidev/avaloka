@@ -1,0 +1,13 @@
+diff --git a/ui/src/components/dashboard/IconRail.tsx b/ui/src/components/dashboard/IconRail.tsx
+index 2055e579..133dbca0 100644
+--- a/ui/src/components/dashboard/IconRail.tsx
++++ b/ui/src/components/dashboard/IconRail.tsx
+@@ -329,7 +329,7 @@ export function RailGroup({
+               size="sm"
+               color="tertiary"
+               icon={item.icon}
+-              aria-current={isActive ? "page" : undefined}
++              aria-current={undefined}
+               tooltip={isLocked ? `${item.label} — Available on Professional` : item.label}
+               tooltipPlacement="right"
+               onClick={() => onItemClick?.(item.id)}

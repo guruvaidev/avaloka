@@ -129,7 +129,7 @@ One interface, two backends, selected by deployment profile — the same pattern
 (Column)-[:CLASSIFIED_AS]->(PIIKind)
 ```
 
-The `PII` edge is worth noting: the classifier from PR #300 already produces it, and putting it in the graph makes **"which models were trained on data derived from a column holding personal data"** a single query. That is a compliance answer nobody can currently produce at all.
+The `PII` edge is worth noting: the PII classifier already produces it, and putting it in the graph makes **"which models were trained on data derived from a column holding personal data"** a single query. That is a compliance answer nobody can currently produce at all.
 
 ### 4.4 What it unlocks
 
@@ -145,7 +145,7 @@ Lineage is the prerequisite for schema-drift remediation, so this is not a paral
 
 ### 4.5 Privacy
 
-The same rule as the wiki, and it bites harder here: **column names are data.** `patient_hiv_status` is a diagnosis. The graph stores a salted hash of each column name plus its dtype and role, with the plaintext resolvable only locally, using the keyed scheme already built in PR #300. The graph is local, never transmitted, and excluded from telemetry by allowlist and by test.
+The same rule as the wiki, and it bites harder here: **column names are data.** `patient_hiv_status` is a diagnosis. The graph stores a salted hash of each column name plus its dtype and role, with the plaintext resolvable only locally, using the keyed scheme already built for the PII classifier. The graph is local, never transmitted, and excluded from telemetry by allowlist and by test.
 
 ---
 

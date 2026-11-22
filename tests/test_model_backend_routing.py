@@ -68,6 +68,9 @@ def test_the_test_model_really_is_foreign_to_groq():
 
 
 def test_a_foreign_model_on_groq_fails_with_a_hint_for_a_routable_agent(monkeypatch):
+    # The guard is the Groq path's. MP-01: re-pinned 2026-11-01 — owner decision: the default is
+    # OpenRouter, so the Groq path is selected explicitly here.
+    monkeypatch.setenv("INFERENCE_PROVIDER", "groq")
     monkeypatch.setenv("AVALOKA_VISUALIZATION_MODEL", _FOREIGN)
     monkeypatch.delenv("AVALOKA_VISUALIZATION_BACKEND", raising=False)
     with pytest.raises(mc.UnsupportedModelError, match="AVALOKA_VISUALIZATION_BACKEND=openrouter"):
@@ -75,6 +78,9 @@ def test_a_foreign_model_on_groq_fails_with_a_hint_for_a_routable_agent(monkeypa
 
 
 def test_a_foreign_model_on_groq_gives_no_such_hint_for_a_groq_only_agent(monkeypatch):
+    # The guard is the Groq path's. MP-01: re-pinned 2026-11-01 — owner decision: the default is
+    # OpenRouter, so the Groq path is selected explicitly here.
+    monkeypatch.setenv("INFERENCE_PROVIDER", "groq")
     monkeypatch.setenv(mc.env_var_for("planner"), _FOREIGN)
     with pytest.raises(mc.UnsupportedModelError) as err:
         mc.resolve("planner")

@@ -29,6 +29,8 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from app.core import editions
+
 logger = logging.getLogger(__name__)
 
 MB = 1024 * 1024
@@ -231,10 +233,18 @@ _FAILURE_TTL_S = 30.0
 
 def _billing_disabled() -> bool:
     """True on installs with no billing (self-hosted / OSS): there are no
-    subscriptions to read, so nobody should be told to upgrade."""
+    subscriptions to read, so nobody should be told to upgrade.
+
+    AVALOKA_PLAN_LIMITS=off always disables billing. A deployment declared
+    hosted (editions.declared_deployment) is billed whatever AVALOKA_EDITION
+    says. Declared self-hosted and undeclared keep the AVALOKA_EDITION rule
+    (oss/community is unbilled), so the chart's self_hosted default changes
+    no install's billing."""
     flag = os.getenv("AVALOKA_PLAN_LIMITS", "").strip().lower()
     if flag in ("0", "off", "false", "disabled"):
         return True
+    if editions.declared_deployment() == "hosted":
+        return False
     return os.getenv("AVALOKA_EDITION", "").strip().lower() in ("oss", "community")
 
 
@@ -286,9 +296,9 @@ def try_resolve_plan(user_id: Optional[str]) -> Optional[str]:
     """Like resolve_plan, but None when the plan cannot be known right now
     (no user, or the lookup failed), instead of Free.
 
-    For feature gates that fail open: an unknown plan must not be treated as
-    Free, or a Supabase outage (or a backend with no plan lookup at all) blocks
-    every user."""
+    For feature gates: an unknown plan must not be treated as Free, or a
+    Supabase outage would tell paying users to upgrade. plan_gate refuses it as
+    unavailable on a hosted deployment and allows it everywhere else."""
     if _billing_disabled():
         return _unbilled_plan()
     if not user_id:

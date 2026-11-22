@@ -1,0 +1,22 @@
+diff --git a/app/core/model_config.py b/app/core/model_config.py
+index 8db8066..f230eda 100644
+--- a/app/core/model_config.py
++++ b/app/core/model_config.py
+@@ -272,17 +272,6 @@ def resolve(agent: str, *, backend: Optional[str] = None) -> str:
+     """
+     backend = backend or backend_for(agent)
+     choice = model_for(agent)
+-    if backend == "groq" and not choice.is_default:
+-        active = _active_inference_provider(choice.agent)
+-        if active != "groq":
+-            logger.warning(
+-                "[models] %s=%r ignored: %s's inference provider is %s, which does not "
+-                "read the Groq-path model variable; set AVALOKA_%s_MODEL_%s to choose "
+-                "its model.",
+-                choice.env_var, choice.model, choice.agent, active,
+-                choice.agent.upper(), active.upper(),
+-            )
+-            return DEFAULT_MODELS[choice.agent]
+     check_model_supported(agent, choice.model, backend=backend)
+     logger.info("[models] %s backend=%s", choice, backend)
+     return choice.model

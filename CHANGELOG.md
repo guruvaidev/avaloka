@@ -4,13 +4,84 @@ All notable changes to Avaloka are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] — first public release
+
+The first tagged release of this repository. It is built from the same source
+as the 1.6 development line and contains every change recorded below, under
+[Unreleased] and [1.6.0]; those headings keep the numbers they were written
+under. Builds of `main` published before this release carried no tag and
+reported their version as `1.6.0`.
+
+- **Security.** 1.0.0 includes the fix for the MCP server advisory in
+  [SECURITY.md](SECURITY.md): the onboarding and admin routes require the
+  customer's API key or the API's `MCP_SERVICE_TOKEN`. **Upgrading from a build
+  of `main` from before 2026-10-29:** set `MCP_SERVICE_TOKEN` to the same value
+  on the API and the MCP server, and rotate the database credentials stored in
+  the MCP server.
+- **Security: generated code no longer runs with the server's secrets.** The
+  model-written analysis script, the data-transfer sample preview and the
+  validator's trial run inherited the server's environment (provider keys,
+  database passwords, `DB_ENCRYPTION_KEY`, `MCP_SERVICE_TOKEN`, Supabase keys),
+  and the trial run executed inside the server process. All three now run in a
+  child process with an allowlisted environment and a private home directory;
+  the trial run also has a time limit (`AVALOKA_VALIDATION_TIMEOUT`) and, on
+  Linux, a memory limit (`AVALOKA_VALIDATION_MEMORY_MB`).
+- **Security: the `/execute` service is authenticated, cluster-internal and
+  sandboxed.** Earlier builds could deploy `app/infra/python_app` at run time
+  when a chat message mentioned deploying or a cloud: a service that ran
+  `exec()` on the request body with no authentication, behind a `LoadBalancer`
+  Service, with the namespace's default ServiceAccount token mounted. It is
+  removed. The replacement (`executeService` in the Helm chart, off by default)
+  requires `EXECUTE_SERVICE_TOKEN` on every request, is `ClusterIP` only with a
+  NetworkPolicy, has no ServiceAccount token, and runs each request in a
+  sandboxed child process. Provisioning now needs an explicit request and a
+  confirmation. See the advisory in [SECURITY.md](SECURITY.md): **if an
+  earlier build created the `infra-agent` Deployment, the `infra-agent-service`
+  Service or the `infra-agent-config` ConfigMap in your cluster, delete them**,
+  rotate what the namespace's default service account could reach, and review
+  the load balancer's logs.
+- **A connection saved under a different `DB_ENCRYPTION_KEY` is reported, not
+  lost.** After the key changed, such connections vanished from listings and
+  another user could register the same id over them. They are now listed to
+  their owner as needing re-registration, and nobody else can take their id.
+- **One version number.** `VERSION`, `pyproject.toml`, the Helm chart's
+  `version` and `appVersion`, `avaloka --version` and `GET /version` all read
+  1.0.0.
+- **Images.** The `v1.0.0` tag publishes the four images under
+  `ghcr.io/guruvaidev/` (`avaloka-api`, `avaloka-ui`, `avaloka-ray`,
+  `avaloka-functions`) tagged `1.0.0` and `1.0`
+  (`.github/workflows/images.yml`).
+- **What it does**, in the words of the [README](README.md): a team of
+  specialist agents that takes a dataset from raw rows to a served model and
+  checks its own work before it reports a result. Generated code is validated
+  before it runs, a trained model must beat a trivial baseline, and the numbers
+  in each answer are checked against the results that were computed. It runs
+  from a laptop CLI, fully offline, up to Ray/KubeRay on any Kubernetes
+  cluster through one Helm chart, with the model provider of your choice.
+- **Known issues** are listed under [Unreleased] below.
+
 ## [Unreleased]
 
-On `develop-1.6` since 1.6.0, not yet tagged. Every entry below is a change
+Made on the 1.6 line after 1.6.0. Everything listed here at the `v1.0.0` tag is in 1.0.0. Every entry below is a change
 that broke, or would have broken, a clean install or a first run.
 
 ### Security
 
+- **Cloud storage keys are sealed, never stored in plaintext.** The UI wrote
+  `access_key`/`secret_key` straight into `cloud_datasets` from two places, the
+  table's CHECK allowed it, and the `encrypt_cloud_credentials` RPC -- callable
+  by `anon` -- stored whatever text it was handed as "ciphertext" with no IV.
+  Migration `20261116130000` drops the plaintext branch of the CHECK (added
+  `NOT VALID`, so rows written earlier survive until sealed) and retires the
+  RPC. `POST /api/cloud-connections` is now the one place a key enters the
+  table, sealed in process under `DB_ENCRYPTION_KEY` (503 without the key,
+  never a plaintext insert); both UI writers post there. Rows written before
+  the migration are sealed at API start-up and by
+  `python -m app.api.cloud_connections seal` (a dry run that prints counts
+  only; `--apply` seals). Every reader (`get_cloud_connection`, the Ray job
+  submitter, the Kubernetes secret builder, the planner) opens the keys in
+  memory as before. **Hosted databases may hold plaintext rows today; run the
+  dry run, then `--apply`.**
 - **The MCP server's onboarding and admin routes require authentication.**
   `/customers/*`, `/admin/customers`, `/connect` and `/connections` were open
   to anyone who could reach the MCP server. They now take the customer's API
@@ -29,6 +100,18 @@ that broke, or would have broken, a clean install or a first run.
 
 ### Changed
 
+- **The deployment type is declared, and a failed plan lookup on a hosted
+  deployment answers 503.** `AVALOKA_DEPLOYMENT` (`self_hosted` or
+  `avaloka_hosted`) is now the one signal the plan gates, billing and the
+  plan-lookup fail mode read (`app/core/editions.py`). The chart renders it
+  from `config.deployment`, default `self_hosted`, and the scheduler compose
+  file defaults it too. On `avaloka_hosted`, a plan lookup that fails refuses
+  data transfer, model training and model inference with `503 plan check
+  unavailable` (chat says the check could not run) instead of allowing them;
+  it never asks the user to upgrade. Self-hosted and undeclared installs are
+  unchanged: premium features are allowed, and an undeclared install logs one
+  warning. See [Deployment type](docs/deployment.md#deployment-type)
+  (`app/core/plan_gate.py`, `app/api/server.py`, `app/agents/planner.py`).
 - **The Celery worker has its own Kubernetes service account identity.** The
   chart can annotate it for cloud workload identity
   (`celery.serviceAccount.annotations`), and its Role may create and watch
@@ -68,13 +151,13 @@ that broke, or would have broken, a clean install or a first run.
   PII, null policy, local inference): pandas 3 reads text as its own `str`
   dtype and much of the code asks `dtype == object`.
   `tests/test_pandas_ceiling.py` keeps the cap in every file.
-- **A null-like word in a spreadsheet stays a category in the CLI** (#479).
+- **A null-like word in a spreadsheet stays a category in the CLI**.
   The CLI's Excel reader read `None`, `NA`, `N/A` as missing in every column;
-  it now follows the CSV rule from #474, and that rule also recognises
+  it now follows the CSV rule, and that rule also recognises
   pandas 3's `str` dtype (`avaloka/io/loader.py`,
   `file_handler/null_policy.py`).
 - **The CLI no longer answers a measure it could not find with a row count**
-  (#475). "Total revenue by region" over `gross_revenue` and `net_revenue`
+  "Total revenue by region" over `gross_revenue` and `net_revenue`
   counted rows per region and reported `status="answered"`; it now reports
   `limited` and names the candidate columns. Count goals and goals that name
   the column are answered as before (`avaloka/goal_analysis.py`).

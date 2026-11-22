@@ -36,6 +36,7 @@ import {
   summarizePrompt,
   formatSchedule,
   relativeTime,
+  lastRunLabel,
 } from "@/lib/api/scheduled-prompt-cache";
 
 export const Route = createFileRoute("/scheduled-analysis")({
@@ -757,7 +758,7 @@ function ScheduledAnalysisPage() {
                           <span className="truncate text-sm font-semibold text-primary">You</span>
                         </div>
                         <span className="shrink-0 text-xs text-tertiary">
-                          Last run: {relativeTime(t.last_run_at)}
+                          Last run: {lastRunLabel(t.last_run_at, t.total_run_count)}
                         </span>
                       </div>
                     </article>
@@ -823,7 +824,7 @@ function ScheduledAnalysisPage() {
                           </div>
                         </td>
                         <td className="px-4 py-3 text-sm text-tertiary">
-                          {relativeTime(t.last_run_at)}
+                          {lastRunLabel(t.last_run_at, t.total_run_count)}
                         </td>
                         <td className="px-4 py-3 text-right">
                           <RowActions

@@ -11,6 +11,13 @@
 
 # Paths on develop-1.6 that must never reach the public tree.
 exclude:
+  # --- public version 1.0.0: begin ---
+  - path: oss/internal/
+    reason: >-
+      The generator's own input for public text: its old column is exactly the
+      text the public tree must not carry. Read from the working tree at
+      generation time, never published.
+  # --- public version 1.0.0: end ---
   - path: artifacts/
     reason: >-
       Test output. Already in .gitignore on both branches, but these files
@@ -53,6 +60,24 @@ exclude:
       publishes whatever the source branch carries, so the first sync after it
       lands would otherwise ship it. This file is itself published, so the
       reason stays general on purpose.
+  - path: docs/design/1.6-CAPABILITY-GAPS.md
+    reason: >-
+      Internal planning document, written for the team scheduling work and not
+      reviewed for publication. Withheld by path before it reaches a sync; the
+      rest of docs/design/ stays published. This file is itself published, so
+      the reason stays general on purpose.
+  - path: docs/design/1.6-CHATBOT-INTRO.md
+    reason: >-
+      Internal planning document, written for the team scheduling work and not
+      reviewed for publication. Withheld by path before it reaches a sync; the
+      rest of docs/design/ stays published. This file is itself published, so
+      the reason stays general on purpose.
+  - path: docs/operations/PLATFORM-ADMIN-AND-SUPPORT.md
+    reason: >-
+      Internal operations runbook, written for the team running the service
+      and not reviewed for publication. Withheld by path; the public product
+      rules are in docs/EDITIONS.md. This file is itself published, so the
+      reason stays general on purpose.
   - path: .claude/
     reason: >-
       Local agent tooling configuration; not part of the product. Untracked
@@ -78,6 +103,12 @@ exclude:
       submission. The LaTeX templates (natbib.sty, iclr2026_conference.bst,
       fancyhdr.sty) are third-party licensed on top of that and cannot ship
       under Apache-2.0.
+  # --- provider selection record (default-model switch, owner ruling 2026-11-02) ---
+  - path: docs/internal/provider-selection.md
+    reason: >-
+      Internal record of how model providers were selected. Not reviewed for
+      publication; the public page is docs/privacy-and-egress.md. This file is
+      itself published, so the reason stays general on purpose.
 
 # Files that exist only on the public tree, applied after the exclusions.
 overlay:
@@ -93,6 +124,10 @@ overlay:
   # The internal README documents a LaTeX build against sources the public
   # tree does not carry. This one explains why they are absent instead.
   - docs/research/README.md
+  # The public repository numbers its own releases: its first tagged release
+  # is 1.0.0, while develop-1.6 keeps the 1.6 line. The public number is set
+  # here and by the version splices below, never on develop-1.6.
+  - VERSION
 
 # Sections replaced rather than added wholesale. The public quickstart does
 # not assume SUPABASE_JWT_SECRET or a running redis-server; develop's does.
@@ -101,11 +136,97 @@ splice:
   - file: README.md
     section: "## Quickstart"
     from: oss/overlay/README.quickstart.md
+  # --- public version 1.0.0: begin ---
+  # The public version, 1.0.0. Matched by pattern, not by develop's number, so
+  # a version bump on develop-1.6 does not change the public one.
+  - file: pyproject.toml
+    match: 'version = "[^"]*"'
+    with: 'version = "1.0.0"'
+  - file: deploy/helm/avaloka/Chart.yaml
+    match: 'version: \S+'
+    with: "version: 1.0.0"
+  - file: deploy/helm/avaloka/Chart.yaml
+    match: 'appVersion: \S+'
+    with: 'appVersion: "1.0.0"'
+  # The release entry for 1.0.0. The test that compares VERSION with the
+  # newest CHANGELOG heading reads this, so it moves with the version.
+  - file: CHANGELOG.md
+    before: "## [Unreleased]"
+    from: oss/overlay/CHANGELOG.1.0.0.md
+  - file: CHANGELOG.md
+    line: "On `develop-1.6` since 1.6.0, not yet tagged. Every entry below is a change"
+    with: "Made on the 1.6 line after 1.6.0. Everything listed here at the `v1.0.0` tag is in 1.0.0. Every entry below is a change"
+  # The advisory, restated in the public numbering. Builds of main before the
+  # fix were never tagged, and all of them reported 1.6.0, so the affected
+  # builds are named by date and 1.0.0 is stated as not affected.
+  - file: SECURITY.md
+    line: "| 1.6.x (`main`) | ✅ |"
+    with: "| 1.0.x (`main`) | ✅ |"
+  - file: SECURITY.md
+    line: "| < 1.6   | ❌        |"
+    with: "| < 1.0 (untagged builds of `main`) | ❌ |"
+  - file: SECURITY.md
+    line: "**Affected:** every release up to and including 1.6.0, and `main` before the"
+    with: "**Affected:** every build of `main` before the sync of 2026-10-29, and the"
+  - file: SECURITY.md
+    line: "sync of 2026-10-29."
+    with: "images built from it. Those builds carried no release tag and report their version as `1.6.0`, as do later builds of `main` up to 1.0.0, so go by the date, not the number. **1.0.0 is not affected.**"
+  - file: SECURITY.md
+    line: "**Fixed in:** `main` from 2026-10-29."
+    with: "**Fixed in:** 1.0.0, the first tagged release, and `main` from 2026-10-29."
+  - file: SECURITY.md
+    line: "1. Upgrade to the current `main`."
+    with: "1. Upgrade to 1.0.0 or later."
+  # Image tags and the chart version, as the public tree publishes them.
+  - file: docs/versions.md
+    line: "All four pull anonymously. **No semver tag exists** — `images.yml` would"
+    with: "All four pull anonymously. **Semver tags start at 1.0.0** — `images.yml`"
+  - file: docs/versions.md
+    line: "publish one on a `v*` git tag, but none has been pushed, so `:1.0.0` / `:1.6.0`"
+    with: "publishes `:<version>` and `:<major>.<minor>` on a `v*` git tag, so `v1.0.0` gives `:1.0.0` and `:1.0`;"
+  - file: docs/versions.md
+    line: "do not resolve. Neither does `:develop-1.6`. Verify before pinning:"
+    with: "no earlier semver tag exists, and `:develop-1.6` does not resolve. Verify before pinning:"
+  - file: docs/versions.md
+    match: 'Chart version is `[^`]*` / appVersion `[^`]*` \(`deploy/helm/avaloka/Chart.yaml`\),'
+    with: "Chart version is `1.0.0` / appVersion `1.0.0` (`deploy/helm/avaloka/Chart.yaml`),"
+  - file: docs/deployment.md
+    line: "and a `sha-<short>` tag per build. There are **no semver tags** —"
+    with: "and a `sha-<short>` tag per build. **Semver tags start at 1.0.0** —"
+  - file: docs/deployment.md
+    line: "`images.yml` would publish them on a `v*` git tag, but no such tag has been"
+    with: "`images.yml` publishes them on a `v*` git tag, so `v1.0.0` gives `:1.0.0` and"
+  - file: docs/deployment.md
+    line: "pushed, so `:1.0.0` and `:1.6.0` do not resolve. There is also no"
+    with: "`:1.0`; no earlier semver tag exists. There is also no"
+  - file: docs/DOCS_MAP.md
+    line: "| [CHANGELOG.md](../CHANGELOG.md) | upgraders | What changed, including the breaking changes since 1.6.0 |"
+    with: "| [CHANGELOG.md](../CHANGELOG.md) | upgraders | What changed in each release, starting with 1.0.0, the first public release, and the breaking changes it carries |"
+  # The demo guide tells the presenter what `avaloka --version` prints.
+  - file: docs/DEMO_GUIDE.md
+    line: "avaloka --version        # prints 1.6.0"
+    with: "avaloka --version        # prints 1.0.0"
+  - file: docs/DEMO_GUIDE.md
+    line: "- [ ] `avaloka --version` prints `1.6.0`."
+    with: "- [ ] `avaloka --version` prints `1.0.0`."
+  # --- public version 1.0.0: end ---
+
+# --- public version 1.0.0: begin ---
+# Public text: literal replacements applied after the splices. The table is
+# withheld (see exclude), because what it replaces -- internal change numbers,
+# branch names, commit ids, the 1.6 line's wording -- must not be published,
+# here included. Every row must match exactly as often as it says, or the run
+# fails. The invariants below check the result.
+replace_table: oss/internal/public-text.tsv
+# --- public version 1.0.0: end ---
 
 # Invariants checked after every generation. A failure blocks the push.
 assert_present:
   README.md:
     - "support@avaloka.ai"
+    # Merged on the public repository (GitHub #82); kept so a later sync
+    # cannot quietly revert an outside contribution.
+    - "img.shields.io/github/stars/guruvaidev/avaloka"
     - "at your own risk"
     - "Not tested on"
   app/infra/providers/factory.py:
@@ -122,7 +243,79 @@ assert_present:
   # 3.13+ interpreter into an Arrow C++ source build.
   pyproject.toml:
     - ">=3.11,<3.13"
+    - 'version = "1.0.0"'
+  # --- public version 1.0.0: begin ---
+  # The public version. Each of these is set by the overlay or a splice above;
+  # without them the public tree would read develop-1.6's 1.6.0.
+  VERSION:
+    - "1.0.0"
+  deploy/helm/avaloka/Chart.yaml:
+    - "version: 1.0.0"
+    - 'appVersion: "1.0.0"'
+  avaloka/version.py:
+    - '_FALLBACK = "1.0.0"'
+  CHANGELOG.md:
+    - "## [1.0.0]"
+  SECURITY.md:
+    - "**1.0.0 is not affected.**"
+    - "**Fixed in:** 1.0.0"
+    # The /execute advisory must ship with the release that fixes it.
+    - "### 2026-11: The /execute service ran code without authentication"
+    - "every build of `main` published from 2026-09-15 until 1.0.0"
+    - "**Fixed in:** 1.0.0. The service is replaced"
+    - "sync of 2026-10-29"
+  docs/versions.md:
+    - "Chart version is `1.0.0` / appVersion `1.0.0`"
+  docs/deployment.md:
+    - "`v1.0.0` gives `:1.0.0`"
+  docs/DOCS_MAP.md:
+    - "starting with 1.0.0, the first public release"
+  docs/research/README.md:
+    - "Avaloka 1.0.0"
+  docs/DEMO_GUIDE.md:
+    - "# prints 1.0.0"
+    - "prints `1.0.0`."
+    - "# Avaloka 1.0.0 — Demo Guide"
+  README.md:
+    - "## What's new in 1.0.0"
+  docs/USER_GUIDE.md:
+    - "Applies to Avaloka 1.0.0"
+  docs/TECHNICAL_USER_GUIDE.md:
+    - "Applies to Avaloka 1.0.0"
+  docs/guide/index.html:
+    - "Avaloka 1.0.0 · Apache-2.0"
+  # --- public version 1.0.0: end ---
 assert_absent:
+  # --- public version 1.0.0: begin ---
+  # develop-1.6's number must not reach the public tree as its version.
+  VERSION:
+    - "1.6.0"
+  pyproject.toml:
+    - "1.6.0"
+  deploy/helm/avaloka/Chart.yaml:
+    - "1.6.0"
+  # The 1.6 line's wording, rewritten for 1.0.0 by the replacement table.
+  README.md:
+    - "What's new in 1.6"
+    - "1.6 is about"
+    - "In 1.6,"
+    - "limitations in 1.6"
+  docs/USER_GUIDE.md:
+    - "Avaloka 1.6"
+  docs/TECHNICAL_USER_GUIDE.md:
+    - "Avaloka 1.6"
+  docs/guide/index.html:
+    - "Avaloka 1.6"
+    - "Guide · 1.6"
+    - "In 1.6 "
+  docs/DEMO_GUIDE.md:
+    - "develop-1.6"
+    - "Avaloka 1.6"
+    - " 1.6 "
+    - " 1.6,"
+    - " 1.6."
+    - "1.6's"
+  # --- public version 1.0.0: end ---
   README.md:
     - "SUPABASE_JWT_SECRET"
     - "redis-server"
@@ -132,7 +325,7 @@ assert_absent:
   # a hardcoded version. Assert the hardened state rather than trusting the
   # operator to pass the right SRC_BRANCH.
   tests/kaggle_yellow_taxi_trip_data.py:
-    - "C:/Users/lowta"
+    - "C:/Users/"
   avaloka/version.py:
     - "__version__ = \"0.3.0\""
 
@@ -148,9 +341,22 @@ assert_absent:
 #     and references the old module nowhere. Generation keeps the newer work
 #     and drops the older standalone overlay. Verified by date, not by shape.
 
+# --- provider selection record (owner ruling 2026-11-02) ---
+# The public egress page names only the allowed providers. The names it must not
+# carry are themselves withheld: they are read from a marked block in the
+# withheld record, so this published file lists none of them. Generation fails if
+# the record or its block is missing (scripts/generate-oss.sh, withheld-needle
+# invariants).
+assert_absent_from_withheld:
+  - file: docs/privacy-and-egress.md
+    needles_from: docs/internal/provider-selection.md
+
 # Tree-level invariants. Globs that must match nothing in the generated tree.
 # These are the leaks that actually happened, not hypotheticals.
 assert_no_paths:
+  # --- public version 1.0.0: begin ---
+  - "oss/internal/**/*"       # public-text replacement table, withheld above
+  # --- public version 1.0.0: end ---
   - "**/*.sty"          # third-party LaTeX packages, not Apache-2.0
   - "**/*.bst"
   - "**/math_commands.tex"
@@ -165,11 +371,16 @@ assert_no_paths:
   # Not in the source tree yet. The guard is here first so that the day the
   # directory lands, a dropped or mistyped exclude entry fails the generation.
   - "docs/evaluations/**/*"   # internal assessments, withheld above
+  - "docs/design/1.6-CAPABILITY-GAPS.md"   # internal planning, withheld above
+  - "docs/design/1.6-CHATBOT-INTRO.md"     # internal planning, withheld above
+  - "docs/operations/PLATFORM-ADMIN-AND-SUPPORT.md"   # internal runbook, withheld above
   - ".claude/**/*"            # agent definitions and skills, withheld above
   - "**/bitbucket-pipelines.yml"   # internal CI configuration, withheld above
   - "deploy/telemetry/**/*"   # hosted-service deployment configuration, withheld above
   - "avaloka/arena/**"         # asserted by tests/test_oss_readiness.py
   - "tests/arena/**"
+  # --- provider selection record (owner ruling 2026-11-02) ---
+  - "docs/internal/provider-selection.md"   # internal record, withheld above
 
 # Credential shapes that must not appear with a plausible payload attached.
 # A bare prefix, or a short obviously-fake tail, is a test fixture asserting
@@ -188,6 +399,17 @@ assert_no_secrets:
   # The scanner builds the headers at runtime instead; see pem_private_keys.
   pem_private_keys: true
 
+# No publicly routable IPv4 literal in the generated tree (oss/address_scan.py;
+# tests/test_oss_no_addresses.py applies the same rule to every tracked file).
+# Loopback, 0.0.0.0, RFC 5737 documentation ranges (203.0.113.x, 198.51.100.x,
+# 192.0.2.x), RFC 1918 private ranges and the Kubernetes cluster-local defaults
+# do not route and pass without being listed; examples and tests use those.
+# `allow` is for a routable address that must be published, quoted, one per line.
+# The leak that happened: Dockerfile.train-plus-dta named the shared GKE Ray
+# cluster's dashboard IP:port in its first line.
+assert_no_addresses:
+  allow: []
+
 # Paths that must not be reachable from the published ref -- not merely absent
 # from its tree. A tree-only check passes while the history behind the ref still
 # carries the file, which is how a .env that was force-added in July 2026 and
@@ -195,3 +417,32 @@ assert_no_secrets:
 assert_unreachable:
   - ".env"
   - ".env.bak.pre-docker-switch"
+
+# --- public version 1.0.0: begin ---
+# Patterns that must match nowhere in the files a glob selects.
+#
+# Internal change numbers: "#" and three or four digits, not inside a word,
+# an HTML entity, a path or another "#". The public repository's own pull
+# requests are numbered below one hundred today; a public reference above that
+# is written "GitHub #" followed by the number, and unless_after allows it.
+# Code is out of scope: CSS and TypeScript carry three-digit hex colours this
+# pattern cannot tell apart, so it runs over prose -- Markdown, the CSV
+# reports, and this manifest and its overlays.
+assert_no_match:
+  - glob: "**/*.md"
+    pattern: '(?<![\w&#/])#[1-9][0-9]{2,3}(?!\w)'
+    unless_after: "GitHub "
+  - glob: "docs/**/*.csv"
+    pattern: '(?<![\w&#/])#[1-9][0-9]{2,3}(?!\w)'
+    unless_after: "GitHub "
+  - glob: "oss/**/*.yaml"
+    pattern: '(?<![\w&#/])#[1-9][0-9]{2,3}(?!\w)'
+    unless_after: "GitHub "
+  # Commit ids in the demo guide: it says which build it was checked on in
+  # words, not by an internal commit.
+  - glob: "docs/DEMO_GUIDE.md"
+    pattern: '`[0-9a-f]{7,40}`'
+  # Nor by internal branch name.
+  - glob: "docs/DEMO_GUIDE.md"
+    pattern: '(?:fix|hotfix|bugfix|feat|docs)/1\.[0-9]'
+# --- public version 1.0.0: end ---

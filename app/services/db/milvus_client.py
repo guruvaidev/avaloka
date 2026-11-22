@@ -67,6 +67,8 @@ class MilvusClientImpl:
         self._default_cell   = os.environ.get("MILVUS_DEFAULT_CELL",     "default_cell")
 
         self._collection = None
+        # Checked once per process, against the first real vector seen.
+        self._space_checked = False
         logger.info(
             f"Initialized MilvusClientImpl — host={self.host}:{self.port}, "
             f"collection={self.collection_name}, dim={self._vector_dim}"
@@ -135,6 +137,37 @@ class MilvusClientImpl:
             f"(nlist={self._nlist}, partition='{self._partition}')"
         )
 
+    def _check_embedding_space(self, vector: Optional[List[float]]) -> None:
+        """Warn, once, when stored vectors come from a different embedding space.
+
+        Before this change embeddings went to OpenAI whenever OPENAI_API_KEY was set;
+        they are now local by default. Both are padded to the collection's dimension,
+        so nothing fails -- but a local query scored against an OpenAI-embedded
+        row is noise. Milvus scores server-side, so rows cannot be skipped per
+        query here; this samples the stored rows and says what to do instead.
+        Never raises.
+        """
+        if self._space_checked or not vector or not any(vector) or not self._collection:
+            return
+        self._space_checked = True
+        try:
+            from app.services.embedding_utils import same_embedding_space
+            rows = self._collection.query(
+                expr="timestamp >= 0", output_fields=["vector"], limit=64,
+            )
+            stored = [r.get("vector") for r in rows if r.get("vector") is not None]
+            foreign = sum(1 for v in stored if not same_embedding_space(vector, list(v)))
+        except Exception as e:
+            logger.debug(f"[L4] embedding-space check skipped: {e}")
+            return
+        if foreign:
+            logger.warning(
+                f"[L4] {foreign} of {len(stored)} sampled rows in '{self.collection_name}' were "
+                "embedded by a different embedding provider than the one now configured "
+                "(EMBEDDING_PROVIDER). Their similarity scores are meaningless: drop the "
+                "collection, or re-embed its 'content' field with the current provider."
+            )
+
     def insert_insight(self,
                        session_id:   str,
                        content:      str,
@@ -154,6 +187,8 @@ class MilvusClientImpl:
                 "using zero-vector fallback. Provide real embeddings for meaningful retrieval."
             )
             vector = [0.0] * self._vector_dim
+
+        self._check_embedding_space(vector)
 
         nb_id   = notebook_id or self._default_nb
         cell_id = cell_id     or self._default_cell
@@ -195,6 +230,8 @@ class MilvusClientImpl:
                 "using zero-vector. Results will reflect the nearest zero-point neighbours."
             )
             query_vector = [0.0] * self._vector_dim
+
+        self._check_embedding_space(query_vector)
 
         search_params = {
             "metric_type": "COSINE",
@@ -239,6 +276,86 @@ class MilvusClientImpl:
         except Exception as e:
             logger.error(f"Failed to search Milvus: {e}")
             return []
+
+    # ------------------------------------------------------------------
+    # Deletion
+    # ------------------------------------------------------------------
+    # Unlike insert and search, these raise when Milvus cannot be reached: a
+    # delete that silently did nothing would leave customer memory behind
+    # while the caller believed it gone. Each one selects rows with a query,
+    # checks every row belongs to the scope (memory_scope.owns_key), and
+    # deletes them by primary key, which every Milvus 2.x accepts.
+
+    def _require_collection(self):
+        if not self._collection:
+            raise RuntimeError("Milvus collection not initialized; nothing was deleted")
+        return self._collection
+
+    def _delete_matching(self, expr: str, keep) -> int:
+        """Delete the rows `expr` selects for which keep(session_id) is true,
+        in rounds of at most _DELETE_BATCH rows, until a round finds no row it
+        has not already deleted (a query may still see a row just deleted)."""
+        collection = self._require_collection()
+        done: set = set()
+        for _ in range(_DELETE_MAX_ROUNDS):
+            rows = collection.query(expr=expr, output_fields=["id", "session_id"],
+                                    limit=_DELETE_BATCH, consistency_level="Strong")
+            ids = sorted({int(r["id"]) for r in rows or []
+                          if keep(r.get("session_id"))} - done)
+            if not ids:
+                break
+            collection.delete(f"id in {ids}")
+            done.update(ids)
+        collection.flush()
+        return len(done)
+
+    def delete_keys(self, keys: List[str]) -> int:
+        """Delete every row filed under exactly one of `keys` (session_id)."""
+        wanted = {str(k) for k in keys or [] if k}
+        if not wanted:
+            return 0
+        expr = "session_id in [" + ", ".join(_expr_str(k) for k in sorted(wanted)) + "]"
+        return self._delete_matching(expr, lambda key: key in wanted)
+
+    def delete_thread(self, scope: str, thread_id: str) -> int:
+        """Delete what one thread of this user (scope) learned."""
+        from app.services.memory_scope import thread_key
+        if not scope or not thread_id:
+            return 0
+        return self.delete_keys([thread_key(scope, thread_id)])
+
+    def delete_user(self, scope: str, legacy_keys: Optional[List[str]] = None) -> int:
+        """Delete every row of this user: the bare user key (rows written before
+        the thread scope) and every thread, preference and dataset key built
+        from it. `legacy_keys` are further exact keys -- the user's session
+        ids, under which rows were filed before user scoping and under which
+        execution insights are still filed."""
+        from app.services.memory_scope import owns_key
+        if not scope:
+            return 0
+        # LIKE only narrows the query (its wildcards can match more than the
+        # prefix); owns_key decides what is deleted.
+        deleted = self._delete_matching(f"session_id like {_expr_str(scope + '%')}",
+                                        lambda key: owns_key(key, scope))
+        return deleted + self.delete_keys(legacy_keys or [])
+
+    def delete_by_ids(self, ids: List[int], scope: str) -> int:
+        """Delete single rows by primary key -- only those that belong to scope."""
+        from app.services.memory_scope import owns_key
+        ids = sorted({int(i) for i in ids or []})
+        if not ids or not scope:
+            return 0
+        return self._delete_matching(f"id in {ids}", lambda key: owns_key(key, scope))
+
+
+# A Milvus query returns at most 16384 rows.
+_DELETE_BATCH = 16384
+_DELETE_MAX_ROUNDS = 1000
+
+
+def _expr_str(value: str) -> str:
+    """A string literal for a Milvus boolean expression."""
+    return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
 milvus_client = MilvusClientImpl()

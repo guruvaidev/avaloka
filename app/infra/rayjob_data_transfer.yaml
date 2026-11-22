@@ -7,6 +7,10 @@ spec:
   shutdownAfterJobFinishes: true
   ttlSecondsAfterFinished: 600
 
+  # No credential is ever rendered into this CR or its ConfigMap: database URLs
+  # and bucket keys reach the pods from the per-job Secret __RAYJOB_NAME__-env
+  # (secretKeyRef below), which app/infra/ray_job_runner.py creates owned by
+  # this RayJob right after it is applied, and deletes when the job ends.
   runtimeEnvYAML: |
     pip:
       - pandas
@@ -20,7 +24,6 @@ spec:
     env_vars:
       JOB_ID: "__JOB_ID__"
       PYTHONPATH: "/home/ray"
-      __CLOUD_ENV_VARS__
 
   rayClusterSpec:
     rayVersion: "2.10.0"
@@ -56,6 +59,7 @@ spec:
               env:
                 - name: GOOGLE_APPLICATION_CREDENTIALS
                   value: /var/secrets/google/key.json
+                __SECRET_ENV_REFS__
               volumeMounts:
                 - name: script-volume
                   mountPath: /home/ray/scripts
@@ -72,6 +76,9 @@ spec:
             - name: gcs-sa-key-volume
               secret:
                 secretName: __GCS_SECRET_NAME__
+                # Optional: the job namespace (rbac.rayJobSecretsNamespace) need
+                # not hold a platform GCS key.
+                optional: true
 
     workerGroupSpecs:
       - groupName: small-group
@@ -99,6 +106,7 @@ spec:
                 env:
                   - name: GOOGLE_APPLICATION_CREDENTIALS
                     value: /var/secrets/google/key.json
+                  __SECRET_ENV_REFS__
                 volumeMounts:
                   - name: script-volume
                     mountPath: /home/ray/scripts
@@ -112,6 +120,7 @@ spec:
               - name: gcs-sa-key-volume
                 secret:
                   secretName: __GCS_SECRET_NAME__
+                  optional: true
 
 ---
 apiVersion: v1

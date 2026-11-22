@@ -3,9 +3,11 @@
 The gate is decided by app/core/plan_gate.py from the app/core/editions.py
 matrix (COST gates), so the planner, the API and editions.py always agree:
 
-* self-hosted (AVALOKA_DEPLOYMENT unset): never gated;
-* Avaloka-hosted: only plans whose capabilities include the feature;
-* plan unknown (no user, Supabase lookup failed): allowed (fail open).
+* self-hosted (AVALOKA_DEPLOYMENT=self_hosted, or unset = undeclared): never gated;
+* hosted (avaloka_hosted): only plans whose capabilities include the feature;
+* no user on the request: allowed;
+* hosted, Supabase lookup failed: refused as unavailable (503), never as an
+  upgrade. tests/test_plan_lookup_fail_mode.py covers the full matrix.
 
 The lookup-failure tests use the REAL resolver in app/core/plan_limits.py with
 only the Supabase query (_lookup_plan) replaced, so they certify what
@@ -136,12 +138,14 @@ def test_successful_lookup_is_cached(hosted, lookup):
     assert lookup.calls == ["user-1"]
 
 
-# ------------------------------------------------ fail open (real resolver)
+# --------------------------------------- lookup failure (real resolver)
 
-def test_lookup_failure_fails_open_with_the_real_resolver(hosted, lookup):
+def test_hosted_lookup_failure_is_unavailable_with_the_real_resolver(hosted, lookup):
+    # Was "fails open": a hosted deployment now refuses a premium feature it
+    # cannot check (503), rather than giving it away.
     lookup.table["user-1"] = RuntimeError("supabase down")
     d = plan_gate.check_feature("data_transfer", user_id="user-1")
-    assert d.allowed and d.plan is None
+    assert not d.allowed and d.unavailable and d.plan is None
 
 
 def test_lookup_failure_is_unknown_not_free(lookup):
@@ -180,10 +184,20 @@ def test_disable_switch(hosted, monkeypatch):
     assert plan_gate.check_feature("data_transfer", user_id="u", plan="free").allowed
 
 
-def test_billing_disabled_install_is_not_gated(hosted, lookup, monkeypatch):
+def test_billing_disabled_install_is_not_gated(lookup, monkeypatch):
     monkeypatch.setenv("AVALOKA_EDITION", "oss")
     assert plan_gate.check_feature("model_training", user_id="user-1").allowed
     assert lookup.calls == []
+
+
+def test_declared_hosted_is_billed_whatever_the_edition(hosted, lookup, monkeypatch):
+    # Was "hosted + AVALOKA_EDITION=oss is unbilled": a deployment that declares
+    # itself hosted bills plans; only AVALOKA_PLAN_LIMITS=off turns billing off.
+    monkeypatch.setenv("AVALOKA_EDITION", "oss")
+    lookup.table["user-1"] = "free"
+    assert not plan_gate.check_feature("model_training", user_id="user-1").allowed
+    monkeypatch.setenv("AVALOKA_PLAN_LIMITS", "off")
+    assert plan_gate.check_feature("model_training", user_id="user-1").allowed
 
 
 # ------------------------------------------------------------ upgrade message
@@ -250,11 +264,17 @@ def test_self_hosted_free_user_transfer_passes_the_gate(stop_after_gate, lookup)
     assert "plan_upgrade_required" not in state
 
 
-def test_hosted_transfer_allowed_when_lookup_fails(hosted, stop_after_gate, lookup):
+def test_hosted_transfer_unavailable_when_lookup_fails(hosted, stop_after_gate, lookup):
+    # Was "allowed when the lookup fails": a hosted deployment now refuses the
+    # transfer as unavailable, without asking the user to upgrade.
     lookup.table["user-1"] = RuntimeError("supabase down")
     state = _state()          # no user_plan on the state: resolved from user_id
-    with pytest.raises(_PastGate):
-        planner._handle_initiate_transfer(state, None)
+    try:
+        msg = planner._handle_initiate_transfer(state, None)
+    except _PastGate:
+        msg = None                    # the old fail-open: the transfer went ahead
+    assert msg is not None and msg.startswith("Plan check unavailable")
+    assert "plan_upgrade_required" not in state
 
 
 # ---------------------------------------------------------- model training gate
@@ -341,7 +361,7 @@ def server():
 
 @pytest.mark.parametrize("plan, allowed", [
     ("enterprise", True), ("professional", True), ("Enterprise", True),
-    ("free", False), ("", True), (None, True),    # empty/None = unknown -> fail open
+    ("free", False), ("", True), (None, True),    # no plan and no user -> allowed
 ])
 def test_server_plan_allows_premium_hosted(server, hosted, plan, allowed):
     assert server._plan_allows_premium(plan) is allowed
@@ -374,9 +394,17 @@ def test_require_premium_plan_passes_for_paid(server, hosted, lookup):
     assert asyncio.run(server._require_premium_plan("user-1", "model_inference")) is None
 
 
-def test_require_premium_plan_fails_open_like_the_planner(server, hosted, lookup):
+def test_require_premium_plan_503_when_hosted_lookup_fails(server, hosted, lookup):
+    # Was "fails open like the planner": hosted now answers 503, never an upgrade.
     lookup.table["user-1"] = RuntimeError("supabase down")
-    assert asyncio.run(server._require_premium_plan("user-1", "model_inference")) is None
+    try:
+        asyncio.run(server._require_premium_plan("user-1", "model_inference"))
+        code, detail = None, {}       # the old fail-open: allowed
+    except server.HTTPException as exc:
+        code, detail = exc.status_code, exc.detail
+    assert code == 503
+    assert detail["reason"] == "plan_check_unavailable"
+    assert "plan_upgrade_required" not in str(detail)
 
 
 def test_require_premium_plan_self_hosted_passes(server, lookup):

@@ -42,6 +42,9 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 import pytest
 
 from tests.e2e.conftest import (
+    MCP_CONNECTION_MISSING,
+    MCP_CONNECTION_OWNED,
+    MCP_CONNECTIONS,
     MODE,
     UNAUTH_MESSAGE,
     ApiClient,
@@ -67,6 +70,8 @@ OWNED_SESSION = "session-does-not-exist"
 OWNED_DATASET = "dataset-does-not-exist"
 OWNED_THREAD = "thread-does-not-exist"
 OWNED_TASK = "task-does-not-exist"
+OWNED_CONNECTION = MCP_CONNECTION_OWNED  # also the sweep's {connection_id} sample
+MISSING_CONNECTION = MCP_CONNECTION_MISSING
 # A value that only ever lives inside the owner's session, never in a URL.
 OWNER_SECRET = "code-registry/owner-private-artifact.py"
 
@@ -138,6 +143,40 @@ def _sweep_ids(routes: Iterable[Tuple[str, str, str]]) -> List[str]:
     return [route_id(m, p) for m, p, _ in routes]
 
 
+# Routes that validate the request body before they check auth, so an anonymous
+# caller with an empty body gets 422 and the field schema instead of 401. Each
+# is a strict xfail on its own, so the fix flips them one route at a time.
+# Owned by fix/1.6-auth-before-validation, which answers 401 before the body is
+# read for every mutating route (app/api/auth_gate.py), so none remain.
+AUTH_AFTER_VALIDATION: set[Tuple[str, str]] = set()
+
+
+def _anon_sweep_params() -> List[Any]:
+    params = []
+    for method, template, concrete in _sweep_routes():
+        marks = []
+        if (method, template) in AUTH_AFTER_VALIDATION:
+            marks.append(pytest.mark.xfail(
+                strict=True,
+                raises=AssertionError,
+                reason=(
+                    f"DEFECT E2.05 (low): {method} {template} validates the body before it "
+                    "checks auth, so an anonymous caller gets 422 and the schema, not 401. "
+                    "Owned by fix/1.6-auth-before-validation; remove this route from "
+                    "AUTH_AFTER_VALIDATION when it is fixed."
+                ),
+            ))
+        params.append(pytest.param(method, template, concrete,
+                                   id=route_id(method, template), marks=marks))
+    return params
+
+
+def test_e2_05_auth_after_validation_entries_are_live_routes() -> None:
+    """Each route held as a known 422-before-401 is still served, so the list cannot rot."""
+    live = {(m, p) for m, p, _ in route_inventory()}
+    assert AUTH_AFTER_VALIDATION <= live, sorted(AUTH_AFTER_VALIDATION - live)
+
+
 # Third-party packages the in-memory fake stack does not stand in for. An
 # exception from one of these means "this route needs real infrastructure", so
 # the leg skips; anything else (a TypeError in a handler, say) still fails loudly.
@@ -193,6 +232,15 @@ def _seed_owner_resources() -> None:
         gcs_code_object_key=OWNER_SECRET,
     )
     _seed_thread(OWNED_THREAD, OWNED_SESSION)
+    MCP_CONNECTIONS[OWNED_CONNECTION] = {
+        "id": OWNED_CONNECTION,
+        "user_id": OWNER,
+        "customer_id": "owner-customer",
+        "api_key_ciphertext": OWNER_SECRET,
+        "api_key_iv": "owner-iv",
+        "username_ciphertext": OWNER_SECRET,
+        "username_iv": "owner-iv",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -207,7 +255,7 @@ def test_e2_05_route_inventory_is_populated() -> None:
     assert ("GET", "/datasets") in {(m, p) for m, p, _ in inventory}
 
 
-@pytest.mark.parametrize("method,template,concrete", _sweep_routes(), ids=_sweep_ids(_sweep_routes()))
+@pytest.mark.parametrize("method,template,concrete", _anon_sweep_params())
 @pytest.mark.parametrize("probe,headers", _ANON_PROBES, ids=[p for p, _ in _ANON_PROBES])
 def test_e2_05_anonymous_probe_is_401(
     api: ApiClient,
@@ -399,6 +447,52 @@ def test_e2_08_foreign_resource_never_returns_data(
         f"{route_id(method, template)} -> {resp.status_code} {resp.text[:300]}"
     )
     assert OWNER_SECRET not in resp.text
+
+
+# E2.08b was a strict xfail until hotfix/1.6-mcp-connection-crypto-ownership
+# (ef2609c7): another user's connection answered 403, a missing one 404.
+@pytest.mark.parametrize("action", ["encrypt", "decrypt"])
+def test_e2_08b_foreign_mcp_connection_is_indistinguishable_from_missing(
+    api: ApiClient, action: str
+) -> None:
+    """Another user's connection id gets exactly the response a nonexistent id gets."""
+    _requires_hermetic_state()
+    _seed_owner_resources()
+
+    foreign = api.post(f"/api/mcp-connections/{OWNED_CONNECTION}/{action}", user=INTRUDER, json={})
+    missing = api.post(f"/api/mcp-connections/{MISSING_CONNECTION}/{action}", user=INTRUDER, json={})
+
+    assert missing.status_code == 404, f"missing id -> {missing.status_code} {missing.text[:200]}"
+    assert OWNER_SECRET not in foreign.text
+    assert (foreign.status_code, foreign.json()) == (missing.status_code, missing.json()), (
+        f"foreign id -> {foreign.status_code} {foreign.text[:200]}; "
+        f"missing id -> {missing.status_code} {missing.text[:200]}"
+    )
+
+
+def test_e2_08b_ownership_check_sees_the_fake_row(api: ApiClient) -> None:
+    """Control for E2.08b: the fake row is real enough that its owner passes the
+    ownership check and the intruder is refused -- so the 403 above is the check
+    at work, not a broken fake."""
+    _requires_hermetic_state()
+    _seed_owner_resources()
+
+    import asyncio
+
+    from fastapi import HTTPException
+
+    import app.api.server as server
+
+    row = asyncio.run(server._mcp_conn_owned_row(OWNED_CONNECTION, OWNER))
+    assert row["id"] == OWNED_CONNECTION and row["user_id"] == OWNER
+
+    with pytest.raises(HTTPException) as refused:
+        asyncio.run(server._mcp_conn_owned_row(OWNED_CONNECTION, INTRUDER))
+    assert refused.value.status_code in (403, 404)
+
+    with pytest.raises(HTTPException) as missing:
+        asyncio.run(server._mcp_conn_owned_row(MISSING_CONNECTION, INTRUDER))
+    assert missing.value.status_code == 404
 
 
 def test_e2_08_pins_orphan_thread_history_is_an_empty_200(api: ApiClient) -> None:

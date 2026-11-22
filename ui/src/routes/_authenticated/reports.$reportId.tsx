@@ -3,9 +3,7 @@ import { useMemo, useState } from "react";
 import {
   ArrowLeft,
   Bell01,
-  SearchLg,
   Copy01,
-  Stars02,
 } from "@untitledui/icons";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
@@ -22,6 +20,8 @@ import { dashboardFromVizConfig, type DashboardWidget } from "@/lib/api/project-
 import { fetchReportById } from "@/lib/reports";
 import { toast } from "sonner";
 import { PlanGate } from "@/components/dashboard/PlanGate";
+import { usePlanFeatures } from "@/lib/use-plan-features";
+import { InlineMarkdown } from "@/components/analysis/ChartCarousel";
 
 
 export const Route = createFileRoute("/_authenticated/reports/$reportId")({
@@ -42,7 +42,7 @@ export const Route = createFileRoute("/_authenticated/reports/$reportId")({
     ],
   }),
   component: () => (
-    <PlanGate>
+    <PlanGate capability="reports">
       <ReportDetailPage />
     </PlanGate>
   ),
@@ -192,7 +192,6 @@ function insightsFromWidget(widget: DashboardWidget): string[] {
 function ReportDetailPage() {
   const navigate = useNavigate();
   const { reportId } = Route.useParams();
-  const [query, setQuery] = useState("");
   
   const [shareOpen, setShareOpen] = useState(false);
   const [commentsOpen, setCommentsOpen] = useState(false);
@@ -203,8 +202,9 @@ function ReportDetailPage() {
     queryFn: () => fetchReportById(reportId),
   });
 
-  // Everyone with access to this route can comment. Only the report creator
-  // may share it with others.
+  // Commenting is Professional or higher (owner ruling 2026-11-01); the server
+  // refuses it too. Only the report creator may share the report with others.
+  const { canComment } = usePlanFeatures();
   const { data: currentUserId } = useQuery({
     queryKey: ["auth", "user-id"],
     queryFn: async () => {
@@ -219,7 +219,6 @@ function ReportDetailPage() {
     report?.created_by_id ??
     null;
   const canShare = !!(currentUserId && creatorId && currentUserId === creatorId);
-  const canComment = true;
 
 
 
@@ -241,8 +240,8 @@ function ReportDetailPage() {
 
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-primary text-primary">
-      <header className="flex items-center justify-between gap-3 border-b border-secondary bg-primary px-6 py-3">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-primary text-primary dark:bg-[#0b0d10]">
+      <header className="flex items-center justify-between gap-3 border-b border-secondary bg-primary px-6 py-3 dark:border-white/10 dark:bg-[#111418]">
         <div className="flex items-center gap-3">
           <ButtonUtility
             size="sm"
@@ -254,7 +253,7 @@ function ReportDetailPage() {
           <div className="leading-tight">
             <div className="flex items-center gap-2">
               <h1 className="text-md font-semibold text-primary">{title}</h1>
-              <span className="inline-flex items-center rounded-full bg-success-secondary px-2 py-0.5 text-xs font-medium text-fg-success-primary ring-1 ring-inset ring-success-subtle">
+              <span className="inline-flex items-center rounded-full bg-success-secondary px-2 py-0.5 text-xs font-medium text-fg-success-primary ring-1 ring-inset ring-success-subtle dark:bg-green-500/15 dark:text-green-300 dark:ring-green-500/25">
                 {datasetLabel}
               </span>
             </div>
@@ -302,19 +301,6 @@ function ReportDetailPage() {
 
       <div className="flex flex-1 overflow-hidden">
         <div className="relative flex flex-1 flex-col overflow-hidden">
-          <div className="flex items-center justify-end gap-2 border-b border-secondary bg-primary px-6 py-3">
-            <div className="w-[280px]">
-              <Input
-                aria-label="Search"
-                placeholder="Search"
-                size="sm"
-                icon={SearchLg}
-                shortcut="⌘K"
-                value={query}
-                onChange={setQuery}
-              />
-            </div>
-          </div>
           <div className="flex-1 overflow-y-auto">
 
 
@@ -322,11 +308,11 @@ function ReportDetailPage() {
           <p className="mb-2 text-right text-xs text-tertiary">Thursday 10:16am</p>
 
           {isPending ? (
-            <div className="mt-4 rounded-xl border border-secondary bg-secondary/30 p-4 text-sm text-secondary">
+            <div className="mt-4 rounded-xl border border-secondary bg-secondary/30 p-4 text-sm text-secondary dark:border-white/10 dark:bg-[#111418]">
               Loading report…
             </div>
           ) : widgets.length === 0 ? (
-            <div className="mt-4 rounded-xl border border-secondary bg-secondary/30 p-4 text-sm text-secondary">
+            <div className="mt-4 rounded-xl border border-secondary bg-secondary/30 p-4 text-sm text-secondary dark:border-white/10 dark:bg-[#111418]">
               No charts or insights available for this report.
             </div>
           ) : (
@@ -336,18 +322,18 @@ function ReportDetailPage() {
                 return (
                   <div
                     key={widget.id}
-                    className="rounded-xl border border-secondary bg-primary p-4"
+                    className="rounded-xl border border-secondary bg-primary p-4 dark:border-white/10 dark:bg-[#111418]"
                   >
                     <p className="text-sm font-semibold text-primary">{widget.title}</p>
                     <div className="mt-3 min-h-[220px]">
                       <DashboardMiniChart widget={widget} samples={samples} height={220} />
                     </div>
                     {widgetInsights.length > 0 && (
-                      <div className="mt-4 rounded-lg border border-secondary bg-secondary/30 p-3">
+                      <div className="mt-4 rounded-lg border border-secondary bg-secondary/30 p-3 dark:border-white/10 dark:bg-[#171b20]">
                         <p className="text-xs font-semibold text-primary">Key Insights</p>
                         <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-secondary">
                           {widgetInsights.map((insight, index) => (
-                            <li key={index}>{insight}</li>
+                            <li key={index}><InlineMarkdown content={insight} /></li>
                           ))}
                         </ul>
                       </div>
@@ -395,9 +381,6 @@ function ReportDetailPage() {
                 </svg>
               </button>
             )}
-            <button type="button" className="hover:text-secondary" aria-label="Insights">
-              <Stars02 className="size-4" />
-            </button>
           </div>
 
           {insightCommentOpen && canComment && (

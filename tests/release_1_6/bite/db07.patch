@@ -1,0 +1,14 @@
+diff --git a/app/api/server.py b/app/api/server.py
+index c61b6d4a..8e465ead 100644
+--- a/app/api/server.py
++++ b/app/api/server.py
+@@ -9029,9 +9029,6 @@ async def db_tables_to_analysis(request: Request, response: Response, body: Tabl
+                         await save_session(session_id, session_data)
+                 except HTTPException as e:
+                     logger.warning("[db-tables] thread create failed (soft): %s", e.detail)
+-            elif thread_id:
+-                session_data["thread_id"] = thread_id
+-                await save_session(session_id, session_data)
+ 
+             dataset_ids.append(dsid)
+             dataset_session_map[dsid] = session_id

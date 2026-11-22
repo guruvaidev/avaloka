@@ -1,0 +1,13 @@
+diff --git a/ui/src/components/dashboard/auto-insights/AutoInsightsPanels.tsx b/ui/src/components/dashboard/auto-insights/AutoInsightsPanels.tsx
+index 940d8474..65e63d10 100644
+--- a/ui/src/components/dashboard/auto-insights/AutoInsightsPanels.tsx
++++ b/ui/src/components/dashboard/auto-insights/AutoInsightsPanels.tsx
+@@ -89,7 +89,7 @@ function chartKind(slide: Slide, config: any) {
+   return `Line · trend${range}`;
+ }
+ export function InsightNavigator({ slides, index, config, onSelect }: { slides: Slide[]; index: number; config: any; onSelect: (index: number) => void }) {
+-  return <nav className="ai-navigator ai-surface" aria-label="Insight navigator"><h3 className="ai-eyebrow">INSIGHTS · {slides.length}</h3><div className="ai-nav-list">{slides.map((slide, position) => <Button color="tertiary" key={`${slide.title}-${position}`} className={`ai-control ai-nav-item ${index === position ? 'ai-selected' : ''}`} aria-current={index === position ? "true" : undefined} onPress={() => onSelect(position)}><span className="ai-nav-number">{position + 1}</span><span className="ai-nav-copy"><strong>{slide.title}</strong><small>{chartKind(slide, config)}</small></span></Button>)}</div></nav>;
++  return <nav className="ai-navigator ai-surface" aria-label="Insight navigator"><h3 className="ai-eyebrow">INSIGHTS · {slides.length}</h3><div className="ai-nav-list">{slides.map((slide, position) => <Button color="tertiary" key={`${slide.title}-${position}`} className={`ai-control ai-nav-item ${index === position ? 'ai-selected' : ''}`} aria-current={index === position ? "true" : undefined} onPress={() => onSelect(position)}><span className="ai-nav-number">{position + 1}</span><span className="ai-nav-copy"><strong></strong><small>{chartKind(slide, config)}</small></span></Button>)}</div></nav>;
+ }
+ export function ChartNavigation({ index, total, onSelect }: { index: number; total: number; onSelect: (index: number) => void }) {
+   return <><Button color="secondary" className="ai-control ai-arrow ai-previous" aria-label="Previous insight" isDisabled={index === 0} iconLeading={ChevronLeft} onPress={() => onSelect(index - 1)} /><Button color="primary" className="ai-control ai-arrow ai-next" aria-label="Next insight" isDisabled={index >= total - 1} iconLeading={ChevronRight} onPress={() => onSelect(index + 1)} /><div className="ai-progress"><div className="ai-dots">{Array.from({ length: total }, (_, position) => <Button color="tertiary" key={position} className={`ai-control ai-dot ${position === index ? 'ai-dot-active' : ''}`} aria-label={`Show insight ${position + 1}`} aria-current={position === index ? "true" : undefined} onPress={() => onSelect(position)} />)}</div><span>{index + 1} of {total} · use ← → keys</span></div></>;

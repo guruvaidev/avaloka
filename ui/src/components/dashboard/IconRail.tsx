@@ -18,13 +18,15 @@ import {
   Diamond01,
 } from "@untitledui/icons";
 import { useActivePlan } from "@/lib/use-active-plan";
+import { normalizePlan, planIncludes } from "@/lib/edition-comparison";
+import type { EditionPlan } from "@/lib/edition-matrix.gen";
 import { Button as AriaButton } from "react-aria-components";
 import { ButtonUtility } from "@/components/base/buttons/button-utility";
 import { Avatar } from "@/components/base/avatar/avatar";
 import { Dropdown } from "@/components/base/dropdown/dropdown";
 import { Logomark } from "@/components/brand/Logomark";
 import { cx } from "@/lib/utils/cx";
-import { useNavigate, useRouterState } from "@tanstack/react-router";
+import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { supabase } from "@/integrations/supabase/client";
 import { useProjectsPerms, useDashboardPerms } from "@/lib/use-user-mgmt-perms";
 
@@ -32,9 +34,10 @@ import { ReportIcon } from "./icons/ReportIcon";
 import { ConfigurationsIcon } from "./icons/ConfigurationsIcon";
 import { NotificationsPopover } from "./NotificationsPopover";
 import { getCachedAuthUser } from "@/lib/auth-user";
-import { SUPPORT_ADMIN_EMAIL } from "@/lib/support-admin";
-import { Server } from "lucide-react";
-import { canUseRayJobs, rayLimitsOptions } from "@/lib/ray-jobs";
+import { amISupportAdmin } from "@/lib/support-tickets.functions";
+import { LockKeyhole, Server, Zap } from "lucide-react";
+import { useRayDashboardLauncher } from "@/lib/use-ray-dashboard";
+import { Tooltip as RailTooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip";
 
 type RailItem = { id: string; icon: FC<{ className?: string }>; label: string };
 
@@ -59,16 +62,20 @@ const bottomItems: RailItem[] = [
   { id: "upgrade", icon: Diamond01, label: "Upgrade" },
 ];
 
-const FREE_LOCKED_IDS = new Set(["projects", "reports", "sources", "settings"]);
+const FREE_LOCKED_IDS = new Set(["projects", "sources"]);
 
-/** Ray jobs stays visible but locked unless limits confirm data transfer (loading/error = locked). */
-export function railLockedIds(isFree: boolean, dataTransferUnlocked: boolean): Set<string> {
+/** Ray dashboard stays visible but locked unless limits confirm data transfer (loading/error = locked). */
+/** Reports is locked from the edition matrix's `reports` capability, as its route's PlanGate is. */
+export function railLockedIds(isFree: boolean, dataTransferUnlocked = true, plan: EditionPlan | null = null): Set<string> {
   const ids = new Set<string>(isFree ? FREE_LOCKED_IDS : []);
-  if (!dataTransferUnlocked) ids.add("ray-jobs");
+  if (!dataTransferUnlocked) ids.add("ray-dashboard");
+  if (plan !== null && !planIncludes(plan, "reports")) ids.add("reports");
   return ids;
 }
 
 // Default destinations for rail items. Keeps every page's behavior consistent.
+// "ray-dashboard" is not here: it opens the Ray dashboard instead of navigating.
+// "inference" is not here either: RailGroup renders it as a <Link to="/inference">.
 const DEFAULT_NAV: Record<string, string> = {
   chat: "/proanalysis",
   projects: "/dashboard",
@@ -79,11 +86,10 @@ const DEFAULT_NAV: Record<string, string> = {
   settings: "/configurations",
   upgrade: "/settings",
   "db-config": "/db-tables",
-  "ray-jobs": "/ray-jobs",
 };
 
 function activeFromPath(pathname: string): string | undefined {
-  if (pathname.startsWith("/ray-jobs")) return "ray-jobs";
+  if (pathname.startsWith("/inference")) return "inference";
   if (pathname.startsWith("/scheduled-analysis") || pathname.startsWith("/proanalysis/scheduled-analysis")) return "history";
   if (pathname.startsWith("/proanalysis")) return "chat";
   if (pathname.startsWith("/analysis")) return "chat";
@@ -115,11 +121,11 @@ export function IconRail({
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const resolvedActive = active ?? activeFromPath(pathname);
   const isAnalysisProject = variant === "analysis-project";
-  const rayLimits = useQuery({ ...rayLimitsOptions, enabled: !isAnalysisProject });
   const planQ = useActivePlan();
-  // Professional/Enterprise unlock Ray jobs; otherwise the limits flag decides (loading/error = locked).
-  const rayUnlocked = canUseRayJobs(planQ.data?.plan, rayLimits.data?.data);
-  const workspaceItems: RailItem[] = [...middleItems, { id: "ray-jobs", icon: Server, label: "Ray jobs" }];
+  const ray = useRayDashboardLauncher();
+  const workspaceItems: RailItem[] = ray.visible
+    ? [...middleItems, { id: "ray-dashboard", icon: Server, label: "Ray dashboard" }, { id: "inference", icon: Zap, label: "Inference" }]
+    : [...middleItems, { id: "inference", icon: Zap, label: "Inference" }];
   const projectsPerms = useProjectsPerms();
   const dashboardPerms = useDashboardPerms();
   const visibleAnalysisProjectItems = analysisProjectItems.filter(
@@ -141,13 +147,18 @@ export function IconRail({
   );
   const visibleBottomItems = bottomItems.filter((item) => {
     if (item.id === "upgrade" && isEnterprise) return false;
-    if (item.id === "settings" && isFree) return false;
     return true;
   });
 
-  const lockedIds = railLockedIds(isFree, rayUnlocked);
+  const rayUnlocked = !ray.locked;
+  const lockedIds = railLockedIds(isFree, rayUnlocked, normalizePlan(tier));
+  if (ray.locked) lockedIds.add("ray-dashboard");
 
   const handleClick = (id: string) => {
+    if (id === "ray-dashboard") {
+      ray.open();
+      return;
+    }
     // Free users can now OPEN premium sections (the diamond badge still shows);
     // individual actions inside each section prompt to upgrade instead.
     onItemClick?.(id);
@@ -158,7 +169,8 @@ export function IconRail({
 
 
   return (
-    <aside className="flex h-full w-[64px] shrink-0 flex-col items-center border-r border-secondary bg-primary py-3">
+    <aside className="my-3 ml-3 flex h-[calc(100%-1.5rem)] w-[64px] shrink-0 flex-col items-center rounded-l-xl rounded-r-none border border-r-0 border-secondary bg-primary py-3 dark:border-white/10 dark:bg-[#1A1A1E]">
+      {ray.dialog}
       {!isAnalysisProject ? (
       <button
         type="button"
@@ -221,9 +233,11 @@ export function ProfileAvatarMenu() {
     gcTime: 30 * 60_000,
     queryFn: async () => {
       const user = await getCachedAuthUser();
-      const email = String(user?.email ?? "").trim().toLowerCase();
-      const isSupportAdmin = email === SUPPORT_ADMIN_EMAIL;
       if (!user) return { name: null as string | null, avatar: null as string | null, isSupportAdmin: false };
+      // Support-desk admins are configured on the server (ADMIN_EMAILS).
+      const isSupportAdmin = await amISupportAdmin()
+        .then((r) => Boolean(r?.isAdmin))
+        .catch(() => false);
 
       const { data: profile } = await supabase
         .from("profiles")
@@ -323,6 +337,26 @@ export function RailGroup({
       {items.map((item) => {
         const isActive = active === item.id;
         const isLocked = lockedIds?.has(item.id) ?? false;
+        if (item.id === "inference") {
+          return (
+            <TooltipProvider key={item.id}>
+              <RailTooltip>
+                <TooltipTrigger asChild>
+                  <Link
+                    to="/inference"
+                    data-rail-item="inference"
+                    aria-label="Inference"
+                    aria-current={isActive ? "page" : undefined}
+                    className={cx("inference-rail-link text-fg-quaternary outline-focus-ring focus-visible:outline-2", isActive && "inference-rail-active")}
+                  >
+                    <Zap className="size-[18px]" />
+                  </Link>
+                </TooltipTrigger>
+                <TooltipContent side="right">Inference</TooltipContent>
+              </RailTooltip>
+            </TooltipProvider>
+          );
+        }
         return (
           <div key={item.id} className="relative" data-rail-item={item.id} data-locked={isLocked || undefined}>
             <ButtonUtility
@@ -330,10 +364,14 @@ export function RailGroup({
               color="tertiary"
               icon={item.icon}
               aria-current={isActive ? "page" : undefined}
-              tooltip={isLocked ? `${item.label} — Available on Professional` : item.label}
+              tooltip={isLocked && item.id !== "ray-dashboard" ? `${item.label} — Available on Professional` : item.label}
               tooltipPlacement="right"
               onClick={() => onItemClick?.(item.id)}
-              className={cx("size-10 *:data-icon:size-[18px]", isActive && "bg-brand-primary_alt text-brand-secondary ring-1 ring-brand ring-inset hover:bg-brand-primary_alt hover:text-brand-secondary")}
+              className={cx(
+                "size-10 *:data-icon:size-[18px]",
+                item.id === "sources" && "[&_[data-icon]]:text-[#51525C]",
+                isActive && "bg-brand-primary_alt text-brand-secondary ring-1 ring-brand ring-inset hover:bg-brand-primary_alt hover:text-brand-secondary",
+              )}
             />
             {isActive ? (
               <span aria-hidden="true" className="pointer-events-none absolute -left-3 top-1 h-8 w-0.5 rounded-r bg-brand-solid" />
@@ -343,7 +381,7 @@ export function RailGroup({
                 aria-hidden="true"
                 className="pointer-events-none absolute -right-1 -top-1 flex size-3.5 items-center justify-center rounded-full bg-brand-solid text-primary_on-brand ring-2 ring-bg-primary"
               >
-                <Diamond01 className="size-2.5" />
+                {item.id === "ray-dashboard" ? <LockKeyhole className="size-2.5" /> : <Diamond01 className="size-2.5" />}
               </span>
             ) : null}
           </div>

@@ -8,6 +8,7 @@ import { analysesKey } from "@/lib/analyses";
 import { createAnalysis as persistCreateAnalysis } from "@/lib/analysis-messages";
 import { projectDashboardKey } from "@/lib/api/project-dashboard";
 import { backendApi, type UploadLimits } from "@/lib/api/backendApi";
+import { PLAN_CHECK_UNAVAILABLE_MESSAGE, PLAN_CHECK_UNAVAILABLE_TITLE } from "@/lib/plan-check";
 import { setPendingDashboardAnalysis } from "@/lib/pending-dashboard-analysis";
 import { cx } from "@/lib/utils/cx";
 import { finishAutoInsightsBot, startAutoInsightsBot } from "@/lib/auto-insights-bot";
@@ -195,7 +196,8 @@ export function UploadModal({
     queryKey: ["upload-limits"],
     queryFn: () => backendApi.getUploadLimits(),
     enabled: open,
-    staleTime: 5 * 60 * 1000,
+    // An unchecked plan is never cached: the next attempt asks again.
+    staleTime: (query) => (query.state.data?.plan_check_unavailable ? 0 : 5 * 60 * 1000),
     retry: false,
   });
 
@@ -206,23 +208,30 @@ export function UploadModal({
     maxTotalBytes: typeof limits?.max_total_bytes === "number" ? limits.max_total_bytes : FALLBACK_MAX_BYTES,
     maxFiles: typeof limits?.max_files === "number" ? limits.max_files : null,
     batchJobs: limits?.batch_jobs === true,
+    /** The plan could not be checked: a limit hit is not an upgrade case. */
+    planCheckUnavailable: limits?.plan_check_unavailable === true,
   };
   const maxFileMb =
     typeof limits?.max_file_mb === "number" ? limits.max_file_mb : toMb(effLimits.maxFileBytes);
   const maxTotalMb =
     typeof limits?.max_total_mb === "number" ? limits.max_total_mb : toMb(effLimits.maxTotalBytes);
 
+  // Shown "try again": make sure the next attempt re-checks the plan.
+  useEffect(() => {
+    if (limitExceeded?.title === PLAN_CHECK_UNAVAILABLE_TITLE) {
+      void queryClient.invalidateQueries({ queryKey: ["upload-limits"] });
+    }
+  }, [limitExceeded, queryClient]);
+
   /** Pre-upload plan limit check. Returns the dialog to show, or null. */
   const checkLimits = (files: File[]): LimitDialog | null => {
-    const { plan, maxFileBytes, maxTotalBytes, maxFiles, batchJobs } = effLimits;
+    const { plan, maxFileBytes, maxTotalBytes, maxFiles, batchJobs, planCheckUnavailable } = effLimits;
     const label = planLabel(plan);
     const isFree = String(plan).toLowerCase() === "free" || !batchJobs;
-    const upgradeDialog = (message: string): LimitDialog => ({
-      kind: "upgrade",
-      title: `${label} plan limit reached`,
-      message,
-      showUpgrade: isFree,
-    });
+    const upgradeDialog = (message: string): LimitDialog =>
+      planCheckUnavailable
+        ? { kind: "upgrade", title: PLAN_CHECK_UNAVAILABLE_TITLE, message: PLAN_CHECK_UNAVAILABLE_MESSAGE, showUpgrade: false }
+        : { kind: "upgrade", title: `${label} plan limit reached`, message, showUpgrade: isFree };
     const cloudDialog: LimitDialog = {
       kind: "cloud",
       title: "Load large files from cloud storage",
@@ -395,12 +404,11 @@ export function UploadModal({
             : typeof obj?.message === "string" && obj.message
               ? obj.message
               : fallbackMessages[reason] ?? `The file(s) exceed the ${label} plan limit.`;
-        setLimitExceeded({
-          kind: "upgrade",
-          title: `${label} plan limit reached`,
-          message,
-          showUpgrade: obj?.upgrade_available === true,
-        });
+        setLimitExceeded(
+          effLimits.planCheckUnavailable
+            ? { kind: "upgrade", title: PLAN_CHECK_UNAVAILABLE_TITLE, message: PLAN_CHECK_UNAVAILABLE_MESSAGE, showUpgrade: false }
+            : { kind: "upgrade", title: `${label} plan limit reached`, message, showUpgrade: obj?.upgrade_available === true },
+        );
         setProgress(0);
         return;
       }
@@ -790,7 +798,7 @@ export function UploadModal({
             </p>
             <p className="mt-1 text-xs text-tertiary">
               {limits
-                ? `CSV, Excel or JSON (max. ${maxFileMb} MB per file, ${maxTotalMb} MB total)`
+                ? `CSV, Excel or JSON (max. ${maxFileMb} MB per file)`
                 : "CSV, Excel or JSON (max. 100MB)"}
             </p>
           </div>

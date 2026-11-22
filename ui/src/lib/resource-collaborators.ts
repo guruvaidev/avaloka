@@ -2,6 +2,7 @@
 // Kept separate from chat, comments, and insight features.
 
 import { supabase } from "@/integrations/supabase/client";
+import { fetchDisplayProfiles } from "@/lib/display-profiles";
 import { getCachedAuthUser } from "@/lib/auth-user";
 
 export type ResourceType = "project" | "analysis" | "report";
@@ -354,11 +355,9 @@ export async function inviteAppUsersToResource(input: {
         .map((u) => u.auth_user_id)
         .filter((v): v is string => !!v);
       if (!authIds.length) return;
-      const { data: profs } = await supabase
-        .from("profiles")
-        .select("id,user_id")
-        .in("user_id", authIds);
-      const recipients = ((profs ?? []) as { id: string }[]).map((p) => p.id);
+      // Collaborators may be in other organisations, whose profile rows are not
+      // readable; the display lookup maps auth user ids to profile ids.
+      const recipients = (await fetchDisplayProfiles(supabase, authIds)).map((p) => p.id);
       if (!recipients.length) return;
       const { notifyMany } = await import("@/lib/notifications");
       await notifyMany(recipients, {

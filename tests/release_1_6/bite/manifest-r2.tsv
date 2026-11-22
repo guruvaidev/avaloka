@@ -1,0 +1,15 @@
+UI-B23	revert	vitest	r2-ui-b23-a.patch	tests/release_1_6/settled-settings.test.tsx -t UI-B23:.the.Profile..company..tab.is.not
+UI-B23	revert	vitest	r2-ui-b23-b.patch	tests/release_1_6/settled-settings.test.tsx -t UI-B23:.the.Profile..company..tab.is.offered
+UI-B24	revert	vitest	r2-ui-b24.patch	tests/release_1_6/settled-settings.test.tsx -t UI-B24:
+UI-B26	revert	vitest	r2-ui-b26.patch	tests/release_1_6/settled-billing.test.tsx -t UI-B26:
+UI-B27	revert	vitest	r2-ui-b27-a.patch	tests/release_1_6/settled-billing.test.tsx -t UI-B27:.choosing
+UI-B27	revert	vitest	r2-ui-b27-b.patch	tests/release_1_6/settled-billing.test.tsx -t UI-B27:.the.shared
+BG03	revert	vitest	r2-bg03.patch	tests/release_1_6/settled-auto-insights.test.tsx -t BG03:
+BG32	revert	vitest	r2-bg32.patch	tests/release_1_6/settled-auto-insights.test.tsx -t BG32:
+UI-B09	revert	vitest	r2-ui-b09.patch	tests/release_1_6/settled-auto-insights.test.tsx -t UI-B09:
+BG04	fix	vitest	r2-bg04-fix.patch	tests/release_1_6/settled-auto-insights.test.tsx -t BG04
+BG46	revert	vitest	r2-bg46-a.patch	tests/release_1_6/settled-layout-copy.test.tsx -t BG46:.at.common
+BG46	revert	vitest	r2-bg46-b.patch	tests/release_1_6/settled-layout-copy.test.tsx -t BG46:.dragging
+BG27	revert	vitest	r2-bg27.patch	tests/release_1_6/settled-layout-copy.test.tsx -t BG27:
+BG25	revert	vitest	r2-bg25.patch	tests/release_1_6/settled-layout-copy.test.tsx -t BG25:
+UI-B19	revert	vitest	r2-ui-b19.patch	tests/release_1_6/settled-layout-copy.test.tsx -t UI-B19:

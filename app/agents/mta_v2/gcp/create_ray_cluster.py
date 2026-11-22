@@ -41,7 +41,8 @@ def create_ray_cluster(
     _assert_worker_resources(worker_resources)
 
     head_spec = {
-        "serviceType": "LoadBalancer",
+        # ClusterIP: the head is reached only from inside the cluster (API/worker pods).
+        "serviceType": "ClusterIP",
         "rayStartParams": {
             "dashboard-host": "0.0.0.0",
             # Head node contributes no task CPUs — workers handle all workloads

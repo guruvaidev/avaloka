@@ -5,7 +5,7 @@
 | **Applies to** | the `avaloka` command (package `avaloka/`, version 1.0.0) on `main` |
 | **Scope** | the nine CLI commands, the mission runner and fireflies, workload sizing, source resolution, deployment gates, the serving plan, the chat session, packaging and the process boundary |
 | **Type** | test plan **with** test code. Case status: EXISTS (file::test) = already automated before this plan; NEW = implemented by this plan in `tests/avaloka/test_cli_plan_*.py`; GATED = implemented, skips unless its substrate is present |
-| **Derived from** | *Avaloka on Kubernetes — Test Plan* (PR #229). Same five-layer, cheapest-first structure, same hermetic invariant, same "pin every finding with a test" rule, re-targeted from the Helm chart to the CLI |
+| **Derived from** | *Avaloka on Kubernetes — Test Plan*. Same five-layer, cheapest-first structure, same hermetic invariant, same "pin every finding with a test" rule, re-targeted from the Helm chart to the CLI |
 
 ---
 

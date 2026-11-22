@@ -1,0 +1,12 @@
+diff --git a/ui/src/components/analysis/ChartCarousel.tsx b/ui/src/components/analysis/ChartCarousel.tsx
+--- a/ui/src/components/analysis/ChartCarousel.tsx
++++ b/ui/src/components/analysis/ChartCarousel.tsx
+@@ -189,7 +189,7 @@ export function ChartCarousel({
+                         title="Maximize chart"
+                         onClick={(event) => {
+                           event.stopPropagation();
+-                          setFullscreenOpen(true);
++                          setFullscreenOpen(false);
+                         }}
+                         className="ml-auto rounded-md border border-secondary bg-primary p-1.5 text-fg-secondary shadow-sm transition hover:bg-secondary hover:text-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600"
+                       >

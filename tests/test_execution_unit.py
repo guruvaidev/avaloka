@@ -85,7 +85,7 @@ def test_get_service_details_fails_when_ip_or_port_missing():
             {
                 "step_name": "Get infra-agent-service IP/Port",
                 "status": "SUCCESS",
-                "details": {"ip": "1.2.3.4"},  # port missing
+                "details": {"ip": "203.0.113.4"},  # port missing
             }
         ],
     }
@@ -101,13 +101,13 @@ def test_get_service_details_success_extracts_ip_port():
             {
                 "step_name": "Get infra-agent-service IP/Port",
                 "status": "SUCCESS",
-                "details": {"ip": "1.2.3.4", "port": "8080"},
+                "details": {"ip": "203.0.113.4", "port": "8080"},
             }
         ],
     }
     out = exec_mod.get_service_details(infra)
     assert out["status"] == "success"
-    assert out["service_ip"] == "1.2.3.4"
+    assert out["service_ip"] == "203.0.113.4"
     assert out["service_port"] == "8080"
 
 
@@ -148,7 +148,7 @@ df2.to_csv('{out_forward}', index=False)
         def json(self):
             return {"status": "success", "output": None}
 
-    def fake_post(url, json, timeout):
+    def fake_post(url, json, timeout, headers=None):
         captured["url"] = url
         captured["payload"] = json
         captured["timeout"] = timeout
@@ -196,7 +196,7 @@ def test_execute_code_on_k8s_skips_data_payload_if_input_file_missing(tmp_path, 
 
     captured = {}
 
-    def fake_post(url, json, timeout):
+    def fake_post(url, json, timeout, headers=None):
         captured["payload"] = json
         return _Resp()
 
@@ -242,28 +242,19 @@ def test_execution_agent_node_returns_failed_when_no_code():
     assert new_state["execution_result"]["status"] == "failed"
     assert "No code provided for execution" in new_state["messages"][-1].content
 
-def test_execution_agent_node_reprovisions_and_parses_csv_and_sets_file_data(monkeypatch):
-    # infra not provisioned -> should call infra_agent_node()
+def test_execution_agent_node_uses_the_configured_service_and_parses_csv_and_sets_file_data(monkeypatch):
+    # Was: infra not provisioned -> reprovision GCP python-docker. Running an
+    # analysis no longer provisions anything; the chart-configured service is used.
     state = _base_state(
         coder_definition={"code": "```python\nprint('hi')\n```"},
         infrastructure_provisioned={"status": "not_provisioned", "details": []},
         data_source_location="in.csv",
         output_location="out.csv",
     )
+    monkeypatch.setenv("AVALOKA_EXECUTE_SERVICE_URL", "http://203.0.113.4:8080")
 
     def fake_infra_agent_node(s):
-        s = s.copy()
-        s["infrastructure_provisioned"] = {
-            "status": "provisioned",
-            "details": [
-                {
-                    "step_name": "Get infra-agent-service IP/Port",
-                    "status": "SUCCESS",
-                    "details": {"ip": "1.2.3.4", "port": "8080"},
-                }
-            ],
-        }
-        return s
+        raise AssertionError("execution provisioned infrastructure")
 
     monkeypatch.setattr(exec_mod, "infra_agent_node", fake_infra_agent_node)
 
@@ -305,7 +296,7 @@ def test_execution_agent_node_success_but_non_csv_output_message(monkeypatch):
                 {
                     "step_name": "Get infra-agent-service IP/Port",
                     "status": "SUCCESS",
-                    "details": {"ip": "1.2.3.4", "port": "8080"},
+                    "details": {"ip": "203.0.113.4", "port": "8080"},
                 }
             ],
         },
@@ -331,7 +322,7 @@ def test_execution_agent_node_failure_reports_short_reason(monkeypatch):
                 {
                     "step_name": "Get infra-agent-service IP/Port",
                     "status": "SUCCESS",
-                    "details": {"ip": "1.2.3.4", "port": "8080"},
+                    "details": {"ip": "203.0.113.4", "port": "8080"},
                 }
             ],
         },

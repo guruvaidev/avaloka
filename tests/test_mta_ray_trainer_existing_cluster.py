@@ -68,6 +68,10 @@ def _successful_result() -> dict:
 
 
 def test_existing_cluster_submits_without_provisioning_or_gcp_key(monkeypatch):
+    # This drives the dashboard-API ("direct") path. Since PR-1c the default is a
+    # RayJob CR on the shared cluster (MTA_RAY_SUBMISSION_MODE=kuberay), covered by
+    # tests/test_trainfer_rayjob.py.
+    monkeypatch.setenv("MTA_RAY_SUBMISSION_MODE", "direct")
     monkeypatch.setenv(
         "MTA_RAY_DASHBOARD_URL",
         "http://avaloka-raycluster-head-svc:8265/",

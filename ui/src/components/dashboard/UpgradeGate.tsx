@@ -3,6 +3,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { Diamond01, X as XIcon } from "@untitledui/icons";
 import { Button } from "@/components/base/buttons/button";
 import { useActivePlan } from "@/lib/use-active-plan";
+import { upgradePromptText } from "@/lib/edition-comparison";
 
 /**
  * Free-plan action gate.
@@ -70,8 +71,7 @@ export function UpgradePlanDialog({
 
         <h2 className="mt-4 text-lg font-semibold text-primary">Upgrade your plan</h2>
         <p className="mt-1.5 text-sm text-tertiary">
-          {feature ? `${feature} is` : "This feature is"} available on paid plans. Upgrade
-          to unlock projects, datasets, insights and team collaboration.
+          {feature ? `${feature} is` : "This feature is"} available on paid plans. {upgradePromptText()}
         </p>
 
         <div className="mt-6 flex justify-end gap-2">

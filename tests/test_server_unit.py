@@ -606,8 +606,17 @@ def test_preview_rebuilds_missing_local_file_from_blobstore(client: TestClient):
 
     sid = data.get("session_id") or session_id
     assert sid in SESSIONS
-    restored = Path(SESSIONS[sid]["work_local_input"])
-    assert restored.exists()
+    # Preview must not repoint the working input at the sample: that made every
+    # later "Full dataset" run use sample_input.csv (issue 1, 29 Oct).
+    work_input = SESSIONS[sid]["work_local_input"]
+    assert not str(work_input).endswith("sample_input.csv")
+    assert Path(work_input) == local_input_path
+
+    # The full file comes back on the next full run.
+    import asyncio
+    from app.api import server
+    asyncio.run(server._ensure_local_inputs(SESSIONS[sid], need_full=True))
+    assert Path(SESSIONS[sid]["work_local_input"]).exists()
 
 
 # ======================================================================================
@@ -1442,6 +1451,47 @@ def test_tables_to_analysis_creates_datasets(client: TestClient, monkeypatch):
     assert len(out["datasets"]) == 2
     aliases = {d["alias"] for d in out["datasets"]}
     assert "users" in aliases and "orders" in aliases
+
+
+def test_tables_to_analysis_types_columns_from_the_rows(client: TestClient, monkeypatch):
+    # rc9: every database column was typed "string", so an INTEGER `stroke`
+    # compared to 1 was blocked by the static check as a string comparison.
+    async def run_mcp_fake(customer_id, api_key, sql):
+        return {"columns": ["id", "age", "stroke", "gender", "bmi"],
+                "rows": [[9046, 67.0, 1, "Male", 36.6], [51676, 61.0, 0, "Female", None]]}
+
+    monkeypatch.setattr(server, "_run_mcp_db_query", run_mcp_fake, raising=False)
+    resp = client.post(
+        "/api/database/tables-to-analysis",
+        json={"tables": ["patients"], "customer_id": "c1", "api_key": "k1"},
+        headers=make_auth_headers("tta-typed"),
+    )
+    assert resp.status_code == 200, resp.text
+    sess = SESSIONS[resp.json()["session_id"]]
+    schema = sess["schema"] if isinstance(sess["schema"], dict) else json.loads(sess["schema"])
+    assert schema == {"id": "int64", "age": "float64", "stroke": "int64",
+                      "gender": "string", "bmi": "float64"}, schema
+    assert '"stroke" INTEGER' in sess["ddl_schema"], sess["ddl_schema"]
+
+
+def test_db_query_sample_session_types_columns_from_the_rows(client: TestClient, monkeypatch):
+    # "Average age of patients who had a stroke" on a database table: the DB
+    # sample typed every column "string", so an INTEGER `stroke` compared to 1
+    # was blocked by the static check as a string comparison (2.0 #571).
+    _mock_mcp(monkeypatch, {"columns": ["id", "age", "stroke", "gender", "bmi"],
+                            "rows": [[9046, 67.0, 1, "Male", 36.6], [51676, 61.0, 0, "Female", None]]})
+    resp = client.post(
+        "/api/v1/database/query",
+        json={"content": "SELECT * FROM patients", "customer_id": "cust-1",
+              "metadata": {"api_key": "secret"}},
+        headers=make_auth_headers("db-typed"),
+    )
+    assert resp.status_code == 200, resp.text
+    sess = SESSIONS[resp.json()["session_id"]]
+    schema = sess["schema"] if isinstance(sess["schema"], dict) else json.loads(sess["schema"])
+    assert schema == {"id": "int64", "age": "float64", "stroke": "int64",
+                      "gender": "string", "bmi": "float64"}, schema
+    assert '"stroke" INTEGER' in sess["ddl_schema"], sess["ddl_schema"]
 
 
 def test_tables_to_analysis_rejects_invalid_table_name(client: TestClient):
@@ -4775,40 +4825,38 @@ def test_analysis_feedback_invalid_type_422(client: TestClient):
 # ======================================================================================
 
 
+MCP_CONN_ID = "0b6f7c2e-3d1a-4e5f-9a8b-7c6d5e4f3a21"
+MCP_OTHER_ID = "5e1d2c3b-4a59-4687-b6a5-c4d3e2f1a0b9"
+MCP_MISSING_ID = "9f8e7d6c-5b4a-4392-8170-6f5e4d3c2b1a"
+
+
 def _patch_mcp_row(monkeypatch, row):
     monkeypatch.setattr(server, "_mcp_conn_select", lambda cid: row, raising=False)
 
 
 def test_mcp_encrypt_unknown_connection_404(client: TestClient, monkeypatch):
     _patch_mcp_row(monkeypatch, None)
-    resp = client.post("/api/mcp-connections/c1/encrypt", json={"apiKey": "k"},
+    resp = client.post(f"/api/mcp-connections/{MCP_CONN_ID}/encrypt", json={"apiKey": "k"},
                        headers=make_auth_headers("mcp-user"))
     assert resp.status_code == 404
 
 
-def test_mcp_encrypt_foreign_connection_403(client: TestClient, monkeypatch):
-    _patch_mcp_row(monkeypatch, {"id": "c1", "user_id": "other"})
-    resp = client.post("/api/mcp-connections/c1/encrypt", json={"apiKey": "k"},
-                       headers=make_auth_headers("mcp-user"))
-    assert resp.status_code == 403
-
-
 def test_mcp_encrypt_requires_a_field(client: TestClient, monkeypatch):
-    _patch_mcp_row(monkeypatch, {"id": "c1", "user_id": "mcp-user"})
-    resp = client.post("/api/mcp-connections/c1/encrypt", json={},
+    _patch_mcp_row(monkeypatch, {"id": MCP_CONN_ID, "user_id": "mcp-user"})
+    resp = client.post(f"/api/mcp-connections/{MCP_CONN_ID}/encrypt", json={},
                        headers=make_auth_headers("mcp-user"))
     assert resp.status_code == 422
 
 
 def test_mcp_encrypt_stores_ciphertext_and_blanks_plaintext(client: TestClient, monkeypatch):
-    _patch_mcp_row(monkeypatch, {"id": "c1", "user_id": "mcp-user"})
+    _patch_mcp_row(monkeypatch, {"id": MCP_CONN_ID, "user_id": "mcp-user"})
     monkeypatch.setattr(server, "encrypt_secret",
                         lambda v: {"ciphertext": f"ct({len(v)})", "iv": "iv"}, raising=False)
     updates: List[Dict[str, Any]] = []
     monkeypatch.setattr(server, "_mcp_conn_update", lambda cid, patch: updates.append(patch),
                         raising=False)
 
-    resp = client.post("/api/mcp-connections/c1/encrypt", json={"apiKey": "secret-key"},
+    resp = client.post(f"/api/mcp-connections/{MCP_CONN_ID}/encrypt", json={"apiKey": "secret-key"},
                        headers=make_auth_headers("mcp-user"))
     assert resp.status_code == 200, resp.text
     assert resp.json()["encrypted"] == ["api_key"]
@@ -4817,23 +4865,23 @@ def test_mcp_encrypt_stores_ciphertext_and_blanks_plaintext(client: TestClient, 
 
 
 def test_mcp_encrypt_without_key_configured_500(client: TestClient, monkeypatch):
-    _patch_mcp_row(monkeypatch, {"id": "c1", "user_id": "mcp-user"})
+    _patch_mcp_row(monkeypatch, {"id": MCP_CONN_ID, "user_id": "mcp-user"})
     monkeypatch.setattr(server, "encrypt_secret", lambda v: None, raising=False)
-    resp = client.post("/api/mcp-connections/c1/encrypt", json={"username": "bob"},
+    resp = client.post(f"/api/mcp-connections/{MCP_CONN_ID}/encrypt", json={"username": "bob"},
                        headers=make_auth_headers("mcp-user"))
     assert resp.status_code == 500
     assert "DB_ENCRYPTION_KEY" in resp.json()["detail"]
 
 
 def test_mcp_decrypt_success(client: TestClient, monkeypatch):
-    _patch_mcp_row(monkeypatch, {"id": "c1", "user_id": "mcp-user",
+    _patch_mcp_row(monkeypatch, {"id": MCP_CONN_ID, "user_id": "mcp-user",
                                  "api_key_ciphertext": "CT", "api_key_iv": "IV"})
     monkeypatch.setattr(
         server, "decrypt_secret",
         lambda blob: f"plain:{blob['ciphertext']}" if blob.get("ciphertext") else None,
         raising=False,
     )
-    resp = client.post("/api/mcp-connections/c1/decrypt", headers=make_auth_headers("mcp-user"))
+    resp = client.post(f"/api/mcp-connections/{MCP_CONN_ID}/decrypt", headers=make_auth_headers("mcp-user"))
     assert resp.status_code == 200, resp.text
     assert resp.json() == {"apiKey": "plain:CT", "username": None}
 
@@ -4842,7 +4890,7 @@ def test_mcp_decrypt_success(client: TestClient, monkeypatch):
 def test_mcp_credentials_bind_the_customer_to_the_verified_user(client: TestClient, monkeypatch, route, body):
     """The onboarding API releases a password to the planner only for a customer
     bound to the user it names; encrypt/decrypt are where that binding happens."""
-    _patch_mcp_row(monkeypatch, {"id": "c1", "user_id": "mcp-user", "customer_id": "cust_1",
+    _patch_mcp_row(monkeypatch, {"id": MCP_CONN_ID, "user_id": "mcp-user", "customer_id": "cust_1",
                                  "api_key_ciphertext": "CT", "api_key_iv": "IV"})
     monkeypatch.setattr(server, "encrypt_secret", lambda v: {"ciphertext": "x", "iv": "y"}, raising=False)
     monkeypatch.setattr(server, "_mcp_conn_update", lambda cid, patch: None, raising=False)
@@ -4868,7 +4916,7 @@ def test_mcp_credentials_bind_the_customer_to_the_verified_user(client: TestClie
             return types.SimpleNamespace(status_code=200)
 
     monkeypatch.setattr(server.httpx, "AsyncClient", _Client)
-    resp = client.post(f"/api/mcp-connections/c1/{route}", json=body,
+    resp = client.post(f"/api/mcp-connections/{MCP_CONN_ID}/{route}", json=body,
                        headers=make_auth_headers("mcp-user"))
     assert resp.status_code == 200, resp.text
     assert len(posts) == 1
@@ -4881,10 +4929,10 @@ def test_mcp_credentials_bind_the_customer_to_the_verified_user(client: TestClie
 
 
 def test_mcp_decrypt_key_mismatch_409(client: TestClient, monkeypatch):
-    _patch_mcp_row(monkeypatch, {"id": "c1", "user_id": "mcp-user",
+    _patch_mcp_row(monkeypatch, {"id": MCP_CONN_ID, "user_id": "mcp-user",
                                  "api_key_ciphertext": "CT", "api_key_iv": "IV"})
     monkeypatch.setattr(server, "decrypt_secret", lambda blob: None, raising=False)
-    resp = client.post("/api/mcp-connections/c1/decrypt", headers=make_auth_headers("mcp-user"))
+    resp = client.post(f"/api/mcp-connections/{MCP_CONN_ID}/decrypt", headers=make_auth_headers("mcp-user"))
     assert resp.status_code == 409
 
 
@@ -4893,8 +4941,119 @@ def test_mcp_lookup_failure_500(client: TestClient, monkeypatch):
         raise RuntimeError("supabase down")
 
     monkeypatch.setattr(server, "_mcp_conn_select", _boom, raising=False)
-    resp = client.post("/api/mcp-connections/c1/decrypt", headers=make_auth_headers("mcp-user"))
+    resp = client.post(f"/api/mcp-connections/{MCP_CONN_ID}/decrypt", headers=make_auth_headers("mcp-user"))
     assert resp.status_code == 500
+    # A genuine backend failure stays a 500, with a body that names nothing.
+    assert resp.json() == {"detail": "Connection lookup failed"}
+
+
+# Ownership. The service role bypasses RLS, so the handler is the only owner
+# check: another user's connection must look exactly like one that does not
+# exist (same status, same body), and nothing may be decrypted, written,
+# bound or returned for it.
+
+_MCP_OWNER = "mcp-owner"
+_MCP_INTRUDER = "mcp-intruder"
+_MCP_OWNER_ROW = {
+    "id": MCP_CONN_ID, "user_id": _MCP_OWNER, "customer_id": "cust_owner",
+    "api_key_ciphertext": "OWNER-API-CT", "api_key_iv": "OWNER-API-IV",
+    "username_ciphertext": "OWNER-USER-CT", "username_iv": "OWNER-USER-IV",
+}
+_MCP_ROUTES = [("encrypt", {"apiKey": "intruder-key", "username": "intruder"}), ("decrypt", None)]
+
+
+def _mcp_store(monkeypatch) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, List[Any]]]:
+    """A fake mcp_connections holding one row owned by _MCP_OWNER. Like PostgREST
+    on the uuid id column, a non-uuid id is an error, not an empty result.
+    Every select, write, encrypt, decrypt and owner bind is recorded."""
+    from postgrest.exceptions import APIError
+    import uuid as _uuid
+
+    rows = {MCP_CONN_ID: dict(_MCP_OWNER_ROW)}
+    calls: Dict[str, List[Any]] = {"update": [], "encrypt": [], "decrypt": [], "bind": []}
+
+    def _select(cid):
+        try:
+            _uuid.UUID(cid)
+        except ValueError:
+            raise APIError({"code": "22P02", "message": f'invalid input syntax for type uuid: "{cid}"'})
+        row = rows.get(cid)
+        return dict(row) if row else None
+
+    def _update(cid, patch):
+        calls["update"].append((cid, dict(patch)))
+        rows[cid].update(patch)
+
+    def _encrypt(value):
+        calls["encrypt"].append(value)
+        return {"ciphertext": f"ct({value})", "iv": "iv"}
+
+    def _decrypt(blob):
+        calls["decrypt"].append(dict(blob))
+        return f"plain:{blob['ciphertext']}" if blob.get("ciphertext") else None
+
+    async def _bind(customer_id, user_id, api_key):
+        calls["bind"].append((customer_id, user_id, api_key))
+
+    monkeypatch.setattr(server, "_mcp_conn_select", _select, raising=False)
+    monkeypatch.setattr(server, "_mcp_conn_update", _update, raising=False)
+    monkeypatch.setattr(server, "encrypt_secret", _encrypt, raising=False)
+    monkeypatch.setattr(server, "decrypt_secret", _decrypt, raising=False)
+    monkeypatch.setattr(server, "_bind_mcp_customer_owner", _bind, raising=False)
+    return rows, calls
+
+
+@pytest.mark.parametrize("route,body", _MCP_ROUTES, ids=[r for r, _ in _MCP_ROUTES])
+def test_mcp_foreign_connection_is_404(client: TestClient, monkeypatch, route, body):
+    _mcp_store(monkeypatch)
+    resp = client.post(f"/api/mcp-connections/{MCP_CONN_ID}/{route}", json=body,
+                       headers=make_auth_headers(_MCP_INTRUDER))
+    assert resp.status_code == 404, resp.text
+    assert resp.json() == {"detail": "Connection not found"}
+
+
+@pytest.mark.parametrize("missing_id", [MCP_MISSING_ID, "not-a-uuid"], ids=["well-formed", "malformed"])
+@pytest.mark.parametrize("route,body", _MCP_ROUTES, ids=[r for r, _ in _MCP_ROUTES])
+def test_mcp_foreign_and_missing_connection_answer_identically(
+    client: TestClient, monkeypatch, route, body, missing_id
+):
+    """The response must not say whether another user's id exists."""
+    _mcp_store(monkeypatch)
+    headers = make_auth_headers(_MCP_INTRUDER)
+    foreign = client.post(f"/api/mcp-connections/{MCP_CONN_ID}/{route}", json=body, headers=headers)
+    missing = client.post(f"/api/mcp-connections/{missing_id}/{route}", json=body, headers=headers)
+    assert (foreign.status_code, foreign.content) == (missing.status_code, missing.content)
+    assert missing.status_code == 404
+
+
+@pytest.mark.parametrize("route,body", _MCP_ROUTES, ids=[r for r, _ in _MCP_ROUTES])
+def test_mcp_owner_still_succeeds(client: TestClient, monkeypatch, route, body):
+    rows, calls = _mcp_store(monkeypatch)
+    resp = client.post(f"/api/mcp-connections/{MCP_CONN_ID}/{route}", json=body,
+                       headers=make_auth_headers(_MCP_OWNER))
+    assert resp.status_code == 200, resp.text
+    if route == "encrypt":
+        assert resp.json()["encrypted"] == ["api_key", "username"]
+        assert rows[MCP_CONN_ID]["api_key_ciphertext"] == "ct(intruder-key)"
+    else:
+        assert resp.json() == {"apiKey": "plain:OWNER-API-CT", "username": "plain:OWNER-USER-CT"}
+    assert calls["bind"] and calls["bind"][0][:2] == ("cust_owner", _MCP_OWNER)
+
+
+@pytest.mark.parametrize("route,body", _MCP_ROUTES, ids=[r for r, _ in _MCP_ROUTES])
+def test_mcp_cross_user_attempt_touches_nothing(client: TestClient, monkeypatch, caplog, route, body):
+    rows, calls = _mcp_store(monkeypatch)
+    with caplog.at_level("WARNING"):
+        resp = client.post(f"/api/mcp-connections/{MCP_CONN_ID}/{route}", json=body,
+                           headers=make_auth_headers(_MCP_INTRUDER))
+    assert resp.status_code == 404, resp.text
+    assert calls == {"update": [], "encrypt": [], "decrypt": [], "bind": []}
+    assert rows == {MCP_CONN_ID: _MCP_OWNER_ROW}
+    for owner_value in ("OWNER-", "cust_owner", _MCP_OWNER):
+        assert owner_value not in resp.text
+    # The attempt is still logged server-side, without naming the owner.
+    assert f"not owned by requester {_MCP_INTRUDER}" in caplog.text
+    assert _MCP_OWNER not in caplog.text
 
 
 # ======================================================================================

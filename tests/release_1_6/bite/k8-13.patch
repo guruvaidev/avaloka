@@ -1,0 +1,13 @@
+diff --git a/app/agents/mta_v2/failure_diagnostics.py b/app/agents/mta_v2/failure_diagnostics.py
+index bd1c0473..5d586368 100644
+--- a/app/agents/mta_v2/failure_diagnostics.py
++++ b/app/agents/mta_v2/failure_diagnostics.py
+@@ -20,7 +20,7 @@ _RULES = (
+     ("TARGET_LEAKAGE", (r"target leakage detected", r"duplicate or almost perfectly encode target"), "Target leakage detected", "One or more selected features reveal the target answer, so training was blocked.", False),
+     ("DUPLICATE_ROWS", (r"duplicate training rows detected", r"copied records can leak across"), "Duplicate training rows detected", "Repeated records could leak across the training and validation split, so training was blocked.", False),
+     ("IDENTIFIER_FEATURE", (r"identifier-like feature detected", r"unique row identifiers.*not be used for prediction"), "Identifier-like feature detected", "A selected feature uniquely identifies rows instead of providing a reusable prediction signal, so training was blocked.", False),
+-    ("OOM_KILLED", (r"oomkilled", r"out of memory", r"exit(?:ed)?(?: code)?\s*137", r"memory limit"), "Training pod ran out of memory", "The training container exceeded its memory limit.", True),
++    ("OOM_KILLED", (r"oomkilled", r"out of memory", r"timed? out", r"deadline exceeded", r"exit(?:ed)?(?: code)?\s*137", r"memory limit"), "Training pod ran out of memory", "The training container exceeded its memory limit.", True),
+     ("TRAINING_TIMEOUT", (r"timed? out", r"timeout", r"deadline exceeded", r"did not complete within"), "Training timed out", "The training run did not finish before its configured deadline.", True),
+     ("IMAGE_PULL_FAILED", (r"imagepullbackoff", r"errimagepull", r"failed to pull image", r"manifest unknown", r"not found.*(?:image|manifest)"), "Training image could not be pulled", "Kubernetes could not download the container image required for training.", True),
+     ("POD_EVICTED", (r"\bevicted\b", r"node had condition"), "Training pod was evicted", "Kubernetes evicted the training pod because the node was under resource pressure.", True),

@@ -2,6 +2,7 @@
 // but scoped to a report. author_id → profiles.id.
 
 import { supabase } from "@/integrations/supabase/client";
+import { attachDisplayAuthors } from "@/lib/display-profiles";
 import { requireCurrentProfileId } from "@/lib/current-profile";
 import { getCachedAuthUser } from "@/lib/auth-user";
 import {
@@ -43,8 +44,9 @@ type Row = {
   author: InsightCommentAuthor | InsightCommentAuthor[] | null;
 };
 
-const SELECT =
-  "id,body,created_at,parent_id,attachments,report_id,author_id,author:profiles!author_id(id,full_name,avatar_url)";
+// Authors are attached from display fields (attachDisplayAuthors): a commenter on
+// a shared report may be in another organisation, whose profile row is not readable.
+const SELECT = "id,body,created_at,parent_id,attachments,report_id,author_id";
 
 function normalizeAuthor(a: Row["author"]): InsightCommentAuthor | null {
   if (!a) return null;
@@ -99,7 +101,9 @@ export async function loadReportComments(reportId: string): Promise<ReportCommen
     .eq("report_id", reportId)
     .order("created_at", { ascending: true });
   if (error) throw error;
-  const rows = await resolveRowAvatars((data ?? []) as unknown as Row[]);
+  const rows = await resolveRowAvatars(
+    (await attachDisplayAuthors(supabase, (data ?? []) as unknown as Row[])) as Row[],
+  );
 
   const map = new Map<string, ReportComment>();
   const topLevel: ReportComment[] = [];

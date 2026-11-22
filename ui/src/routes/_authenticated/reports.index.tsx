@@ -9,6 +9,7 @@ import { deleteReport, fetchReportProjects, fetchReports, type ReportRecord } fr
 import { supabase } from "@/integrations/supabase/client";
 import { PlanGate } from "@/components/dashboard/PlanGate";
 import { getCachedAuthUser } from "@/lib/auth-user";
+import { getCurrentOrgId } from "@/lib/current-org";
 
 export const Route = createFileRoute("/_authenticated/reports/")({
   head: () => ({
@@ -21,7 +22,7 @@ export const Route = createFileRoute("/_authenticated/reports/")({
     ],
   }),
   component: () => (
-    <PlanGate>
+    <PlanGate capability="reports">
       <ReportsPage />
     </PlanGate>
   ),
@@ -62,7 +63,12 @@ function formatDate(iso: string): string {
   }
 }
 
-function toRow(r: ReportRecord, currentUserId: string | null, isAdmin: boolean): ReportRow {
+function toRow(
+  r: ReportRecord,
+  currentUserId: string | null,
+  isAdmin: boolean,
+  currentOrgId: string | null,
+): ReportRow {
   const analysis = r.analyses ?? null;
   const creator = r.creator ?? null;
   const createdById = r.created_by_id ?? (typeof r.created_by === "string" ? r.created_by : r.created_by.id);
@@ -96,7 +102,9 @@ function toRow(r: ReportRecord, currentUserId: string | null, isAdmin: boolean):
       initials: creatorInitials,
       src: creator?.avatar_url ?? undefined,
     },
-    canDelete: isAdmin || isSelf,
+    // An admin deletes only within its own organisation ("Creators or admins
+    // delete reports"); a report shared from another organisation is not its own.
+    canDelete: isSelf || (isAdmin && !!currentOrgId && r.organization_id === currentOrgId),
   };
 }
 
@@ -147,9 +155,15 @@ function ReportsPage() {
     },
   });
 
+  const { data: currentOrgId = null } = useQuery({
+    queryKey: ["auth", "current-org", currentUserId],
+    enabled: !!currentUserId && isAdmin,
+    queryFn: () => getCurrentOrgId(),
+  });
+
   const rows = useMemo(
-    () => records.map((r: ReportRecord) => toRow(r, currentUserId, isAdmin)),
-    [records, currentUserId, isAdmin],
+    () => records.map((r: ReportRecord) => toRow(r, currentUserId, isAdmin, currentOrgId)),
+    [records, currentUserId, isAdmin, currentOrgId],
   );
   const bookmarkedIds = useMemo(() => new Set<string>(), []);
   const toggleReportBookmark = () => {};
@@ -174,14 +188,14 @@ function ReportsPage() {
   const showLoading = reportsLoading || reportsFetching;
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 bg-primary text-primary">
+    <div className="flex min-h-0 min-w-0 flex-1 bg-primary text-primary dark:bg-[#0b0d10]">
       <ReportsSidebar
         projects={projects}
         selectedId={selectedProjectId}
         onSelect={(id) => setSelectedProjectId(id)}
       />
       <main className="relative flex flex-1 flex-col overflow-hidden">
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-full bg-[radial-gradient(150%_100%_at_42.83%_20.65%,#4680e400_43.87%,#1565EF_150%,#fff)]" />
+        <div className="reports-page-backdrop pointer-events-none absolute inset-x-0 bottom-0 h-full bg-[radial-gradient(150%_100%_at_42.83%_20.65%,#4680e400_43.87%,#1565EF_150%,#fff)]" />
         <div className="scrollbar-hide relative flex flex-1 flex-col overflow-y-auto">
           <div className="px-6 pt-4" />
 

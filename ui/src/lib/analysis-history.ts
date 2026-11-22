@@ -4,6 +4,7 @@
 import { loadMessages, type AnalysisMessage } from "@/lib/analysis-messages";
 import { dashboardWidgetsForHistory } from "@/lib/api/project-dashboard";
 import { supabase } from "@/integrations/supabase/client";
+import { attachDisplayAuthors } from "@/lib/display-profiles";
 import { getCachedAuthUser } from "@/lib/auth-user";
 
 export type AnalysisHistoryActorKind = "user" | "ai";
@@ -716,7 +717,9 @@ export async function loadAnalysisHistory(
     loadOptional("analysis_comments", () =>
       supabase
         .from("analysis_comments" as never)
-        .select("id,content,created_at,parent_id,author:profiles!author_id(full_name,avatar_url)")
+        // Authors are attached below from display fields: a commenter may be in
+        // another organisation, whose profile row is not readable.
+        .select("id,content,created_at,parent_id,author_id")
         .eq("analysis_id", analysisId)
         .order("created_at", { ascending: true }),
     ),
@@ -729,7 +732,11 @@ export async function loadAnalysisHistory(
   const entries: AnalysisHistoryEntry[] = [
     ...entriesFromAnalysisRow(row, hasMessageViz),
     ...entriesFromChatMessages(chatMessages, row),
-    ...entriesFromInsightComments(analysisId, (insightComments ?? []) as unknown as InsightCommentRow[], row),
+    ...entriesFromInsightComments(
+      analysisId,
+      (await attachDisplayAuthors(supabase, (insightComments ?? []) as unknown as Array<{ author_id?: string | null }>)) as unknown as InsightCommentRow[],
+      row,
+    ),
     ...entriesFromDashboardGraphs(analysisId, dashboardWidgets, row),
     ...entriesFromCollaborators(analysisId, (collaborators ?? []) as unknown as CollaboratorRow[], row),
   ];

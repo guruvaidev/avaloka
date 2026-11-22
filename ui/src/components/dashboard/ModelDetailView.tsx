@@ -12,8 +12,10 @@ import {
 } from "recharts";
 
 import { Button } from "@/components/ui/button";
+import { Link } from "@tanstack/react-router";
 import { backendApi, type BackendModelDetail, type BackendTrainingHistoryPoint } from "@/lib/api/backendApi";
-import { InferencePanel } from "@/components/dashboard/InferencePanel";
+import { normalizeModelDetails, formatNumber, formatPercent, formatVersion } from "@/api/inference";
+import { getModelMetrics } from "@/lib/modelMetrics";
 
 
 interface Props {
@@ -91,14 +93,7 @@ export function ModelDetailView({ runId, onBack }: Props) {
   const modelType = pickString(raw, "model_type", "task_type", "type");
   const version = pickString(raw, "version", "latest_version", "model_version", "current_version");
 
-  const trainLoss = pickNumber(raw, "final_train_loss", "train_loss") ?? pickNumber(metricsBag, "final_train_loss", "train_loss");
-  const valLoss = pickNumber(raw, "final_val_loss", "val_loss", "validation_loss") ?? pickNumber(metricsBag, "final_val_loss", "val_loss", "validation_loss");
-  const accuracy = pickNumber(raw, "final_accuracy", "accuracy") ?? pickNumber(metricsBag, "final_accuracy", "accuracy");
-  const f1 = pickNumber(raw, "final_f1_score", "f1_score", "f1") ?? pickNumber(metricsBag, "final_f1_score", "f1_score", "f1");
-
-  const r2 = pickNumber(raw, "final_r2", "r2_score", "r2", "r squared") ?? pickNumber(metricsBag, "final_r2", "r2_score", "r2");
-  const rmse = pickNumber(raw, "final_rmse", "rmse", "root_mean_squared_error") ?? pickNumber(metricsBag, "final_rmse", "rmse", "root_mean_squared_error");
-  const mae = pickNumber(raw, "final_mae", "mae", "mean_absolute_error") ?? pickNumber(metricsBag, "final_mae", "mae", "mean_absolute_error");
+  const { trainLoss, valLoss, accuracy, f1, r2, rmse, mae } = getModelMetrics(raw);
 
   const rowsProcessed = pickNumber(raw, "rows_processed") ?? pickNumber(metricsBag, "rows_processed");
   const numEpochs = pickNumber(raw, "num_epochs_trained", "epochs_trained", "num_epochs") ?? pickNumber(metricsBag, "num_epochs_trained");
@@ -113,30 +108,31 @@ export function ModelDetailView({ runId, onBack }: Props) {
   const metricTiles = (
     isRegression
       ? [
-          { label: "Average Error (MAE)", value: formatMetric(mae) },
-          { label: "Large-Error Score (RMSE)", value: formatMetric(rmse) },
+          { label: "Average error (MAE)", value: mae === undefined ? null : formatNumber(mae) },
+          { label: "Large-error score (RMSE)", value: rmse === undefined ? null : formatNumber(rmse) },
           {
-            label: "Explained Variation (R²)",
-            value: typeof r2 === "number" && Number.isFinite(r2) ? `${(r2 * 100).toFixed(2)}%` : null,
+            label: "Explained variation (R²)",
+            value: typeof r2 === "number" && Number.isFinite(r2) ? formatPercent(r2) : null,
           },
-          { label: "Final Train Loss", value: formatMetric(trainLoss) },
-          { label: "Final Validation Loss", value: formatMetric(valLoss) },
         ]
 
       : [
-          { label: "Final Train Loss", value: formatMetric(trainLoss) },
-          { label: "Final Validation Loss", value: formatMetric(valLoss) },
-          { label: "Final Accuracy", value: formatMetric(accuracy) },
-          { label: "Final F1 Score", value: formatMetric(f1) },
+          { label: "Final accuracy", value: formatMetric(accuracy) },
+          { label: "Final F1 score", value: formatMetric(f1) },
         ]
   ).filter((m) => m.value !== null);
 
 
+  const normalized = normalizeModelDetails(raw);
+  const inputCount = normalized?.inputFeatureCount;
+  const encodedCount = normalized?.encodedFeatureCount;
   const runInfoTiles = [
-    { label: "Rows Processed", value: formatCount(rowsProcessed) },
-    { label: "Number of Epochs", value: formatCount(numEpochs) },
-    { label: "Number of Features", value: formatCount(numFeatures) },
-    { label: "Number of Classes", value: formatCount(numClasses) },
+    { label: "Rows processed", value: formatCount(rowsProcessed) },
+    { label: "Number of epochs", value: formatCount(numEpochs) },
+    { label: "Features", value: inputCount !== undefined ? `${formatCount(inputCount)} input` : formatCount(numFeatures), subline: inputCount !== undefined && encodedCount !== undefined && encodedCount !== inputCount ? `${formatCount(encodedCount)} after encoding` : undefined },
+    { label: "Final train loss", value: formatMetric(trainLoss) },
+    { label: "Final validation loss", value: formatMetric(valLoss) },
+    { label: "Number of classes", value: isRegression ? null : formatCount(numClasses) },
   ].filter((m) => m.value !== null);
 
   return (
@@ -169,15 +165,15 @@ export function ModelDetailView({ runId, onBack }: Props) {
         <div className="flex flex-1 flex-col gap-4">
           <div className="rounded-2xl border border-border bg-card p-6">
             <div className="grid grid-cols-2 gap-x-8 gap-y-5">
-              {modelType && <Field label="Task Type" value={titleCase(modelType)} />}
-              {version && <Field label="Latest version" value={`Version ${version}`} />}
+              {modelType && <Field label="Task type" value={titleCase(modelType)} />}
+              {version && <Field label="Latest version" value={formatVersion(version) ?? "—"} />}
               {description && <Field label="Description" value={description} full />}
             </div>
 
             {metricTiles.length > 0 && (
               <>
                 <h2 className="mt-7 text-base font-semibold text-foreground">Metrics</h2>
-                <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
                   {metricTiles.map((m) => (
                     <div key={m.label} className="rounded-xl border border-border bg-muted p-4">
                       <div className="text-xs text-muted-foreground">{m.label}</div>
@@ -190,12 +186,13 @@ export function ModelDetailView({ runId, onBack }: Props) {
 
             {runInfoTiles.length > 0 && (
               <>
-                <h2 className="mt-7 text-base font-semibold text-foreground">Run Info</h2>
+                <h2 className="mt-7 text-base font-semibold text-foreground">Run info</h2>
                 <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
                   {runInfoTiles.map((m) => (
                     <div key={m.label} className="rounded-xl border border-border bg-muted p-4">
                       <div className="text-xs text-muted-foreground">{m.label}</div>
                       <div className="mt-1 text-xl font-semibold text-foreground">{m.value}</div>
+                      {m.subline && <div className="mt-1 text-xs text-muted-foreground">{m.subline}</div>}
                     </div>
                   ))}
                 </div>
@@ -225,7 +222,7 @@ export function ModelDetailView({ runId, onBack }: Props) {
                       label={{ value: "Value", angle: -90, position: "insideLeft", fontSize: 11, fill: "var(--chart-tick)" }}
                     />
                     <Tooltip />
-                    <Legend verticalAlign="bottom" iconType="square" formatter={(value) => <span style={{ color: "var(--foreground)" }}>{value}</span>} />
+                    <Legend verticalAlign="top" height={36} iconType="square" formatter={(value) => <span style={{ color: "var(--foreground)" }}>{value}</span>} />
                     <Line type="monotone" dataKey="train_loss" name="Training loss" stroke="#3b82f6" strokeWidth={2} dot={{ r: 2 }} />
                     <Line type="monotone" dataKey="val_loss" name="Validation loss" stroke="#fca5a5" strokeWidth={2} dot={{ r: 2 }} />
                     {hasAccuracy && <Line type="monotone" dataKey="accuracy" name="Accuracy" stroke="#10b981" strokeWidth={2} dot={{ r: 2 }} />}
@@ -237,7 +234,7 @@ export function ModelDetailView({ runId, onBack }: Props) {
             );
           })()}
 
-          <InferencePanel runId={runId} raw={raw} />
+          <div className="flex justify-end"><Button asChild className="min-h-11"><Link to="/inference" search={{ run_id: runId }}>Open in Inference</Link></Button></div>
         </div>
 
       ) : null}

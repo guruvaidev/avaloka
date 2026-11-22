@@ -7,7 +7,7 @@ This page is self-contained. Read it and you should know what the work claims
 without opening the PDF — and know exactly which of those claims the code in
 this repository backs, because every one of them cites `file:line` here.
 
-Avaloka 1.6.0, Python 3.11–3.12 (`VERSION`, `pyproject.toml:7`,
+Avaloka 1.0.0, built from the 1.6 line; Python 3.11–3.12 (`VERSION`, `pyproject.toml:7`,
 `pyproject.toml:16`).
 
 ---

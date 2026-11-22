@@ -51,6 +51,9 @@ TRAINING_FEATURE_ORDER: List[str] = ["zip_code", "age", "income"]
 TRAINING_FEATURES: Dict[str, float] = {"zip_code": 90210.0, "age": 41.0, "income": 82000.0}
 
 DISPATCH_METHODS = (
+    "_configure_modelserver",
+    "_inference_modelserver",
+    "_stop_modelserver",
     "_configure_rayserve",
     "_inference_rayserve",
     "_stop_rayserve",
@@ -307,10 +310,25 @@ def test_e7_03_api_rejects_an_unloaded_gateway_model(api, monkeypatch: pytest.Mo
 # ---------------------------------------------------------------------------
 
 
-def test_e7_04_default_backend_is_rayserve(ism_fresh) -> None:
-    """With INFERENCE_BACKEND unset the manager selects the in-cluster RayServe backend."""
+def test_e7_04_default_backend_is_modelserver(ism_fresh) -> None:
+    """With INFERENCE_BACKEND unset the manager selects the model-server Deployment
+    (app/serve/model_server.py): one Deployment serves every model and scales to zero.
+    Re-pinned for 1.6 from rayserve, which is now the opt-in INFERENCE_BACKEND=rayserve."""
     module = ism_fresh(None)
-    assert module.INFERENCE_BACKEND == "rayserve"
+    assert module.INFERENCE_BACKEND == "modelserver"
+
+
+def test_e7_04_modelserver_backend_dispatches_to_modelserver(monkeypatch: pytest.MonkeyPatch) -> None:
+    """INFERENCE_BACKEND=modelserver routes configure/inference/stop to the model-server methods."""
+    monkeypatch.setattr(ism, "INFERENCE_BACKEND", "modelserver")
+    calls = _stub_dispatch(monkeypatch, ism)
+    manager = ism.InferenceServiceManager()
+
+    manager.configure_inference_service("run-e7")
+    manager.inference("run-e7", {"features": TRAINING_FEATURES})
+    manager.stop_inference_service("run-e7")
+
+    assert calls == ["_configure_modelserver", "_inference_modelserver", "_stop_modelserver"]
 
 
 @pytest.mark.parametrize("raw", ["  RayServe  ", "RAYSERVE", "RayServe", "rayserve\n"])
@@ -333,9 +351,29 @@ def test_e7_04_rayserve_backend_dispatches_to_rayserve(monkeypatch: pytest.Monke
     assert calls == ["_configure_rayserve", "_inference_rayserve", "_stop_rayserve"]
 
 
-def test_e7_04_explicit_gateway_backend_dispatches_to_legacy_path(monkeypatch: pytest.MonkeyPatch) -> None:
-    """INFERENCE_BACKEND=gateway still routes to the legacy GCP API Gateway methods."""
+def test_e7_04_gateway_backend_is_refused_without_the_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
+    """INFERENCE_BACKEND=gateway alone is refused before anything is created: the legacy
+    path leaked a GKE namespace and API Gateway per deployment (20d9f320)."""
     monkeypatch.setattr(ism, "INFERENCE_BACKEND", "gateway")
+    monkeypatch.setattr(ism, "ALLOW_LEGACY_GATEWAY", False)
+    calls = _stub_dispatch(monkeypatch, ism)
+    manager = ism.InferenceServiceManager()
+
+    for invoke in (
+        lambda: manager.configure_inference_service("run-e7"),
+        lambda: manager.inference("run-e7", {"features": TRAINING_FEATURES}),
+        lambda: manager.stop_inference_service("run-e7"),
+    ):
+        with pytest.raises(RuntimeError, match="AVALOKA_ALLOW_LEGACY_GATEWAY=1"):
+            invoke()
+    assert calls == []
+
+
+def test_e7_04_explicit_gateway_backend_dispatches_to_legacy_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """INFERENCE_BACKEND=gateway with AVALOKA_ALLOW_LEGACY_GATEWAY=1 still routes to the
+    legacy GCP API Gateway methods (kept for recovering an existing deployment)."""
+    monkeypatch.setattr(ism, "INFERENCE_BACKEND", "gateway")
+    monkeypatch.setattr(ism, "ALLOW_LEGACY_GATEWAY", True)
     calls = _stub_dispatch(monkeypatch, ism)
     manager = ism.InferenceServiceManager()
 
@@ -545,8 +583,11 @@ def test_e7_06_pins_deleted_model_details_have_no_lifecycle_guard() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_e7_07_pins_inference_serve_app_is_fixed_at_one_replica() -> None:
-    """The inference Serve app pins num_replicas: 1 with no autoscaling_config."""
+def test_e7_07_pins_inference_serve_app_autoscales_to_zero() -> None:
+    """The opt-in (INFERENCE_BACKEND=rayserve) Serve app uses Serve-native autoscaling:
+    min 0 so an idle app holds no replica, and the 7200 s downscale delay is the same
+    two-hour idle rule the model-server reaper applies. Re-pinned for 1.6 from
+    num_replicas: 1 with no autoscaling_config."""
     rayservice = _load_chart(RAYSERVICE_CHART)[0]
     assert rayservice["kind"] == "RayService"
 
@@ -554,26 +595,40 @@ def test_e7_07_pins_inference_serve_app_is_fixed_at_one_replica() -> None:
     deployment = application["deployments"][0]
 
     assert deployment["name"] == "InferenceService"
-    assert deployment["num_replicas"] == 1
-    assert "autoscaling_config" not in deployment
+    assert "num_replicas" not in deployment
+    assert deployment["autoscaling_config"] == {
+        "min_replicas": 0,
+        "initial_replicas": 1,
+        "max_replicas": 4,
+        "target_ongoing_requests": 4,
+        "upscale_delay_s": 10,
+        "downscale_delay_s": 7200,
+    }
     assert application["import_path"] == "app.serve.inference:app"
     assert application["runtime_env"]["env_vars"]["MODEL_URI"] == ""
 
 
-def test_e7_07_pins_inference_rayservice_has_no_cluster_autoscaler() -> None:
-    """The inference RayService sets no enableInTreeAutoscaling; its workers cap at 3."""
+def test_e7_07_pins_inference_rayservice_scales_its_workers_from_zero() -> None:
+    """The opt-in RayService runs the Ray autoscaler so worker pods follow the Serve
+    replicas: serve-workers start at 0, floor 0, cap 3. Re-pinned for 1.6 from a
+    fixed (1, 1, 3) group with no enableInTreeAutoscaling."""
     rayservice = _load_chart(RAYSERVICE_CHART)[0]
     cluster = rayservice["spec"]["rayClusterConfig"]
     worker = cluster["workerGroupSpecs"][0]
 
-    assert "enableInTreeAutoscaling" not in cluster
-    assert "autoscalerOptions" not in cluster
+    assert cluster.get("enableInTreeAutoscaling") is True
+    assert "autoscalerOptions" in cluster
     assert worker["groupName"] == "serve-workers"
-    assert (worker["replicas"], worker["minReplicas"], worker["maxReplicas"]) == (1, 1, 3)
+    assert (worker["replicas"], worker["minReplicas"], worker["maxReplicas"]) == (0, 0, 3)
 
 
 def test_e7_07_rayservice_receives_mlflow_and_object_store_environment() -> None:
-    """The API and Ray pods must resolve the same runs:/ URI and S3 artifacts."""
+    """The API and Ray pods must resolve the same runs:/ URI and S3 artifacts: both get
+    avaloka-config (MLflow and object-store settings) whole, and from avaloka-secrets
+    exactly the two object-store keys -- never the whole secret.
+
+    Re-pinned for 1.6: this required envFrom avaloka-secrets until 30550b77
+    (hotfix/1.6-ray-job-secret) narrowed the Serve pods to named keys."""
     rayservice = _load_chart(RAYSERVICE_CHART)[0]
     cluster = rayservice["spec"]["rayClusterConfig"]
     head = cluster["headGroupSpec"]["template"]["spec"]["containers"][0]
@@ -582,9 +637,17 @@ def test_e7_07_rayservice_receives_mlflow_and_object_store_environment() -> None
     for container in (head, worker):
         refs = container["envFrom"]
         assert any(ref.get("configMapRef", {}).get("name") == "avaloka-config" for ref in refs)
-        assert any(ref.get("secretRef", {}).get("name") == "avaloka-secrets" for ref in refs)
+        assert not any("secretRef" in ref for ref in refs), f"whole secret mounted: {refs}"
+        from_secret = {
+            item["name"]: item["valueFrom"]["secretKeyRef"]
+            for item in container.get("env", [])
+            if "secretKeyRef" in item.get("valueFrom", {})
+        }
+        assert sorted(from_secret) == ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"], from_secret
+        for name, ref in from_secret.items():
+            assert (ref["name"], ref["key"]) == ("avaloka-secrets", name), ref
 
-    timeout = {item["name"]: item["value"] for item in head["env"]}
+    timeout = {item["name"]: item["value"] for item in head["env"] if "value" in item}
     assert timeout["RAY_DASHBOARD_SUBPROCESS_MODULE_WAIT_READY_TIMEOUT"] == "180"
     assert head["resources"]["limits"]["memory"] == "6Gi"
 

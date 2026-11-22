@@ -42,7 +42,7 @@ WRITE_JOB_DEFINITION_JSON = os.getenv("AVALOKA_JOB_REGISTRY_WRITE_JSON", "true")
 # ── Signed URL expiry (for retrieval endpoints) ───────────────────────────────
 SIGNED_URL_EXPIRY_M = int(os.getenv("AVALOKA_SIGNED_URL_EXPIRY_MINUTES", "15"))
 
-# ── Retry config (Leela: "try once, wait 2s, wait 4s, then post error to UI") ─
+# ── Retry config: try once, wait 2s, wait 4s, then post an error to the UI ──
 _RETRY_DELAYS = (0, 2, 4)   # seconds before attempt 1, 2, 3
 
 
@@ -232,7 +232,7 @@ async def persist_generated_code_to_store(
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Task B — Job definition → Git  (planner tool call — not auto-triggered)
-# (Leela: "this should be a tool call from planner so user can choose")
+# (a planner tool call, so the user chooses when it runs)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 async def _ensure_github_branch(repo: str, branch: str) -> None:
@@ -304,8 +304,8 @@ async def persist_job_definition_to_git(
     """
     Persist a confirmed job to the Git registry.
 
-    Writes the generated .py transform (so the CODE is visible in the repo —
-    Leela's requirement) and, unless AVALOKA_JOB_REGISTRY_WRITE_JSON=false, the
+    Writes the generated .py transform (so the CODE is visible in the repo)
+    and, unless AVALOKA_JOB_REGISTRY_WRITE_JSON=false, the
     machine-readable job_definition.json next to it. The GitHub token + repo are
     resolved PER USER from the Settings → Integrations connection, falling back
     to the GITHUB_SYSTEM_TOKEN / GITHUB_JOB_REGISTRY_REPO env vars.
@@ -334,7 +334,7 @@ async def persist_job_definition_to_git(
     base = f"jobs/{ds}/{an}/v{version or 1}__{prompt_ts}"
     written: List[str] = []
 
-    # 1) The .py transform — the human-readable code Leela wants in the repo.
+    # 1) The .py transform — the human-readable code kept in the repo.
     code = (coder_definition or {}).get("code")
     if isinstance(code, str) and code.strip():
         py_path = f"{base}_transform.py"
@@ -389,7 +389,7 @@ async def persist_job_definition_to_git(
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Task C — Execution output → Cloud storage  (per-prompt timestamped file)
-# (Leela: "stored by chat timestamp so we know which output is for each prompt")
+# (stored by chat timestamp, so each output maps to the prompt that produced it)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
@@ -461,8 +461,7 @@ async def persist_execution_output_to_store(
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Task D — Visualization config → Cloud storage
-# (Leela: "how do we store visualization data — we dont want to run
-#          visualizations again")
+# (stored so visualizations do not have to be run again)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
@@ -531,7 +530,7 @@ def _append_asset(
 #
 # TRIGGER CONDITION: only fires when execution ran or code was generated as part
 # of a run.  NOT called on every conversational turn.
-# (Leela: "this happens when we schedule or run, not during every interaction")
+# (runs when a job is scheduled or run, not on every interaction)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 async def _persist_assets_background(
@@ -556,7 +555,7 @@ async def _persist_assets_background(
     """
     Runs AFTER ChatResponse is returned.  All task errors are caught and written
     to the Redis session as persist_errors so the UI can notify the user.
-    (Leela: "retry with exponential backoff … post an error to UI on 3rd failure")
+    Retries with exponential backoff and posts an error to the UI on the 3rd failure.
     """
     from app.services.session_service import (  # type: ignore[import-not-found]
         get_session, save_session, update_session,
@@ -686,8 +685,7 @@ async def _persist_assets_background(
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Planner Tool definitions
-# (Leela: "This should be an agent with a tool call so planner knows when to
-#  write it — it should not be called directly")
+# (exposed as tool calls so the planner decides when to write; not called directly)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _make_persistence_tools():

@@ -1,0 +1,16 @@
+diff --git a/app/agents/execution_agent.py b/app/agents/execution_agent.py
+index 357b211..99b439e 100644
+--- a/app/agents/execution_agent.py
++++ b/app/agents/execution_agent.py
+@@ -354,9 +354,9 @@ def render_rayjob_yaml(
+     # number. Anchored at end of line, the requested count was ignored.
+     # K8-10/K8-11: idle workers scale to zero. minReplicas used to be pinned to
+     # the worker count (== maxReplicas), which left the autoscaler no room.
+-    y = re.sub(r"(?m)^([ \t]*)replicas:[ \t]*\d+[ \t]*(?:#.*)?$", rf"\1replicas: {workers}", y)
++    y = re.sub(r"(?m)^(\s*)replicas:\s*\d+\s*$", rf"\1replicas: {workers}", y)
+     y = re.sub(r"(?m)^([ \t]*)minReplicas:[ \t]*\d+[ \t]*(?:#.*)?$", r"\1minReplicas: 0", y)
+-    y = re.sub(r"(?m)^([ \t]*)maxReplicas:[ \t]*\d+[ \t]*(?:#.*)?$", rf"\1maxReplicas: {workers}", y)
++    y = re.sub(r"(?m)^(\s*)maxReplicas:\s*\d+\s*$", rf"\1maxReplicas: {workers}", y)
+ 
+     y = y.replace("__DATA_SOURCE_URI__", data_uri or "")
+     y = y.replace("__OUTPUT_ARTIFACT_URI__", output_artifact_uri or "")

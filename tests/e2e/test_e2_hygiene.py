@@ -215,19 +215,8 @@ def test_e2_11_pins_wildcard_credentials_config() -> None:
     assert kwargs["allow_credentials"] is True
 
 
-@pytest.mark.parametrize(
-    "origin, expect_pna_grant",
-    [
-        pytest.param(HOSTILE_ORIGIN, False, id="hostile-origin"),
-        pytest.param("https://app.avaloka.ai", False, id="plausible-origin"),
-        pytest.param("*", True, id="literal-star-origin"),
-    ],
-)
-def test_e2_11a_pins_private_network_preflight_requires_literal_origin_match(
-    api: Any, origin: str, expect_pna_grant: bool
-) -> None:
-    """Pins the undecided call: the PNA middleware (server.py:719-740) grants Access-Control-Allow-Private-Network only when Origin is literally a member of allow_origins, which holds '*', so no browser origin ever qualifies -- should '*' satisfy the PNA check?"""
-    resp = api.options(
+def _pna_preflight(api: Any, origin: str):
+    return api.options(
         "/version",
         headers={
             "Origin": origin,
@@ -235,11 +224,61 @@ def test_e2_11a_pins_private_network_preflight_requires_literal_origin_match(
             "Access-Control-Request-Private-Network": "true",
         },
     )
+
+
+def _cors_allows(origin: str) -> bool:
+    """Starlette's own answer, from the app's CORS settings -- not server.py's PNA code."""
+    from starlette.middleware.cors import CORSMiddleware
+
+    async def _app(scope, receive, send):  # never called
+        raise AssertionError("not served")
+
+    return CORSMiddleware(_app, **_cors_kwargs()).is_allowed_origin(origin)
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        pytest.param(HOSTILE_ORIGIN, id="hostile-origin"),
+        pytest.param("https://app.avaloka.ai", id="plausible-origin"),
+        pytest.param("*", id="literal-star-origin"),
+    ],
+)
+def test_e2_11a_private_network_grant_follows_the_cors_allow_list(api: Any, origin: str) -> None:
+    """The PNA middleware grants Access-Control-Allow-Private-Network exactly when the
+    Origin passes the CORS allow-list, and then echoes that Origin with a 204.
+
+    Re-pinned for 1.6: this used to pin a literal-membership rule ('*' satisfied
+    nothing). 9f9043d6 made '*' count, reaching develop-1.6 in c75131df. With
+    allow_origins=['*'] that grants every Origin -- the exposure is tracked by the
+    strict xfail below, against DEFECT E2.11, not accepted here."""
+    resp = _pna_preflight(api, origin)
     granted = resp.headers.get("access-control-allow-private-network") == "true"
-    assert granted is expect_pna_grant
-    if expect_pna_grant:
+    assert granted is _cors_allows(origin), (
+        f"PNA grant={granted} but CORS allows {origin!r}={_cors_allows(origin)}"
+    )
+    if granted:
         assert resp.status_code == 204
         assert resp.headers.get("access-control-allow-origin") == origin
+
+
+@pytest.mark.defect
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason=(
+        "DEFECT E2.11 (P0): allow_origins=['*'] with allow_credentials=True. Because the PNA "
+        "grant follows the CORS allow-list, every Origin -- a hostile one included -- is told "
+        "Access-Control-Allow-Private-Network: true. Fixed when allow_origins is narrowed; "
+        "remove this xfail then."
+    ),
+)
+def test_e2_11a_hostile_origin_gets_no_private_network_grant(api: Any) -> None:
+    """A hostile Origin's private-network preflight is not granted."""
+    resp = _pna_preflight(api, HOSTILE_ORIGIN)
+    assert resp.headers.get("access-control-allow-private-network") != "true", (
+        f"hostile origin granted PNA: {dict(resp.headers)}"
+    )
 
 
 # ---------------------------------------------------------------------------

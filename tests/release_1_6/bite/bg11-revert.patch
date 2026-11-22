@@ -1,0 +1,13 @@
+diff --git a/app/api/server.py b/app/api/server.py
+index c61b6d4a..e95e2ad7 100644
+--- a/app/api/server.py
++++ b/app/api/server.py
+@@ -6770,7 +6770,7 @@ Ready to proceed with model training!"""
+         mlflow_run_id = final.get("mlflow_run_id")
+         if not mlflow_run_id and isinstance(training_result, dict):
+             mlflow_run_id = training_result.get("mlflow_run_id")
+-        training_completed = final.get("training_completed", False)
++        training_completed = False
+         ready_to_train = final.get("ready_to_train", False)
+         training_status = "completed" if training_completed else "pending" if ready_to_train else None
+ 

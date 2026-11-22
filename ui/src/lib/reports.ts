@@ -1,4 +1,5 @@
 import { supabase } from "@/integrations/supabase/client";
+import { fetchDisplayProfiles } from "@/lib/display-profiles";
 
 export type ReportUserDetails = {
   id: string;
@@ -88,13 +89,13 @@ export async function createReport(input: {
   const userId = userData.user?.id;
   if (!userId) throw new Error("Not signed in");
 
+  // Free/Professional users have no organization (personal reports).
   const orgId = await currentOrgId();
-  if (!orgId) throw new Error("Missing organization");
 
   const { data, error } = await supabase
     .from("reports")
     .insert({
-      organization_id: orgId,
+      organization_id: orgId ?? null,
       project_id: input.projectId,
       analysis_id: input.analysisId,
       title: input.title || "Untitled report",
@@ -207,11 +208,9 @@ export async function enrichReports(reports: ReportRecord[]): Promise<ReportReco
     { first_name: string | null; last_name: string | null; full_name: string | null }
   >();
   if (collabAuthIds.length) {
-    const { data: cprofs } = await supabase
-      .from("profiles")
-      .select("id, user_id, first_name, last_name, full_name")
-      .or(`id.in.(${collabAuthIds.join(",")}),user_id.in.(${collabAuthIds.join(",")})`);
-    for (const p of (cprofs ?? []) as Array<{
+    // Collaborators may be in other organisations: display fields only.
+    const cprofs = await fetchDisplayProfiles(supabase, collabAuthIds);
+    for (const p of cprofs as Array<{
       id: string;
       user_id: string | null;
       first_name: string | null;
@@ -312,10 +311,8 @@ export async function enrichReports(reports: ReportRecord[]): Promise<ReportReco
     }
 
     const profileIdList = Array.from(profileLookupIds);
-    const { data: profs } = await supabase
-      .from("profiles")
-      .select("id, user_id, first_name, last_name, full_name, avatar_url")
-      .or(`id.in.(${profileIdList.join(",")}),user_id.in.(${profileIdList.join(",")})`);
+    // Creators may be in other organisations: display fields only.
+    const profs = await fetchDisplayProfiles(supabase, profileIdList);
 
     const profMap = new Map<
       string,
@@ -328,14 +325,7 @@ export async function enrichReports(reports: ReportRecord[]): Promise<ReportReco
         avatar_url: string | null;
       }
     >();
-    for (const p of (profs ?? []) as Array<{
-      id: string;
-      user_id: string | null;
-      first_name: string | null;
-      last_name: string | null;
-      full_name: string | null;
-      avatar_url: string | null;
-    }>) {
+    for (const p of profs) {
       profMap.set(p.id, p);
       if (p.user_id) profMap.set(p.user_id, p);
     }

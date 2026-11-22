@@ -1,6 +1,6 @@
 {
  "suite": "v4",
- "source": "/Users/mehebubalom/Desktop/GuruvaiSciences/ssh-workstation/avaloka-test-results/TEST_PLAN_v4.md",
+ "source": "tests/avaloka-test-results/TEST_PLAN_v4.md",
  "thread_datasets": {
   "housing-main": "upload:housing.csv",
   "housing-mta": "upload:housing.csv",

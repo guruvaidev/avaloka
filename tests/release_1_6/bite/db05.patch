@@ -1,0 +1,29 @@
+diff --git a/app/mcp_server/customer_dbs.py b/app/mcp_server/customer_dbs.py
+index c0f66b1b..d11a0581 100644
+--- a/app/mcp_server/customer_dbs.py
++++ b/app/mcp_server/customer_dbs.py
+@@ -352,10 +352,10 @@ class DatabaseConnectionManager:
+                     'check_same_thread': False
+                 }
+             else:
+-                engine_kwargs['connect_args'] = {
+-                    'connect_timeout': conn.query_timeout,
+-                    **conn.connection_params
+-                }
++                engine_kwargs['connect_args'] = (
++                    {} if conn.database_type == 'oracle' else {'connect_timeout': conn.query_timeout}
++                )
++                engine_kwargs['connect_args'].update(conn.connection_params or {})
+ 
+             engine = create_engine(connection_string, **engine_kwargs)
+ 
+@@ -380,7 +380,8 @@ class DatabaseConnectionManager:
+ 
+                 elif conn.database_type == 'oracle':
+                     result = connection.execute(text("SELECT * FROM v$version WHERE banner LIKE 'Oracle%' AND ROWNUM = 1"))
+-                    version = result.fetchone()[0] if result.fetchone() else "Oracle"
++                    _row = result.fetchone()
++                    version = _row[0] if _row else "Oracle"
+                     result = connection.execute(text("SELECT SYS_CONTEXT('USERENV', 'DB_NAME'), USER FROM dual"))
+                     database, user = result.fetchone()
+ 

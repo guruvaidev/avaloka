@@ -145,7 +145,7 @@ def test_7_planner_missing_dest(mock_session, mock_state, transfer_params):
 def test_8_planner_auto_fetch_source_api_success(mock_pipeline, mock_session, mock_gke, mock_state, transfer_params):
     # The onboarding API 'has' this source; it should be auto-registered.
     _config_session(mock_session, status=200, payload={
-        "host": "1.2.3.4", "port": 3306, "database": "api_db",
+        "host": "203.0.113.4", "port": 3306, "database": "api_db",
         "username": "u", "password": "p", "table": "t",
         "customers": [{"customer_id": "new_api_db", "database_type": "mysql"}],
     })
@@ -160,7 +160,7 @@ def test_8_planner_auto_fetch_source_api_success(mock_pipeline, mock_session, mo
 @patch("app.agents.data_transfer_agent.data_transfer_agent.data_transfer_pipeline")
 def test_9_planner_auto_fetch_dest_api_success(mock_pipeline, mock_session, mock_gke, mock_state, transfer_params):
     _config_session(mock_session, status=200, payload={
-        "host": "1.2.3.4", "port": 5432, "database": "api_db",
+        "host": "203.0.113.4", "port": 5432, "database": "api_db",
         "username": "u", "password": "p", "table": "t",
         "customers": [{"customer_id": "new_api_db", "database_type": "postgresql"}],
     })

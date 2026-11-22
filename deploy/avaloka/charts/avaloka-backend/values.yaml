@@ -97,15 +97,10 @@ ingress:
     kubernetes.io/ingress.class: nginx
     nginx.ingress.kubernetes.io/proxy-body-size: "100m"
 
-  langgraph:
-    host: avaloka-langgraph.local
+  # The API only: the langgraph container is internal (no host, no path).
   api:
     host: avaloka-api.local
   paths:
-    - path: /langgraph
-      pathType: Prefix
-      serviceName: avaloka-backend-langgraph
-      servicePort: 3000
     - path: /api
       pathType: Prefix
       serviceName: avaloka-backend-api
@@ -126,14 +121,15 @@ probes:
       periodSeconds: 20
       failureThreshold: 3
   langgraph:
-    # LangGraph CLI exposes /info; if missing the probe falls back to TCP.
+    # /ok: the one LangGraph route that answers without LANGGRAPH_SERVICE_TOKEN
+    # (/info now needs it, and a kubelet probe sends no header).
     readiness:
-      path: /info
+      path: /ok
       initialDelaySeconds: 15
       periodSeconds: 5
       failureThreshold: 6
     liveness:
-      path: /info
+      path: /ok
       initialDelaySeconds: 60
       periodSeconds: 20
       failureThreshold: 3

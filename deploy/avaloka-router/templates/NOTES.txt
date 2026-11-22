@@ -1,0 +1,8 @@
+Avaloka router: active color {{ .Values.activeColor }}.
+{{- if and .Values.ingress.enabled .Values.ingress.hosts.langgraph }}
+
+NOTE: ingress.hosts.langgraph ({{ .Values.ingress.hosts.langgraph }}) is ignored.
+The LangGraph server is internal-only: the API is its only caller and reaches it
+inside its own pod, so this chart renders no route and no Service for it. Remove
+the value, and the DNS record for that host if one exists.
+{{- end }}

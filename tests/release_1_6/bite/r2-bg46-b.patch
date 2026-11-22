@@ -1,0 +1,13 @@
+diff --git a/ui/src/lib/chat-width.ts b/ui/src/lib/chat-width.ts
+index cff7f333..d2cfce6c 100644
+--- a/ui/src/lib/chat-width.ts
++++ b/ui/src/lib/chat-width.ts
+@@ -26,7 +26,7 @@ export function defaultChatWidth(viewport: number): number {
+ /** min(720px, 55% of the window), never squeezing the data area below 480px, never below the minimum. */
+ export function maxChatWidth(viewport: number): number {
+   return Math.round(
+-    Math.max(CHAT_WIDTH_MIN, Math.min(CHAT_WIDTH_MAX, viewport * 0.55, viewport - WORKSPACE_CHROME - DATA_AREA_MIN)),
++    Math.max(CHAT_WIDTH_MIN, Math.min(CHAT_WIDTH_MAX, viewport * 0.55, viewport)),
+   );
+ }
+ 
