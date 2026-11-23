@@ -5,13 +5,16 @@ import logging
 import os
 import re
 import time
+import traceback
 import uuid
 from dotenv import load_dotenv
 from groq import APIError
 from langchain_core.messages import AIMessage, HumanMessage, BaseMessage
 from langchain_core.prompts import ChatPromptTemplate
 import requests
+from app.agents import infra_confirmation
 from app.infra.ray_job_runner import ray_job_context
+from app.core import job_ledger
 
 # Load environment variables
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -27,7 +30,8 @@ from app.agents.suggestions import (MAX_OFFERED_SUGGESTIONS,
 # Rendering the offer lives with parsing and remembering it; this name is kept
 # so existing call sites read unchanged.
 _render_suggestions = render_suggestions
-from app.graph.etl_state import ETLState
+from app.graph.etl_state import DTA_HANDLE_SOURCES, ETLState
+from app.agents.data_transfer_agent.dta_state import redact_secrets
 from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 from typing import List, Literal, Optional, Tuple, Union
 from app.core.celery_app import AvalokaScheduler
@@ -45,8 +49,9 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Plan gates: data transfer (DTA) and model training are COST gates in
 # app/core/editions.py. app/core/plan_gate.py decides them from that matrix:
-# never on a self-hosted deployment, on the hosted service only for plans that
-# include the capability, and allowed (fail open) when the plan is unknown.
+# never on a self-hosted or undeclared deployment, on the hosted service only
+# for plans that include the capability. A hosted plan lookup that fails refuses
+# the feature as unavailable: no upgrade message, no plan_upgrade_required.
 # Everything else (analysis, charts, code) is unchanged for every plan.
 # ---------------------------------------------------------------------------
 
@@ -69,6 +74,17 @@ def _premium_allowed(state, feature: str = "data_transfer") -> bool:
 def _upgrade_message(feature: str, state) -> str:
     from app.core.plan_gate import upgrade_message
     return upgrade_message(_gate(feature, state))
+
+
+def _refusal(feature: str, state):
+    """(message, upgrade) for a refused ``feature``. ``upgrade`` is False when
+    the plan could not be checked: the turn says so instead of asking a user
+    who may be paying to upgrade."""
+    from app.core.plan_gate import unavailable_message, upgrade_message
+    decision = _gate(feature, state)
+    if decision.unavailable:
+        return unavailable_message(decision), False
+    return upgrade_message(decision), True
 
 
 def _user_plan(state) -> Optional[str]:
@@ -108,6 +124,7 @@ def _apply_training_plan_gate(state_in, out_state):
                 (state_in or {}).get("user_id"), _user_plan(state_in))
     if training_schedule:
         out["task_schedule"] = None
+    message, upgrade = _refusal("model_training", state_in)
     out.update({
         "enable_training": False,
         "skip_to_training": False,
@@ -115,10 +132,10 @@ def _apply_training_plan_gate(state_in, out_state):
         "training_plan_reply_action": "none",
         "ready_to_code": False,
         "ready_to_summarize": False,
-        "plan_upgrade_required": "model_training",
+        "plan_upgrade_required": "model_training" if upgrade else None,
     })
     msgs = list(out.get("messages") or state_in.get("messages") or [])
-    msgs.append(AIMessage(content=_upgrade_message("model_training", state_in)))
+    msgs.append(AIMessage(content=message))
     out["messages"] = msgs
     return out
 
@@ -296,40 +313,101 @@ def _is_grouped_on(stem: str, prompt_stems: tuple[str, ...], column_stems: set) 
     uses = [i for i, word in enumerate(prompt_stems) if word == stem]
     return bool(uses) and all(grouped(i) for i in uses)
 
+# Questions asking for a count of records.
+_RECORD_COUNT_PATTERNS = [
+    re.compile(
+        r"\bhow\s+many\s+(?P<population>.+?)"
+        r"(?=\s+(?:did|do|does|have|has|had|were|are|was|is)\b|[?.!,;:]|$)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:number|count)\s+of\s+(?P<population>.+?)"
+        r"(?=\s+(?:did|do|does|have|has|had|were|are|was|is)\b|[?.!,;:]|$)",
+        re.IGNORECASE,
+    ),
+]
+
+# Questions asking for the percentage/share of a population
+# that satisfies a condition.
+_RECORD_PROPORTION_PATTERNS = [
+    re.compile(
+        r"\b(?:what\s+)?(?:percentage|percent|%)\s+of\s+"
+        r"(?P<population>.+?)\s+"
+        r"(?P<predicate>were|are|was|is|have|has|had|did|do|does)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:what\s+)?(?:share|proportion)\s+of\s+"
+        r"(?P<population>.+?)\s+"
+        r"(?P<predicate>were|are|was|is|have|has|had|did|do|does)\b",
+        re.IGNORECASE,
+    ),
+]
+
+
+def _record_context_stems(prompt: str) -> set[str]:
+    """
+    Extract words describing the population being counted or measured.
+
+    These words describe which records the question is about,
+    rather than necessarily identifying a numeric measurement.
+
+    Examples:
+        "What % of loan applications were denied?"
+            -> loan, application
+
+        "How many customers made purchases?"
+            -> customer
+
+        "What percentage of orders were returned?"
+            -> order
+    """
+    stems: set[str] = set()
+    patterns = _RECORD_COUNT_PATTERNS + _RECORD_PROPORTION_PATTERNS
+    for pattern in patterns:
+        match = pattern.search(prompt)
+        if not match:
+            continue
+
+        population = match.group("population").strip()
+
+        # Stop at punctuation or common clause boundaries.
+        population = re.split(
+            r"\b(?:by|per|for\s+each|across|grouped\s+by)\b|[,;?.!]",
+            population,
+            maxsplit=1,
+            flags=re.IGNORECASE,
+        )[0]
+
+        stems.update(
+            _metric_stem(token)
+            for token in _column_tokens(population)
+            if len(token) >= 3
+            and not token.isdigit()
+        )
+
+    return stems
+
 
 def _detect_metric_ambiguity(prompt: str, state: Optional[ETLState]) -> Optional[dict]:
-    """Ask "which X?" only when two or more NUMERIC columns collide on the stem X
-    and nothing in the prompt already picks one.
+    """Ask "which X?" only when two or more numeric columns collide
+    on a measurement stem and the prompt does not resolve the choice.
 
-    The stem-collision rule:
+    Population/entity words are excluded when the user asks for
+    record counts or proportions of records.
 
-    * A name is split into tokens on case, underscores, punctuation and
-      camelCase humps, then each token is folded to its singular: ActualCost,
-      actual_cost and "Actual Costs" are all (actual, cost).
-    * Two columns collide on a stem when both contain it as a whole token and
-      each carries at least one other token (the qualifier), and the qualifiers
-      differ. Position does not matter: gross_revenue/net_revenue collide on a
-      suffix, revenue_2023/revenue_2024 on a prefix. Three or more colliding
-      columns are all offered.
-    * A column that IS the stem (revenue next to net_revenue) is what the user
-      named, so it resolves the choice instead of joining the collision.
-    * A stem is only looked for among the words the user typed. Whether the
-      word follows "average"/"total" is irrelevant: "What was revenue last
-      month?" is exactly as ambiguous as "total revenue last month".
-    * A stem that directly follows per / for each / across is what the user
-      groups on, not what they measure, and is skipped. So is one after "by",
-      but only once a column word has been named before it: "revenue by
-      region" groups on region, "sort by revenue" asks about revenue.
-      Otherwise the first colliding stem in prompt order is the one asked
-      about, so "which channel has the most subscribers" still asks about
-      channel when two numeric channel_* columns exist.
-    * The prompt resolves the choice itself when it names every token of one
-      option ("gross revenue", "revenue 2024") or a word only one option has
-      ("views" for video_views_for_the_last_30_days), or when it asks for the
-      whole group ("all revenue", "revenue columns").
+    Examples:
+        "What % of loan applications were denied?"
+            -> loan is population context, not a metric.
 
-    This is a deterministic gate that runs before the LLM. A single matching
-    column never asks; the coder and validator still handle the request.
+        "How many customers made purchases?"
+            -> customers is population context, not a metric.
+
+        "What is the average gross revenue?"
+            -> revenue remains a metric.
+
+        "What is the average revenue?"
+            -> may be ambiguous if gross_revenue and net_revenue exist.
     """
     if os.getenv("AVALOKA_METRIC_CLARIFICATION", "1").strip().lower() in {"0", "false", "off", "no"}:
         return None
@@ -352,6 +430,11 @@ def _detect_metric_ambiguity(prompt: str, state: Optional[ETLState]) -> Optional
     words = set(prompt_stems)
     candidates = [(column, set(_column_stems(column))) for column in columns]
     column_stems = set().union(*(tokens for _, tokens in candidates))
+    # NEW:
+    # Identify words describing the population being analyzed.
+    # These should not automatically be treated as metrics.
+    record_context_stems = _record_context_stems(prompt)
+
     seen: set = set()
     for measure in _column_tokens(prompt):
         stem = _metric_stem(measure)
@@ -361,27 +444,30 @@ def _detect_metric_ambiguity(prompt: str, state: Optional[ETLState]) -> Optional
         # 1. Grammar and numbers are never measures.
         if len(measure) < 3 or measure.isdigit() or measure in _METRIC_FUNCTION_WORDS:
             continue
-        # 2. A word the user only groups on ("per X", "by X", "across X") is a
-        #    dimension. "for each X" is caught by the "each X" test in rule 3.
+        # 2. NEW:
+        # Skip words that describe the population being counted
+        # or measured rather than the numeric measurement itself.
+        if stem in record_context_stems:
+            continue
+        # 3. A word the user only groups on is a dimension.
         if _is_grouped_on(stem, prompt_stems, column_stems):
             continue
-        # 3. Asking for the whole group is not a choice between its members.
+        # 4. Asking for the whole group is not a choice between its members.
         if re.search(rf"\b(?:all|each|every|both)\s+{re.escape(measure)}\b", prompt, re.IGNORECASE):
             continue
         if re.search(rf"\b{re.escape(measure)}\s+(?:columns|fields|metrics)\b", prompt, re.IGNORECASE):
             continue
-        # An exact column with that name resolves it.
+        # 5. An exact column with that name resolves it.
         if any(tokens == {stem} for _, tokens in candidates):
             continue
-        # 4. Only numeric columns are measures, so text columns sharing the
-        #    stem (channel_type, country_rank labels) are not real options.
+        # 6. Only numeric columns are measures.
         options = [(column, tokens) for column, tokens in candidates
                    if stem in tokens and len(tokens) > 1]
         options = [(column, tokens) for column, tokens in options
                    if not _column_is_non_numeric(column, schema, state)]
         if len(options) < 2:
             continue
-        # 5. A qualifier the user already named ("math score", "revenue 2024") resolves it.
+        # 7. A qualifier the user already named resolves the choice.
         if any(tokens.issubset(words) for _, tokens in options):
             continue
         named = False
@@ -699,12 +785,23 @@ def _seed_ray_fields(state: ETLState) -> None:
             state["execution_mode"] = "local"
             logger.warning("Planner: file_size unknown → defaulting to local (safe fallback)")
 
-def _seed_infra_request_if_needed(state: ETLState) -> None:
+def _seed_infra_request_if_needed(state: ETLState) -> Optional[dict]:
+    """The Ray prerequisites request (namespace, KubeRay) a k8s-ray run on cloud
+    data would want, or None. Returned, never written to the state.
+
+    It used to be written into ``infrastructure_request`` unasked, so any turn
+    that neither coded nor summarized (a clarification, a question) went
+    through provision_infra: KubeRay installs, or ``provision_cluster`` when
+    kubectl was not configured. Provisioning needs an explicit request and a
+    "yes" (app/agents/infra_confirmation.py); the confirmation path adds these
+    Ray fields to the request it confirms. Ray execution itself submits to an
+    existing cluster and needs none of it.
+    """
     if state.get("execution_mode") != "k8s-ray":
-        return
+        return None
 
     if not (state.get("data_source_location_cloud") or "").strip():
-        return
+        return None
 
     infra = state.get("infrastructure_provisioned")
     infra_ready = (
@@ -712,10 +809,10 @@ def _seed_infra_request_if_needed(state: ETLState) -> None:
         or (isinstance(infra, dict) and str(infra.get("status", "")).lower() == "provisioned")
     )
     if infra_ready:
-        return
+        return None
 
     if state.get("infrastructure_request"):
-        return
+        return None
 
     # infer platform from cloud URI (best effort)
     uri = (state.get("data_source_location_cloud") or state.get("data_source_location") or "").lower()
@@ -726,7 +823,7 @@ def _seed_infra_request_if_needed(state: ETLState) -> None:
     else:
         platform = os.getenv("DEFAULT_INFRA_PLATFORM", "gcp")
 
-    state["infrastructure_request"] = {
+    return {
         "type": platform,
         "app_type": "python-docker",
         "use_ray": True,
@@ -739,6 +836,13 @@ def _seed_infra_request_if_needed(state: ETLState) -> None:
 # ---------------------------------------------------------------------------
 # Message normalization
 # ---------------------------------------------------------------------------
+
+def _is_job_note(message) -> bool:
+    """A code-written background-job note (app/core/job_notes.py): system
+    context in the history, never the assistant's last turn."""
+    ak = getattr(message, "additional_kwargs", None) or {}
+    return isinstance(ak, dict) and bool(ak.get("avaloka_job_note"))
+
 
 def _normalize_messages(messages: List) -> List[BaseMessage]:
     """Convert messages to proper LangChain message objects.
@@ -1791,7 +1895,9 @@ tools = [
         "type": "function",
         "description": (
             "Register a database (MySQL, PostgreSQL) or cloud bucket (AWS S3, GCS, Azure Blob) "
-            "credential into the session. Call when the user provides connection details. "
+            "connection. Call when the user provides connection details. Credentials are stored "
+            "sealed; a password or key the user typed is shown to you as \u27e6credential\u27e7 -- "
+            "put \u27e6credential\u27e7 in the matching field and the stored value is used. "
             "For a cloud bucket set `db_type` to 'aws_s3'/'gcs'/'azure_blob' and `bucket_name`, "
             "plus the provider credentials the user gives (S3: `access_key`/`secret_key`/`region`; "
             "GCS: `gcp_service_account_json`; Azure: `az_storage_account` + `az_sas_token` or "
@@ -1922,6 +2028,62 @@ tool_name_to_param = {
 # Tool call parsing
 # ---------------------------------------------------------------------------
 
+#: gpt-oss speaks the Harmony format, and some hosts leak its framing into the
+#: tool name: "functions.generate_code", "respond_to_user<|channel|>commentary",
+#: "generate_code.json". The tool meant is still recognisable.
+_HARMONY_NAME_NOISE = re.compile(
+    r"^(?:functions\.)|<\|[a-z_]+\|>.*$|\.(?:commentary|analysis|final|json)$"
+)
+
+#: Sent once when the model called a tool that does not exist (Harmony's phantom
+#: "commentary" / "json" / "return_answer" calls). Mirrors the bounded re-prompt
+#: avaloka/data_agent uses on 2.x for the same failure.
+_PHANTOM_TOOL_REPROMPT = (
+    "Your previous reply called a tool named {name!r}, which does not exist. "
+    "Call exactly one of these tools by its exact name, with JSON arguments that "
+    "match its schema: {names}. Do not invent tools."
+)
+
+
+def _normalise_tool_name(name: Optional[str]) -> Optional[str]:
+    """The planner tool *name* refers to, with Harmony framing removed, if any."""
+    if not name or name in tool_name_to_param:
+        return name
+    stripped = _HARMONY_NAME_NOISE.sub("", name).strip()
+    return stripped if stripped in tool_name_to_param else name
+
+
+def _tool_call_name(tool_call: Any) -> Optional[str]:
+    if isinstance(tool_call, dict):
+        fn = tool_call.get("function")
+        return (fn or {}).get("name") if isinstance(fn, dict) else tool_call.get("name")
+    return getattr(tool_call, "name", None)
+
+
+def _phantom_tool_names(response: Any) -> list:
+    """Names of tool calls in *response* that no planner tool answers to."""
+    calls = getattr(response, "tool_calls", None) or []
+    return [n for n in (_tool_call_name(c) for c in calls)
+            if _normalise_tool_name(n) not in tool_name_to_param]
+
+
+def _retry_phantom_tool_call_once(llm: Any, msgs: list, response: Any, **invoke_kwargs: Any) -> Any:
+    """Ask once more when the model called a tool that does not exist.
+
+    Without this a phantom call reached parse_tool_call as a KeyError and the
+    turn ended as "I ran into a temporary problem while planning". One re-prompt
+    naming the real tools, then the reply is used as it is: a second phantom
+    fails exactly as before, so the retry cannot loop or hide a real problem.
+    """
+    phantom = _phantom_tool_names(response)
+    if not phantom:
+        return response
+    logger.warning("Planner: model called nonexistent tool %r; re-prompting once.", phantom[0])
+    nudge = HumanMessage(content=_PHANTOM_TOOL_REPROMPT.format(
+        name=phantom[0], names=", ".join(sorted(tool_name_to_param))))
+    return llm.invoke(list(msgs) + [nudge], **invoke_kwargs)
+
+
 def parse_tool_call(tool_call_response) -> ToolCall:
     if isinstance(tool_call_response, ToolCall):
         return tool_call_response
@@ -1945,6 +2107,7 @@ def parse_tool_call(tool_call_response) -> ToolCall:
     else:
         raise TypeError(f"Unsupported tool call response type: {type(tool_call_response)}")
 
+    tool_name = _normalise_tool_name(tool_name)
     model = tool_name_to_param.get(tool_name)
     if not model:
         raise KeyError(f"Tool name '{tool_name}' not mapped to a Pydantic parameter model.")
@@ -2564,6 +2727,11 @@ def _detect_fabricated_reference(user_input: str, state: ETLState) -> Optional[d
          values; use LLM adjudication for partial cases. Fails open.
     """
     text = _strip_runtime_context(user_input)
+    # A sealed credential (app/core/typed_secrets.py) is base64 that reads like
+    # camelCase identifiers; it is not a field reference, and judging it as one
+    # refused "register a connection ... password <token>" as a fabrication.
+    from app.core.typed_secrets import TOKEN_RE as _SEALED_TOKEN_RE
+    text = _SEALED_TOKEN_RE.sub(" ", text or "")
     if not text or len(text.split()) < 3:
         return None
     if _is_task_operation_request(text):
@@ -3214,9 +3382,22 @@ def _extract_object_path_from_prompt(text: str, role: str) -> Optional[str]:
 
 
 def _get_db_registry(state: ETLState) -> Dict[str, dict]:
+    """The session registry, scrubbed on read.
+
+    An entry resolved from a store (a UI database or cloud connection) holds its
+    handle and display fields; the credentials are read from the store when a
+    transfer runs. A checkpoint written before that rule may still hold them in
+    such an entry; they are dropped here, before anything reads them.
+    """
+    from app.graph.etl_state import scrub_registry_entry
     if "dta_database_registry" not in state or state["dta_database_registry"] is None:
         state["dta_database_registry"] = {}
-    return state["dta_database_registry"]
+    registry = state["dta_database_registry"]
+    for alias, entry in list(registry.items()):
+        scrubbed = scrub_registry_entry(entry)
+        if scrubbed is not entry:
+            registry[alias] = scrubbed
+    return registry
 
 def _format_registry_for_display(registry: Dict[str, dict]) -> str:
     if not registry:
@@ -3260,9 +3441,333 @@ def _resolve_registry_alias(registry: Dict[str, dict], alias: str) -> Optional[s
     return next((key for key in registry if key.casefold() == folded), None)
 
 
+def _redact_typed(text: str) -> str:
+    """``text`` with typed credentials redacted, for a log line."""
+    from app.core.typed_secrets import redact_typed_secrets
+    return redact_typed_secrets(text)[0]
+
+
+def _seal_human_message(message) -> None:
+    """Seal typed credentials in a human message, in place. Other messages are left alone."""
+    from app.core.typed_secrets import seal_typed_secrets
+    if isinstance(message, HumanMessage) and isinstance(message.content, str):
+        sealed, n = seal_typed_secrets(message.content)
+        if n:
+            message.content = sealed
+    elif isinstance(message, dict) and (message.get("type") == "human" or message.get("role") == "user"):
+        content = message.get("content")
+        if isinstance(content, str):
+            sealed, n = seal_typed_secrets(content)
+            if n:
+                message["content"] = sealed
+        elif isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and isinstance(part.get("text"), str):
+                    part["text"], _ = seal_typed_secrets(part["text"])
+
+
+# RegisterDatabaseParams fields that carry a secret, and the token label each
+# one takes from the user's message when the model did not copy the token.
+_REGISTER_SECRET_FIELDS = {
+    "password": "password",
+    "secret_key": "secret_key",
+    "access_key": "access_key",
+    "az_sas_token": "az_sas_token",
+    "az_access_key": "az_access_key",
+    "gcp_service_account_json": None,
+    "azure_connection_string": None,
+}
+
+
+#: How many of the user's turns back a registration's typed credentials may be.
+#: "Register X ... password P" is answered at once, or after one clarifying
+#: exchange ("yes", "use port 5433"); further back is a different request.
+_REGISTER_TOKEN_TURNS = 4
+
+
+def _message_role_text(message) -> Tuple[str, str]:
+    if isinstance(message, HumanMessage):
+        return "human", message.content if isinstance(message.content, str) else ""
+    if isinstance(message, AIMessage):
+        return "ai", message.content if isinstance(message.content, str) else ""
+    if isinstance(message, dict):
+        role = message.get("type") or message.get("role") or ""
+        content = message.get("content")
+        role = "human" if role in ("human", "user") else "ai" if role in ("ai", "assistant") else role
+        return role, content if isinstance(content, str) else ""
+    return "", ""
+
+
+_DECLARED_NAME_RE = re.compile(r"\b(?:named|called|alias)\s+[`'\"]?([\w.-]+)", re.IGNORECASE)
+
+
+def _word_in(value: Any, text: str) -> bool:
+    value = str(value or "").strip()
+    return bool(value) and re.search(r"(?<![\w.-])" + re.escape(value) + r"(?![\w-])", text, re.IGNORECASE) is not None
+
+
+def _registration_credentials_text(state: ETLState, params: RegisterDatabaseParams) -> Tuple[str, bool]:
+    """``(the user's message that carried this registration's details, or "",
+    whether any message in scope carried a sealed token at all)``.
+
+    Bound to the registration flow, not to a name the user may never have
+    typed (the model picks one when they don't). Candidates are the user's
+    messages since the last completed registration ("Registered X as" -- its
+    tokens were that registration's), at most _REGISTER_TOKEN_TURNS back,
+    that carry a sealed token. The newest one wins whose details agree with
+    the registration the model built:
+
+    * every one of host, database and user the registration names appears in
+      it, as a word -- so details typed for another connection (another
+      user, another database) never lend it their password;
+    * if it declares a name ("named X", "called X"), that name is this alias.
+
+    A confirming "yes" resolves to the message before it, and re-sending the
+    details (what a refusal asks for) supersedes an earlier attempt.
+    """
+    from app.core.typed_secrets import TOKEN_RE
+    done = re.compile(r"Registered \**`?[\w.-]+`?\** as ", re.IGNORECASE)
+    alias = (params.alias or "").strip()
+    humans, saw = 0, False
+    for message in reversed(state.get("messages") or []):
+        role, text = _message_role_text(message)
+        if role == "ai" and done.search(text):
+            return "", saw
+        if role != "human":
+            continue
+        humans += 1
+        if humans > _REGISTER_TOKEN_TURNS:
+            return "", saw
+        if not TOKEN_RE.search(text):
+            continue
+        saw = True
+        plain = TOKEN_RE.sub(" ", text)
+        if not all(_word_in(v, plain) for v in (params.host, params.database, params.user) if v):
+            continue
+        declared = [m.group(1) for m in _DECLARED_NAME_RE.finditer(plain)]
+        if declared and not any(d.lower() == alias.lower() for d in declared):
+            continue
+        return text, True
+    return "", saw
+
+
+def _open_register_secrets(state: ETLState, params: RegisterDatabaseParams):
+    """The secrets for this registration, opened from the sealed tokens. Locals only.
+
+    Returns a dict, or a refusal string when a credential field cannot be
+    resolved. The model saw ``⟦credential⟧`` where the user typed a secret, so
+    the value comes from the user's own message (see
+    _registration_credentials_text for which one): a field takes that
+    message's token with the same label when there is exactly one; a field
+    still holding a token is opened as is. The placeholder itself is never
+    used as a credential. A plaintext value -- a caller that bypassed both
+    seals -- is used as given, and still goes only to the sealed store.
+    """
+    from app.core.typed_secrets import PLACEHOLDER, has_sealed, open_sealed, sealed_labels
+    flow_text, typed_any = _registration_credentials_text(state, params)
+    labels = sealed_labels(flow_text)
+    out: Dict[str, Any] = {}
+    unresolved = []
+    for field, label in _REGISTER_SECRET_FIELDS.items():
+        value = getattr(params, field, None)
+        if isinstance(value, dict):
+            value = json.dumps(value)
+        if isinstance(value, str) and has_sealed(value):
+            value = open_sealed(value)
+        elif label and len(labels.get(label, [])) == 1:
+            value = open_sealed(labels[label][0])
+        elif isinstance(value, str) and PLACEHOLDER in value and len(labels.get("private_key", [])) == 1:
+            # An SA JSON the model was shown with its private key as the placeholder.
+            value = value.replace(PLACEHOLDER, open_sealed(labels["private_key"][0]) or PLACEHOLDER, 1)
+        if value in (None, ""):
+            if getattr(params, field, None) not in (None, ""):
+                unresolved.append(field)   # a token this key could not open
+            continue
+        if isinstance(value, str) and (PLACEHOLDER in value or "\u27e6sealed:" in value):
+            unresolved.append(field)
+            continue
+        out[field] = value
+    if (params.db_type in ("mysql", "postgresql") and typed_any and not flow_text
+            and not out.get("password") and "password" not in unresolved):
+        # A password was typed recently, but for another connection: never
+        # try this one without its own (nor with that one).
+        unresolved.append("password")
+    if unresolved:
+        logger.warning("DTA: registration of %s has unresolved credential field(s) %s",
+                       params.alias, sorted(unresolved))
+        return (f"❌ **I couldn't find the {', '.join(sorted(unresolved)).replace('_', ' ')} for "
+                f"`{params.alias}`** in what you typed, so nothing was stored. Send the connection "
+                f"details again in one message, including the password. {_QUOTE_PASSWORD_HINT}")
+    return out
+
+
+# Shown with every chat registration that could not log in. Never echoes the
+# value: an unquoted password ends before sentence punctuation (typed_secrets).
+_QUOTE_PASSWORD_HINT = ("If your password ends in punctuation (. , ; : ! ? or a closing "
+                        "bracket), put it in quotes, e.g. password 'secret.' -- otherwise "
+                        "the punctuation is read as the end of the sentence.")
+
+
+def _chat_customer_id(alias: str) -> str:
+    """An onboarding customer id for a chat-registered database: the alias, made unique."""
+    base = re.sub(r"[^a-z0-9_]", "_", (alias or "db").lower()).strip("_") or "db"
+    return f"{base[:40]}_{uuid.uuid4().hex[:8]}"
+
+
+def _seal_chat_database(state: ETLState, params: RegisterDatabaseParams, secrets: Dict[str, Any]):
+    """Register a chat-typed database in the onboarding sealed store. Returns its id, or a refusal.
+
+    The same store the UI's connect modal registers in (/customers/register):
+    the onboarding API tests the connection, binds the customer to this user
+    and keeps the connection string; this session keeps the customer id, which
+    the transfer opens through /customers/{id}/credentials as this user.
+    (1.6: no sealed api_key handle -- the service token plus the user opens it.)
+    """
+    user_id = (state.get("user_id") or "").strip()
+    if not user_id:
+        return "❌ **I can't store database credentials without a signed-in user.** Connect it from the Connections page instead."
+    customer_id = _chat_customer_id(params.alias)
+    registration = {
+        "connection_name": params.alias,
+        "customer_id": customer_id,
+        "customer_name": params.alias,
+        "database_type": params.db_type,
+        "host": params.host,
+        "port": params.port,
+        "database_name": params.database,
+        "username": params.user,
+        "password": secrets.get("password") or "",
+        "contact_email": "",
+        "connection_params": {"sslmode": params.sslmode} if params.sslmode else {},
+    }
+    try:
+        from app.api.db_connections import register_and_save
+        _saved, _ = _run_async(register_and_save(user_id, registration))
+    except Exception as e:
+        detail = str(getattr(e, "detail", None) or type(e).__name__)
+        # The password as typed and URL-encoded, and any user:password@ (#635's redact_secrets).
+        detail = redact_secrets(detail, [registration["password"]])
+        logger.warning("DTA: chat registration of %s failed: %s", params.alias, type(e).__name__)
+        return (f"❌ **Couldn't register `{params.alias}`:** {_dta_customer_text(detail)}\n\n"
+                f"Nothing was stored. {_QUOTE_PASSWORD_HINT}")
+    return {"conn_id": str(_saved.get("customer_id") or customer_id)}
+
+
+_CHAT_CLOUD_PROVIDER = {"aws_s3": "aws", "gcs": "gcp", "azure_blob": "azure"}
+
+
+def _seal_chat_cloud(state: ETLState, params: RegisterDatabaseParams, secrets: Dict[str, Any]):
+    """Store a chat-typed bucket's keys sealed in cloud_datasets. Returns ``{"conn_id"}``, ``{}`` or a refusal.
+
+    ``{}`` when the user gave no keys (the bucket runs on the ambient identity,
+    as before). Keys go in the table's *_ciphertext columns, the same AES-GCM
+    scheme the UI's cloud connections use; get_cloud_connection opens them.
+    """
+    access, secret = None, None
+    if params.db_type == "aws_s3":
+        access, secret = secrets.get("access_key"), secrets.get("secret_key")
+    elif params.db_type == "gcs":
+        secret = secrets.get("gcp_service_account_json")
+        if secret:
+            try:
+                access = (json.loads(secret) or {}).get("client_email") or "service_account"
+            except Exception:
+                return "❌ **That service-account key isn't valid JSON**, so nothing was stored."
+    elif params.db_type == "azure_blob":
+        if secrets.get("az_access_key") or secrets.get("azure_connection_string"):
+            return ("❌ **An Azure account key or connection string can't be stored from chat.** "
+                    "Add the container on the Cloud Datasets page, or give a SAS token. Nothing was stored.")
+        access, secret = params.az_storage_account, secrets.get("az_sas_token")
+    if not (access or secret):
+        return {}
+    if not (access and secret):
+        return "❌ **Both halves of the key are needed** (an access key and its secret). Nothing was stored."
+    user_id = (state.get("user_id") or "").strip()
+    from app.api.cloud_connections import encrypt_secret
+    a_enc, s_enc = encrypt_secret(access), encrypt_secret(secret)
+    if not (user_id and os.getenv("SUPABASE_URL") and os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+            and a_enc and s_enc):
+        return ("❌ **Bucket keys can't be stored from chat on this deployment.** Add it on the "
+                "Cloud Datasets page instead. Nothing was stored.")
+    row = {
+        "user_id": user_id, "name": params.alias, "provider": _CHAT_CLOUD_PROVIDER[params.db_type],
+        "region": params.region, "bucket_name": params.bucket_name, "file_key": params.file_path,
+        "connection_status": "active",
+        "access_key_ciphertext": a_enc["ciphertext"], "access_key_iv": a_enc["iv"],
+        "secret_key_ciphertext": s_enc["ciphertext"], "secret_key_iv": s_enc["iv"],
+    }
+    try:
+        from app.agents.sampling_persistence import get_supabase_client
+        res = get_supabase_client().table("cloud_datasets").insert(
+            {k: v for k, v in row.items() if v is not None}).execute()
+        conn_id = ((getattr(res, "data", None) or [{}])[0] or {}).get("id")
+    except Exception as e:
+        logger.warning("DTA: storing chat cloud connection %s failed: %s", params.alias, type(e).__name__)
+        conn_id = None
+    if not conn_id:
+        return f"❌ **Couldn't store the keys for `{params.alias}`.** Nothing was stored."
+    return {"conn_id": str(conn_id)}
+
+
+def _same_db(a_host, a_port, a_db, a_user, params: RegisterDatabaseParams) -> bool:
+    def norm(v):
+        return str(v or "").strip().casefold()
+    if norm(a_host) != norm(params.host) or norm(a_db) != norm(params.database) or norm(a_user) != norm(params.user):
+        return False
+    try:
+        return not a_port or not params.port or int(a_port) == int(params.port)
+    except (TypeError, ValueError):
+        return norm(a_port) == norm(params.port)
+
+
+def _existing_db_connection(state: ETLState, registry: Dict[str, dict], params: RegisterDatabaseParams):
+    """``(alias, entry)`` of a connection this chat already has to this host, database and user, else None.
+
+    (1.6: this chat's registry only. 2.0 also checks the user's saved
+    connections table, which 1.6 does not have.)
+    """
+    for alias, entry in registry.items():
+        if (isinstance(entry, dict) and entry.get("db_type") == params.db_type and entry.get("conn_id")
+                and _same_db(entry.get("host"), entry.get("port"), entry.get("database"), entry.get("user"), params)):
+            return alias, entry
+    return None
+
+
 def _handle_register_database(state: ETLState, params: RegisterDatabaseParams) -> str:
+    """Register a connection typed into chat. The session keeps its id, never its secret.
+
+    The secret goes straight to the sealed store -- the onboarding API for a
+    database, cloud_datasets for a bucket -- and the registry entry is the
+    handle plus display fields. Nothing this returns repeats a secret.
+    """
     registry = _get_db_registry(state)
-    entry = params.model_dump(exclude_none=True)
+    if params.db_type in ("mysql", "postgresql"):
+        # Re-sending the same details reuses the connection they already made;
+        # it never registers a second copy under a new id.
+        existing = _existing_db_connection(state, registry, params)
+        if existing:
+            alias, entry = existing
+            from app.graph.etl_state import scrub_registry_entry
+            registry[alias] = scrub_registry_entry(entry)
+            state["dta_database_registry"] = registry
+            return (f"✅ **`{alias}` is already registered** for `{params.database}` on "
+                    f"`{params.host}:{params.port}` (user `{params.user}`), so I'll use it. "
+                    f"Nothing new was stored.\n\nUse `\"{alias}\"` as source or destination in a transfer.")
+    secrets = _open_register_secrets(state, params)
+    if isinstance(secrets, str):
+        return secrets
+    if params.db_type in ("mysql", "postgresql"):
+        sealed = _seal_chat_database(state, params, secrets)
+    else:
+        sealed = _seal_chat_cloud(state, params, secrets)
+    secrets = None  # the plaintext goes no further than the sealed store
+    if isinstance(sealed, str):
+        return sealed
+    from app.graph.etl_state import scrub_registry_entry
+    entry = scrub_registry_entry({
+        **params.model_dump(exclude_none=True, exclude={"alias", "az_storage_account", *_REGISTER_SECRET_FIELDS}),
+        **sealed, "_source": "chat",
+    })
     canonical_alias = _resolve_registry_alias(registry, params.alias) or params.alias
     registry[canonical_alias] = entry
     state["dta_database_registry"] = registry
@@ -3284,8 +3789,11 @@ def _handle_register_database(state: ETLState, params: RegisterDatabaseParams) -
             object_note = f" Default object: `{params.file_path}` (name a different file in your transfer request to override)."
         else:
             object_note = " No default object set — name the file to transfer in your request (e.g. `folder/data.csv`)."
-    return (
-        f" Registered **{params.alias}** as `{db_type}` — {detail}.{object_note}\n\n"
+    sealed_note = (" The credentials are stored sealed; this chat keeps only the connection id."
+                   if entry.get("conn_id") else "")
+    from app.core.typed_secrets import redact_sealed
+    return redact_sealed(
+        f" Registered **{params.alias}** as `{db_type}` — {detail}.{object_note}{sealed_note}\n\n"
         f"Use `\"{params.alias}\"` as source or destination in a transfer."
     )
 
@@ -3713,27 +4221,64 @@ def _cloud_conn_to_entry(conn: dict) -> Optional[dict]:
 
     entry: dict = {
         "db_type": db_type,
+        # The handle: the cloud_datasets row the keys live in. The keys
+        # themselves are read from it when the transfer runs
+        # (_cloud_secrets_for), never copied into the session registry.
+        "conn_id": str(conn["id"]) if conn.get("id") else None,
         "name": conn.get("name"),  # display label (e.g. "C2C_Source_GCP")
         "bucket_name": raw_bucket,
         "file_path": default_object,
         "region": conn.get("region") or conn.get("aws_region"),
         "_source": "cloud_ui",
     }
+    return {k: v for k, v in entry.items() if v is not None}
+
+
+def _cloud_conn_secrets(conn: dict, db_type: str) -> dict:
+    """The provider keys of a full cloud_datasets row, in the shape the cloud builders read.
+
+    Only the transfer itself calls this, on a row it has just read by id. The
+    result lives in that call's locals.
+    """
+    secrets: dict = {}
     if db_type == "aws_s3":
-        entry["access_key"] = conn.get("access_key") or conn.get("aws_access_key_id")
-        entry["secret_key"] = conn.get("secret_key") or conn.get("aws_secret_access_key")
+        secrets["access_key"] = conn.get("access_key") or conn.get("aws_access_key_id")
+        secrets["secret_key"] = conn.get("secret_key") or conn.get("aws_secret_access_key")
     elif db_type == "gcs":
         # Schema stores the service-account JSON in service_account_json or secret_key.
-        entry["gcp_service_account_json"] = (
+        secrets["gcp_service_account_json"] = (
             conn.get("service_account_json")
             or conn.get("gcp_service_account_json")
             or conn.get("secret_key")
         )
     elif db_type == "azure_blob":
-        entry["az_storage_account"] = conn.get("account_name") or conn.get("access_key")
-        entry["az_access_key"] = conn.get("account_key")
-        entry["az_sas_token"] = conn.get("sas_token") or conn.get("sas") or conn.get("secret_key")
-    return {k: v for k, v in entry.items() if v is not None}
+        secrets["az_storage_account"] = conn.get("account_name") or conn.get("access_key")
+        secrets["az_access_key"] = conn.get("account_key")
+        secrets["az_sas_token"] = conn.get("sas_token") or conn.get("sas") or conn.get("secret_key")
+    return {k: v for k, v in secrets.items() if v is not None}
+
+
+def _cloud_secrets_for(entry: dict, alias: Optional[str] = None) -> dict:
+    """Open a registry cloud entry's handle: ``entry`` plus its provider keys.
+
+    Reads the cloud_datasets row named by ``conn_id`` (or, for an entry from a
+    checkpoint older than ``conn_id``, the row id it is registered under). An
+    entry with no handle (a bucket typed into chat carries its keys itself) is
+    returned as is; a row that cannot be read yields the entry unchanged, and
+    the job then runs on the ambient identity as an unauthenticated bucket would.
+    """
+    conn_id = (entry or {}).get("conn_id")
+    if not conn_id and (entry or {}).get("_source") == "cloud_ui" and _UUID_RE.match(alias or ""):
+        conn_id = alias
+    if not conn_id:
+        return dict(entry or {})
+    try:
+        from app.api.cloud_connections import get_cloud_connection
+        conn = _run_async(get_cloud_connection(str(conn_id))) or {}
+    except Exception as e:
+        logger.warning("Could not open cloud connection %s: %s", conn_id, type(e).__name__)
+        return dict(entry)
+    return {**entry, **_cloud_conn_secrets(conn, entry.get("db_type", ""))}
 
 
 _UUID_RE = re.compile(
@@ -3760,14 +4305,19 @@ def _auto_fetch_cloud_from_ui(alias: str) -> Optional[dict]:
         return None
     if not conn:
         return None
-    return _cloud_conn_to_entry(conn)
+    entry = _cloud_conn_to_entry(conn)
+    if entry:
+        entry.setdefault("conn_id", alias)  # the id it was read by is its handle
+    return entry
 
 
 def _auto_fetch_from_ui(alias: str, user_id: Optional[str] = None) -> Optional[dict]:
-    """Auto-fetch database credentials from the customer_dbs API by customer_id.
+    """Resolve a database connection from the customer_dbs API by customer_id.
 
     A plain connection NAME (== customer_id) resolves here; cloud connections do
-    not. Returns a registry-style entry dict, or ``None`` when the name is unknown.
+    not. Returns a registry entry -- the handle (``conn_id``) and display fields,
+    no password: the transfer reads the credentials again when it runs
+    (``_fetch_full_creds``) -- or ``None`` when the name is unknown.
     """
     try:
         with requests.Session() as session:
@@ -3796,11 +4346,11 @@ def _auto_fetch_from_ui(alias: str, user_id: Optional[str] = None) -> Optional[d
                     logger.warning("customer_dbs list lookup failed for %s: %s", alias, list_err)
                 return {
                     "db_type":  db_type,
+                    "conn_id":  alias,
                     "host":     data.get("host"),
                     "port":     data.get("port"),
                     "database": data.get("database"),
                     "user":     data.get("username"),
-                    "password": data.get("password"),
                     "table":    data.get("table"),
                     "_source":  "ui",
                 }
@@ -3830,7 +4380,7 @@ def _resolve_cloud_conn_by_name(name: str, user_id: str, role: str = "destinatio
     if not name or not user_id:
         return None
     try:
-        from app.api.cloud_connections import get_cloud_connection, list_cloud_connections
+        from app.api.cloud_connections import list_cloud_connections
         conns = _run_async(list_cloud_connections(user_id)) or []
     except Exception as e:
         logger.warning("Cloud %s name lookup failed for %s: %s", role_word, name, e)
@@ -3843,25 +4393,11 @@ def _resolve_cloud_conn_by_name(name: str, user_id: str, role: str = "destinatio
     matched = [c for c in conns if any(n and n.casefold() == folded for n in _display_names(c))]
 
     if len(matched) == 1:
-        # list_cloud_connections deliberately never copies credential fields, so
-        # the matched row carries no service-account key / access key. Building
-        # the registry entry straight from it yields a credential-less endpoint:
-        # the runner then falls back to ambient cloud auth and the transfer dies
-        # with "storage.objects.get denied". Re-read the full row by id — the
-        # same thing the UUID path (_auto_fetch_cloud_from_ui) already does — so
-        # naming a connection is equivalent to pasting its id.
+        # list_cloud_connections never copies credential fields, and the entry
+        # needs none: it carries the row id as its handle, and the transfer
+        # reads the keys by that id when it runs (_cloud_secrets_for). Naming a
+        # connection is still equivalent to pasting its id.
         conn_row = matched[0]
-        conn_id = conn_row.get("id")
-        if conn_id:
-            try:
-                full = _run_async(get_cloud_connection(str(conn_id)))
-                if full:
-                    conn_row = full
-            except Exception as e:
-                logger.warning(
-                    "Could not load credentials for cloud connection %s (%s): %s",
-                    name, conn_id, e,
-                )
         entry = _cloud_conn_to_entry(conn_row)
         if not entry:
             return (
@@ -4171,7 +4707,8 @@ def _list_dest_tables(creds: dict, db_type: str) -> Optional[List[str]]:
         finally:
             engine.dispose()
     except Exception as e:
-        logger.info("DTA wizard: could not list tables (%s); asking for a name instead.", e)
+        logger.info("DTA wizard: could not list tables (%s); asking for a name instead.",
+                    redact_secrets(e, [(creds or {}).get("password")]))
         return None
 
 
@@ -4195,8 +4732,10 @@ def _resolve_pending_dta(state: ETLState, pending: dict, reply: str) -> str:
     """Fill the awaited slot from the user's reply and re-run the transfer handler."""
     if not _premium_allowed(state):
         state["pending_clarification"] = None
-        state["plan_upgrade_required"] = "data_transfer"
-        return _upgrade_message("data_transfer", state)
+        message, upgrade = _refusal("data_transfer", state)
+        if upgrade:
+            state["plan_upgrade_required"] = "data_transfer"
+        return message
     collected = dict(pending.get("collected") or {})
     awaiting = pending.get("awaiting")
     answer = _strip_runtime_context(reply).strip()
@@ -4254,14 +4793,55 @@ def _resolve_pending_dta(state: ETLState, pending: dict, reply: str) -> str:
     return _handle_initiate_transfer(state, params)
 
 
+def _open_db_credentials(state, alias: str, entry: dict) -> Optional[dict]:
+    """Open a database entry's handle (2.0's name): the credentials endpoint first,
+    then, for an entry that is not a handle, the registry entry.
+
+    The result lives in this call's locals and is never written to state. A
+    UI connection's entry is a handle with no password, so it has no
+    fallback: when the endpoint will not open it, this returns ``None`` and
+    the transfer is refused rather than run on what state holds.
+    """
+    handle = str((entry or {}).get("conn_id") or alias)
+    try:
+        with requests.Session() as session:
+            r = session.get(
+                f"{ONBOARDING_API_URL}/customers/{handle}/credentials",
+                headers=_onboarding_headers(state.get("user_id")),
+                timeout=5,
+            )
+            if r.status_code == 200:
+                data = r.json()
+                return {
+                    "host":     data.get("host"),
+                    "port":     data.get("port"),
+                    "database": data.get("database"),
+                    "user":     data.get("username"),
+                    "password": data.get("password"),
+                    # A chat registration names its table; the onboarding
+                    # store only knows the database's first one.
+                    "table":    (entry.get("table") if entry.get("_source") == "chat" else None)
+                                or data.get("table"),
+                    "sslmode":  data.get("sslmode") or data.get("ssl_mode") or entry.get("sslmode"),
+                }
+    except Exception as e:
+        logger.warning("Could not fetch credentials for %s: %s", alias, type(e).__name__)
+    if entry.get("_source") in DTA_HANDLE_SOURCES:
+        return None
+    return {k: v for k, v in entry.items()
+            if k not in ("db_type", "_source", "conn_id") and v is not None}
+
+
 def _handle_initiate_transfer(state: ETLState, params: InitiateTransferParams) -> str:
     # Paid feature: refuse before resolving endpoints or starting any job.
     if not _premium_allowed(state):
         logger.info("[plan-gate] data transfer blocked for user=%s plan=%s",
                     state.get("user_id"), _user_plan(state))
         state["pending_clarification"] = None
-        state["plan_upgrade_required"] = "data_transfer"
-        return _upgrade_message("data_transfer", state)
+        message, upgrade = _refusal("data_transfer", state)
+        if upgrade:
+            state["plan_upgrade_required"] = "data_transfer"
+        return message
     # End-to-end wall clock the user actually waits: endpoint resolution, schema
     # deduction, code generation and the run itself. This is deliberately larger
     # than the runner's own job duration, which is reported separately.
@@ -4390,29 +4970,8 @@ def _handle_initiate_transfer(state: ETLState, params: InitiateTransferParams) -
     source_entry = registry[params.source_alias]
     dest_entry   = registry[params.destination_alias]
 
-    def _fetch_full_creds(alias: str, entry: dict) -> dict:
-        """Always try credentials endpoint first, fallback to registry entry."""
-        try:
-            with requests.Session() as session:
-                r = session.get(
-                    f"{ONBOARDING_API_URL}/customers/{alias}/credentials",
-                    headers=_onboarding_headers(state.get("user_id")),
-                    timeout=5,
-                )
-                if r.status_code == 200:
-                    data = r.json()
-                    return {
-                        "host":     data.get("host"),
-                        "port":     data.get("port"),
-                        "database": data.get("database"),
-                        "user":     data.get("username"),
-                        "password": data.get("password"),
-                        "table":    data.get("table"),
-                        "sslmode":  data.get("sslmode") or data.get("ssl_mode") or entry.get("sslmode"),
-                    }
-        except Exception as e:
-            logger.warning("Could not fetch credentials for %s: %s", alias, e)
-        return {k: v for k, v in entry.items() if k not in ("db_type", "_source") and v is not None}
+    def _fetch_full_creds(alias: str, entry: dict) -> Optional[dict]:
+        return _open_db_credentials(state, alias, entry)
 
     # ── Resolve each endpoint (database OR cloud object storage) ────────────
     # Returns a dict(creds, type, file_uri, cloud_env) on success, or a
@@ -4462,16 +5021,26 @@ def _handle_initiate_transfer(state: ETLState, params: InitiateTransferParams) -
                     f"`{object_path}` in **`{disp}`** is JSON. Use a `.csv` or `.parquet` "
                     "source object instead (JSON is supported as a destination)."
                 )
-            creds = _build_cloud_credentials(entry, object_path)
+            # The keys are read from the connection's store now, into this
+            # call's locals; the registry entry is only the handle.
+            secret_entry = _cloud_secrets_for(entry, alias)
+            creds = _build_cloud_credentials(secret_entry, object_path)
             return {
                 "creds": creds,
                 "type": file_type,
                 "file_uri": creds.get_cloud_uri(file_type),
-                "cloud_env": _cloud_env_from_entry(entry, role),
+                "cloud_env": _cloud_env_from_entry(secret_entry, role),
+                "secret_entry": secret_entry,
             }
 
         # ── Database endpoint ──
         creds = _fetch_full_creds(alias, entry)
+        if creds is None:
+            return (
+                f"❌ **I can't open the credentials for `{disp}`** — the connection "
+                "isn't available to you right now. Nothing was written. Reconnect it "
+                "(or say **list connections**) and try again."
+            )
         db_type = _normalize_db_type(entry.get("db_type", ""))
         if role == "source" and (entry.get("source_table") or "").strip():
             # The user analyzed a specific table; read from THAT, not the
@@ -4524,7 +5093,7 @@ def _handle_initiate_transfer(state: ETLState, params: InitiateTransferParams) -
                 "Destination table set: alias=%s table=%s create_if_missing=%s",
                 alias, params.dest_table, params.create_if_missing,
             )
-        return {"creds": creds, "type": db_type, "file_uri": None, "cloud_env": {}}
+        return {"creds": creds, "type": db_type, "file_uri": None, "cloud_env": {}, "secret_entry": entry}
 
     source_res = _resolve_endpoint(params.source_alias, source_entry, "source")
     if isinstance(source_res, str):
@@ -4542,12 +5111,28 @@ def _handle_initiate_transfer(state: ETLState, params: InitiateTransferParams) -
     # service account (the cluster's default identity may lack bucket access).
     def _gcs_sa(entry: dict) -> Optional[str]:
         return entry.get("gcp_service_account_json") if entry.get("db_type") == "gcs" else None
-    # Ambient identity used for the source read (and single-SA fallback).
-    gcp_sa_json = _gcs_sa(source_entry) or _gcs_sa(dest_entry)
+    # Ambient identity used for the source read (and single-SA fallback). The
+    # keys come from the opened entries (locals), not the registry's handles.
+    source_secret_entry, dest_secret_entry = source_res["secret_entry"], dest_res["secret_entry"]
+    gcp_sa_json = _gcs_sa(source_secret_entry) or _gcs_sa(dest_secret_entry)
     # The destination write authenticates as the destination's own SA when the
     # destination is GCS; otherwise a cloud->cloud write reuses the source SA,
     # which may lack write access to the destination bucket.
-    dest_gcp_sa_json = _gcs_sa(dest_entry)
+    dest_gcp_sa_json = _gcs_sa(dest_secret_entry)
+
+    def _redact(text) -> str:
+        """``text`` with every credential this transfer carries masked: for replies and logs."""
+        values = [*cloud_env.values(), *(final_runtime_env.values()), gcp_sa_json, dest_gcp_sa_json]
+        for c in (source_creds, dest_creds):
+            if isinstance(c, dict):
+                values.append(c.get("password"))
+            else:
+                for f in ("secret_key", "az_access_key", "az_sas_token", "az_client_secret"):
+                    v = getattr(c, f, None)
+                    values.append(v.get_secret_value() if hasattr(v, "get_secret_value") else v)
+        return redact_secrets(text, values)
+
+    final_runtime_env: Dict[str, str] = {}
 
     try:
         final_state, injection_script = data_transfer_pipeline(
@@ -4562,23 +5147,24 @@ def _handle_initiate_transfer(state: ETLState, params: InitiateTransferParams) -
             create_if_missing=bool(params.create_if_missing),
         )
     except Exception as e:
-        logger.error(f"data_transfer_pipeline failed: {e}", exc_info=True)
-        return f"❌ **Transfer failed (System Error):**\n```\n{e}\n```"
+        logger.error("data_transfer_pipeline failed: %s\n%s", _redact(e), _redact(traceback.format_exc()))
+        return f"❌ **Transfer failed (System Error):**\n```\n{_redact(e)}\n```"
 
     # Database URLs are no longer inlined into the generated script; the pipeline
     # hands them back here so the runners can inject them as environment variables.
     # Keep them out of logs — cloud_env is only ever passed to the runner.
-    cloud_env = {**cloud_env, **(final_state.get("runtime_secret_env") or {})}
+    final_runtime_env.update(final_state.get("runtime_secret_env") or {})
+    cloud_env = {**cloud_env, **final_runtime_env}
 
     error_msg = final_state.get("error_message")
     warnings  = final_state.get("warnings")
 
     if error_msg:
-        return f"❌ **Transfer Setup Failed:**\n\n{error_msg}"
+        return f"❌ **Transfer Setup Failed:**\n\n{_redact(error_msg)}"
 
     warnings_text = ""
     if warnings:
-        warnings_text = "⚠️ **Warnings:**\n- " + "\n- ".join(warnings) + "\n\n"
+        warnings_text = "⚠️ **Warnings:**\n- " + "\n- ".join(_redact(w) for w in warnings) + "\n\n"
 
     # If the wizard created a new destination table, show the schema it used (built
     # from the TRANSFORMED output, not the source) — the user chose auto-create.
@@ -4636,6 +5222,20 @@ def _handle_initiate_transfer(state: ETLState, params: InitiateTransferParams) -
     # 16 hex = 64 bits: the never-pruned ledger key must not birthday-collide, but
     # wider would push the derived RayJob/pod names against the k8s 63-char limit.
     job_id = f"dta-{uuid.uuid4().hex[:16]}"
+
+    # The background-job ledger (app/core/job_ledger.py): claim the turn's row
+    # when the API opened one for this long turn, else start this transfer's
+    # own. The bell and the chat note come from finish(), below.
+    _ledger_label = f"{params.source_alias} ➡️ {params.destination_alias}"
+    _ledger_id = state.get("ledger_job_id")
+    if _ledger_id:
+        job_ledger.claim(_ledger_id, kind="transfer", resource_type="transfer", resource_id=job_id, label=_ledger_label)
+        job_ledger.running(_ledger_id)
+    else:
+        _ledger_id = job_ledger.start(
+            state.get("user_id"), "transfer", thread_id=state.get("thread_id"), session_id=state.get("session_id"),
+            resource_type="transfer", resource_id=job_id, label=_ledger_label, status="running", origin="api",
+        )
     state["dta_last_transfer"]["job_id"] = job_id
     state["dta_last_transfer"]["execution_env"] = execution_env
 
@@ -4676,10 +5276,14 @@ def _handle_initiate_transfer(state: ETLState, params: InitiateTransferParams) -
     except Exception as e:
         elapsed = _format_duration(time.monotonic() - _transfer_started)
         # Full traceback to the logs; the customer gets one readable line.
-        logger.error("DTA execution failed for job %s after %s: %s", job_id, elapsed, e, exc_info=True)
-        _reason = str(e).strip().splitlines()[0] if str(e).strip() else "an unexpected error"
+        logger.error("DTA execution failed for job %s after %s: %s\n%s", job_id, elapsed,
+                     _redact(e), _redact(traceback.format_exc()))
+        _reason = _redact(e).strip().splitlines()[0] if str(e).strip() else "an unexpected error"
         if len(_reason) > 220:
             _reason = _reason[:220].rstrip() + "…"
+        job_ledger.finish(_ledger_id, "failed",
+                          fail_reason="timed_out" if "timeout" in _reason.lower() or "timed out" in _reason.lower() else "failed",
+                          error_line=_reason)
         return (
             f"❌ **The transfer could not be completed** "
             f"(`{params.source_alias}` ➡️ `{params.destination_alias}`).\n\n"
@@ -4695,6 +5299,10 @@ def _handle_initiate_transfer(state: ETLState, params: InitiateTransferParams) -
     job_time = _format_duration(exec_seconds)
 
     success = bool(run_result)
+    _outcome_status = str(getattr(run_result, "status", "") or "").upper()
+    job_ledger.finish(_ledger_id, "succeeded" if success else "failed",
+                      fail_reason=None if success else ("timed_out" if _outcome_status == "TIMEOUT" else "failed"),
+                      error_line=None if success else (str(getattr(run_result, "message", "") or "") or None))
     # Runners return a TransferResult (row count + table parsed from the job
     # logs); older/mocked callers may still return a bare bool, so read the
     # extras defensively and just omit the count line when they're absent.
@@ -4810,7 +5418,7 @@ def _invoke_planner_with_recovery(msgs, tool_choice, invoke_kwargs):
                 )
                 tail = attempt_msgs[1:]
                 last_human = [m for m in tail if isinstance(m, HumanMessage)][-1:]
-                last_ai = [m for m in tail if isinstance(m, AIMessage)][-1:]
+                last_ai = [m for m in tail if isinstance(m, AIMessage) and not _is_job_note(m)][-1:]
                 attempt_msgs = [attempt_msgs[0]] + last_ai + last_human
                 trimmed = True
                 continue
@@ -4822,6 +5430,13 @@ def _invoke_planner_with_recovery(msgs, tool_choice, invoke_kwargs):
 
 def plan_etl_job(state: ETLState) -> ETLState:
     """Planner node. Plans the turn, then applies the plan gate for model training."""
+    # A credential typed into the chat is sealed before anything here logs the
+    # message or sends it to a model. The API server already did this; a turn
+    # that reached the graph another way is sealed here, in the message itself.
+    # Every human message, not only this turn's: a checkpoint written before
+    # sealing still holds what was typed then, and this is where it is read.
+    for _m in state.get("messages") or []:
+        _seal_human_message(_m)
     # is_dta_request means "THIS planner pass handled a data transfer". It used to
     # be set and never cleared, so it stuck to the thread; reset it on every pass
     # (the router ends the turn on it).
@@ -4932,7 +5547,7 @@ def _plan_etl_job_impl(state: ETLState) -> ETLState:
                 break
 
     if any(re.search(p, _prompt_to_check, re.IGNORECASE) for p in _NON_ANALYSIS_PATTERNS):
-        logger.warning("Planner: rejected non-analysis prompt: %s", _prompt_to_check[:120])
+        logger.warning("Planner: rejected non-analysis prompt: %s", _redact_typed(_prompt_to_check)[:120])
         ai_response = AIMessage(
             content=(
                 "I am not allowed to execute these operations. "
@@ -4948,6 +5563,106 @@ def _plan_etl_job_impl(state: ETLState) -> ETLState:
         })
         return _preserve_infra(state)
     # ── end guard ─────────────────────────────────────────────────────────────
+
+    # ── Provisioning needs an explicit request and a confirmation ───────────
+    # (app/agents/infra_confirmation.py). Before everything that could read
+    # "deploy", "aws" or "kubernetes" as a reason to provision: an analysis
+    # question naming a cloud is an analysis question.
+    _infra_pending = state.get("pending_clarification")
+    _infra_resume = None   # the rest of a compound request, planned after the infra turn
+    _infra_said = None     # what this turn reports before planning that rest
+    if isinstance(_infra_pending, dict) and _infra_pending.get("type") == infra_confirmation.REPORT_TYPE:
+        if state.get("infrastructure_provisioned"):
+            # provision_infra -> plan_etl loop-back: say what actually happened.
+            _infra_said = infra_confirmation.outcome_report(state.get("infrastructure_provisioned"))
+            _infra_resume = _infra_pending.get("resume")
+            if not _infra_resume:
+                new_state = state.copy()
+                new_state.update({
+                    "messages": state.get("messages", []) + [AIMessage(content=_infra_said)],
+                    "pending_clarification": None,
+                    "ready_to_summarize": False,
+                    "ready_to_code": False,
+                    "enable_training": False,
+                })
+                return _preserve_infra(new_state)
+        state["pending_clarification"] = None
+    elif isinstance(_infra_pending, dict) and _infra_pending.get("type") == infra_confirmation.PENDING_TYPE:
+        _infra_req = dict(_infra_pending.get("infrastructure_request") or {})
+        _pending_resume = _infra_pending.get("resume")
+        state["pending_clarification"] = None
+        if _infra_req and infra_confirmation.is_affirmative(_prompt_to_check):
+            logger.info("Planner: provisioning confirmed for %s", _infra_req.get("type"))
+            new_state = state.copy()
+            new_state.update({
+                # Only a confirmed request reaches provision_infra (route_planner_output).
+                "infrastructure_request": {**_infra_req, "confirmed": True},
+                "infrastructure_provisioned": None,
+                "pending_clarification": infra_confirmation.report_pending(_pending_resume),
+                "messages": state.get("messages", []) + [AIMessage(
+                    content=infra_confirmation.started_message(_infra_req, _pending_resume))],
+                "ready_to_summarize": False,
+                "ready_to_code": False,
+                "enable_training": False,
+            })
+            return _preserve_infra(new_state, touched_req=True, touched_infra=True)
+        if infra_confirmation.is_negative(_prompt_to_check):
+            if not _pending_resume:
+                new_state = state.copy()
+                new_state.update({
+                    "messages": state.get("messages", []) + [AIMessage(content=infra_confirmation.CANCELLED_MESSAGE)],
+                    "ready_to_summarize": False,
+                    "ready_to_code": False,
+                    "enable_training": False,
+                })
+                return _preserve_infra(new_state)
+            # Declining the deploy is not declining the analysis that came with it.
+            _infra_said, _infra_resume = infra_confirmation.CANCELLED_MESSAGE, _pending_resume
+        # Anything else is a new request; the unconfirmed one lapses.
+
+    if _infra_resume:
+        # Plan the rest of the compound request now, as the planner does for a
+        # resolved clarification: the reply that resumed it ("yes", or the
+        # provisioning loop-back) is replaced by the request itself, after the
+        # infra outcome has been said.
+        logger.info("Planner: resuming the rest of a compound request: %s", _infra_resume[:120])
+        state = state.copy()
+        updated_messages = list(state.get("messages", []))
+        for idx in range(len(updated_messages) - 1, -1, -1):
+            msg = updated_messages[idx]
+            if isinstance(msg, HumanMessage):
+                updated_messages[idx] = HumanMessage(content=_infra_resume)
+                break
+            if isinstance(msg, dict) and (msg.get("type") == "human" or msg.get("role") == "user"):
+                msg = dict(msg)
+                msg["content"] = _infra_resume
+                updated_messages[idx] = msg
+                break
+        state["messages"] = updated_messages + [AIMessage(content=_infra_said)]
+        state["pending_clarification"] = None
+        normalized_messages = _normalize_messages(state.get("messages", []))
+        _prompt_to_check = _infra_resume
+        user_prompt = _infra_resume
+
+    if not state.get("infrastructure_provisioned"):
+        _infra_req = infra_confirmation.explicit_request(_prompt_to_check)
+        if _infra_req:
+            # In k8s-ray mode the confirmed request provisions the Ray prerequisites.
+            _ray_req = _seed_infra_request_if_needed(state)
+            if _ray_req:
+                _infra_req = {**_ray_req, **_infra_req}
+            logger.info("Planner: explicit provisioning request for %s; asking to confirm", _infra_req["type"])
+            new_state = state.copy()
+            _resume = infra_confirmation.remainder(_prompt_to_check)
+            new_state.update({
+                "pending_clarification": infra_confirmation.pending(_infra_req, _resume),
+                "messages": state.get("messages", []) + [AIMessage(
+                    content=infra_confirmation.confirmation_prompt(_infra_req, _resume))],
+                "ready_to_summarize": False,
+                "ready_to_code": False,
+                "enable_training": False,
+            })
+            return _preserve_infra(new_state)
 
     # DTA destination wizard: a mid-transfer reply (a connection name, a table name,
     # a filename, a format) carries no transfer keyword, so route it straight back to
@@ -5035,7 +5750,7 @@ def _plan_etl_job_impl(state: ETLState) -> ETLState:
     clarification_details = _detect_ambiguous_prompt_details(_prompt_to_check, state)
     if clarification_details:
         clarification = clarification_details["message"]
-        logger.info("Planner: asking clarification for ambiguous prompt: %s", _prompt_to_check[:120])
+        logger.info("Planner: asking clarification for ambiguous prompt: %s", _redact_typed(_prompt_to_check)[:120])
         ai_response = AIMessage(content=clarification)
         state.update({
             "messages": state.get("messages", []) + [ai_response],
@@ -5098,7 +5813,8 @@ def _plan_etl_job_impl(state: ETLState) -> ETLState:
         return _preserve_infra(state)
     # Seed Ray fields (RAY PATCH)
     _seed_ray_fields(state)
-    _seed_infra_request_if_needed(state)
+    # Not seeded into infrastructure_request any more: no provisioning without
+    # the user's confirmation (see _seed_infra_request_if_needed).
 
     # Routing decision log
     logger.info(
@@ -5542,13 +6258,16 @@ def _plan_etl_job_impl(state: ETLState) -> ETLState:
         "\nDo not force full-dataset analysis unless fidelity is entire_dataset and user explicitly requests deep/full fidelity."
     )
 
-    # Inject Context Memory into the planner's awareness
-    if state.get("memory_hints"):
-        hints_str = "\n- ".join(state["memory_hints"])
+    # Inject Context Memory into the planner's awareness. A write or transfer
+    # in memory never steers a plan (app/services/memory_actions.py).
+    from app.services.memory_actions import analysis_memory_context
+    memory_hints, logic_signature = analysis_memory_context(state)
+    if memory_hints:
+        hints_str = "\n- ".join(memory_hints)
         csv_info += f"\n\n[CONTEXT MEMORY - USER PREFERENCES & PAST INSIGHTS]:\n- {hints_str}"
     
-    if state.get("session_logic_signature"):
-        csv_info += f"\n\n[SESSION LOGIC SIGNATURE]:\n{state['session_logic_signature']}"
+    if logic_signature:
+        csv_info += f"\n\n[SESSION LOGIC SIGNATURE]:\n{logic_signature}"
 
 
     # Pending training-plan replies are classified here so planner owns the
@@ -5685,39 +6404,8 @@ def _plan_etl_job_impl(state: ETLState) -> ETLState:
         })
         return _preserve_infra(new_state)
 
-    # Keyword detection for infrastructure (explicitly touches infrastructure_request).
-    # Needs no LLM, so it runs before the llm-is-None stub path. Gated on
-    # "infra not already requested/provisioned this turn": on the
-    # provision_infra -> plan_etl loop-back the last human message is unchanged,
-    # so without the gate this fast path would re-fire, short-circuit the LLM
-    # planner, and silently drop the rest of a compound request like
-    # "deploy this on GCP and then analyze X".
-    infra_keywords_re = re.compile(r"\b(?:deploy(?:ment|ing|ed)?|gcp|aws|kubernetes)\b", re.IGNORECASE)
-    if (
-        not state.get("infrastructure_provisioned")
-        and not prev_req
-        and infra_keywords_re.search(user_input)
-    ):
-        if re.search(r"\bgcp\b", user_input, re.IGNORECASE):
-            platform = "gcp"
-        elif re.search(r"\baws\b", user_input, re.IGNORECASE):
-            platform = "aws"
-        else:
-            platform = "gcp"
-        logger.info("in infra request")
-        new_state = state.copy()
-        ai_response = AIMessage(
-            content=(
-                f"Got it — provisioning {platform.upper()} infrastructure for your deployment now. "
-                "I'll continue with your request once it's ready."
-            )
-        )
-        new_state.update({
-            "infrastructure_request": {"type": platform, "app_type": "python-docker"},
-            "messages": state.get("messages", []) + [ai_response],
-            "enable_training": False,
-        })
-        return _preserve_infra(new_state, touched_req=True)
+    # Infrastructure requests are handled near the top of this function
+    # (explicit request -> confirmation -> provision_infra), never by keyword.
 
     # Check for summarize commands AFTER the infrastructure keywords.
     # "Looks good, deploy to GCP" is a compound request: the generic
@@ -5948,16 +6636,25 @@ def _plan_etl_job_impl(state: ETLState) -> ETLState:
                 # the user tried to pick one.
                 _tail = msgs[1:]
                 _last_human = [m for m in _tail if isinstance(m, HumanMessage)][-1:]
-                _last_ai = [m for m in _tail if isinstance(m, AIMessage)][-1:]
+                _last_ai = [m for m in _tail if isinstance(m, AIMessage) and not _is_job_note(m)][-1:]
                 trimmed = [msgs[0]] + _last_ai + _last_human
                 response = llm.invoke(trimmed, tools=tools, tool_choice=_tool_choice, **_invoke_kwargs)
 
+        response = _retry_phantom_tool_call_once(
+            llm, msgs, response, tools=tools, tool_choice=_tool_choice, **_invoke_kwargs
+        )
         raw_response = response
         # Was the whole AIMessage: tool-call arguments, the reasoning trace and
         # every metadata field, on one INFO line. The model id is the part worth
         # keeping -- with a failover chain configured it is how you tell from a
         # log whether the primary or a backup served this turn.
         logger.info("Planner LLM answered: %s", describe_response(raw_response))
+        # Which model answered, when a fallback tier stood in for the configured one
+        # (owner ruling 2026-11-02: never swap silently). None when the configured
+        # model answered; set on every turn so a previous turn's record cannot linger.
+        from app.core.model_tiers import answered_by as _answered_by
+
+        state["answered_by"] = _answered_by(raw_response)
         logger.debug("Planner raw response: %s", log_preview(raw_response, 2000))
 
         # Surface the model's deliberation to the UI (reasoning_format
@@ -6005,13 +6702,18 @@ def _plan_etl_job_impl(state: ETLState) -> ETLState:
                 infra_request = tool_call.parameters.model_dump()
                 # infra_agent_node keys off "type"; the tool schema uses "platform".
                 infra_request["type"] = str(infra_request.pop("platform", "") or "").lower() or None
+                if not infra_request["type"]:
+                    infra_request["type"] = (os.getenv("DEFAULT_INFRA_PLATFORM") or "gcp").lower()
+                # The model choosing this tool is not the user confirming it:
+                # ask first (infra_confirmation), provision only on "yes".
                 state.update({
-                    "infrastructure_request": infra_request,
+                    "pending_clarification": infra_confirmation.pending(infra_request),
+                    "messages": state["messages"] + [AIMessage(content=infra_confirmation.confirmation_prompt(infra_request))],
                     "ready_to_summarize": False,
                     "ready_to_code": False,
                     "enable_training": False,
                 })
-                return _preserve_infra(state, touched_req=True)
+                return _preserve_infra(state)
 
             elif tool_call and tool_call.name == "summarize_job":
                 state.update({
@@ -6083,7 +6785,11 @@ def _plan_etl_job_impl(state: ETLState) -> ETLState:
                     # next turn on, memory_injection re-derives memory_hints with
                     # reserved slots for stored preferences.
                     hints = [h for h in (state.get("memory_hints") or []) if h != preference]
-                    hints.append(preference)
+                    # A preference to write or move data is never a hint
+                    # (app/services/memory_actions.py).
+                    from app.services.memory_actions import describes_write_action
+                    if not describes_write_action(preference):
+                        hints.append(preference)
                     state["memory_hints"] = hints[-3:]
 
                 if not preference:

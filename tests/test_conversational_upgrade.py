@@ -318,7 +318,12 @@ def test_first_pass_still_routes_to_infra(mock_llm):
     )
     state = _make_state(COMPOUND)
     result = plan_etl_job(state)
-    assert result.get("infrastructure_request") == {"type": "gcp", "app_type": "python-docker"}
+    # An explicit deploy is confirmed before anything is provisioned
+    # (app/agents/infra_confirmation.py); the request waits on the confirmation.
+    assert not result.get("infrastructure_request")
+    pending = result.get("pending_clarification") or {}
+    assert pending.get("type") == "infrastructure_confirmation"
+    assert pending.get("infrastructure_request") == {"type": "gcp", "app_type": "python-docker"}
 
 
 @patch("app.agents.planner.llm")

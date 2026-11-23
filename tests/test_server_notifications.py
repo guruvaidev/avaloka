@@ -1,8 +1,6 @@
 """Tests for the D4 notification code in app/api/server.py.
 
 Covers:
-  * _notify_deferred_turn: the right type, title and body per outcome, and the
-    deferred turn id as the dedupe ref.
   * _remember_pending_turn: the in-process copy that answers polls when Redis
     is down (a late "running" never overwrites "done"; the copy is capped).
   * GET /threads/{id}/pending-turn: falls back to that copy, per user.
@@ -37,19 +35,6 @@ def run(coro):
 
 
 @pytest.fixture
-def sent(monkeypatch):
-    """Capture create_notification calls made by server.py."""
-    calls = []
-
-    async def fake_create(user_id, ntype, title, body=None, **kw):
-        calls.append({"user_id": user_id, "type": ntype, "title": title, "body": body, **kw})
-        return {"id": "n-1"}
-
-    monkeypatch.setattr(server.notification_service, "create_notification", fake_create)
-    return calls
-
-
-@pytest.fixture
 def mem(monkeypatch):
     """A fresh, empty in-process pending-turn store."""
     store = {}
@@ -65,66 +50,6 @@ def as_user(monkeypatch):
 @pytest.fixture
 def anonymous(monkeypatch):
     monkeypatch.setattr(server, "_resolve_user_id", lambda req: None)
-
-
-def notify(**overrides):
-    kw = dict(user_id=USER, thread_id=THREAD, deferred_id="turn-1", kind="analysis", ok=True,
-              question="Create age brackets (0-30, 31-60, >60)", dataset_id="ds-1",
-              dataset_label="healthcare_dataset.csv")
-    kw.update(overrides)
-    return run(server._notify_deferred_turn(**kw))
-
-
-# ---------------------------------------------------------------------------
-# _notify_deferred_turn
-# ---------------------------------------------------------------------------
-
-@pytest.mark.parametrize("kind, ok, ntype, title", [
-    ("analysis", True, "analysis.completed", "Analysis completed"),
-    ("analysis", False, "analysis.failed", "Analysis failed"),
-    ("training", True, "training.completed", "Model training finished"),
-    ("training", False, "training.failed", "Model training failed"),
-])
-def test_notify_type_and_title_per_outcome(sent, kind, ok, ntype, title):
-    notify(kind=kind, ok=ok)
-    assert sent[0]["type"] == ntype
-    assert sent[0]["title"] == title
-
-
-def test_notify_passes_ids_and_uses_the_turn_id_as_ref(sent):
-    notify()
-    call = sent[0]
-    assert call["user_id"] == USER
-    assert call["thread_id"] == THREAD
-    assert call["dataset_id"] == "ds-1"
-    assert call["ref"] == "turn-1"
-
-
-def test_notify_body_quotes_question_and_names_dataset(sent):
-    notify()
-    assert sent[0]["body"] == "“Create age brackets (0-30, 31-60, >60)” on healthcare_dataset.csv"
-
-
-def test_notify_body_clips_long_question(sent):
-    notify(question="why " * 60)
-    body = sent[0]["body"]
-    quoted = body.split("”")[0].lstrip("“")
-    assert len(quoted) <= 80 and quoted.endswith("…")
-
-
-def test_notify_failure_body_ends_with_the_reason(sent):
-    notify(ok=False, error_message="The data has no column named Age.")
-    assert sent[0]["body"].endswith(". The data has no column named Age.")
-
-
-def test_notify_with_no_question_or_dataset_sends_no_body(sent):
-    notify(question="", dataset_label="")
-    assert sent[0]["body"] is None
-
-
-def test_notify_failure_with_only_a_reason(sent):
-    notify(ok=False, question="", dataset_label="", error_message="Timed out.")
-    assert sent[0]["body"] == "Timed out."
 
 
 # ---------------------------------------------------------------------------
@@ -220,7 +145,7 @@ def test_poll_prefers_finished_memory_over_stale_running(as_user, mem, redis_run
 
 
 def test_poll_reports_running_when_nothing_finished(as_user, mem, redis_running):
-    assert poll("turn-1") == {"status": "running", "kind": "analysis"}
+    assert poll("turn-1") == {"status": "running", "kind": "analysis", "queued": False}
 
 
 def test_poll_does_not_leak_another_users_turn(monkeypatch, mem, redis_down):

@@ -63,10 +63,19 @@ const onVisibility = () => {
     startTimer();
   }
 };
-const onRefreshEvent = () => void refresh();
+const onRefreshEvent = () => {
+  // Signup reconciliation may have provisioned the profile after we mounted.
+  if (!state.profileId) {
+    stop();
+    void start();
+  } else {
+    void refresh();
+  }
+};
 
 async function start() {
   const gen = ++generation;
+  window.addEventListener("app-notifications:refresh", onRefreshEvent);
   const pid = await getCurrentProfileId();
   if (gen !== generation) return;
   set({ profileId: pid });

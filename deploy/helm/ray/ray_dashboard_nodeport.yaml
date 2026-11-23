@@ -1,0 +1,21 @@
+# deploy/helm/ray/ray_dashboard_nodeport.yaml
+# kind only, opt-in: applied by cluster_bootstrap when RAY_DASHBOARD_EXPOSE_NODEPORT=1.
+# Everywhere else the Ray dashboard is reached only through the API's owner-checked
+# proxy (app/api/ray_jobs.py); no node port, no public IP.
+# Expose the Ray dashboard on the kind NodePort (matches deploy/clusters/kind-cluster.yaml).
+apiVersion: v1
+kind: Service
+metadata:
+  name: avaloka-ray-dashboard
+  labels:
+    app.kubernetes.io/part-of: avaloka
+spec:
+  type: NodePort
+  selector:
+    ray.io/cluster: avaloka-raycluster
+    ray.io/node-type: head
+  ports:
+    - name: dashboard
+      port: 8265
+      targetPort: 8265
+      nodePort: 30265

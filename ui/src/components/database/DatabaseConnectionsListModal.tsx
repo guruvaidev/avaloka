@@ -82,7 +82,7 @@ export function DatabaseConnectionsListModal({
   return (
     <>
       <Dialog open={open && !queryFor} onOpenChange={onOpenChange}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-w-2xl dark:border-white/10 dark:bg-[#131316]">
           <div className="flex items-center justify-between border-b px-1 pb-3 pr-8">
             <div className="flex items-center gap-2">
               <Database className="h-5 w-5 text-[#1565EF]" />
@@ -94,8 +94,8 @@ export function DatabaseConnectionsListModal({
                     <span
                       title={
                         health.healthy
-                          ? "The database query service is reachable and responding."
-                          : "The database query service isn't responding right now. Queries may fail — try again shortly, or re-register the connection if it persists."
+                          ? "The database query service (MCP server) answered its health check."
+                          : `The database query service (MCP server) health check: ${health.status}. Listing tables and queries may fail until it answers.`
                       }
                       className={cn(
                         "ml-1 inline-flex cursor-help items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium",
@@ -110,7 +110,7 @@ export function DatabaseConnectionsListModal({
                           health.healthy ? "bg-emerald-500" : "bg-amber-500",
                         )}
                       />
-                      Service {health.healthy ? "online" : health.status}
+                      Query service {health.healthy ? "online" : health.status}
                     </span>
                   )}
                 </p>

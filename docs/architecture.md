@@ -181,7 +181,7 @@ Two inference paths exist in the codebase:
 
   Scaling: the shipped CR is a fixed `num_replicas: 1` Serve deployment over a
   worker group of `minReplicas: 1, maxReplicas: 3`
-  (`deploy/helm/ray/rayservice.yaml:31, 64-66`). It does **not** scale to zero —
+  (`deploy/helm/ray/rayservice.yaml:31, 69-71`). It does **not** scale to zero —
   see §10 for which path does. The images are `avaloka-ray:latest`, side-loaded
   into the cluster by `deploy_stack.py` rather than pulled from a registry.
 - **MTA v2 managed inference (`app/agents/mta_v2/`)** — trains on Ray/GKE and
@@ -300,7 +300,7 @@ so, rather than failing outright.
 
 | Lifecycle stage | Depends on | Env vars | Required? | Why it's needed / what breaks without it |
 | --------------- | ---------- | -------- | --------- | ---------------------------------------- |
-| **Reasoning** (the agents' "brains") | One LLM provider, selected by `INFERENCE_PROVIDER` | `OPENROUTER_API_KEY` (default provider), or `GROQ_API_KEY_PLANNING_AGENT` / `GROQ_API_KEY_CODING_AGENT` for Groq | **A key for the selected provider, yes** | Every agent builds its model through `build_chat_model` (`app/core/inference.py`). With no usable key the agents fall back to deterministic stubs — no real planning or code synthesis. See §8.1 for which provider is selected. |
+| **Reasoning** (the agents' "brains") | One LLM provider, selected by `INFERENCE_PROVIDER` | `GROQ_API_KEY_PLANNING_AGENT` / `GROQ_API_KEY_CODING_AGENT` for Groq (the default provider), or `OPENROUTER_API_KEY` for OpenRouter | **A key for the selected provider, yes** | Every agent builds its model through `build_chat_model` (`app/core/inference.py`). With no usable key the agents fall back to deterministic stubs — no real planning or code synthesis. See §8.1 for which provider is selected. |
 | **Session & thread state** | Redis | `REDIS_URL` | **Yes (for the API)** | Uploads, threads, and inference store session state in Redis. Without it the API returns `503` on `/api/upload`, `/threads`, and inference. A circuit breaker tolerates brief hiccups. |
 | **Scheduling / long jobs** | Redis (Celery broker) | `CELERY_REDIS_URL` | For scheduled/async work | The Scheduler and full-dataset (`entire_dataset`) runs dispatch through Celery/RedBeat. Without it, only synchronous execution paths run. |
 | **API authentication** | Supabase JWT (ES256/RS256 via JWKS, or legacy HS256) | `SUPABASE_URL` for JWKS; `SUPABASE_JWT_SECRET` for HS256 | **Yes (for the API)** | Every non-public route validates a bearer JWT (`app/api/server.py:1066-1084`). The env var is `SUPABASE_JWT_SECRET` — *not* `JWT_SECRET`, which is only the Python name it is bound to at `server.py:322`. An empty value fails closed at startup. See [api.md](api.md). |
@@ -317,7 +317,7 @@ so, rather than failing outright.
 | **Infra defaults** | — | `DEFAULT_INFRA_PLATFORM`, `DATASET_SIZE_BYTES_THRESHOLD_FOR_RAY_TRAINING` | Optional | Tunes routing decisions (which cloud, when to escalate to Ray training). |
 
 **The short version:** to run the agents you need **one LLM provider key**
-(OpenRouter by default); to run the API you also need **Redis** and
+(Groq by default); to run the API you also need **Redis** and
 **`SUPABASE_JWT_SECRET`**. Everything else unlocks a specific capability — cloud storage,
 distributed training, managed inference, caching, tracking, database
 connections — and is optional until you need that stage.
@@ -337,15 +337,18 @@ first (`resolve_provider`, `app/core/inference.py:206`):
 3. `INFERENCE_PROVIDER` — global.
 4. Nothing set: **OpenRouter** if `OPENROUTER_API_KEY` is present, else Groq if
    a Groq key is, else OpenAI if `OPENAI_API_KEY` is, else OpenRouter —
-   `_default_provider_with_a_usable_key`, `app/core/inference.py:129`.
+   `_default_provider_with_a_usable_key`, `app/core/inference.py`.
 
-The default changed from Groq to OpenRouter so one key reaches many model
-vendors, which is the better first-run default for a self-hosted install. Groq
-remains supported and is still the lowest-latency path. Two cautions:
+The default is OpenRouter with `openai/gpt-oss-120b`, matching the Helm chart's
+`inference.provider` (MP-01, owner decision 2026-11-01: the cheapest per correct
+answer in the 2026-11-01 runs). Requests carry OpenRouter `provider` preferences:
+`only` = the allowlist for the model family, `allow_fallbacks: false`,
+`data_collection: "deny"`, `zdr: true` (`openrouter_allowlist`,
+`_openrouter_routing`). When no listed provider can serve a request, OpenRouter
+returns 404 or 503 and the primary falls back to the next tier, GPT-6 Luna (pinned to
+Azure, sent with reasoning effort `none` for tool calling;
+`_with_openrouter_tier`). Groq remains supported. One caution:
 
-* The **module docstring** of `app/core/inference.py` (lines 22–27 and 41–46)
-  still says Groq is the default. The code does not — `_PROVIDER_ALIASES[""]`
-  is `OPENROUTER` (line 82). Trust the code; the docstring is stale.
 * `.env.example:25` sets `OPENROUTER_BASE_URL`, but the builder reads
   `INFERENCE_OPENROUTER_BASE_URL` (`app/core/inference.py:308`). Overriding the
   base URL needs the second name.
@@ -388,7 +391,7 @@ The sections above describe the planner/coder/validator core. Since then the
 system gained three layers, each with a one-line rationale and the PR that
 carried it:
 
-### The evidence layer (#271)
+### The evidence layer
 `contract.py` (agents declare stage/reads/writes; undeclared writes are
 dropped, a crashing agent becomes a structured failure), `integrity_agent.py`
 (leakage screened **before** training), `evaluation_agent.py`
@@ -397,7 +400,7 @@ baseline, CI-gated wins), `claim_verifier.py` (the narrative checked against
 the evidence, deterministically). The Validator checks the *code*; this layer
 checks the *claim*.
 
-### Model routing and fallback (#272, #286, #287)
+### Model routing and fallback
 One table decides *which model* (`model_config.py`, env-overridable,
 live-verified); one factory decides *which provider*; `model_fallback.py`
 decides *what happens when the provider fails* — OpenRouter first, then a
@@ -407,8 +410,7 @@ model families from live catalogues with zero code changes and verifies tags
 before suggesting pulls. Born of a real outage: Groq removed the entire Llama
 line and six agents 404'd mid-analysis.
 
-One consequence of the default moving to OpenRouter (§8.1): when OpenRouter is
-the *primary*, no fallback is attached. `_with_fallback`
+When OpenRouter is the *primary* (§8.1), no fallback is attached. `_with_fallback`
 (`app/core/inference.py:389`) returns the model unchanged in that case, because
 wrapping an OpenRouter primary in an OpenRouter backup retries an outage
 against the provider that just produced it, and the wrapper changes the
@@ -416,7 +418,7 @@ returned type. So fallback is active on the Groq, local, Bedrock, Vertex and
 Azure paths, and is a deliberate no-op on the default one. Pin
 `INFERENCE_PROVIDER=groq` if you want the two-provider path.
 
-### Conversational agent with optional swarm (#273/#282, from #157)
+### Conversational agent with optional swarm
 `avaloka_agent/` routes conversation before planning; swarm is resolved by
 **import probe** (`app/agents/avaloka_agent/capabilities.py`) — an OSS build
 without the module
@@ -424,7 +426,7 @@ degrades to no narration, and no environment variable can claim a capability
 whose code is absent. That property is what the edition split
 (`docs/EDITIONS.md`, `docs/INSTALL.md`) relies on.
 
-### Inference serving lifecycle (#265)
+### Inference serving lifecycle
 The legacy gateway minted an `inference-service-{uuid}` namespace plus a GCP API
 Gateway per model and reclaimed neither: **eighteen accumulated between
 2026-04-22 and 2026-08-14**, each holding a pod, ~1 vCPU and its own
@@ -442,7 +444,7 @@ path. And scale-to-zero applies to the **MTA v2 managed-inference** path, not to
 the Ray Serve `RayService` the chart ships, which is pinned at one replica over
 a one-to-three worker group (§5).
 
-### Training integrity (#292)
+### Training integrity
 Preprocessing is fitted on the **training split only** — imputation values,
 one-hot vocabularies and scaler statistics — and merely *applied* to validation.
 Fitting before the split is textbook target leakage: the model sees test-set
@@ -465,7 +467,7 @@ inside a Docker image and cannot import `app.*`), so their agreement on
 preprocessing, split rule and metric keys is maintained deliberately and should
 be asserted by test rather than assumed.
 
-### Fallback coverage and verification (#281, #290)
+### Fallback coverage and verification
 Fallback is not per-agent opt-in: **twelve modules** resolve their LLM through
 `model_fallback.py`, each non-OpenRouter primary paired with an OpenRouter
 equivalent via `with_fallbacks()`. Eight import `attach_fallback` directly —
@@ -516,7 +518,7 @@ provisioner and single-cloud in the serving path. Routing MTA through the same
 factory is the remaining work; until then, treat AWS/Azure inference as
 manual configuration.
 
-### Measurement (1.7 line: #277, #283, #284)
+### Measurement (1.7 line)
 A benchmark harness with plugin-discovered suites, a
 (Quality, Cost, Latency, Data-Scanned) 4-tuple, resumable journals, and a
 pre-flight smoke suite over five surfaces (harness/prompts/loops/graph/
@@ -805,12 +807,14 @@ Model choice is configuration, not code:
 | Concern | Where |
 | --- | --- |
 | *Which model* an agent asks for | `app/core/model_config.py` — `resolve("coder")` / `model_for("coder")`, env-overridable per `env_var_for(agent)`, live-verified against the provider catalogue |
-| *Which provider* serves it | **OpenRouter (default)** · Groq · in-cluster vLLM/Ollama · OpenAI · Bedrock · Vertex · Azure — selected per §8.1 |
+| *Which provider* serves it | **Groq (default)** · OpenRouter · in-cluster vLLM/Ollama · OpenAI · Bedrock · Vertex · Azure — selected per §8.1 |
 | *When the provider fails* | `app/core/model_fallback.py` — OpenRouter backup, then a **local** last resort sized by deployment profile. A no-op when OpenRouter is already the primary; see §10. |
 
 The local tier is profile-aware: a cluster GPU serves `google/gemma-4-31b-it`
 (`AVALOKA_LOCAL_MODEL_CLUSTER`, `model_fallback.py:463`); a laptop gets
-`google/gemma-3-4b-it` (`AVALOKA_LOCAL_MODEL_LAPTOP`, line 468) — chosen
+the default local model, `qwen3:4b-instruct-2507-q4_K_M`
+(`AVALOKA_LOCAL_MODEL_LAPTOP`, from `inference.DEFAULT_LOCAL_MODEL`; Apache-2.0,
+and what `deploy/inference/ollama-cpu.yaml` serves) — chosen
 deliberately and stated in the logs, because a laptop serving 27B+ turns a
 fallback into a hang. Detection uses `KUBERNETES_SERVICE_HOST` (kubelet-injected,
 line 482); `AVALOKA_DEPLOYMENT_PROFILE` overrides. The ids a given vLLM or

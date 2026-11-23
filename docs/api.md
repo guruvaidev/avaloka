@@ -8,7 +8,7 @@ chat, and model management.
 - **App object:** `app.api.server:app` (`app/api/server.py:1129`, FastAPI title
   `Avaloka UI API`)
 - **Default port:** `9000` (the container `CMD` is
-  `uvicorn app.api.server:app --host 0.0.0.0 --port 9000` —
+  `uvicorn app.api.server:app --host 0.0.0.0 --port 9000 --loop asyncio` —
   `deploy/docker/Dockerfile.api:104`)
 - **Interactive docs:** `GET /docs` (Swagger UI), `GET /openapi.json` — the app
   does not override `docs_url`, so both are served
@@ -16,7 +16,7 @@ chat, and model management.
   chosen by the token's own `alg` header (`app/api/server.py:1066`).
 
 ```bash
-uvicorn app.api.server:app --host 0.0.0.0 --port 9000 --reload
+uvicorn app.api.server:app --host 0.0.0.0 --port 9000 --loop asyncio --reload
 ```
 
 ## Authentication
@@ -262,7 +262,12 @@ that your JWT and `SUPABASE_JWT_SECRET` agree.
   it.
 - **LangGraph dev server** — `langgraph.json` maps the `avaloka` graph to
   `app/api/langgraph_app.py:graph`; `langgraph dev` serves it on the LangGraph
-  CLI's default `http://127.0.0.1:2024`.
+  CLI's default `http://127.0.0.1:2024`. It is **internal**: the API is its
+  only caller (as a thread registry), no chart routes to it, a NetworkPolicy
+  admits only the API pods, and every call except `GET /ok` needs
+  `Authorization: Bearer $LANGGRAPH_SERVICE_TOKEN` or gets `401`
+  (`app/api/langgraph_service_auth.py`, wired in by `langgraph.json`
+  `http.app`). The token is generated like the other generated secrets.
 - **MCP servers** — two unrelated sets. `app/mcp_server/customer_dbs.py` and
   `app/mcp_server/multi_tenant_mcp_server.py` are the customer-database
   registry; `app/interfaces/mcp/server.py` is the mission-planning tool server

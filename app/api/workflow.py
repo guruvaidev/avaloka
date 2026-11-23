@@ -334,9 +334,15 @@ def route_planner_output(state: ETLState):
         return "prepare_code"
 
     # ── infra provisioning ─────────────────────────────────────────────────
+    # Only a request the user confirmed (app/agents/infra_confirmation.py sets
+    # "confirmed" on "yes"). A request that arrived any other way -- seeded by
+    # the planner, set by a fallback, left in an old checkpoint -- provisions
+    # nothing.
+    _infra_request = state.get("infrastructure_request")
     if (
         not state.get("infrastructure_provisioned")
-        and state.get("infrastructure_request")
+        and isinstance(_infra_request, dict)
+        and _infra_request.get("confirmed") is True
     ):
         return "provision_infra"
 
@@ -441,9 +447,25 @@ def route_after_training(state: ETLState):
 # ---------------------------------------------------------------------------
 
 def route_after_execution(state: ETLState):
-    """Route to visualization after execution completes."""
+    """Route to visualization after execution completes, or retry local code once on timeout/crash."""
     execution_result = state.get("execution_result", {})
-    if execution_result.get("status") in {"error", "failed"} or state.get("execution_error"):
+    exec_error = str(state.get("execution_error") or "")
+    if execution_result.get("status") in {"error", "failed"} or exec_error:
+        is_local_failure = (
+            state.get("execution_mode") == "local"
+            or "Script execution timed out" in exec_error
+            or "Script failed with exit status" in exec_error
+        )
+        has_code = bool(
+            (state.get("coder_definition") or {}).get("code")
+            or state.get("generated_code")
+        )
+        already_retried = bool(
+            (state.get("coder_definition") or {}).get("execution_retried")
+            or int(state.get("execution_retry_count") or 0) >= 1
+        )
+        if is_local_failure and not already_retried and has_code:
+            return "retry_code"
         return "end"
     sample_data = state.get("uploaded_csv_preview", [])
     if execution_result or sample_data:
@@ -455,12 +477,61 @@ def route_after_execution(state: ETLState):
 # Coding subgraph
 # ---------------------------------------------------------------------------
 
+#: Sample-run outcomes that are not the code crashing (the same list as
+#: app.agents.validator.run_code_validation's): nothing ran, or it ran and
+#: returned no rows. Repeated here so this module imports nothing new from
+#: the validator.
+_SAMPLE_NOT_A_CRASH = frozenset({
+    "Execution returned an empty DataFrame.",
+    "Sample data unavailable for execution",
+    "Sample data unavailable for execution.",
+    "Validation failed.",
+})
+
+
+def _sample_crash(state) -> str | None:
+    """The sample run's error when main(df) itself raised, else None."""
+    if state.get("syntax_error") or state.get("static_semantic_error"):
+        return None
+    err = str(state.get("execution_error") or "").strip()
+    if not err or err in _SAMPLE_NOT_A_CRASH:
+        return None
+    return err
+
+
+def logical_review_with_sample_crash_gate(state: CodingAgentState) -> dict:
+    """The logical reviewer, plus a deterministic check that the sample run did not crash.
+
+    A crash on the sample used to send the code back only when the LLM reviewer
+    read the crash and said so. With no reviewer configured it approved, and
+    code that had already raised on the sample went on to the full run. A crash
+    is a fact, not a judgement: it refines on the same budget as the other
+    validators. When the budget runs out the code still goes forward (a crash
+    on a tiny sample can be an artefact of the sample).
+    """
+    out = logical_semantic_validator_node(state)
+    if not isinstance(out, dict):
+        return out
+    crash = _sample_crash(state)
+    if not crash or out.get("logical_semantic_error"):
+        return {**out, "sample_crash_error": False}
+    return {
+        **out,
+        "sample_crash_error": True,
+        "code_validation_feedback": (
+            f"main(df) raised an error when run on the sample data: {crash[:500]}. "
+            "Fix the code so it runs on this data."
+        ),
+    }
+
+
 def check_validation_status(state: CodingAgentState) -> str:
     """Routes back to coder if validation fails, otherwise ends."""
     has_error = (
         state.get("syntax_error")
         or state.get("static_semantic_error")
         or state.get("logical_semantic_error")
+        or state.get("sample_crash_error")
         # A contract violation is a deterministic, self-stated failure: the
         # result does not satisfy the acceptance criteria the blueprint itself
         # published for this task. It retries on the same budget as the rest.
@@ -495,7 +566,7 @@ def build_coding_graph(checkpointer=None):
     workflow.add_node("validator_static", static_semantic_validator_node)
     workflow.add_node("execute_code", execute_code_node)
     workflow.add_node("validator_contract", contract_validator_node)
-    workflow.add_node("validator_logical", logical_semantic_validator_node)
+    workflow.add_node("validator_logical", logical_review_with_sample_crash_gate)
 
     workflow.set_entry_point("coder")
     workflow.add_edge("coder", "validator_syntax")
@@ -789,6 +860,37 @@ def coding_subgraph_node(state: ETLState) -> dict:
             f"{state.get('output_location', 'the requested output path')}."
         )
 
+    prior_exec_res = state.get("execution_result") or {}
+    prior_exec_err = str(state.get("execution_error") or "")
+    prior_code = state.get("generated_code") or (state.get("coder_definition") or {}).get("code") or ""
+    is_exec_retry = bool(
+        prior_code
+        and (
+            prior_exec_res.get("status") in {"error", "failed"}
+            or "Script execution timed out" in prior_exec_err
+            or "Script failed with exit status" in prior_exec_err
+        )
+    )
+    exec_retry_feedback = None
+    if is_exec_retry:
+        stderr_tail = str(state.get("execution_stderr") or "").strip()[-1500:]
+        detail_msg = prior_exec_res.get("message") or prior_exec_err
+        if "timed out" in detail_msg.lower():
+            exec_retry_feedback = (
+                f"Execution Failure on Full Dataset: {detail_msg}.\n"
+                "Your previous code timed out on the full dataset because it used an O(N^2) loop, "
+                ".iterrows(), or repeated DataFrame boolean filtering inside a loop. "
+                "Rewrite main(df) to use O(N log N) or O(N) vectorized NumPy/pandas operations: "
+                "extract columns to NumPy arrays (.to_numpy()), pre-group once outside the loop, "
+                "and use np.searchsorted or pd.merge_asof instead of scanning df inside a loop."
+            )
+        else:
+            exec_retry_feedback = (
+                f"Execution Failure on Dataset: {detail_msg}\n"
+                f"{stderr_tail}\n"
+                "Fix the runtime error in main(df) so the script runs to completion with exit status 0."
+            )
+
     initial_coding_state = {
         "user_prompt": user_prompt,
         "plan": plan_text,
@@ -800,8 +902,10 @@ def coding_subgraph_node(state: ETLState) -> dict:
         "requirements": requirements,
         "messages": state.get("messages", []),
         "retry_count": 0,
+        "generated_code": prior_code if is_exec_retry else None,
+        "code_validation_feedback": exec_retry_feedback,
         "coder_pseudocode": state.get("coder_pseudocode"),
-        "coder_contract": None,
+        "coder_contract": state.get("coder_contract") if is_exec_retry else None,
         "contract_error": None,
         "contract_violations": None,
         "uploaded_csv_preview": state.get("uploaded_csv_preview"),
@@ -863,7 +967,11 @@ def coding_subgraph_node(state: ETLState) -> dict:
         }
 
     updates = {
-        "coder_definition": {"code": generated_code},
+        "coder_definition": (
+            {"code": generated_code, "execution_retried": True}
+            if is_exec_retry
+            else {"code": generated_code}
+        ),
         "coder_raw_response": coder_message_text,
         "generated_code": generated_code,
         "coder_pseudocode": final_coding_state.get("coder_pseudocode"),
@@ -884,7 +992,8 @@ def coding_subgraph_node(state: ETLState) -> dict:
         "output_tables": None,
     }
 
-    # ── Fidelity-based execution policy ─────────────────────────────────────
+    if is_exec_retry:
+        updates["execution_result"] = None
     # This must be decided here (a node's return value, which LangGraph
     # persists via its reducers) rather than inside route_after_code (a
     # router, whose in-place state mutations are discarded before the next
@@ -1187,12 +1296,12 @@ def build_graph(checkpointer=None):
     except ImportError:
         pass
 
-    # ── execution nodes → visualize / end ──────────────────────────────────
+    # ── execution nodes → visualize / retry_code / end ─────────────────────
     for exec_node in ("execute_on_k8s", "execute_locally", "execute_on_ray"):
         graph_builder.add_conditional_edges(
             exec_node,
             route_after_execution,
-            {"visualize": "visualize", "end": "verify_claims"},
+            {"visualize": "visualize", "retry_code": "code_etl", "end": "verify_claims"},
         )
 
     # ── terminal edges ─────────────────────────────────────────────────────

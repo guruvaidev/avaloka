@@ -149,6 +149,50 @@ for where that gate lives and the one case where it is absent, and
 
 ---
 
+## Backfilling Celery task results
+
+Task results are durable in Postgres (`public.celery_task_results`) and cached
+in Redis for `CELERY_RESULT_EXPIRES` seconds. An install upgraded from a
+version that kept results in Redis only, with no expiry, still holds those
+old results in Redis. `scripts/ops/backfill_celery_results.py` copies each one
+to Postgres as a summary (no messages, arguments, inline output or traceback
+text), reads the row back, and only then gives the Redis key a TTL.
+
+Before you start: the migration `20261117120000_celery_task_results` must be
+applied. The script refuses to run (exit 2, nothing changed) without it, and
+without Redis or Postgres credentials.
+
+- **Dry run first.** It is the default and changes nothing; it prints counts
+  only (keys scanned, already with a TTL, would be backed up, unfinished).
+- **Then the real run** with `--apply` (also spelled `--no-dry-run`). Exit 0
+  when every row verified; 1 when any did not (those keys keep no TTL; re-run).
+- **Re-run at any time.** Rows are upserted by task id and a key gets its TTL
+  only after its row verifies, so an interrupted run is resumed by running it
+  again. `--limit N` backs up N keys (a canary); `--batch N` sets the SCAN batch.
+- It only ever reads `celery-task-meta-*`. Broker, scheduler and session keys
+  are never read or changed. Large results are read in 1 MiB chunks.
+
+**From a running pod** (the api and celery pods have the credentials):
+
+```bash
+kubectl -n <namespace> exec deploy/<release>-celery -- python /app/scripts/ops/backfill_celery_results.py
+kubectl -n <namespace> exec deploy/<release>-celery -- python /app/scripts/ops/backfill_celery_results.py --apply --limit 50
+kubectl -n <namespace> exec deploy/<release>-celery -- python /app/scripts/ops/backfill_celery_results.py --apply
+```
+
+**As a one-shot Job** (chart value `ops.backfillCeleryResults`, off by default):
+
+```bash
+helm upgrade <release> deploy/helm/avaloka -n <namespace> <your usual -f/--set flags> \
+  --set ops.backfillCeleryResults.enabled=true                       # dry run
+kubectl -n <namespace> logs job/<release>-backfill-celery-results-<revision>
+helm upgrade <release> deploy/helm/avaloka -n <namespace> <your usual -f/--set flags> \
+  --set ops.backfillCeleryResults.enabled=true --set ops.backfillCeleryResults.apply=true
+```
+
+Each enabled upgrade creates one Job named after the release revision; turn
+the value off again on the next upgrade.
+
 ## Troubleshooting
 
 **MLflow database migration errors.** A schema left behind by a different

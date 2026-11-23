@@ -136,6 +136,29 @@ def test_a_grouping_alone_never_asks(prompt):
     assert _measure(prompt, state) is None
 
 
+@pytest.mark.parametrize("prompt, expected", [
+    ("How many customers made purchases?", {"customer", "purchase"}),
+    ("What percentage of loan applications were denied?", {"loan", "application"}),
+    ("What share of orders were returned?", {"order"}),
+    ("Count of active users by region", {"user"}),
+])
+def test_record_count_and_proportion_patterns_mark_population_words(prompt, expected):
+    stems = planner._record_context_stems(prompt)
+    assert expected.issubset(stems)
+
+
+@pytest.mark.parametrize("prompt", [
+    "How many customers made purchases?",
+    "How many revenue rows are there?",
+    "What percentage of loan applications were denied?",
+    "What share of orders were returned?",
+    "Count of active users by region",
+])
+def test_record_count_and_proportion_questions_do_not_trigger_metric_ambiguity(prompt):
+    state = {"uploaded_csv_columns": ["gross_revenue", "net_revenue"]}
+    assert planner._detect_ambiguous_prompt_details(prompt, state) is None
+
+
 @pytest.mark.parametrize("typing", ["untyped", "all numeric"])
 def test_known_limitation_a_grouping_named_first_without_a_preposition_is_asked_about(typing):
     """Pinned, not endorsed. The grouping rule keys on per / by / for each /

@@ -43,27 +43,3 @@ spec:
       port: {{ .Values.service.api.port }}
       targetPort: {{ .Values.service.api.port }}
       protocol: TCP
-
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: avaloka-langgraph-active
-  labels:
-    app.kubernetes.io/name: avaloka-backend
-    app.kubernetes.io/component: backend
-    app.kubernetes.io/managed-by: {{ .Release.Service }}
-    avaloka.io/port: langgraph
-    avaloka.io/router: "true"
-  annotations:
-    avaloka.io/active-color: {{ .Values.activeColor | quote }}
-spec:
-  type: ClusterIP
-  selector:
-    app.kubernetes.io/component: backend
-    avaloka.io/color: {{ .Values.activeColor | quote }}
-  ports:
-    - name: http
-      port: {{ .Values.service.langgraph.port }}
-      targetPort: {{ .Values.service.langgraph.port }}
-      protocol: TCP

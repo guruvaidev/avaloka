@@ -68,6 +68,17 @@ export type Slide = {
 
 export const PALETTE = ["#1565ef", "#f97066", "#12b76a", "#f79009", "#7a5af8", "#06aed4", "#ee46bc"];
 
+function ActiveBarTopShadow(props: any) {
+  const { x, y, width, height, fill, plotTop = 0 } = props;
+  if (![x, y, width, height, plotTop].every(Number.isFinite)) return null;
+  return (
+    <g>
+      <rect x={x} y={plotTop} width={width} height={Math.max(0, y - plotTop)} fill={fill} fillOpacity={0.12} />
+      <rect x={x} y={y} width={width} height={height} fill={fill} rx={4} />
+    </g>
+  );
+}
+
 function formatNumberCompact(n: number | string): string {
   return measureLabel(n);
 }
@@ -637,7 +648,7 @@ export function DynamicChart({
   if (slide.undrawable || !slide.data?.length) {
     return (
       <div
-        className="flex w-full items-center justify-center text-[12px] text-[#667085]"
+        className="flex w-full items-center justify-center text-[12px] text-tertiary"
         style={{ height: compact ? Math.min(height, 120) : height }}
       >
         This chart couldn't be drawn from the available data.
@@ -657,15 +668,15 @@ export function DynamicChart({
         className={
           stackPresentation
             ? `ai-pie-layout ${compact ? "ai-pie-compact" : ""}`
-            : `flex w-full min-w-0 flex-wrap gap-3 overflow-visible ${height > 400 ? "h-full items-center" : "h-auto"}`
+            : `flex w-full min-w-0 flex-wrap gap-3 ${compact ? "overflow-hidden" : "overflow-visible"} ${height > 400 ? "h-full items-center" : "h-auto"}`
         }
-        style={stackPresentation ? { height, minHeight: 320 } : height > 400 ? { height } : undefined}
+        style={stackPresentation ? { height, minHeight: 320 } : compact || height > 400 ? { height } : undefined}
       >
         <div
           className={
             stackPresentation
               ? "ai-pie-box"
-              : `${height > 400 ? "h-full" : "h-[230px]"} min-h-[230px] min-w-[220px] flex-[1.2_1_0%] shrink-0`
+              : `${compact ? "h-full min-h-0" : `${height > 400 ? "h-full" : "h-[230px]"} min-h-[230px]`} ${compact ? "min-w-0 w-full flex-1" : "min-w-[220px] flex-[1.2_1_0%] shrink-0"}`
           }
         >
           <ResponsiveContainer width="100%" height="100%">
@@ -713,7 +724,7 @@ export function DynamicChart({
                   className={
                     stackPresentation
                       ? "ai-pie-legend-item"
-                      : "flex min-w-0 items-center gap-2 text-[11px] text-[#475467]"
+                      : "flex min-w-0 items-center gap-2 text-[11px] text-[var(--chart-tick)]"
                   }
                 >
                   <span
@@ -721,7 +732,7 @@ export function DynamicChart({
                     style={{ backgroundColor: PALETTE[i % PALETTE.length] }}
                   />
                   <span className="min-w-0 flex-1 break-words">{item.name}</span>
-                  <span className="shrink-0 whitespace-nowrap text-[#101828]">
+                  <span className="shrink-0 whitespace-nowrap text-primary">
                     {formatNumberCompact(item.value)} ({pct(item.value)})
                   </span>
                 </li>
@@ -735,9 +746,9 @@ export function DynamicChart({
 
   if (slide.type === "scatter") {
     return (
-      <div className="ai-scatter-chart">
+      <div className={compact ? "ai-scatter-chart min-w-0 w-full overflow-hidden" : "ai-scatter-chart"}>
         <div className="ai-scatter-header">{header}{controls}</div>
-        <div className="ai-scatter-plot" style={{ height: Math.max(height, 320) }}><ResponsiveContainer width="100%" height="100%">
+        <div className="ai-scatter-plot" style={{ height: compact ? Math.max(height - 32, 120) : Math.max(height, 320), minWidth: 0, maxWidth: "100%" }}><ResponsiveContainer width="100%" height="100%">
           <ScatterChart
             margin={{ top: 12, right: 16, left: 16, bottom: 12 }}
           >
@@ -896,9 +907,9 @@ export function DynamicChart({
                     }
               }
             />
-            <RTooltip {...histogramTooltip} />
+            <RTooltip {...histogramTooltip} cursor={false} />
             {slide.series.map((s) => (
-              <Bar key={s.dataKey} dataKey={s.dataKey} name={s.name} fill={s.color ?? PALETTE[0]} radius={[4, 4, 0, 0]}>
+              <Bar key={s.dataKey} dataKey={s.dataKey} name={s.name} fill={s.color ?? PALETTE[0]} radius={[4, 4, 0, 0]} activeBar={<ActiveBarTopShadow plotTop={margin.top} />}>
                 {stackPresentation &&
                   slide.chartKind !== "histogram" &&
                   slide.data.length >= 2 &&
@@ -1038,7 +1049,7 @@ export function DynamicChart({
           )}
         </ComposedChart>
       </ResponsiveContainer>
-      <div className="mt-1 flex items-center justify-center gap-5 text-[11px] text-[#475467]">
+      <div className="mt-1 flex items-center justify-center gap-5 text-[11px] text-[var(--chart-tick)]">
         {slide.series.map((s) => (
           <span key={s.dataKey} className="inline-flex items-center gap-1.5">
             <span className="size-2 rounded-sm" style={{ background: s.color }} />

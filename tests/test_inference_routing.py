@@ -45,7 +45,7 @@ def test_bare_classify_phrasing_is_not_hijacked():
 
 def test_pending_infra_request_beats_inference_detection():
     state = _state("deploy this on gcp and then predict churn", **MODEL_STATE)
-    state["infrastructure_request"] = {"type": "gcp", "app_type": "python-docker"}
+    state["infrastructure_request"] = {"type": "gcp", "app_type": "python-docker", "confirmed": True}
     assert wf.route_planner_output(state) == "provision_infra"
 
 

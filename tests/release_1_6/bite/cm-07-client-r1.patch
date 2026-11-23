@@ -1,0 +1,11 @@
+diff --git a/app/mcp_server/client.py b/app/mcp_server/client.py
+new file mode 100644
+index 00000000..b407b9f1
+--- /dev/null
++++ b/app/mcp_server/client.py
+@@ -0,0 +1,5 @@
++"""Minimal client for the multi-tenant MCP server (bite fixture for CM-07)."""
++
++
++def list_tables(connection_id):
++    raise NotImplementedError(connection_id)

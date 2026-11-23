@@ -1,0 +1,13 @@
+diff --git a/app/agents/sampling_agent_daft.py b/app/agents/sampling_agent_daft.py
+index 1b41337d..339f49c4 100644
+--- a/app/agents/sampling_agent_daft.py
++++ b/app/agents/sampling_agent_daft.py
+@@ -2157,7 +2157,7 @@ def sample_with_profiling(
+         
+         ray_info_snapshot = get_ray_cluster_info()
+         profiling_result = {
+-            "data_shape": {"rows": total_rows, "columns": len(schema)},
++            "data_shape": {"rows": total_rows, "columns": len(schema) + 1},
+             "column_statistics": column_statistics,
+             "data_quality": data_quality,
+             "portfolio_metadata": {

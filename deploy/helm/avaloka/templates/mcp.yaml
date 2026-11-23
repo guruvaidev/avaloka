@@ -75,6 +75,13 @@ spec:
                   name: {{ include "avaloka.secretName" . }}
                   key: MCP_SERVICE_TOKEN
                   optional: true
+            # Customer credentials are sealed at rest and in transit under this
+            # key; the server refuses to start without it (app/core/encryption_key.py).
+            - name: DB_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "avaloka.secretName" . }}
+                  key: DB_ENCRYPTION_KEY
           ports:
             - name: http
               containerPort: {{ .Values.mcp.port }}

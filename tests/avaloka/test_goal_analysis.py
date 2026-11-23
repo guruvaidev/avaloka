@@ -191,3 +191,88 @@ def test_a_count_goal_is_still_answered_with_a_row_count():
         result = analyze_goal(_two_revenues(), goal, {"columns": []})
         assert result["status"] == "answered", goal
         assert result["metrics"]["aggregation"] == "count", goal
+
+
+def test_a_missing_group_is_labelled_and_every_group_reports_its_size():
+    """A NaN category was printed as the group "nan" and ranked like a real one,
+    and a one-row group could top the ranking with no sign of how thin it was."""
+    frame = pd.DataFrame({
+        "category": ["A", "A", "B", None, None, None],
+        "earnings": [10.0, 20.0, 100.0, 40.0, 50.0, 60.0],
+    })
+    result = analyze_goal(frame, "average earnings by category", {"columns": []})
+    groups = {g["group"]: g["value"] for g in result["metrics"]["groups"]}
+    assert groups == {"B": 100.0, "(missing)": 50.0, "A": 15.0}
+    assert "nan" not in groups
+    assert result["metrics"]["group_sizes"] == {"B": 1, "(missing)": 3, "A": 2}
+    assert "category=B: mean earnings=100 (n=1)." in result["findings"]
+    assert any("3 rows have no category value" in f for f in result["findings"])
+
+
+def test_correlation_reports_rank_correlation_beside_pearson():
+    """One extreme row drags Pearson down while the ranks still move together."""
+    frame = pd.DataFrame({
+        "uploads": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 1_000_000.0],
+        "earnings": [10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 5.0],
+    })
+    result = analyze_goal(frame, "correlation between uploads and earnings", {"columns": []})
+    pair = result["metrics"]["pairs"][0]
+    rank = result["metrics"]["rank_pairs"][0]
+    assert pair["r"] < 0  # Pearson is dominated by the single outlier
+    assert rank["rho"] > pair["r"]
+    assert "Spearman rho=" in result["findings"][0]
+
+
+def test_a_null_like_label_that_ranks_is_flagged_not_silently_counted():
+    """The loader keeps "nan" in a text column as a label by policy. When it ranks
+    among the groups the report must say it may be missing data."""
+    frame = pd.DataFrame({
+        "category": ["A", "A", "nan", "nan", "nan"],
+        "earnings": [10.0, 20.0, 40.0, 50.0, 60.0],
+    })
+    result = analyze_goal(frame, "average earnings by category", {"columns": []})
+    assert any(
+        "'nan' (3 rows) is a null-like word" in f and "exclude it" in f
+        for f in result["findings"]
+    )
+    plain = analyze_goal(frame.assign(category=["A", "A", "B", "B", "B"]),
+                         "average earnings by category", {"columns": []})
+    assert not any("null-like" in f for f in plain["findings"])
+
+
+def test_a_rank_only_relationship_is_reported_even_among_many_pairs():
+    """Spearman was computed only for the five strongest Pearson pairs, so a
+    relationship that one extreme row hides from Pearson fell outside them as
+    soon as there were more than five pairs."""
+    import numpy as np
+    rng = np.random.default_rng(7)
+    n = 60
+    base = rng.normal(size=n)
+    frame = pd.DataFrame({f"c{i}": base + rng.normal(scale=0.3 + 0.1 * i, size=n) for i in range(4)})
+    uploads = np.arange(1.0, n + 1)
+    earnings = uploads * 10.0
+    uploads[-1] = 1e9  # one channel drags Pearson toward zero
+    earnings[-1] = 0.0
+    frame["uploads"] = uploads
+    frame["earnings"] = earnings
+    result = analyze_goal(frame, "what is the relationship in this data", {"columns": []})
+    pearson_top = {(p["left"], p["right"]) for p in result["metrics"]["pairs"]}
+    assert ("uploads", "earnings") not in pearson_top  # the old selection missed it
+    reported = {(p["left"], p["right"]): p for p in result["metrics"]["rank_pairs"]}
+    assert ("uploads", "earnings") in reported
+    assert reported[("uploads", "earnings")]["rho"] > 0.9
+    assert any(f.startswith("uploads and earnings:") and "Spearman rho=" in f for f in result["findings"])
+
+
+def test_a_real_missing_category_is_not_merged_with_absent_values():
+    """A category literally named "(missing)" must stay apart from rows with no value."""
+    frame = pd.DataFrame({
+        "category": ["(missing)", "(missing)", None, "A"],
+        "earnings": [10.0, 20.0, 90.0, 5.0],
+    })
+    result = analyze_goal(frame, "average earnings by category", {"columns": []})
+    sizes = result["metrics"]["group_sizes"]
+    assert sizes["(missing)"] == 2
+    assert sizes["(missing: no value)"] == 1
+    assert any("1 rows have no category value" in f and "(missing: no value)" in f
+               for f in result["findings"])

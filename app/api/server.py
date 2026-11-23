@@ -182,6 +182,7 @@ from app.agents.sampling_async import sample_quick
 from app.agents.profiling_agent import profile_full
 from app.agents.sampling_persistence import persist_full_profile, load_portfolio, load_profile, upsert_profile
 from app.agents.execution_agent import execution_agent_node_local, execution_agent_node_ray
+from app.agents.execution_agent import RAY_NO_CONNECTION_REASON
 from app.agents.planner import review_edited_code
 from app.agents.validator import run_code_validation
 from app.core.celery_app import (
@@ -190,6 +191,7 @@ from app.core.celery_app import (
     celery_app,
     _logs_from_final,
     _ray_job_from_final,
+    _run_outcome_from_final,
     _run_status_from_final,
     _training_failure_from_final,
 )
@@ -199,6 +201,8 @@ from app.agents.mta_v2.failure_diagnostics import (
     format_training_failure,
 )
 from app.core.task_metadata import scheduled_task_metadata
+from app.core import run_truth
+from app.core import celery_results
 from app.utils import convert_message_dicts_to_objects
 from celery.result import AsyncResult
 from celery.schedules import crontab
@@ -207,6 +211,7 @@ from redbeat.schedulers import get_redis
 # NEW: shared services
 from app.services import session_service, storage_service
 from app.services import notification_service
+from app.core import job_ledger, job_notes, long_jobs
 from app.services.session_service import (
     _note_cache_failure,
     _mget_safe,
@@ -263,6 +268,7 @@ from app.api.helpers import (
     _normalize_schema_for_state,
     _write_rows_to_csv,
     _ddl_from_schema,
+    _schema_from_db_rows,
     _fallback_sample_csv,
     _datauri_csv_to_records,
     _compact_messages,
@@ -279,6 +285,7 @@ from app.api.helpers import (
 
 )
 
+from app.core.typed_secrets import redact_typed_secrets, seal_typed_secrets
 from app.api.cloud_connections import (
     get_cloud_connection,
     connection_belongs_to_user,
@@ -328,9 +335,10 @@ from app.core.plan_limits import resolve_plan, limits_for, check_sizes, limit_er
 
 # Data transfer, model training and model inference are COST gates in
 # app/core/editions.py; app/core/plan_gate.py decides them (planner.py in chat,
-# the model endpoints below directly). Self-hosted deployments are never gated;
-# an unknown plan (lookup failed) is allowed, the same policy as the planner.
-from app.core.plan_gate import check_feature, upgrade_message, FEATURE_CAPABILITY
+# the model endpoints below directly). Self-hosted and undeclared deployments
+# are never gated. On a hosted deployment a failed plan lookup is refused as
+# unavailable (503), never as an upgrade, the same policy as the planner.
+from app.core.plan_gate import check_feature, upgrade_message, unavailable_message, FEATURE_CAPABILITY
 
 
 def _plan_allows_premium(plan: Optional[str], feature: str = "model_training") -> bool:
@@ -339,10 +347,20 @@ def _plan_allows_premium(plan: Optional[str], feature: str = "model_training") -
 
 
 async def _require_premium_plan(user_id: str, feature: str) -> None:
-    """403 with an upgrade payload unless the user's plan includes the feature."""
+    """403 with an upgrade payload unless the user's plan includes the feature;
+    503 "plan check unavailable" when a hosted plan lookup failed."""
     decision = await asyncio.to_thread(check_feature, feature, user_id=user_id)
     if decision.allowed:
         return
+    if decision.unavailable:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            {
+                "reason": "plan_check_unavailable",
+                "feature": feature,
+                "message": unavailable_message(decision),
+            },
+        )
     raise HTTPException(
         status.HTTP_403_FORBIDDEN,
         {
@@ -1066,7 +1084,17 @@ async def _ensure_local_inputs(
     # 3) Ensure a working input exists.
     work_input_str = sess.get("work_local_input")
     work_input = Path(work_input_str) if work_input_str else None
-    work_input_ok = bool(work_input and work_input.exists())
+    # work_local_input may have been repointed at the sample or the streamed
+    # head. For a sub-1 GB full run that is not the full file: fetch it again.
+    is_stand_in = bool(work_input) and (
+        work_input == sample_path
+        or work_input.name in ("sample_input.csv", "streamed_head.csv")
+    )
+    small_file = int(sess.get("file_size_bytes") or 0) < LARGE_DATASET_THRESHOLD_BYTES
+    work_input_ok = bool(
+        work_input and work_input.exists()
+        and not (need_full and is_stand_in and small_file)
+    )
 
     # ENTIRE-local needs the full object; sample suffices otherwise.
     if need_full and not work_input_ok:
@@ -1080,7 +1108,7 @@ async def _ensure_local_inputs(
         )
         if can_download:
             ext = (sess.get("input_data_type") or "csv").lower()
-            dest = work_input if work_input else (
+            dest = work_input if (work_input and not is_stand_in) else (
                 work_dir / f"input_{sess.get('dataset_id') or _new_id()}.{ext}"
             )
             try:
@@ -1179,8 +1207,10 @@ def _assistant_messages_from_state(state: Dict[str, Any]) -> List[Dict[str, str]
 async def lg_request(method: str, path: str, **kw) -> httpx.Response:
     """
     Low-level HTTP call to the LangGraph server, using the shared http_client from config
-    if available; otherwise a one-shot client.
+    if available; otherwise a one-shot client. Every call carries the service
+    token the server requires (api_config.langgraph_auth_headers).
     """
+    kw["headers"] = {**(kw.get("headers") or {}), **api_config.langgraph_auth_headers()}
     try:
         if api_config.http_client is None:
             timeout = httpx.Timeout(
@@ -1247,14 +1277,16 @@ TURN_SYNC_DEADLINE_S = float(os.getenv("AVALOKA_TURN_SYNC_DEADLINE_S", "70"))
 _deferred_turn_tasks: set[asyncio.Task] = set()
 
 
-def _pending_turn_running(deferred_id: str, kind: str = "analysis"):
+def _pending_turn_running(deferred_id: str, kind: str = "analysis", queued: bool = False):
+    """``queued`` says the turn is waiting for a slot on the long-jobs pool
+    (app/core/long_jobs.py) rather than running; the poll shows it."""
     def _apply(cur: Dict[str, Any]) -> None:
         pt = cur.get("pending_turn")
         pt = _maybe_json_load(pt) if isinstance(pt, str) else pt
         if isinstance(pt, dict) and pt.get("id") == deferred_id and pt.get("status") in ("done", "error"):
             return
         cur["pending_turn"] = {
-            "id": deferred_id, "status": "running",
+            "id": deferred_id, "status": "running", "queued": bool(queued),
             "kind": kind, "created_at": _now_iso(),
         }
     return _apply
@@ -1267,18 +1299,23 @@ def _carry_pending_kind(cur: Dict[str, Any]) -> str:
 
 
 def _pending_turn_done(deferred_id: str, result: Dict[str, Any]):
+    # "done" means the turn returned; outcome says whether its run succeeded.
+    truth = (result or {}).get("run_truth") or {}
     def _apply(cur: Dict[str, Any]) -> None:
         cur["pending_turn"] = {
             "id": deferred_id, "status": "done", "kind": _carry_pending_kind(cur),
+            "outcome": truth.get("outcome"),
             "result": _json_safe_payload(result), "finished_at": _now_iso(),
         }
     return _apply
 
 
 def _pending_turn_error(deferred_id: str, message: str):
+    truth = run_truth.failed("exception", kind="deferred", detail=message)
     def _apply(cur: Dict[str, Any]) -> None:
         cur["pending_turn"] = {
             "id": deferred_id, "status": "error", "kind": _carry_pending_kind(cur),
+            "outcome": truth["outcome"], "run_truth": truth,
             "message": message, "finished_at": _now_iso(),
         }
     return _apply
@@ -1313,33 +1350,120 @@ def _remember_pending_turn(thread_id: str, user_id: Optional[str], mutator) -> N
         logger.debug("[deferred] could not record pending turn in memory", exc_info=True)
 
 
-async def _notify_deferred_turn(
-    *, user_id: Optional[str], thread_id: str, deferred_id: str, kind: str,
-    ok: bool, question: str, dataset_id: Optional[str], dataset_label: str,
-    error_message: Optional[str] = None,
-) -> None:
-    """D4: tell the user a turn that outlived the sync deadline has finished."""
-    training = kind == "training"
-    if ok:
-        n_type = "training.completed" if training else "analysis.completed"
-        title = "Model training finished" if training else "Analysis completed"
-    else:
-        n_type = "training.failed" if training else "analysis.failed"
-        title = "Model training failed" if training else "Analysis failed"
-    q = " ".join((question or "").split())
+def _turn_job_label(question: str, dataset_label: str) -> Optional[str]:
+    """What the bell quotes for a deferred chat turn: the question's first
+    80 characters and the dataset's alias, both already shown in the thread.
+    job_ledger scrubs and clips it again on the way in."""
+    q = " ".join(redact_typed_secrets(question or "")[0].split())
     q = (q[:77] + "…") if len(q) > 80 else q
-    parts = []
-    if q:
-        parts.append(f"\u201c{q}\u201d")
+    parts = [f"\u201c{q}\u201d"] if q else []
     if dataset_label:
         parts.append(f"on {dataset_label}")
-    body_text = " ".join(parts)
-    if not ok and error_message:
-        body_text = (body_text + ". " if body_text else "") + error_message
-    await notification_service.create_notification(
-        user_id, n_type, title, body_text or None,
-        thread_id=thread_id, dataset_id=dataset_id, ref=deferred_id,
-    )
+    return " ".join(parts) or None
+
+
+def _turn_outcome(resp: "ChatResponse") -> Tuple[str, Optional[str], Optional[str]]:
+    """(status, fail_reason, error_line) for the ledger from a turn's run truth."""
+    truth = resp.run_truth or {}
+    outcome = str(truth.get("outcome") or "")
+    if outcome == run_truth.FAILED:
+        reason = str(truth.get("reason") or "")
+        return "failed", ("refused" if truth.get("kind") == "refused" or "refus" in reason.lower() else "failed"), reason or None
+    return "succeeded", None, None
+
+
+async def _finish_turn_job(job_id: Optional[str], status: str, *, fail_reason: Optional[str] = None,
+                           error_line: Optional[str] = None, quiet: bool = False) -> None:
+    """Finish the ledger row of a deferred or long chat turn off the loop;
+    the ledger rings the bell and queues the chat note (neither when
+    ``quiet``: the row turned out to be an ordinary turn). Never raises."""
+    if not job_id:
+        return
+    try:
+        await asyncio.to_thread(job_ledger.finish, job_id, status, fail_reason=fail_reason,
+                                error_line=error_line, notify=not quiet, chat_note=not quiet)
+    except Exception:  # noqa: BLE001
+        logger.warning("[jobs] could not finish turn job %s", str(job_id)[:8], exc_info=True)
+
+
+async def _settle_turn_job(turn_holder: Dict[str, Any], final: Dict[str, Any], deferred: bool,
+                           status: str, fail_reason: Optional[str], error_line: Optional[str]) -> None:
+    """Decide what the turn's ledger row is now that the graph has returned.
+
+    * The turn queued its work on a worker (``task_info.task_id`` is set):
+      the worker owns the row -- it travelled in the Celery state -- so this
+      turn must not finish it.
+    * The row was classified long but no producer claimed it (no resource, no
+      Ray job): it was an ordinary turn. It becomes an ``analysis`` row and,
+      unless the turn was deferred (then the user was told to wait and is owed
+      a bell), ends quietly: no bell, no chat note.
+    * Otherwise the producers' claims stand and the row ends with this turn's
+      outcome; a producer that already finished it made this a no-op.
+    """
+    job_id = turn_holder.get("ledger_job_id")
+    if not job_id:
+        return
+    if (final.get("task_info") or {}).get("task_id"):
+        logger.info("[jobs] turn job %s handed to the worker as task %s", job_id[:8],
+                    str((final.get("task_info") or {}).get("task_id"))[:8])
+        turn_holder["ledger_job_id"] = None
+        return
+    quiet = False
+    if turn_holder.get("long_kind"):
+        row = await asyncio.to_thread(job_ledger.get, job_id)
+        if row is not None and not row.terminal and not row.resource_type and not row.ray_job_name:
+            await asyncio.to_thread(job_ledger.claim, job_id, kind="analysis")
+            quiet = not deferred
+    await _finish_turn_job(job_id, status, fail_reason=fail_reason, error_line=error_line, quiet=quiet)
+
+
+async def _run_execution_node(node, state_in: Dict[str, Any], use_ray: bool) -> Dict[str, Any]:
+    """Run an execution node off the loop: on the long-jobs pool when it will
+    wait on a RayJob, on the default pool otherwise (app/core/long_jobs.py)."""
+    if use_ray:
+        return await long_jobs.get_pool().submit(lambda: node(state_in))
+    return await asyncio.get_event_loop().run_in_executor(None, lambda: node(state_in))
+
+
+JOB_NOTES_FLUSH_TIMEOUT_S = float(os.getenv("AVALOKA_JOB_NOTES_FLUSH_TIMEOUT_S", "5"))
+
+
+async def _deliver_job_notes(thread_id: str, user_id: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Deliver the thread's finished-job notes at a turn boundary.
+
+    app/core/job_notes.py holds the outbox; this is the only place that turns
+    queued notes into history. It runs after the turn's own reply is in
+    THREAD_META (so a note never lands between a question and its answer), is
+    bounded, never raises, and calls no model. The flush is skipped by the
+    outbox itself while a turn is in flight on the thread. Returns the batch
+    the UI appends after the reply, or None.
+    """
+    if not thread_id:
+        return None
+    try:
+        batch = await asyncio.wait_for(
+            asyncio.to_thread(job_notes.flush_sync, thread_id, user_id=user_id),
+            timeout=JOB_NOTES_FLUSH_TIMEOUT_S,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("[jobs] note flush for thread %s timed out; notes stay pending", thread_id[:8])
+        return None
+    except Exception:  # noqa: BLE001 - delivery must never fail the request
+        logger.warning("[jobs] note flush for thread %s failed; notes stay pending", thread_id[:8], exc_info=True)
+        return None
+    if not batch:
+        return None
+    try:
+        _ensure_thread_local(thread_id)
+        lc = THREAD_META[thread_id].get("lc_msgs", [])
+        lc.append(job_notes.make_note_message(batch["text"], batch["job_ids"], batch["batch_id"]))
+        THREAD_META[thread_id]["lc_msgs"] = _limit_messages(_compact_messages(lc), MAX_CONTEXT_TURNS)
+        await persist_thread_history(thread_id)
+    except Exception:  # noqa: BLE001 - the transcript row and the bell already carry it
+        logger.warning("[jobs] note batch %s not appended to history of %s", batch.get("batch_id", "")[:8],
+                       thread_id[:8], exc_info=True)
+    return batch
+
 
 def _resolve_user_id(req: Request) -> Optional[str]:
     auth_header = req.headers.get("Authorization", "")
@@ -1406,6 +1530,10 @@ async def server_lifespan(app: FastAPI):
     global small_file_persistence_executor, small_file_persistence_semaphore, small_file_persistence_inflight
 
     _validate_auth_config()
+    # Every sealed credential is AES-GCM under DB_ENCRYPTION_KEY: no key, or a
+    # published one, and nothing is sealed. Refuse to start rather than run so.
+    from app.core.encryption_key import require_db_encryption_key
+    require_db_encryption_key("The Avaloka API")
     # A service-role key for the wrong project answers every request with
     # `401 Invalid API key`, which reads like a rotated key rather than a
     # mismatch. Say so once at boot instead of once per failed request.
@@ -1430,6 +1558,16 @@ async def server_lifespan(app: FastAPI):
         except Exception as _exc:  # a failed warm-up must never stop the server
             logger.warning("[startup] embedding warm-up skipped: %s", _exc)
 
+    # Cloud keys written before migration 20261116130000 are plaintext; seal
+    # them now, under the key just required above. Counts only in the log.
+    try:
+        from app.api import cloud_connections as _cc
+        _sealed = await asyncio.to_thread(_cc.seal_at_startup)
+        if _sealed:
+            logger.info("[startup] sealed %d cloud connection(s) that carried plaintext keys", _sealed)
+    except Exception as _exc:  # never let the sealer stop the server
+        logger.warning("[startup] cloud key sealing skipped: %s", type(_exc).__name__)
+
     async with config_lifespan(app):
         small_file_persistence_executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=SMALL_FILE_PERSISTENCE_MAX_WORKERS,
@@ -1447,6 +1585,31 @@ async def server_lifespan(app: FastAPI):
                 small_file_persistence_executor = None
 
 app = FastAPI(title="Avaloka UI API", lifespan=server_lifespan)
+
+# The final pass on what a person is shown: no sealed credential token, and
+# no fragment of one, in any thread response, history, trace or stream.
+from app.core.typed_secrets import RedactRepliesMiddleware, install_model_scrub  # noqa: E402
+
+install_model_scrub()
+app.add_middleware(RedactRepliesMiddleware)
+
+# Auth before body: an anonymous POST/PUT/PATCH/DELETE gets 401 before FastAPI
+# parses and validates the body, so a 422 can never reveal a route's schema to a
+# caller with no token. Added before CORS so the 401 still carries CORS headers.
+# The resolver is looked up per request so tests that patch it are honoured.
+from app.api.auth_gate import AuthBeforeBodyMiddleware  # noqa: E402
+
+AUTH_GATE_EXEMPT = {
+    # Known fail-open (plan E2.05a, pinned by strict xfails in
+    # tests/e2e/test_e2_auth.py): it never checks the caller. Closing it changes
+    # thread creation for its callers, so it is its own fix, not this gate's.
+    ("POST", "/threads"),
+}
+app.add_middleware(
+    AuthBeforeBodyMiddleware,
+    resolve_user_id=lambda req: _resolve_user_id(req),
+    exempt=AUTH_GATE_EXEMPT,
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -1468,6 +1631,20 @@ app.include_router(_build_analytics_router(_resolve_user_id))
 from app.api.ray_jobs import build_router as _build_ray_jobs_router
 
 app.include_router(_build_ray_jobs_router(_resolve_user_id, _require_premium_plan))
+
+# Trained models, registry records, serving endpoints and ML jobs. Owner-scoped;
+# slow operations answer 202 with a job handle (app/api/models_routes.py).
+from app.api.models_routes import build_router as _build_models_router
+
+app.include_router(_build_models_router(_resolve_user_id, _require_premium_plan))
+
+# Cloud connections: the one route that stores an object-store key, sealed in
+# this process (app/api/cloud_connections.py; migration 20261116130000 refuses
+# plaintext keys). Rows written before that migration are sealed at start-up
+# (server_lifespan).
+from app.api import cloud_connections as _cloud_connections
+
+app.include_router(_cloud_connections.build_router(_resolve_user_id))
 
 # ---------- PNA preflight ----------
 @app.middleware("http")
@@ -1587,15 +1764,25 @@ async def get_plan_limits(request: Request):
     if not user_id:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing or invalid auth token")
     plan = await asyncio.to_thread(resolve_plan, user_id)
+    # The same decision the chat and model endpoints make, for the UI to hide or
+    # label paid actions before the user tries them.
+    decisions = {
+        feature: await asyncio.to_thread(check_feature, feature, user_id=user_id)
+        for feature in FEATURE_CAPABILITY
+    }
     return {
+        # Free while a lookup is failing (resolve_plan's upload-limit policy);
+        # plan_check_unavailable says when that is the case on a hosted deployment.
         "plan": plan,
         "limits": limits_for(plan).as_dict(),
-        # The same decision the chat and model endpoints make, for the UI to
-        # hide or label paid actions before the user tries them.
-        "features": {
-            feature: (await asyncio.to_thread(check_feature, feature, user_id=user_id)).allowed
-            for feature in FEATURE_CAPABILITY
+        "features": {feature: d.allowed for feature, d in decisions.items()},
+        # "not_on_plan" is an upgrade case; "unavailable" (the plan could not be
+        # checked) is not: the UI says to try again and offers no upgrade.
+        "feature_states": {
+            feature: "allowed" if d.allowed else "unavailable" if d.unavailable else "not_on_plan"
+            for feature, d in decisions.items()
         },
+        "plan_check_unavailable": any(d.unavailable for d in decisions.values()),
     }
 
 @app.get("/debug/whoami")
@@ -3770,6 +3957,85 @@ async def list_threads(
     owned_flags = await asyncio.gather(*(_owned_by_caller(t) for t in out))
     return [t for t, owned in zip(out, owned_flags) if owned]
 
+_EXEC_OK = ("success", "succeeded", "completed", "done")
+
+
+async def _finished_run_view(final: Any, execution_id: Optional[str], task_metadata: Dict[str, Any]) -> Dict[str, Any]:
+    """What a finished (SUCCESS) run returns to the UI.
+
+    A result stored as a summary (app/core/celery_results.py) holds no
+    messages and no inline output; the run's reply, output table, logs and run
+    truth come from its durable scheduled_runs row. A result stored before
+    summaries (the full state) is read as it always was.
+    """
+    chat_only = _scheduled_task_has_chat_result_only(task_metadata)
+    task_type = task_metadata.get("task_type")
+    if not celery_results.is_summary(final):
+        final = dict(final) if isinstance(final, dict) else {}
+        final["messages"] = convert_message_dicts_to_objects(final.get("messages", []))
+        assistant_messages = _assistant_messages_from_state(final)
+        output_file_data, output_json = get_output_from_state(final)
+        er = final.get("execution_result") or {}
+        if chat_only or (str(er.get("status", "")).lower() not in _EXEC_OK and not final.get("output_file_data")):
+            output_file_data = output_json = None
+        run_status, error = (_run_status_from_final(final, task_type="training")
+                             if task_type == "training" else (None, None))
+        return {
+            "final": final,
+            "assistant_messages": assistant_messages,
+            "output_file_data": output_file_data,
+            "output_json": output_json,
+            "completion_message": _scheduled_task_completion_message(final, assistant_messages, task_metadata),
+            "run_truth": _scheduled_task_run_truth(final, task_metadata),
+            "output_contract": er.get("output_contract"),
+            "logs": _logs_from_final(final),
+            "ray_job": _ray_job_from_final(final),
+            "run_status": run_status,
+            "error": error,
+        }
+    run = await asyncio.to_thread(celery_results.load_scheduled_run, execution_id) or {}
+    run_result = run.get("result") or {}
+    assistant_messages = celery_results.assistant_messages_from_logs(run_result.get("logs"))
+    output_json = run_result.get("output_json") if isinstance(run_result.get("output_json"), list) else None
+    output_file_data = celery_results.output_file_data_from_rows(output_json, final.get("output_location"))
+    if chat_only:
+        output_file_data = output_json = None
+    run_status = str(run.get("status") or "").lower() or None
+    if task_type == "training" and run_status == "failure":
+        completion_message = run_result.get("message") or TRAINING_FAILURE_MESSAGE
+    elif task_type in {"start_inference", "stop_inference"} and assistant_messages:
+        completion_message = assistant_messages[-1]["content"]
+    else:
+        completion_message = str(task_metadata.get("success_message") or "The scheduled task is complete.")
+    return {
+        "final": {"output_location": final.get("output_location")},
+        "assistant_messages": assistant_messages,
+        "output_file_data": output_file_data,
+        "output_json": output_json,
+        "completion_message": completion_message,
+        "run_truth": run_result.get("run_truth"),
+        "output_contract": run_result.get("output_contract"),
+        "logs": run_result.get("logs"),
+        "ray_job": run_result.get("ray_job"),
+        "run_status": run_status if task_type == "training" else None,
+        "error": run.get("error") if task_type == "training" else None,
+    }
+
+
+def _run_finished_state(execution_id: Optional[str]) -> Optional[str]:
+    """SUCCESS/FAILURE when the run's durable record says it is over, else None.
+
+    For a Celery state that is not final: a result that is no longer stored
+    reads as PENDING, which must not be shown as "running".
+    """
+    return celery_results.finished_run_state(celery_results.load_scheduled_run(execution_id))
+
+
+#: The SSE checks the durable run record every this many polls while a task
+#: is not final, so a run that ended without a stored result ends the stream.
+_SSE_DURABLE_CHECK_EVERY = 15
+
+
 async def task_sse_iter(task_id: str, redbeat_key: str):
     try:
         entry = AvalokaEntry.from_key(redbeat_key, celery_app)
@@ -3787,6 +4053,8 @@ async def task_sse_iter(task_id: str, redbeat_key: str):
             **task_metadata,
         }) + "\n\n"
     
+    polls = 0
+    ended_without_result: Optional[str] = None
     while (task := AsyncResult(task_id, app=celery_app)).state not in ("FAILURE", "SUCCESS", "REVOKED"):
         if task.state != current_state:
             yield "event: message\ndata: " + json.dumps({
@@ -3795,6 +4063,11 @@ async def task_sse_iter(task_id: str, redbeat_key: str):
                 **task_metadata,
             }) + "\n\n"
             current_state = task.state
+        if polls % _SSE_DURABLE_CHECK_EVERY == 0:
+            ended_without_result = await asyncio.to_thread(_run_finished_state, task_id)
+            if ended_without_result:
+                break
+        polls += 1
         await sleep(1)
 
     if entry is None:
@@ -3806,29 +4079,28 @@ async def task_sse_iter(task_id: str, redbeat_key: str):
         else -1
     )
 
-    if task.state == "REVOKED":
+    if ended_without_result:
+        # The run is over but its result is no longer stored.
+        yield "event: message\ndata: " + json.dumps({
+            "status": "SUCCESS" if ended_without_result == "SUCCESS" else "FAILED",
+            "message": "The run finished; its stored result is no longer available.",
+            "next_due_at": next_due_at, **task_metadata,
+        }) + "\n\n"
+    elif task.state == "REVOKED":
         yield "event: message\ndata: " + json.dumps({"status": "CANCELLED", "traceback": str(task.traceback), "next_due_at": next_due_at, **task_metadata}) + "\n\n"
     elif task.failed():
         yield "event: message\ndata: " + json.dumps({"status": "FAILED", "traceback": str(task.traceback), "next_due_at": next_due_at, **task_metadata}) + "\n\n"
     else:
-        final = task.result or {}
-        final.update(
-            messages=convert_message_dicts_to_objects(final.get("messages", []))
-        )
-        assistant_messages = _assistant_messages_from_state(final)
-        output_file_data, output_json = get_output_from_state(final)
-        execution_result = final.get("execution_result") or {}
-        execution_succeeded = str(execution_result.get("status", "")).lower() in (
-            "success", "succeeded", "completed", "done"
-        )
-        if _scheduled_task_has_chat_result_only(task_metadata) or (
-            not execution_succeeded and not final.get("output_file_data")
-        ):
-            output_file_data = None
-            output_json = None
-        completion_message = _scheduled_task_completion_message(final, assistant_messages, task_metadata)
+        view = await _finished_run_view(task.result, task_id, task_metadata)
+        assistant_messages = view["assistant_messages"]
+        output_file_data, output_json = view["output_file_data"], view["output_json"]
+        completion_message = view["completion_message"]
+        # The outcome _record_run_finish writes for this run (item 8a): Celery
+        # SUCCESS only means the task returned, not that it answered.
+        _task_truth = view["run_truth"]
         yield "event: message\ndata: " + json.dumps({
             "status": "SUCCESS",
+            "run_truth": _task_truth,
             "message": completion_message,
             "completion_message": completion_message,
             "messages": assistant_messages,
@@ -3841,6 +4113,8 @@ async def task_sse_iter(task_id: str, redbeat_key: str):
                 "assistant_message": assistant_messages[-1] if assistant_messages else None,
                 "message": completion_message,
                 "completion_message": completion_message,
+                "run_truth": _task_truth,
+                "output_contract": view["output_contract"],
             },
             "next_due_at": next_due_at
         }) + "\n\n"
@@ -3890,7 +4164,45 @@ async def delete_thread(request: Request, thread_id: str):
         await session_service.cache.delete(_k_thread_session(thread_id))
     await delete_thread_history(thread_id)
     THREAD_META.pop(thread_id, None)
+    await _forget_thread_memory(user_id, thread_id, sid)
     return Response(status_code=204)
+
+
+async def _forget_thread_memory(user_id: str, thread_id: str, sid: Optional[str] = None) -> None:
+    """Delete what a deleted thread learned (app/services/memory_plane.py).
+    Never raises: a memory store being down must not fail the delete; the
+    memory plane logs which store was not cleared."""
+    try:
+        from app.services.memory_plane import forget_thread_memory
+        await asyncio.to_thread(forget_thread_memory, user_id, thread_id, sid)
+    except Exception:
+        logger.warning("Memory cleanup failed for thread %s", thread_id, exc_info=True)
+
+
+async def forget_account_memory(user_id: str) -> Dict[str, Any]:
+    """Internal API: delete all of a user's learned memory, for account
+    deletion. 1.6 has no account-deletion route; whatever deletes an account
+    calls this. Covers every Milvus insight and Chroma signature filed under
+    the user, rows filed under the user's sessions, and the Redis copies of
+    the threads bound to those sessions. Returns {store: rows removed or
+    "failed: ..."}; never raises."""
+    sids: List[str] = []
+    tids: set = set()
+    cache = session_service.cache
+    try:
+        if cache:
+            sids = sorted(await cache.smembers(_k_user_sessions(user_id)) or [])
+            for sid in sids:
+                tids.update(await cache.smembers(_k_session_threads(sid)) or [])
+    except Exception:
+        logger.warning("forget_account_memory: could not list the sessions of user %s",
+                       user_id, exc_info=True)
+    try:
+        from app.services.memory_plane import forget_user_memory
+        return await asyncio.to_thread(forget_user_memory, user_id, sorted(tids), sids)
+    except Exception:
+        logger.warning("Memory cleanup failed for user %s", user_id, exc_info=True)
+        return {}
 
 
 def _full_cloud_uri(sess: dict) -> str | None:
@@ -4187,9 +4499,12 @@ def _build_deferred_job_card(
         f"- **Dataset**: {dataset_name}\n"
         f"- **Question (as interpreted)**: {q}\n"
         f"- **Estimated completion**: {eta_hint}\n\n"
-        "This dataset is above the in-memory analysis budget, so no partial or "
-        "sampled results are shown — the answer will come from the full run. "
-        "Check the task panel for progress."
+        # Not "every row": the Ray batch job computes the answer on the first
+        # RAY_ANALYSIS_SAMPLE_ROWS rows and reports the file's row count beside it
+        # (MAJ-030, the Ray-honesty labelling). The result carries that scope.
+        "This runs as a background job; nothing is shown until it finishes. The "
+        "result will appear here, saying how many of the file's rows it analysed, "
+        "and you'll get a notification."
     )
 
 
@@ -4466,10 +4781,45 @@ def _scheduled_task_is_in_flight(task_id: Optional[str]) -> bool:
         execution_id = AvalokaScheduler.get_last_run_task_id(redbeat_key, False)
         if not execution_id:
             return True
-        return AsyncResult(execution_id, app=celery_app).state not in ("FAILURE", "SUCCESS", "REVOKED")
+        if AsyncResult(execution_id, app=celery_app).state in ("FAILURE", "SUCCESS", "REVOKED"):
+            return False
+        # Not final in Celery: a result that is no longer stored reads PENDING.
+        return _run_finished_state(execution_id) is None
     except Exception:
         logger.debug("Could not inspect scheduled task state for %s", task_id, exc_info=True)
         return True
+
+def _entire_job_in_flight(sess: Dict[str, Any]) -> bool:
+    """A full-dataset job is genuinely running for this session.
+
+    Time-bounded like the byte-routing guard: a purged, lost or expired Celery
+    task reports PENDING forever, which used to lock every later "Full dataset"
+    question onto the quick sample with no way out.
+    """
+    task_id = sess.get("analysis_task_id")
+    if not task_id:
+        return False
+    scheduled_at = float(sess.get("analysis_task_scheduled_at") or 0)
+    try:
+        ttl = int(os.getenv("ANALYSIS_DEFER_INFLIGHT_TTL_S", "3600"))
+    except ValueError:
+        ttl = 3600
+    if scheduled_at <= 0 or (time.time() - scheduled_at) >= ttl:
+        return False
+    return _scheduled_task_is_in_flight(task_id)
+
+
+def _reported_last_run_at(entry: Any, run_count: int) -> Optional[str]:
+    """When the task last ran, or None if it never has.
+
+    entry.last_run_at is RedBeat's schedule anchor, not a run record: celery's
+    ScheduleEntry seeds it with the creation time and AvalokaEntry.save()
+    persists that, so a task that has never run would read "last run just now".
+    Only a dispatch (which also bumps the run count) makes it a real run time.
+    """
+    if not run_count or not getattr(entry, "last_run_at", None):
+        return None
+    return entry.last_run_at.isoformat()
 
 
 def _scheduled_task_metadata_from_entry(entry: Any) -> Dict[str, Any]:
@@ -4499,6 +4849,12 @@ def _scheduled_task_completion_message(
         if latest:
             return latest
     return str(task_metadata.get("success_message") or "The scheduled task is complete.")
+
+
+def _scheduled_task_run_truth(final: Dict[str, Any], task_metadata: Dict[str, Any]) -> Dict[str, Any]:
+    """run_truth for a finished task's result: the same call _record_run_finish
+    makes, so the route and the run record cannot disagree."""
+    return _run_outcome_from_final(final, task_type=str(task_metadata.get("task_type") or "execute"))[2]
 
 
 def _scheduled_task_has_chat_result_only(task_metadata: Dict[str, Any]) -> bool:
@@ -4879,10 +5235,27 @@ async def send_message(
             "Session storage (Redis) is not available.",
         )
 
+    # A password, key or token typed into the chat is sealed before anything
+    # reads the message: the history, the logs, every model call and the graph
+    # see a token, and only the data transfer agent opens it, to hand the
+    # connection to the sealed store (app/core/typed_secrets.py).
+    body.content, _sealed_count = seal_typed_secrets(body.content)
+    if _sealed_count:
+        logger.info("[send_message] sealed %d typed credential(s) in thread %s", _sealed_count, thread_id[:8])
+
     # optional hint from UI / frontend (for primary dataset)
     dataset_id_hint = (body.metadata or {}).get("dataset_id")
     # analysis id from the ?aid= in the Lovable URL (shared-analysis chats)
     analysis_id_hint = (body.metadata or {}).get("analysis_id") or (body.metadata or {}).get("aid")
+
+    # Check the canonical thread even when the requester already has a session.
+    # Profile/team grants carry an effective level; legacy Enterprise returns
+    # no level and retains its existing authorization path.
+    message_plan = await asyncio.to_thread(resolve_plan, user_id)
+    shared_thread = (await _resolve_shared_session_for_thread(thread_id, user_id)
+                     if message_plan != "enterprise" else None)
+    if shared_thread and shared_thread.get("share_access_level", 3) < 3:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Edit access and a Professional plan are required to run a shared analysis.")
 
     # user_id is the REQUESTER (auth.uid()). owner_user_id is whose sessions we
     # actually read: same for the owner, but for an authorized collaborator it
@@ -4914,6 +5287,8 @@ async def send_message(
         shared = await _resolve_shared_session_for_thread(
             thread_id, user_id, analysis_id=analysis_id_hint
         )
+        if shared and shared.get("share_access_level", 3) < 3:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "Edit access is required to collaborate on this analysis.")
         if shared and shared.get("session_id"):
             candidate_sid = shared["session_id"]
             candidate_sess = await get_session(candidate_sid)
@@ -5066,11 +5441,7 @@ async def send_message(
     # ----------------------------------------------------
     _text_requested_fidelity = _parse_fidelity_from_text(body.content)
     _text_requested_sample_name = _parse_selected_sample_from_text(body.content)
-    _requested_fidelity = (
-        _text_requested_fidelity
-        or body.analysis_fidelity
-        or (body.metadata or {}).get("analysis_fidelity")
-    )
+    _requested_fidelity = _text_requested_fidelity   # the UI switch writes the session directly
     _requested_sample_name = (
         _text_requested_sample_name
         or body.selected_sample_name
@@ -5207,10 +5578,9 @@ async def send_message(
             _early_msg = _build_metadata_answer(primary_sess, body.content)
 
         # 2) A full-dataset job already in flight: return its handle instead of
-        #    scheduling a duplicate. Time-bounded: _scheduled_task_is_in_flight
-        #    reports PENDING forever once the Celery result expires
-        #    (result_expires=3600), which would otherwise lock the dataset on a
-        #    stale job card permanently.
+        #    scheduling a duplicate. Time-bounded, so a task that was purged or
+        #    lost (no result anywhere, no finished run record) cannot lock the
+        #    dataset on a stale job card permanently.
         _sched_at = float(primary_sess.get("analysis_task_scheduled_at") or 0)
         try:
             _inflight_ttl = int(os.getenv("ANALYSIS_DEFER_INFLIGHT_TTL_S", "3600"))
@@ -5316,17 +5686,16 @@ async def send_message(
     if not _mode_switch_message:
         if _current_fidelity == FIDELITY_PORTFOLIO and not _portfolio_ready:
             _effective_fidelity = FIDELITY_QUICK
-    # _portfolio_ready = _sample_status == "full_sample"
-    # _effective_fidelity = _current_fidelity
-    # _analysis_task_in_flight = False
-    # if not _mode_switch_message:
-    #     if _current_fidelity == FIDELITY_PORTFOLIO and not _portfolio_ready:
-    #         _effective_fidelity = FIDELITY_QUICK
-
         elif _current_fidelity == FIDELITY_ENTIRE:
-            _analysis_task_in_flight = _scheduled_task_is_in_flight(primary_sess.get("analysis_task_id"))
+            _analysis_task_in_flight = _entire_job_in_flight(primary_sess)
             if _analysis_task_in_flight:
                 _effective_fidelity = FIDELITY_PORTFOLIO if _portfolio_ready else FIDELITY_QUICK
+            elif primary_sess.get("analysis_task_id"):
+                # Finished, failed or stale: release the lock so this turn runs in full.
+                logger.info("[send_message] clearing stale analysis_task_id %s",
+                            primary_sess.get("analysis_task_id"))
+                primary_sess["analysis_task_id"] = None
+                primary_sess["analysis_task_scheduled_at"] = None
 
     _effective_analysis_source_label = (
         "entire_dataset"
@@ -5714,6 +6083,7 @@ async def send_message(
     )
     cloud_uri = active_cloud_source or _full_cloud_uri(primary_sess)
 
+    _ray_fallback_reason = None
     if execution_mode == "k8s-ray":
         conn_id = primary_sess.get("connection_id")
         
@@ -5725,7 +6095,11 @@ async def send_message(
                 cloud_uri, conn_id
             )
             execution_mode = "local"
-            # Don't raise — just quietly downgrade to local
+            # Visible, not quiet: the local node labels the reply and the run.
+            _ray_fallback_reason = (
+                RAY_NO_CONNECTION_REASON if cloud_uri
+                else "the dataset has no cloud copy for Ray to read"
+            )
 
 
         if primary_sess.get("work_dir") and not Path(primary_sess["work_dir"]).exists():
@@ -5808,7 +6182,8 @@ async def send_message(
     )
 
     # The requester's plan gates data transfer and model training in the planner.
-    # None when it cannot be looked up: the gate then allows (fail open) instead
+    # None when it cannot be looked up: the gate then refuses it as unavailable
+    # on a hosted deployment (allows it elsewhere) instead
     # of treating the user as Free.
     try:
         from app.core.plan_limits import try_resolve_plan
@@ -5879,6 +6254,7 @@ async def send_message(
         "ray_namespace": ray_namespace,
         "ray_timeout_s": ray_timeout_s,
         "ray_execution_profile": "batch_heavy",
+        "ray_fallback_reason": _ray_fallback_reason,
 
 
         
@@ -6127,6 +6503,9 @@ async def send_message(
                 "second": 0,
                 "max_runs": 1,
             }
+    if execution_mode == "k8s-ray":
+        # Routing above settled on Ray after all: there is no fallback to label.
+        state_in["ray_fallback_reason"] = None
     logger.info(
         "[fidelity] mode=%s resolved execution_mode=%s cloud_uri=%s task_schedule=%s",
         f"{_current_fidelity}->{_effective_fidelity}" if _current_fidelity != _effective_fidelity else _current_fidelity,
@@ -6149,7 +6528,7 @@ async def send_message(
         )
         # If the re-download changed work_local_input, point this run at it.
         if (
-            _effective_fidelity == FIDELITY_PORTFOLIO
+            _effective_fidelity in (FIDELITY_PORTFOLIO, FIDELITY_ENTIRE)
             and not _is_large_dataset
             and not active_local_source
             and primary_sess.get("work_local_input")
@@ -6171,6 +6550,16 @@ async def send_message(
     # # ----------------------------------------------------
     bound_sid = group_sid          # thread is bound to the group session (step 2)
     _turn_holder: Dict[str, Any] = {}
+
+    # The job-note outbox (app/core/job_notes.py) must not deliver into this
+    # thread while this turn runs; open it here, close it once, from whichever
+    # path ends the turn (normal return, in-turn error, deferred failure).
+    job_notes.turn_started(thread_id)
+    _turn_holder["notes_open"] = True
+
+    def _close_notes_turn() -> None:
+        if _turn_holder.pop("notes_open", False):
+            job_notes.turn_finished(thread_id)
 
     async def _run_graph_and_finalize() -> ChatResponse:
         _t0 = time.monotonic()
@@ -6194,13 +6583,50 @@ async def send_message(
             except Exception:
                 pass
 
-        final = await asyncio.get_event_loop().run_in_executor(
-            None,
-            lambda: GRAPH.invoke(
+        def _graph_call():
+            return GRAPH.invoke(
                 state_in,
                 config={"configurable": {"thread_id": f"ui:{thread_id}"}},
-            ),
-        )
+            )
+
+        # Long producers (training, transfer, Ray execution, batch prediction)
+        # wait inside the graph for the whole job. They get their own bounded
+        # pool so N of them never starve the default pool every chat turn uses;
+        # the job ledger shows them queued until a worker starts them.
+        _long = long_jobs.classify_long_turn(body.content, state_in, _TRAINING_TURN_RE)
+        if _long is not None:
+            _pool = long_jobs.get_pool()
+            _queued = _pool.would_queue()
+            _turn_holder["long_kind"] = _long.kind
+            _turn_holder["long_queued"] = _queued
+            _job_id = await asyncio.to_thread(
+                job_ledger.start, user_id, _long.kind, job_id=deferred_id, thread_id=thread_id,
+                session_id=primary_sid, status="queued" if _queued else "running", origin="api",
+                label=_turn_job_label(body.content or "", primary_sess.get("alias") or primary_sess.get("filename") or ""),
+            )
+            if _job_id:
+                _turn_holder["ledger_job_id"] = _job_id
+                state_in["ledger_job_id"] = _job_id
+                state_in["ledger_job_kind"] = _long.kind
+            _loop = asyncio.get_running_loop()
+
+            def _on_start() -> None:          # worker thread: the job left the queue
+                _turn_holder["long_queued"] = False
+                job_ledger.running(_job_id)
+                if _turn_holder.get("deferred_stashed"):
+                    _mut = _pending_turn_running(deferred_id, _turn_holder.get("pending_kind") or "analysis", queued=False)
+                    _remember_pending_turn(thread_id, user_id, _mut)
+                    try:
+                        asyncio.run_coroutine_threadsafe(update_session(bound_sid, _mut), _loop)
+                    except Exception:  # noqa: BLE001
+                        logger.debug("[long-jobs] could not update the pending turn", exc_info=True)
+
+            logger.info("[long-jobs] turn %s classified %s (%s): %s; pool running=%d queued=%d",
+                        deferred_id[:8], _long.kind, _long.reason, "queued" if _queued else "running",
+                        _pool.running, _pool.queued)
+            final = await _pool.submit(_graph_call, on_start=_on_start)
+        else:
+            final = await asyncio.get_event_loop().run_in_executor(None, _graph_call)
         _tmark("graph_done")
 
         if _shadow_on:
@@ -6615,7 +7041,16 @@ Ready to proceed with model training!"""
         #    LLM prose. The summarizer was bypassed in the graph (D-01), and the
         #    payload must carry NO analytical numbers — clear outputs
         #    unconditionally and replace the assistant message wholesale.
-        if _byte_defer_active:
+        # A "Full dataset" question on a large file is handed to a background
+        # Ray job the same way: answer with the job card, not the summarizer's
+        # JSON or the bare "task is scheduled" line.
+        _entire_job_scheduled = bool(
+            task_id
+            and not _byte_defer_active
+            and _effective_fidelity == FIDELITY_ENTIRE
+            and state_in.get("execution_mode") == "k8s-ray"
+        )
+        if _byte_defer_active or _entire_job_scheduled:
             if task_id:
                 _job_card = _build_deferred_job_card(
                     task_id=str(task_id),
@@ -6849,6 +7284,11 @@ Ready to proceed with model training!"""
                 _assistant_text += " Data preparation: " + " ".join(_multi_notes)
         elif _structured:
             _assistant_text = str((final.get("execution_result") or {}).get("message") or "Incomplete analysis.")
+        # A Ray-to-local fallback is labelled by the local node; a structured
+        # reply rebuilt above would drop that label, so it is restored here.
+        _ray_fallback_note = ((final.get("execution_result") or {}).get("ray_fallback") or {}).get("note")
+        if _ray_fallback_note and isinstance(_assistant_text, str) and _ray_fallback_note.strip() not in _assistant_text:
+            _assistant_text = _assistant_text.rstrip() + _ray_fallback_note
         if _ran_on_partial_sample and isinstance(_assistant_text, str) and _assistant_text.strip():
             _assistant_text = _assistant_text.rstrip() + _sample_fidelity_note(
                 _effective_fidelity, _resolved_rows, primary_sess.get("selected_sample_name"),
@@ -6859,6 +7299,7 @@ Ready to proceed with model training!"""
             messages=[{"role": "user", "content": body.content}]
             + ([{"role": "assistant", "content": _assistant_text}] if _assistant_text else []),
             reasoning=final.get("reasoning_trace"),
+            answered_by=final.get("answered_by"),
             plan_upgrade_required=final.get("plan_upgrade_required"),
             planner_definition=final.get("planner_definition", {}) or {},
             ready_to_summarize=ready_to_summarize,
@@ -6965,13 +7406,47 @@ Ready to proceed with model training!"""
                     connection_id        = primary_sess.get("connection_id"),
                     storage_uri          = _storage_uri,
                     dataset_label        = primary_sess.get("alias") or primary_sess.get("filename") or "",
-                    analysis_label       = (body.content or "")[:60],
+                    analysis_label       = redact_typed_secrets(body.content or "")[0][:60],
                 )
             )
 
         # If this turn overran the sync window, the HTTP response already went
         # back as a "running" handle — stash the finished result for polling.
-        if (time.monotonic() - _t0) >= TURN_SYNC_DEADLINE_S:
+        _deferred = (time.monotonic() - _t0) >= TURN_SYNC_DEADLINE_S
+        # Run truth comes from code-written fields only; any run_truth the
+        # graph state carries is ignored, and this replaces it on the response.
+        resp.run_truth = run_truth.classify_turn(
+            final,
+            deferred=_deferred,
+            scope_defaults={
+                "rows_processed": (
+                    (_sample_n if _ran_on_partial_sample else _total_rows)
+                    if produced_fresh_output else None
+                ),
+                "rows_total": _total_rows,
+                "rows_total_kind": (
+                    "unknown" if _total_rows is None
+                    else "estimate" if _is_large_dataset else "exact"
+                ),
+                "sample": bool(_ran_on_partial_sample) if produced_fresh_output else None,
+            },
+            entire_on_head=bool(produced_fresh_output and _entire_on_head),
+        )
+        # This turn's own ledger row (a long or deferred turn) ends first, so
+        # its note is among the ones delivered right after the reply. The
+        # ledger rings the bell; a fast, unclassified turn has no row.
+        _status, _fail_reason, _error_line = _turn_outcome(resp)
+        _turn_holder["turn_outcome"] = (_status, _fail_reason, _error_line)
+        await _settle_turn_job(_turn_holder, final if isinstance(final, dict) else {}, _deferred,
+                               _status, _fail_reason, _error_line)
+        # The turn's reply is in THREAD_META: close the turn for the outbox and
+        # deliver what finished meanwhile, after the reply. A deferred turn
+        # carries the batch in its stashed result, so the poll returns it too.
+        _close_notes_turn()
+        _notes_batch = await _deliver_job_notes(thread_id, user_id)
+        if _notes_batch:
+            resp.job_notes = [_notes_batch]
+        if _deferred:
             _done_mutator = _pending_turn_done(deferred_id, resp.model_dump())
             # In-process copy first: it cannot fail, and the poll falls back to it.
             _remember_pending_turn(thread_id, user_id, _done_mutator)
@@ -6979,17 +7454,12 @@ Ready to proceed with model training!"""
                 await update_session(bound_sid, _done_mutator)
             except Exception:
                 logger.warning("[deferred] failed to stash finished turn %s", deferred_id, exc_info=True)
-            await _notify_deferred_turn(
-                user_id=user_id, thread_id=thread_id, deferred_id=deferred_id,
-                kind=_turn_holder.get("pending_kind") or "analysis", ok=True,
-                question=body.content or "", dataset_id=primary_dsid,
-                dataset_label=primary_sess.get("alias") or primary_sess.get("filename") or "",
-            )
 
         return resp
 
     # ---- race the turn against the soft deadline ----
     _turn_task = asyncio.create_task(_run_graph_and_finalize())
+    _turn_task.add_done_callback(lambda _t: _close_notes_turn())   # every ending closes the turn
     _done, _ = await asyncio.wait({_turn_task}, timeout=TURN_SYNC_DEADLINE_S)
 
     # if _turn_task in _done:
@@ -7015,6 +7485,8 @@ Ready to proceed with model training!"""
                 await persist_thread_history(thread_id)
             except Exception:
                 logger.debug("[send_message] could not persist error message", exc_info=True)
+            _close_notes_turn()
+            _err_notes_batch = await _deliver_job_notes(thread_id, user_id)
             resp = ChatResponse(
                 messages=[{"role": "user", "content": body.content},
                           {"role": "assistant", "content": _friendly}],
@@ -7027,6 +7499,8 @@ Ready to proceed with model training!"""
                 execution_context=_build_execution_context(
                     _current_fidelity, primary_sess.get("selected_sample_name")
                 ),
+                run_truth=run_truth.failed("exception", kind="interactive", detail=_friendly),
+                job_notes=[_err_notes_batch] if _err_notes_batch else None,
             )
     else:
         # Slow turn (model training): return a handle before the proxy aborts.
@@ -7041,13 +7515,9 @@ Ready to proceed with model training!"""
                 _err_mutator = _pending_turn_error(_did, _err_text)
                 _remember_pending_turn(thread_id, user_id, _err_mutator)
                 asyncio.create_task(update_session(bound_sid, _err_mutator))
-                asyncio.create_task(_notify_deferred_turn(
-                    user_id=user_id, thread_id=thread_id, deferred_id=_did,
-                    kind=_turn_holder.get("pending_kind") or "analysis", ok=False,
-                    question=body.content or "", dataset_id=primary_dsid,
-                    dataset_label=primary_sess.get("alias") or primary_sess.get("filename") or "",
-                    error_message=_err_text,
-                ))
+                _turn_holder["turn_outcome"] = ("failed", "failed", _err_text)
+                asyncio.create_task(_finish_turn_job(_turn_holder.get("ledger_job_id"), "failed",
+                                                     fail_reason="failed", error_line=_err_text))
         _turn_task.add_done_callback(_cleanup)
 
         # Classify the deferred work ONCE, before anything is stored or returned,
@@ -7061,9 +7531,25 @@ Ready to proceed with model training!"""
         _pending_kind = "training" if _is_training_turn else "analysis"
         _turn_holder["pending_kind"] = _pending_kind
 
-        _running_mutator = _pending_turn_running(_deferred_id, _pending_kind)
+        _running_mutator = _pending_turn_running(_deferred_id, _pending_kind,
+                                                 queued=bool(_turn_holder.get("long_queued")))
         _remember_pending_turn(thread_id, user_id, _running_mutator)
         await update_session(bound_sid, _running_mutator)
+        _turn_holder["deferred_stashed"] = True
+
+        # Producer #1: a deferred turn is a background job. A long-classified
+        # turn already has its row (job id = deferred id); any other one gets
+        # it here. If the task ended while the row was being written, finish
+        # it now; otherwise the task finishes it when it ends.
+        if not _turn_holder.get("ledger_job_id"):
+            _turn_holder["ledger_job_id"] = await asyncio.to_thread(
+                job_ledger.start, user_id, "training" if _is_training_turn else "analysis",
+                job_id=_deferred_id, thread_id=thread_id, session_id=primary_sid, status="running", origin="api",
+                label=_turn_job_label(body.content or "", primary_sess.get("alias") or primary_sess.get("filename") or ""),
+            ) or None
+            if _turn_task.done() and _turn_holder.get("turn_outcome"):
+                _st, _fr, _el = _turn_holder["turn_outcome"]
+                await _finish_turn_job(_turn_holder.get("ledger_job_id"), _st, fail_reason=_fr, error_line=_el)
 
         _pending_text = (
             "Model training is running — this can take a few minutes. "
@@ -7163,7 +7649,7 @@ async def get_pending_turn(
         default_err = ("Training failed. Please try again." if kind == "training"
                                               else "The analysis failed. Please try again.")
         return {"status": "error", "kind": kind, "message": pt.get("message") or default_err}
-    return {"status": "running", "kind": kind}
+    return {"status": "running", "kind": kind, "queued": bool(pt.get("queued"))}
 
 # ── Notifications (design doc D4) ────────────────────────────────────
 @app.get("/api/notifications")
@@ -7387,7 +7873,7 @@ async def get_task_list(request: Request):
             "schedule": schedule,
             "max_runs": entry.max_runs,
             "total_run_count": entry.total_run_count,
-            "last_run_at": entry.last_run_at.isoformat() if entry.last_run_at else None,
+            "last_run_at": _reported_last_run_at(entry, entry.total_run_count),
             "task_type": task_metadata.get("task_type"),
             "task_label": task_metadata.get("task_label"),
             "latest_run": latest_run,
@@ -7426,10 +7912,11 @@ async def get_task_info(request: Request, task_id: str, max_timestamp: int = 0):
     except Exception:
         raise HTTPException(status.HTTP_404_NOT_FOUND)
     
+    all_runs = AvalokaScheduler.get_task_ids_with_timestamp(redbeat_key, False)
     tasks_data = list(
         filter(
             lambda task: max_timestamp == 0 or task[1].timestamp() < max_timestamp, 
-            AvalokaScheduler.get_task_ids_with_timestamp(redbeat_key, False)
+            all_runs
         )
     )
 
@@ -7450,7 +7937,7 @@ async def get_task_info(request: Request, task_id: str, max_timestamp: int = 0):
         "schedule": schedule,
         "max_runs": entry.max_runs,
         "total_run_count": len(tasks_data),
-        "last_run_at": entry.last_run_at.isoformat() if entry.last_run_at else None
+        "last_run_at": _reported_last_run_at(entry, len(all_runs))
     }
 
 @app.get("/tasks/{task_id}/result/{index}")
@@ -7516,6 +8003,17 @@ async def get_task_result(request: Request, task_id: str, index: int):
             await update_session(sid, _clear_scheduled_task)
         return {"status": "FAILED", "traceback": str(task.traceback), "next_due_at": next_due_at, **task_metadata}
     elif task.state not in ("SUCCESS",):
+        finished = await asyncio.to_thread(_run_finished_state, task_id)
+        if finished:
+            # Over, but its result is no longer stored: never "running".
+            if sess.get("analysis_task_id") == scheduled_task_id:
+                await update_session(sid, _clear_scheduled_task)
+            return {
+                "status": "SUCCESS" if finished == "SUCCESS" else "FAILED",
+                "message": "The run finished; its stored result is no longer available.",
+                "next_due_at": next_due_at,
+                **task_metadata,
+            }
         return {
             "status": task.state,
             "message": task_metadata["running_message"],
@@ -7523,21 +8021,10 @@ async def get_task_result(request: Request, task_id: str, index: int):
             **task_metadata,
         }
     else:
-        final = task.result or {}
-        final.update(
-            messages=convert_message_dicts_to_objects(final.get("messages", []))
-        )
-        assistant_messages = _assistant_messages_from_state(final)
-        output_file_data, output_json = get_output_from_state(final)
-        execution_result = final.get("execution_result") or {}
-        execution_succeeded = str(execution_result.get("status", "")).lower() in (
-            "success", "succeeded", "completed", "done"
-        )
-        if _scheduled_task_has_chat_result_only(task_metadata) or (
-            not execution_succeeded and not final.get("output_file_data")
-        ):
-            output_file_data = None
-            output_json = None
+        view = await _finished_run_view(task.result, task_id, task_metadata)
+        final = view["final"]
+        assistant_messages = view["assistant_messages"]
+        output_file_data, output_json = view["output_file_data"], view["output_json"]
         if sess.get("analysis_task_id") == scheduled_task_id:
             await update_session(sid, _clear_scheduled_task)
 
@@ -7571,9 +8058,13 @@ async def get_task_result(request: Request, task_id: str, index: int):
                 )
             )
 
-        completion_message = _scheduled_task_completion_message(final, assistant_messages, task_metadata)
+        completion_message = view["completion_message"]
+        # The outcome _record_run_finish writes for this run (item 8a): Celery
+        # SUCCESS only means the task returned, not that it answered.
+        _task_truth = view["run_truth"]
         return {
             "status": "SUCCESS",
+            "run_truth": _task_truth,
             "message": completion_message,
             "completion_message": completion_message,
             "messages": assistant_messages,
@@ -7586,6 +8077,8 @@ async def get_task_result(request: Request, task_id: str, index: int):
                 "assistant_message": assistant_messages[-1] if assistant_messages else None,
                 "message": completion_message,
                 "completion_message": completion_message,
+                "run_truth": _task_truth,
+                "output_contract": view["output_contract"],
             },
             "next_due_at": next_due_at
         }
@@ -7655,7 +8148,7 @@ async def get_task_runs(request: Request, task_id: str):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Task not found")
     task_metadata = _scheduled_task_metadata_from_entry(entry)
 
-    # Prefer the durable table (survives result_expires=3600).
+    # Prefer the durable table (it outlives the Redis result, CELERY_RESULT_EXPIRES).
     durable = await _load_scheduled_runs(task_id)
     if durable is not None:
         return durable
@@ -7684,31 +8177,23 @@ async def get_task_runs(request: Request, task_id: str):
 
         result_payload = None
         error = None
+        if state not in ("SUCCESS", "FAILURE", "REVOKED") and _run_finished_state(exec_id):
+            # Over, but its result is no longer stored: not "pending".
+            run_status = "success" if _run_finished_state(exec_id) == "SUCCESS" else "failure"
+            error = "The stored result of this run is no longer available."
         if state == "SUCCESS":
             final = task.result or {}
             if isinstance(final, dict):
-                final = dict(final)
-                final["messages"] = convert_message_dicts_to_objects(final.get("messages", []))
-                assistant_messages = _assistant_messages_from_state(final)
-                output_file_data, output_json = get_output_from_state(final)
-                exec_result = final.get("execution_result") or {}
-                exec_ok = str(exec_result.get("status", "")).lower() in (
-                    "success", "succeeded", "completed", "done"
-                )
-                if _scheduled_task_has_chat_result_only(task_metadata) or (
-                    not exec_ok and not final.get("output_file_data")
-                ):
-                    output_file_data = None
-                    output_json = None
+                view = await _finished_run_view(final, exec_id, task_metadata)
                 result_payload = {
-                    "output_json": output_json,
-                    "output_file_data": output_file_data,
-                    "message": _scheduled_task_completion_message(final, assistant_messages, task_metadata),
-                    "logs": _logs_from_final(final),
-                    "ray_job": _ray_job_from_final(final),
+                    "output_json": view["output_json"],
+                    "output_file_data": view["output_file_data"],
+                    "message": view["completion_message"],
+                    "logs": view["logs"],
+                    "ray_job": view["ray_job"],
                 }
                 if task_metadata.get("task_type") == "training":
-                    run_status, error = _run_status_from_final(final, task_type="training")
+                    run_status, error = view["run_status"] or run_status, view["error"]
                     if run_status == "failure":
                         result_payload["logs"] = None
         elif state == "FAILURE":
@@ -7791,7 +8276,8 @@ async def get_task_status(request: Request, task_id: str):
 
     # if AsyncResult(task_id).state in ("FAILURE", "SUCCESS", "REVOKED"):
     #     last_run_at = AvalokaScheduler.get_last_run_at(redbeat_key, generate_key=False)
-    if AsyncResult(task_id, app=celery_app).state in ("FAILURE", "SUCCESS", "REVOKED"):
+    if (AsyncResult(task_id, app=celery_app).state in ("FAILURE", "SUCCESS", "REVOKED")
+            or _run_finished_state(task_id)):
         last_run_at = AvalokaScheduler.get_last_run_at(redbeat_key, generate_key=False)
         return StreamingResponse(
             sse_iter(entry.schedule.remaining_estimate(last_run_at).total_seconds()),
@@ -7864,12 +8350,38 @@ async def fetch_history(request: Request, thread_id: str):
             raise HTTPException(status.HTTP_403_FORBIDDEN, "Thread belongs to another user")
     # Restore from Redis first so history survives process restarts.
     await hydrate_thread_history(thread_id)
+    if sid:
+        # A read is a turn boundary: deliver finished-job notes before serving.
+        await _deliver_job_notes(thread_id, user_id)
     msgs = await read_thread_msgs(thread_id)
     if not sid and msgs:
         # History with no session binding has no owner to authorize against;
         # serving it would hand one user's chat to any authenticated caller.
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown thread_id")
     return {"messages": msgs}
+
+
+@app.get("/threads/{thread_id}/job-notes")
+async def get_thread_job_notes(request: Request, thread_id: str):
+    """Deliver and return the thread's finished-job notes (app/core/job_notes.py).
+
+    The UI calls this when a notification for this thread arrives on its
+    realtime channel. If a turn is in flight the notes stay queued and the
+    response says so; they arrive with that turn's reply instead.
+    """
+    user_id = _resolve_user_id(request)
+    if not user_id:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing or invalid auth token")
+    sid = await get_thread_session(thread_id)
+    sess = await get_session(sid) if sid else None
+    if not sid or not sess or sess.get("user_id") != user_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown thread_id")
+    if job_notes.turn_in_flight(thread_id):
+        return {"delivered": None, "deferred": True,
+                "pending": await asyncio.to_thread(job_notes.pending_count, thread_id)}
+    batch = await _deliver_job_notes(thread_id, user_id)
+    return {"delivered": batch, "deferred": False,
+            "pending": await asyncio.to_thread(job_notes.pending_count, thread_id)}
 
 
 @app.get(
@@ -8149,16 +8661,12 @@ async def preview_dataset(
     if not local_input.exists():
         sample_input = Path(sess_for_ds.get("sample_local_input") or "")
         if sample_input.exists():
+            # Preview reads the sample, but work_local_input is left alone:
+            # persisting the sample there made every later "Full dataset"
+            # run use it. _ensure_local_inputs re-downloads the real file.
             local_input = sample_input
-            sess_for_ds["work_local_input"] = _posix(sample_input)
-            ok = await save_session(session_id, sess_for_ds)
-            if not ok:
-                raise HTTPException(
-                    status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    "Failed to persist session while preparing preview",
-                )
             logger.info(
-                "[preview] using sample_local_input fallback for dataset %s -> %s",
+                "[preview] using sample_local_input for preview only, dataset %s -> %s",
                 dataset_id,
                 sample_input,
             )
@@ -8332,11 +8840,12 @@ async def preview_dataset(
             _eid = AvalokaScheduler.get_last_run_task_id(_rk, False)
             if _eid:
                 _ar = AsyncResult(_eid,  app=celery_app)
-                if _ar.ready() and _ar.successful():
+                if (_ar.ready() and _ar.successful()) or (
+                        not _ar.ready() and _run_finished_state(_eid) == "SUCCESS"):
                     _preview_sample_status = "full_sample"
                     sess_for_ds["sample_status"] = "full_sample"
                     sess_for_ds["profiling_status"] = "full_profile"
-                    _celery_res = _ar.result or {}
+                    _celery_res = _ar.result if _ar.successful() and isinstance(_ar.result, dict) else {}
                     _celery_avail = _celery_res.get("available_samples") or []
                     if _celery_avail:
                         sess_for_ds["available_samples"] = json.dumps(_celery_avail) if not isinstance(_celery_avail, str) else _celery_avail
@@ -8537,7 +9046,10 @@ async def get_background_task_status(request: Request, dataset_id: str):
             "selected_sample_name": (sess or {}).get("selected_sample_name"),
         }
     r = AsyncResult(execution_id, app=celery_app)
-    if not r.ready():
+    # Not final in Celery: a result that is no longer stored reads PENDING, so
+    # ask the durable run record before reporting RUNNING.
+    finished = None if r.ready() else _run_finished_state(execution_id)
+    if not r.ready() and not finished:
         return {
             "state": "RUNNING",
             "sample_status": (sess or {}).get("sample_status"),
@@ -8547,8 +9059,8 @@ async def get_background_task_status(request: Request, dataset_id: str):
             "analysis_fidelity": (sess or {}).get("analysis_fidelity"),
             "selected_sample_name": (sess or {}).get("selected_sample_name"),
         }
-    if r.successful():
-        res = r.result or {}
+    if (r.ready() and r.successful()) or finished == "SUCCESS":
+        res = r.result if r.ready() and isinstance(r.result, dict) else {}
         out_sample_status = res.get("sample_status", "full_sample")
         out_profiling_status = res.get("profiling_status", (sess or {}).get("profiling_status"))
         out_available_samples = res.get("available_samples") or []
@@ -8588,6 +9100,129 @@ async def get_background_task_status(request: Request, dataset_id: str):
         "selected_sample_name": (sess or {}).get("selected_sample_name"),
     }
 
+
+class FidelityUpdateIn(BaseModel):
+    analysis_fidelity: Optional[str] = None      # quick_sample | portfolio_samples | entire_dataset
+    selected_sample_name: Optional[str] = None   # e.g. random_baseline, strat_brand
+
+
+async def _dataset_session_for_user(request: Request, dataset_id: str):
+    user_id = _resolve_user_id(request)
+    if not user_id:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing or invalid auth token")
+    sid = await find_session_by_dataset_for_user(dataset_id, user_id)
+    sess = await get_session(sid) if sid else None
+    if not sess or sess.get("user_id") != user_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Dataset not found for this user")
+    return user_id, sid, sess
+
+
+def _fidelity_options(sess: Dict[str, Any], dataset_id: str) -> Dict[str, Any]:
+    size = int(sess.get("file_size_bytes") or 0)
+    large = size >= LARGE_DATASET_THRESHOLD_BYTES
+    sample_status = str(sess.get("sample_status") or "")
+    portfolio_ready = sample_status == "full_sample" or not large
+    has_cloud = bool(_full_cloud_uri(sess) and sess.get("connection_id"))
+    samples = (_maybe_json_load(sess.get("available_samples")) or sess.get("available_samples")
+               or (_profile_meta.get(dataset_id) or {}).get("available_samples") or [])
+    building = bool(sess.get("background_task_id")) and not portfolio_ready
+
+    return {
+        "dataset_id": dataset_id,
+        "analysis_fidelity": sess.get("analysis_fidelity")
+            or (FIDELITY_QUICK if sample_status == "quick_sample" else FIDELITY_PORTFOLIO),
+        "selected_sample_name": sess.get("selected_sample_name"),
+        "file_size_bytes": size,
+        "is_large_dataset": large,
+        "analysis_task_id": sess.get("analysis_task_id"),
+        "options": [
+            {
+                "value": FIDELITY_QUICK,
+                "label": "Quick sample",
+                "enabled": True,
+                "detail": "First rows of the file. Answers in seconds.",
+            },
+            {
+                "value": FIDELITY_PORTFOLIO,
+                "label": "Portfolio samples",
+                "enabled": portfolio_ready or (large and has_cloud),
+                "status": "ready" if portfolio_ready else ("building" if building else "not_built"),
+                "samples": samples,
+                "detail": ("Representative samples across the file."
+                           if portfolio_ready else
+                           "Built in the background on the cluster when selected."),
+                "reason": None if (portfolio_ready or has_cloud) else "Needs a cloud connection",
+            },
+            {
+                "value": FIDELITY_ENTIRE,
+                "label": "Full dataset",
+                "enabled": (not large) or has_cloud,
+                "runs_as_job": large,
+                "detail": ("Each question runs as a background Ray job."
+                           if large else "Runs on every row."),
+                "reason": None if ((not large) or has_cloud)
+                          else "Large files need a cloud connection to run on the cluster",
+            },
+        ],
+    }
+
+
+@app.get("/api/datasets/{dataset_id}/fidelity", tags=["datasets"])
+async def get_dataset_fidelity(request: Request, dataset_id: str):
+    _, _, sess = await _dataset_session_for_user(request, dataset_id)
+    return _fidelity_options(sess, dataset_id)
+
+
+@app.put("/api/datasets/{dataset_id}/fidelity", tags=["datasets"])
+async def set_dataset_fidelity(request: Request, dataset_id: str, body: FidelityUpdateIn):
+    _, sid, sess = await _dataset_session_for_user(request, dataset_id)
+    current = _fidelity_options(sess, dataset_id)
+    by_value = {o["value"]: o for o in current["options"]}
+
+    fid = body.analysis_fidelity
+    if body.selected_sample_name and not fid:
+        fid = FIDELITY_PORTFOLIO               # picking a sample implies portfolio mode
+    if fid and fid not in by_value:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"Unknown fidelity '{fid}'")
+    if fid and not by_value[fid]["enabled"]:
+        raise HTTPException(status.HTTP_409_CONFLICT, by_value[fid].get("reason") or "Not available")
+
+    samples = by_value[FIDELITY_PORTFOLIO]["samples"]
+    if body.selected_sample_name and samples and body.selected_sample_name not in samples:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            f"Sample '{body.selected_sample_name}' is not available")
+
+    # Large file, portfolio not built yet: start the background build now.
+    scheduled = None
+    if (fid == FIDELITY_PORTFOLIO and current["is_large_dataset"]
+            and str(sess.get("sample_status")) == "quick_sample"
+            and not sess.get("background_task_id")):
+        scheduled = _schedule_background_sampling_task(
+            dataset_id=dataset_id,
+            session_id=sid,
+            cloud_uri=_full_cloud_uri(sess) or "",
+            connection_id=sess.get("connection_id") or "",
+            file_size_bytes=int(sess.get("file_size_bytes") or 0),
+            ray_namespace=os.getenv("RAY_NAMESPACE", "default"),
+        )
+
+    def _apply(cur: Dict[str, Any]) -> None:
+        if fid:
+            cur["analysis_fidelity"] = fid
+            cur["requires_fidelity_choice"] = False
+            cur["fidelity_prompt_shown"] = True
+        if body.selected_sample_name:
+            cur["selected_sample_name"] = body.selected_sample_name
+        if scheduled:
+            cur["background_task_id"] = scheduled
+            cur["portfolio_generation_status"] = "scheduled"
+
+    await update_session(sid, _apply)
+    logger.info("[fidelity-ui] dataset=%s -> %s sample=%s scheduled=%s",
+                dataset_id, fid, body.selected_sample_name, scheduled)
+
+    fresh = await get_session(sid) or sess
+    return {**_fidelity_options(fresh, dataset_id), "background_task_id": scheduled}
 
 @app.delete(
     "/datasets/{dataset_id}",
@@ -8703,6 +9338,13 @@ async def delete_dataset(request: Request, dataset_id: str):
                 THREAD_META.pop(tid, None)
             except Exception:
                 pass
+            await _forget_thread_memory(user_id, tid)
+        # The facts learned about this dataset go with it.
+        try:
+            from app.services.memory_plane import forget_dataset_memory
+            await asyncio.to_thread(forget_dataset_memory, user_id, dataset_id)
+        except Exception:
+            logger.warning("Memory cleanup failed for dataset %s", dataset_id, exc_info=True)
         for sid in target_sids:
             try:
                 if session_service.cache:
@@ -8964,7 +9606,7 @@ async def db_tables_to_analysis(request: Request, response: Response, body: Tabl
             _write_rows_to_csv(dict_rows, sample_input_path)
             output_path = work_dir / "output.csv"
 
-            schema_dict = {c: "string" for c in cols}
+            schema_dict = _schema_from_db_rows(cols, dict_rows)
             ddl = _ddl_from_schema(dsid, schema_dict)
 
             base_alias = "".join(ch if ch.isalnum() else "_" for ch in table).strip("_") or f"table{idx}"
@@ -9343,196 +9985,23 @@ async def chat_db_sample_only(
 
 
 # -------------------------------------------------------------------
-# Get trained model list with metadata
+# The language models the agents use, and the fallback chain behind them
+# (owner ruling 2026-11-02: the model screen). No credentials are returned.
 # -------------------------------------------------------------------
-@app.get("/api/models")
-async def list_models(request: Request):
+@app.get("/api/llm-models")
+async def list_llm_models(request: Request):
     user_id = _resolve_user_id(request)
     if not user_id:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing or invalid auth token")
-    if not session_service.cache:
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Session storage (Redis) is not available.")
-    if not storage_service.blob_store:
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Storage backend not initialized.")
-    
-    from app.agents.mta_v2.mlflow_manager import MLflowManager
-    mlflow_manager = MLflowManager()
-    models = await asyncio.to_thread(mlflow_manager.list_models)
-    result = {
-        "models": [
-            model for model in models if model.get("user_id") == user_id
-        ]
-    }
+    from app.core.inference import describe_llm_setup
 
-    return result
-
-# -------------------------------------------------------------------
-# Get model details
-# -------------------------------------------------------------------
-@app.get("/api/models/{run_id}")
-async def get_model_details(request: Request, run_id: str):
-    user_id = _resolve_user_id(request)
-    if not user_id:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing or invalid auth token")
-    if not session_service.cache:
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Session storage (Redis) is not available.")
-    if not storage_service.blob_store:
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Storage backend not initialized.")
-
-    
-    from app.agents.mta_v2.mlflow_manager import MLflowManager
-    mlflow_manager = MLflowManager()
-    model = await asyncio.to_thread(mlflow_manager.get_model_details, run_id)
-    if model is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Model not found.")
-    elif model.get("user_id") != user_id:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "You do not have permission to access this model.")
-    return model
-
-# -------------------------------------------------------------------
-# Delete model by the run_id (MLflow's run_id)
-# -------------------------------------------------------------------
-@app.delete("/api/models/{run_id}")
-async def delete_model(request: Request, run_id: str):
-    user_id = _resolve_user_id(request)
-    if not user_id:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing or invalid auth token")
-    if not session_service.cache:
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Session storage (Redis) is not available.")
-    if not storage_service.blob_store:
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Storage backend not initialized.")
-
-    from app.agents.mta_v2.mlflow_manager import MLflowManager
-    mlflow_manager = MLflowManager()
-    run_details = await asyncio.to_thread(mlflow_manager.get_model_details, run_id)
-    if run_details is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Model not found.")
-    elif run_details.get("user_id") != user_id:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "You do not have permission to delete this model.")
-    else:
-        if run_details.get("inference_service_details") is not None:
-            from app.agents.mta_v2.inference_service_manager import InferenceServiceManager
-            inferencer = InferenceServiceManager()
-            await asyncio.to_thread(inferencer.stop_inference_service, run_id)
-        await asyncio.to_thread(mlflow_manager.delete_model, run_id)
-    return {"status": "deleted"}
-
-# -------------------------------------------------------------------
-# Inference through the configured service/gateway
-# -------------------------------------------------------------------
-@app.post("/api/models/{run_id}/inference")
-async def inference(
-    request: Request,
-    run_id: str,
-    input_data: Union[Dict[str, Any], List[Dict[str, Any]]],
-):
-    user_id = _resolve_user_id(request)
-    if not user_id:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing or invalid auth token")
-    await _require_premium_plan(user_id, "model_inference")
-    if not session_service.cache:
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Session storage (Redis) is not available.")
-    if not storage_service.blob_store:
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Storage backend not initialized.")
-
-    from app.agents.mta_v2.mlflow_manager import MLflowManager
-    mlflow_manager = MLflowManager()
-    run_details = await asyncio.to_thread(mlflow_manager.get_model_details, run_id)
-    if run_details is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Model not found.")
-    elif run_details.get("user_id") != user_id:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "You do not have permission to use this model.")
-    if not run_details.get("inference_service_details"):
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "Inference service is not configured for this model.",
-        )
-    if isinstance(input_data, list) and (
-        not input_data or not all(isinstance(row, dict) for row in input_data)
-    ):
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            "Batch inference requires a non-empty JSON array of row objects.",
-        )
-    try:
-        from app.agents.mta_v2.inference_service_manager import InferenceServiceManager
-
-        manager = InferenceServiceManager()
-        result = await asyncio.to_thread(manager.inference, run_id, input_data)
-        return {"result": result}
-    except ValueError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
-    except Exception as exc:
-        logger.error("Inference gateway failed for run '%s': %s", run_id, exc, exc_info=True)
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Inference gateway failed: {exc}")
+    return describe_llm_setup()
 
 
 # -------------------------------------------------------------------
-# Configure Inference Service
+# Trained models, registry and serving endpoints: app/api/models_routes.py
+# (mounted next to the Ray jobs router, see include_router above).
 # -------------------------------------------------------------------
-@app.post("/api/models/{run_id}/configure-inference-service")
-async def configure_inference_service(request: Request, run_id: str):
-    user_id = _resolve_user_id(request)
-    if not user_id:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing or invalid auth token")
-    # Starting a service spends hosted compute. Stopping one is never gated, so
-    # a user who lost the plan can always shut down what they started.
-    await _require_premium_plan(user_id, "model_inference")
-    if not session_service.cache:
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Session storage (Redis) is not available.")
-    if not storage_service.blob_store:
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Storage backend not initialized.")
-
-    from app.agents.mta_v2.mlflow_manager import MLflowManager
-    mlflow_manager = MLflowManager()
-    run_details = await asyncio.to_thread(mlflow_manager.get_model_details, run_id)
-    if run_details is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Model not found.")
-    elif run_details.get("user_id") != user_id:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "You do not have permission to delete this model.")
-    else:
-        from app.agents.mta_v2.inference_service_manager import InferenceServiceManager
-        inference_service_manager = InferenceServiceManager()
-        try:
-            details = await asyncio.to_thread(
-                inference_service_manager.configure_inference_service,
-                run_id,
-            )
-            return {"status": "running", "inference_service_details": details}
-        except Exception as e:
-            logger.error(f"Error occurred while configuring inference service - {e}")
-            raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, f"Failed to configure inference service: {e}")
-
-
-# -------------------------------------------------------------------
-# Stop Inference Service
-# -------------------------------------------------------------------
-@app.post("/api/models/{run_id}/stop-inference-service")
-async def stop_inference_service(request: Request, run_id: str):
-    user_id = _resolve_user_id(request)
-    if not user_id:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing or invalid auth token")
-    if not session_service.cache:
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Session storage (Redis) is not available.")
-    if not storage_service.blob_store:
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Storage backend not initialized.")
-
-    from app.agents.mta_v2.mlflow_manager import MLflowManager
-    mlflow_manager = MLflowManager()
-    run_details = await asyncio.to_thread(mlflow_manager.get_model_details, run_id)
-    if run_details is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Model not found.")
-    elif run_details.get("user_id") != user_id:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "You do not have permission to delete this model.")
-    else:
-        from app.agents.mta_v2.inference_service_manager import InferenceServiceManager
-        inference_service_manager = InferenceServiceManager()
-        try:
-            await asyncio.to_thread(inference_service_manager.stop_inference_service, run_id)
-            return {"status": "stopped"}
-        except Exception as e:
-            logger.error(f"Error occurred while stopping inference service - {e}")
-            raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, f"Failed to stop inference service: {e}")
 
 
 # -------------------------------------------------------------------
@@ -9587,7 +10056,7 @@ async def _create_or_update_db_sample_session(
 
     output_path = work_dir / "output.csv"
 
-    schema_dict = {c: "string" for c in columns}
+    schema_dict = _schema_from_db_rows(columns, dict_rows)
     ddl = _ddl_from_schema(dsid, schema_dict)
 
     # ---- Build visualization config for DB sample ----
@@ -9918,45 +10387,52 @@ async def _resolve_profile_id(user_id: str) -> Optional[str]:
     return profile_id
 
 async def _is_analysis_collaborator(
-    analysis_id: str,             # unused — sharing is project-level in this schema
-    profile_id: str,              # unused now, kept for signature stability
+    analysis_id: Optional[str],
+    profile_id: Optional[str],          # unused, kept for signature stability
     project_id: Optional[str],
-    user_id: Optional[str] = None,   # auth.uid(), needed to resolve app_users.id
+    user_id: Optional[str] = None,      # auth.uid(), needed to resolve app_users.id
 ) -> bool:
     """
-    True if the requester is a collaborator on the PROJECT this analysis belongs
-    to. resource_collaborators only carries resource_type='project' (verified),
-    and app_user_id references app_users(id) — so translate the requester's
-    auth.uid() -> app_users.id and compare against that.
+    True if the requester is a collaborator on this ANALYSIS or on the PROJECT it
+    belongs to. The Share panel writes resource_type='analysis' rows for a shared
+    analysis and resource_type='project' rows for a shared project (the projects
+    RLS policy "collaborators read projects via analyses" relies on the former).
+    Both key on app_users.id, so translate auth.uid() -> app_users.id first.
     """
-    if not project_id or not user_id:
+    if not user_id or not (analysis_id or project_id):
         return False
 
     app_user_id = await _resolve_app_user_id(user_id)
     if not app_user_id:
         return False
 
+    targets = [(t, rid) for t, rid in (("analysis", analysis_id), ("project", project_id)) if rid]
+
     def _q() -> bool:
         client = get_supabase_client()
-        try:
-            res = (client.table("resource_collaborators")
-                   .select("id")
-                   .eq("resource_type", "project")
-                   .eq("resource_id", project_id)
-                   .eq("app_user_id", app_user_id)
-                   .limit(1).execute())
-            return bool(getattr(res, "data", None))
-        except Exception as exc:
-            logger.warning("[collab] resource_collaborators check failed (project=%s): %s",
-                           project_id, exc)
-            return False
+        for resource_type, resource_id in targets:
+            try:
+                res = (client.table("resource_collaborators")
+                       .select("id")
+                       .eq("resource_type", resource_type)
+                       .eq("resource_id", str(resource_id))
+                       .eq("app_user_id", str(app_user_id))
+                       .limit(1).execute())
+            except Exception as exc:
+                logger.warning("[collab] resource_collaborators check failed (%s=%s): %s",
+                               resource_type, resource_id, exc)
+                continue
+            if getattr(res, "data", None):
+                return True
+        return False
 
     try:
         return await asyncio.to_thread(_q)
     except Exception as exc:
         logger.error("[collab] authorization check errored: %s", exc, exc_info=True)
         return False
-   
+
+
 async def _resolve_shared_session_for_thread(
     thread_id: str,
     user_id: str,
@@ -9986,10 +10462,28 @@ async def _resolve_shared_session_for_thread(
                      thread_id, analysis_id, exc, exc_info=True)
         return None
 
-    if not row or not row.get("session_id"):
+    if not row:
         return None
 
     owner_id = str(row.get("owner_id") or "")
+
+    profile_id = await _resolve_profile_id(user_id)
+    requester_plan = await asyncio.to_thread(resolve_plan, user_id)
+    if requester_plan == "enterprise" and not row.get("session_id"):
+        return None
+    if profile_id and requester_plan != "enterprise":
+        from app.services.analysis_share_access import standalone_analysis_access
+
+        try:
+            access_level = await asyncio.to_thread(
+                standalone_analysis_access, get_supabase_client(), row["id"], profile_id, requester_plan
+            )
+        except Exception as exc:
+            logger.error("[shared-session] analysis grant lookup failed: %s", exc, exc_info=True)
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Analysis sharing lookup is temporarily unavailable.") from exc
+        if access_level:
+            return {**row, "role": "collaborator", "share_access_level": access_level}
+
 
     # analyses.owner_id is not consistently populated: some rows store the
     # owner's profiles.id, others store the raw auth.uid() (the value the JWT
@@ -9998,7 +10492,6 @@ async def _resolve_shared_session_for_thread(
     if owner_id and owner_id == str(user_id):
         return {**row, "role": "owner"}
 
-    profile_id = await _resolve_profile_id(user_id)   # auth.uid() -> profiles.id
     if profile_id and owner_id == str(profile_id):
         return {**row, "role": "owner"}
 
@@ -10006,6 +10499,7 @@ async def _resolve_shared_session_for_thread(
     app_user_id = await _resolve_app_user_id(user_id)
     if app_user_id and owner_id == str(app_user_id):
         return {**row, "role": "owner"}
+
 
     if profile_id and await _is_analysis_collaborator(
         row["id"], profile_id, row.get("project_id"), user_id=user_id
@@ -10508,8 +11002,8 @@ async def refresh_analysis(
     prompt_ts: Optional[str] = Query(None, description="Re-run a specific version; default = latest"),
 ):
     """
-    Re-execute the latest stored code for an analysis (Leela: 'refresh always
-    executes latest code'). Runs the stored .py directly through the execution
+    Re-execute the latest stored code for an analysis (refresh always executes
+    the latest code). Runs the stored .py directly through the execution
     node, then fires _persist_assets_background so the run is versioned for rollback.
     """
     user_id = _resolve_user_id(request)
@@ -10595,7 +11089,7 @@ async def refresh_analysis(
     logger.info("[refresh] aid=%s session=%s mode=%s key=%s",
                 analysis_id, session_id, "k8s-ray" if use_ray else "local", code_key)
 
-    final = await asyncio.get_event_loop().run_in_executor(None, lambda: node(state_in))
+    final = await _run_execution_node(node, state_in, use_ray)
 
     # ---- extract fresh output ----
 
@@ -11147,7 +11641,7 @@ async def save_and_execute_analysis(
         "[save-and-execute] aid=%s session=%s mode=%s",
         analysis_id, session_id, "k8s-ray" if use_ray else "local",
     )
-    final = await asyncio.get_event_loop().run_in_executor(None, lambda: node(state_in))
+    final = await _run_execution_node(node, state_in, use_ray)
     # ---- Extract and verify the newly executed output ----
     _exec_result = final.get("execution_result") or {}
     _exec_status = str(
@@ -11277,7 +11771,7 @@ async def save_and_execute_analysis(
                 "data_source_location"
             ),
             dataset_label=sess.get("alias") or sess.get("filename") or "",
-            analysis_label=last_prompt[:60] if last_prompt else "",
+            analysis_label=redact_typed_secrets(last_prompt)[0][:60] if last_prompt else "",
         )
 
         checkpoint_created = True
@@ -11477,21 +11971,36 @@ async def _bind_mcp_customer_owner(customer_id: Optional[str], user_id: str, api
         logger.warning("[mcp-creds] owner bind for %s failed: %s", customer_id, exc)
 
 
+# mcp_connections.id is a uuid column. PostgREST rejects any other string with
+# 22P02, which supabase-py raises, so a malformed id must stop here: it can
+# match no row, and letting it through turned "not found" into a 500.
+_MCP_CONN_ID_RE = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE
+)
+
+
+def _mcp_conn_not_found() -> HTTPException:
+    return HTTPException(status.HTTP_404_NOT_FOUND, "Connection not found")
+
+
 async def _mcp_conn_owned_row(connection_id: str, user_id: str) -> Dict[str, Any]:
-    """Fetch an mcp_connections row and enforce ownership (service role bypasses RLS)."""
+    """Fetch an mcp_connections row and enforce ownership (service role bypasses RLS).
+
+    Another user's connection and a missing one get the same 404 and body, so
+    the response never says whether an id exists.
+    """
+    if not _MCP_CONN_ID_RE.fullmatch(connection_id or ""):
+        raise _mcp_conn_not_found()
     try:
         row = await asyncio.to_thread(_mcp_conn_select, connection_id)
     except Exception as exc:
         logger.error("[mcp-creds] lookup failed for %s: %s", connection_id, exc, exc_info=True)
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Connection lookup failed")
     if not row:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Connection not found")
+        raise _mcp_conn_not_found()
     if str(row.get("user_id") or "") != str(user_id):
-        logger.warning(
-            "[mcp-creds] connection %s owned by %s != requester %s",
-            connection_id, row.get("user_id"), user_id,
-        )
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Connection belongs to another user")
+        logger.warning("[mcp-creds] connection %s is not owned by requester %s", connection_id, user_id)
+        raise _mcp_conn_not_found()
     return row
 
 
@@ -11844,4 +12353,6 @@ if __name__ == "__main__":
         port=int(os.getenv("PORT", "8010")),
         reload=DEBUG,
         proxy_headers=True,
+        # Not uvloop: see the CMD note in deploy/docker/Dockerfile.api.
+        loop="asyncio",
     )

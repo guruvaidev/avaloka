@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/primary-auth-middleware";
+import { COMMENTS_NEED_PRO_SERVER, assertPlanFeature } from "@/lib/org-features";
 
 export const createReportComment = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
@@ -20,6 +21,10 @@ export const createReportComment = createServerFn({ method: "POST" })
     }),
   )
   .handler(async ({ data, context }) => {
+    // Commenting is Professional or higher (owner ruling 2026-11-01). The insert
+    // below uses the admin client, which RLS does not apply to, so check here.
+    await assertPlanFeature(context.supabase, "professional", "createReportComment", COMMENTS_NEED_PRO_SERVER);
+
     const { data: report, error: reportError } = await context.supabase
       .from("reports")
       .select("id")

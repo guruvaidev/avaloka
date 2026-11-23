@@ -70,8 +70,11 @@ class TestGraphNode:
         branch passed on the substring "execute_training" appearing in the
         class dict (it matches the private _execute_training). Nothing trained.
 
-        The live route is model_training_agent_node(state) -> execute(state),
-        and a local CSV runs in-process through LocalTrainer with no LLM.
+        The live route is model_training_agent_node(state) -> execute(state).
+        Since the enqueue-only change the chat turn only schedules; the Celery
+        worker re-enters the node with training_scheduled=True, and that pass
+        trains a local CSV in-process through LocalTrainer with no LLM. This
+        test drives the worker pass.
         """
         monkeypatch.setenv("MLFLOW_ALLOW_FILE_STORE", "true")
         monkeypatch.setenv("MLFLOW_DEFAULT_ARTIFACT_ROOT", "")
@@ -102,7 +105,8 @@ class TestGraphNode:
                 "target_column": "target",
             },
         }
-        state = self._node_state(training_plan=plan, skip_to_training=True)
+        state = self._node_state(training_plan=plan, skip_to_training=True,
+                                 training_scheduled=True)
 
         # No LLM: a confirmed plan must not need one to start training.
         with patch("app.agents.mta_v2.agent.llm", None):

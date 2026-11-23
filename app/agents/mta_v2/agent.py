@@ -15,6 +15,23 @@ from app.core.agent_llm import build_agent_llm
 from app.agents.lineage_hooks import record_model_lineage
 from app.graph.etl_state import ETLState
 from app.agents.mta_v2.ray_trainer import RayTrainer
+from app.core import job_ledger
+
+
+def _claim_training_job(state, training_result) -> None:
+    """Tell the background-job ledger what this turn's row is: a training job
+    on the model it produced. The row's owner (the API turn or the Celery
+    task) finishes it; a terminal row is left alone."""
+    job_id = state.get("ledger_job_id") if isinstance(state, dict) else None
+    if not job_id:
+        return
+    run_id = getattr(training_result, "mlflow_run_id", None)
+    if run_id is None and isinstance(training_result, dict):
+        run_id = training_result.get("mlflow_run_id")
+    try:
+        job_ledger.claim(job_id, kind="training", resource_type="model", resource_id=run_id)
+    except Exception:  # noqa: BLE001 - the ledger never fails the training
+        logger.debug("[mta] ledger claim failed", exc_info=True)
 from app.agents.mta_v2.local_trainer import LocalTrainer
 from app.agents.mta_v2.inference import InferenceInterface
 from app.agents.mta_v2.inference_service_manager import InferenceServiceManager
@@ -193,6 +210,25 @@ Important:
 You should meet one of these request. So determine what flow is best for current state, and call all of tools of that flow to accomplish the task. Always think step by step and be precise about which tools to use.
 You can call multiple tools in one response if necessary.
 """
+
+
+#: k-fold cross-validation on the training split (1.7/1.8 runs it; the plan
+#: carries k from 1.6 on so a plan written now trains the same way later).
+DEFAULT_CV_FOLDS = 5
+CV_FOLDS_MIN, CV_FOLDS_MAX = 2, 10
+_CV_FOLDS_RE = re.compile(
+    r"\b(\d{1,2})\s*[- ]?\s*folds?\b|\bk\s*(?:=|:|to)\s*(\d{1,2})\b|\bfolds?\s*(?:=|:|to|of)\s*(\d{1,2})\b",
+    re.IGNORECASE,
+)
+
+
+def parse_cv_folds(text: str) -> Optional[int]:
+    """The fold count a user asked for, clamped to [2, 10]; None when not mentioned."""
+    match = _CV_FOLDS_RE.search(text or "")
+    if not match:
+        return None
+    value = int(next(g for g in match.groups() if g))
+    return max(CV_FOLDS_MIN, min(CV_FOLDS_MAX, value))
 
 
 class ModelTrainingAgent:
@@ -1266,6 +1302,12 @@ class ModelTrainingAgent:
 
         if changed:
             updated_plan["hyperparameter_config"] = hyperparameter_config
+
+        # Cross-validation folds: "3-fold", "k=3", "folds: 3", "use 10 folds".
+        k = parse_cv_folds(latest_text)
+        if k is not None:
+            updated_plan["cross_validation"] = {**(updated_plan.get("cross_validation") or {}), "k": k}
+            changed = True
 
         data_config = dict(updated_plan.get("data_config") or {})
         feature_columns = list(data_config.get("feature_columns") or [])
@@ -2414,6 +2456,7 @@ class ModelTrainingAgent:
             model_version=model_version,
             hyperparameter_config=hyperparameter_config,
             ray_config=ray_config,
+            cross_validation={"k": DEFAULT_CV_FOLDS},
             data_config=data_config,
             execution_backend="ray",
             execution_reason=execution_reason,
@@ -2606,6 +2649,15 @@ class ModelTrainingAgent:
                 failure = build_training_failure(error_detail)
                 training_result["failure"] = failure
             return format_training_failure(failure)
+
+        if training_result.get("status") == "submitted":
+            job = training_result.get("ray_job_name") or training_result.get("ray_job_id") or "the shared cluster"
+            return (
+                "**Training submitted**\n\n"
+                f"Model '{training_result.get('model_name', 'model')}' is training on the shared Ray cluster "
+                f"(job `{job}`). This runs in the background: the Inference panel lists the model when it is "
+                "registered, and you will get a notification when training finishes."
+            )
 
         title = "Local Training Run Report" if use_local else "Training Run Report"
         model_type_raw = training_result.get("model_type")
@@ -2885,8 +2937,29 @@ class ModelTrainingAgent:
         elif use_local:
             training_plan["ray_config"] = None
 
+        # ---- First pass (the chat turn): enqueue, never train here. ----
+        # Both backends go through the Celery worker. Until 2026-11 the local
+        # backend trained inside this graph turn, so every dataset under the
+        # Ray threshold held the HTTP request for the whole run and the chat
+        # hung behind the deferred-turn race. The worker re-enters this node
+        # with training_scheduled=True and runs the backend chosen above.
+        if not state.get("training_scheduled", False):
+            logger.info("Training task is scheduled (backend=%s)", execution_backend)
+            new_state = state.copy()
+            new_state["task_schedule"] = {
+                "task_type": "training",
+                "schedule_type": "relative",
+                "second": 0,
+                "max_runs": 1
+            }
+            new_state["training_scheduled"] = True
+            new_state["training_plan"] = training_plan
+            new_state["ml_job_id"] = self._open_training_job(state, execution_backend)
+            return new_state
+
+        # ---- Second pass (the worker): run the chosen backend. ----
+        self._mark_training_job(state, status="running")
         if use_local:
-            # ---- Local path: run training in-process via LocalTrainer ----
             logger.info("Data source is local — using LocalTrainer (no Ray).")
             trainer = LocalTrainer(
                 user_id=state.get("user_id", "unknown_user"),
@@ -2894,22 +2967,8 @@ class ModelTrainingAgent:
             )
             training_result = trainer.train(training_plan)
             logger.info("Local training completed with result: %s", training_result)
-
+            _claim_training_job(state, training_result)
         else:
-            # ---- Ray path: submit distributed job via RayTrainer ----
-            if not state.get("training_scheduled", False):
-                logger.info("Training task is scheduled")
-                new_state = state.copy()
-                new_state["task_schedule"] = {
-                    "task_type": "training",
-                    "schedule_type": "relative",
-                    "second": 0,
-                    "max_runs": 1
-                }
-                new_state["training_scheduled"] = True
-                new_state["training_plan"] = training_plan
-                return new_state
-            
             logger.info("Data source is remote/cloud — using RayTrainer.")
             trainer = RayTrainer(
                 user_id=state.get("user_id", "unknown_user"),
@@ -2917,6 +2976,20 @@ class ModelTrainingAgent:
             )
             training_result = trainer.train(training_plan)
             logger.info("Training completed with result: %s", training_result)
+
+        if isinstance(training_result, dict) and training_result.get("status") == "submitted":
+            # Submit-only: the RayJob runs on the shared cluster and the worker's
+            # poll chain (app/infra/training_tasks.poll_training_job) finishes the
+            # story -- registry, endpoint, run record, bell. Nothing waits here.
+            new_state = state.copy()
+            new_state["training_result"] = training_result
+            new_state["ray_job_name"] = training_result.get("ray_job_name")
+            new_state["ray_job_namespace"] = training_result.get("ray_namespace")
+            new_state["training_scheduled"] = False
+            new_state["training_completed"] = False
+            new_state["messages"].append(AIMessage(content=self._format_training_result_report(training_result, use_local)))
+            self._mark_training_job(state, status="running", ray_job_name=training_result.get("ray_job_name"))
+            return new_state
 
         if isinstance(training_result, dict):
             error_detail = training_result.get("error") or training_result.get("execution_error")
@@ -2950,14 +3023,83 @@ class ModelTrainingAgent:
         new_state["messages"].append(AIMessage(content=report_content))
         new_state["training_scheduled"] = False
         new_state["training_completed"] = not training_failed
+        self._mark_training_job(
+            state,
+            status="failed" if training_failed else "succeeded",
+            mlflow_run_id=(training_result or {}).get("mlflow_run_id") if isinstance(training_result, dict) else None,
+            error=self._job_error_line(training_result) if training_failed else None,
+        )
         if not training_failed and isinstance(training_result, dict):
             lineage_model_id = record_model_lineage(new_state, training_result)
             if lineage_model_id:
                 new_state["lineage_model_id"] = lineage_model_id
         return new_state
 
+    # ----------------------------------------------------------
+    # Durable job records (ml_jobs). Best-effort around the training itself:
+    # a store that is down must not stop a model from training, but it is
+    # logged loudly because the panel then cannot show the job.
+    # ----------------------------------------------------------
+
+    @staticmethod
+    def _open_training_job(state: ETLState, backend: str) -> Optional[str]:
+        """Create the ml_jobs row for a training request; None if it cannot be recorded."""
+        user_id = state.get("user_id")
+        if not user_id:
+            logger.warning("[ml_jobs] training request has no user_id; job not recorded")
+            return None
+        try:
+            from app.core.ml_store import MLJob, get_ml_store
+
+            job = get_ml_store().create_job(MLJob(
+                user_id=str(user_id),
+                session_id=str(state.get("session_id") or "") or None,
+                kind="training",
+                status="queued",
+            ))
+            logger.info("[ml_jobs] training job %s queued (backend=%s)", job.id, backend)
+            return job.id
+        except Exception:  # noqa: BLE001 - recording must not block training
+            logger.error("[ml_jobs] could not record the training job", exc_info=True)
+            return None
+
+    @staticmethod
+    def _mark_training_job(state: ETLState, **changes: Any) -> None:
+        job_id = state.get("ml_job_id")
+        if not job_id:
+            return
+        try:
+            from datetime import datetime, timezone
+
+            from app.core.ml_store import get_ml_store
+
+            now = datetime.now(timezone.utc)
+            status = changes.get("status")
+            if status == "running":
+                changes.setdefault("started_at", now)
+            elif status in {"succeeded", "failed", "cancelled"}:
+                changes.setdefault("finished_at", now)
+            get_ml_store().update_job(job_id, **changes)
+        except Exception:  # noqa: BLE001
+            logger.error("[ml_jobs] could not update training job %s", job_id, exc_info=True)
+
+    @staticmethod
+    def _job_error_line(training_result: Any) -> Optional[str]:
+        """One user-safe line for ml_jobs.error: the failure title, never the logs."""
+        if not isinstance(training_result, dict):
+            return "Training failed."
+        failure = training_result.get("failure")
+        if isinstance(failure, dict):
+            return str(failure.get("title") or failure.get("summary") or failure.get("code") or "Training failed.")[:300]
+        return "Training failed."
+
     def _configure_inference_service(self, state: ETLState) -> ETLState:
-        """Schedule, then configure, the selected trained model's service."""
+        """Enqueue the endpoint deploy and reply with the job handle.
+
+        The work (artifact check, model load) runs in the Celery worker
+        (app/infra/training_tasks); this turn never waits for it. The panel
+        and the chat follow the job through ml_jobs / ml_endpoints.
+        """
         training_result = state.get("training_result") or {}
         mlflow_run_id = training_result.get("mlflow_run_id") or state.get("mlflow_run_id")
         if not mlflow_run_id:
@@ -2967,42 +3109,38 @@ class ModelTrainingAgent:
             )
             return self._finish_mta(new_state)
 
-        if not state.get("configure_inference_service_scheduled", False):
-            logger.info("Inference service configuration task is scheduled")
-            new_state = state.copy()
-            new_state["task_schedule"] = {
-                "task_type": "start_inference",
-                "schedule_type": "relative",
-                "second": 0,
-                "max_runs": 1,
-            }
-            new_state["configure_inference_service_scheduled"] = True
-            return new_state
+        from app.infra import training_tasks
 
+        new_state = state.copy()
+        new_state["configure_inference_service_scheduled"] = False
+        new_state["task_schedule"] = None
         try:
-            details = InferenceServiceManager().configure_inference_service(mlflow_run_id)
-            new_state = state.copy()
-            new_state["configure_inference_service_scheduled"] = False
-            new_state["task_schedule"] = None
-            new_state["inference_service_details"] = details
-            service_url = details.get("gateway_url") or details.get("endpoint")
-            content = "Inference service setup is complete."
-            if service_url:
-                content += f" The service is available at: {service_url}"
-            new_state["messages"].append(AIMessage(content=content))
-            return self._finish_mta(new_state)
+            job = training_tasks.enqueue_deploy_endpoint(
+                str(state.get("user_id") or ""),
+                mlflow_run_id,
+                session_id=state.get("session_id"),
+                warm=True,
+            )
+            new_state["ml_job_id"] = job.id
+            new_state["messages"].append(AIMessage(content=(
+                "Starting the inference service for this model in the background "
+                f"(job {job.id[:8]}). The Inference panel will show it as running when it is ready."
+            )))
+        except training_tasks.EndpointBusy:
+            new_state["messages"].append(AIMessage(content="The inference service for this model is already starting."))
+        except training_tasks.NoWorker:
+            new_state["messages"].append(AIMessage(content=(
+                "The inference service could not be started: no background worker (Celery) is running."
+            )))
         except Exception as exc:
-            logger.error("Error configuring inference service: %s", exc, exc_info=True)
-            new_state = state.copy()
-            new_state["configure_inference_service_scheduled"] = False
-            new_state["task_schedule"] = None
+            logger.error("Error enqueuing inference service deploy: %s", exc, exc_info=True)
             new_state["messages"].append(
                 AIMessage(content="Sorry, there was an error configuring the inference service. Please try again.")
             )
-            return self._finish_mta(new_state)
+        return self._finish_mta(new_state)
 
     def _stop_inference_service(self, state: ETLState) -> ETLState:
-        """Schedule, then stop, the selected trained model's service."""
+        """Record the stop intent, enqueue the unload, reply at once."""
         training_result = state.get("training_result") or {}
         mlflow_run_id = training_result.get("mlflow_run_id") or state.get("mlflow_run_id")
         if not mlflow_run_id:
@@ -3012,35 +3150,30 @@ class ModelTrainingAgent:
             )
             return self._finish_mta(new_state)
 
-        if not state.get("stop_inference_service_scheduled", False):
-            logger.info("Inference service stopping task is scheduled")
-            new_state = state.copy()
-            new_state["task_schedule"] = {
-                "task_type": "stop_inference",
-                "schedule_type": "relative",
-                "second": 0,
-                "max_runs": 1,
-            }
-            new_state["stop_inference_service_scheduled"] = True
-            return new_state
+        from app.infra import training_tasks
 
+        new_state = state.copy()
+        new_state["stop_inference_service_scheduled"] = False
+        new_state["task_schedule"] = None
+        new_state["inference_service_details"] = None
         try:
-            InferenceServiceManager().stop_inference_service(mlflow_run_id)
-            new_state = state.copy()
-            new_state["stop_inference_service_scheduled"] = False
-            new_state["task_schedule"] = None
-            new_state["inference_service_details"] = None
-            new_state["messages"].append(AIMessage(content="The inference service has been stopped."))
-            return self._finish_mta(new_state)
+            job = training_tasks.enqueue_stop_endpoint(
+                str(state.get("user_id") or ""),
+                mlflow_run_id,
+                session_id=state.get("session_id"),
+            )
+            new_state["ml_job_id"] = job.id
+            new_state["messages"].append(AIMessage(content="The inference service is being stopped."))
+        except training_tasks.NoWorker:
+            new_state["messages"].append(AIMessage(content=(
+                "The inference service is marked stopped, but no background worker (Celery) is running to unload it."
+            )))
         except Exception as exc:
-            logger.error("Error stopping inference service: %s", exc, exc_info=True)
-            new_state = state.copy()
-            new_state["stop_inference_service_scheduled"] = False
-            new_state["task_schedule"] = None
+            logger.error("Error enqueuing inference service stop: %s", exc, exc_info=True)
             new_state["messages"].append(
                 AIMessage(content="Sorry, there was an error stopping the inference service. Please try again.")
             )
-            return self._finish_mta(new_state)
+        return self._finish_mta(new_state)
 
     def _execute_inference(self, state: ETLState) -> ETLState:
         """

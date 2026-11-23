@@ -7,6 +7,9 @@ import { DynamicChart, normalizeVizConfig, type Slide } from "./dynamicChart";
 import { AnalysisOutputTable } from "./AnalysisOutputTable";
 import { backendApi } from "@/lib/api/backendApi";
 import { buildInsightGroups } from "@/lib/insight-groups";
+import { normalizePlan, planIncludes } from "@/lib/edition-comparison";
+import { useActivePlan } from "@/lib/use-active-plan";
+import { assistantOpenOnView } from "@/lib/insights-assistant-visibility";
 import { InsightsAvatar, ExplainChartButton } from "@/components/insights-avatar/InsightsAvatar";
 import { InsightsAvatarProvider, useInsightsAvatar, HIGHLIGHT_CLASS } from "@/components/insights-avatar/InsightsAvatarContext";
 import { Button } from "@/components/base/buttons/button";
@@ -60,7 +63,7 @@ interface AutoInsightsModalProps {
   /** All datasets from a grouped upload; renders a per-dataset tab switcher. */
   datasets?: InsightDataset[];
   primaryDatasetId?: string | null;
-  onPrefillChat?: (text: string) => void;
+  onPrefillChat?: (text: string) => boolean | void;
 }
 
 type ColumnStat = {
@@ -158,20 +161,50 @@ function DatasetOverviewCard({ config }: { config: any }) {
   </section>;
 }
 
+/** Wraps the chat hand-off so Auto Insights closes (like its × button) unless the hand-off is refused. */
+export function askInChatAndClose(onAsk: (text: string) => boolean | void, onOpenChange: (open: boolean) => void) {
+  return (text: string) => {
+    const ok = onAsk(text);
+    if (ok !== false) onOpenChange(false);
+    return ok;
+  };
+}
+
+/** Suggested steps: each whole row asks its text in chat once (spinner + all rows disabled while handing off). */
+export function SuggestedStepList({ items, onAsk }: { items: { type: string; text: string }[]; onAsk?: (text: string) => boolean | void }) {
+  const [pendingIndex, setPendingIndex] = useState<number | null>(null);
+  const busyRef = useRef(false);
+  const ask = (i: number, raw: string) => {
+    const text = String(raw ?? "").trim();
+    if (!text || busyRef.current || !onAsk) return;
+    busyRef.current = true;
+    setPendingIndex(i);
+    const ok = onAsk(text);
+    if (ok === false) {
+      busyRef.current = false;
+      setPendingIndex(null);
+    }
+  };
+  return <div className="ai-suggestion-list">{items.map((item, i) => {
+    const text = String(item.text ?? "").trim();
+    return <button key={i} type="button" className="ai-suggestion-row cursor-pointer text-foreground hover:bg-muted disabled:cursor-default" aria-label={`Ask in chat: ${text}`} disabled={pendingIndex !== null} onClick={() => ask(i, text)}><span className={`ai-step-tag ai-step-${item.type}`}>{item.type}</span><span className="ai-step-text">{item.text}</span>{pendingIndex === i ? <span role="status" aria-label="Sending" className="inline-block size-4 shrink-0 animate-spin rounded-full border-2 border-border border-t-primary" /> : <ChevronRight size={16} aria-hidden="true"/>}</button>;
+  })}</div>;
+}
+
 /** "Watch out for" and "Suggested next steps", side by side. */
-function DatasetOverviewActions({ config, onPrefillChat }: { config: any; onPrefillChat?: (text: string) => void }) {
+function DatasetOverviewActions({ config, onPrefillChat }: { config: any; onPrefillChat?: (text: string) => boolean | void }) {
   const data = overviewSummaryData(config);
   if (!data) return null;
   const { profile, warnings, suggestions } = data;
   if (!(warnings.length > 0 || profile.readiness_reasoning || suggestions.length > 0)) return null;
   return <div className="ai-overview-actions">
     {(warnings.length > 0 || profile.readiness_reasoning) && <section className="ai-surface ai-overview-action"><header><h3>Watch out for</h3><span className="ai-issues-count">{warnings.length} issues</span></header>{profile.readiness_reasoning && <p className="ai-overview-reason">{profile.readiness_reasoning}</p>}<ul>{warnings.map((item: string, i: number) => <li className="ai-issue-row" key={i}><AlertTriangle size={16}/><span>{item}</span></li>)}</ul></section>}
-    {suggestions.length > 0 && <section className="ai-surface ai-overview-action"><header><h3>Suggested next steps</h3><span className="ai-overview-reason">Click to ask in chat</span></header><div className="ai-suggestion-list">{suggestions.map((item, i) => <Button key={i} color="tertiary" className="ai-suggestion-row" onPress={() => onPrefillChat?.(item.text)}><span className={`ai-step-tag ai-step-${item.type}`}>{item.type}</span><span className="ai-step-text">{item.text}</span><ChevronRight size={16}/></Button>)}</div></section>}
+    {suggestions.length > 0 && <section className="ai-surface ai-overview-action"><header><h3>Suggested next steps</h3><span className="ai-overview-reason">Click to ask in chat</span></header><SuggestedStepList items={suggestions} onAsk={onPrefillChat} /></section>}
   </div>;
 }
 
 /** Dataset overview card, followed by the action cards. */
-export function DatasetOverview({ config, onPrefillChat }: { config: any; onPrefillChat?: (text: string) => void }) {
+export function DatasetOverview({ config, onPrefillChat }: { config: any; onPrefillChat?: (text: string) => boolean | void }) {
   if (!overviewSummaryData(config)) return null;
   return <div className="ai-overview-summary">
     <DatasetOverviewCard config={config} />
@@ -377,6 +410,14 @@ function AutoInsightsModalInner({ open, onOpenChange, config, status, datasetNam
   const [codeLoading, setCodeLoading] = useState(false);
   const [activeDatasetId, setActiveDatasetId] = useState<string | null>(null);
   const avatar = useInsightsAvatar();
+  // Insights Assistant visibility: each tab applies its default; closing it in
+  // Stack keeps it closed for this Auto Insights view (reset per dataset).
+  const [assistantOpen, setAssistantOpen] = useState(true);
+  const [assistantDismissed, setAssistantDismissed] = useState(false);
+  const handleAssistantOpenChange = (next: boolean) => {
+    setAssistantOpen(next);
+    if (!next && layout === "stack") setAssistantDismissed(true);
+  };
 
   // One entry per DISTINCT dataset_id — each keeps a reference to its own entry
   // so two sections can never share the same visualization_config object.
@@ -409,6 +450,17 @@ function AutoInsightsModalInner({ open, onOpenChange, config, status, datasetNam
 
 
   const multi = groups.length > 1;
+
+  useEffect(() => {
+    setAssistantOpen(assistantOpenOnView(layout, assistantDismissed));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layout]);
+
+  useEffect(() => {
+    setAssistantDismissed(false);
+    setAssistantOpen(assistantOpenOnView(layout, false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeDatasetId]);
 
   // Default to the first dataset whenever the available groups change.
   useEffect(() => {
@@ -488,7 +540,7 @@ function AutoInsightsModalInner({ open, onOpenChange, config, status, datasetNam
 
   const overviewScrollRef = useRef<HTMLDivElement>(null);
 
-  // Opening the Overview tab always starts at the top, where the charts are.
+  // Opening the Overview tab always starts at the top, at Dataset overview.
   useEffect(() => {
     if (!open || layout !== "grid") return;
     overviewScrollRef.current?.scrollTo({ top: 0 });
@@ -540,6 +592,7 @@ function AutoInsightsModalInner({ open, onOpenChange, config, status, datasetNam
             <div className="grid h-full place-items-center text-sm text-[var(--color-ai-body)]">Generating insights…</div>
           ) : (
             <div className="ai-overview-content">
+              <DatasetOverview config={activeGroup?.config} onPrefillChat={onPrefillChat ? askInChatAndClose(onPrefillChat, onOpenChange) : undefined} />
               {visibleGroups.map((g) => {
                 const offset = flat.findIndex((f) => f.group.id === g.id);
                 return (
@@ -582,14 +635,13 @@ function AutoInsightsModalInner({ open, onOpenChange, config, status, datasetNam
                   </section>
                 );
               })}
-              <DatasetOverview config={activeGroup?.config} onPrefillChat={onPrefillChat} />
             </div>
           )}
         </div>
       ) : layout === "columns" ? (
         <ColumnStatisticsTab key={activeGroup?.id} config={activeGroup?.config} slides={activeGroup?.slides ?? []} onChart={(position) => { setIndex(position); setLayout("stack"); }} />
       ) : (
-        <div className="ai-stack-grid">
+        <div className={`ai-stack-grid${assistantOpen ? " xl:mr-[380px]" : ""}`}>
           <InsightNavigator slides={activeGroup?.slides ?? []} index={index} config={activeGroup?.config} onSelect={setIndex} />
           {isPending || !activeEntry || !activeSlide ? <div className="ai-surface ai-empty-card">{isPending ? "Generating insights…" : "No auto-insights available for this dataset"}</div> : <>
             <InsightCard slide={activeSlide} config={activeEntry.group.config} outputRows={activeEntry.group.outputRows} samples={activeEntry.group.samples} defaultView={defaultView} chartId={chartIdOf(activeSlide, activeEntry.group.id, activeEntry.si)} index={index} total={total} onSelect={setIndex} />
@@ -603,6 +655,8 @@ function AutoInsightsModalInner({ open, onOpenChange, config, status, datasetNam
         datasetId={avatarDatasetId}
         datasetName={avatarDatasetName}
         charts={avatarCharts}
+        open={assistantOpen}
+        onOpenChange={handleAssistantOpenChange}
       />
 
       <CodeViewerModal
@@ -616,13 +670,18 @@ function AutoInsightsModalInner({ open, onOpenChange, config, status, datasetNam
 }
 
 export function AutoInsightsModal(props: AutoInsightsModalProps) {
+  // Every way into Auto Insights opens this modal, so this is its plan gate. It
+  // reads the edition matrix's auto_insights capability, as the Billing tab's
+  // comparison does. While the plan is unknown it stays open, as before.
+  const { data } = useActivePlan();
+  const plan = normalizePlan(data?.plan);
+  const blocked = plan !== null && !planIncludes(plan, "auto_insights");
   // Keyed by aid so the assistant's transcript resets when the analysis changes;
   // unmounting on close stops speech, recognition, requests and highlights.
-  if (!props.open) return null;
+  if (!props.open || blocked) return null;
   return (
     <InsightsAvatarProvider key={props.aid ?? "no-aid"}>
       <AutoInsightsModalInner {...props} />
     </InsightsAvatarProvider>
   );
 }
-

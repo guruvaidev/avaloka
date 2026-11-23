@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Avaloka Developer Guide</title>
-<meta name="description" content="User guide and SDK reference for Avaloka 1.6: the CLI, the Python SDK, the HTTP API and the generated model service, with examples you can run.">
+<meta name="description" content="User guide and SDK reference for Avaloka 1.0.0: the CLI, the Python SDK, the HTTP API and the generated model service, with examples you can run.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,650&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
@@ -258,7 +258,7 @@ mark.hit { background: var(--warn-bg); color: inherit; }
 
 <aside class="rail" id="rail">
   <div class="rail-top">
-    <a class="brand" href="#overview"><b>Avaloka</b><span>Developer Guide · 1.6</span></a>
+    <a class="brand" href="#overview"><b>Avaloka</b><span>Developer Guide · 1.0.0</span></a>
     <button class="menu-btn" id="menu-btn" aria-expanded="false" aria-controls="rail">Contents</button>
   </div>
   <div class="search">
@@ -307,7 +307,7 @@ mark.hit { background: var(--warn-bg); color: inherit; }
 <!-- ============================================================ OVERVIEW -->
 <section class="doc page wide" id="overview">
   <div class="hero">
-    <p class="eyebrow">Avaloka 1.6 · Apache-2.0</p>
+    <p class="eyebrow">Avaloka 1.0.0 · Apache-2.0</p>
     <h1>Build on an AI data scientist that checks its own work.</h1>
     <p class="lede">Avaloka turns a dataset and a question into an answer you can defend: the analysis, the code that produced it, a validated model when you need one, and the evidence behind every number. This guide shows you how to use it, and how to build it into your own tools.</p>
     <div class="hero-meta">
@@ -464,7 +464,7 @@ avaloka chat  app/sample_data/healthcare_dataset.csv</code></pre></div>
     <li>A header split over two rows, such as a <em>Q1 / Q2</em> band above <em>Revenue / Cost</em>, becomes one set of column names.</li>
     <li>Subtotal and grand-total rows aren't counted as data. If a statement's totals are kept as rows, the result says so.</li>
   </ul>
-  <div class="note warn"><b>Multi-sheet workbooks</b><p>In 1.6 the upload path reads the longest sheet, which may not be the one your question is about. Upload the sheet you mean on its own.</p></div>
+  <div class="note warn"><b>Multi-sheet workbooks</b><p>In 1.0.0 the upload path reads the longest sheet, which may not be the one your question is about. Upload the sheet you mean on its own.</p></div>
 
   <h3>Missing values</h3>
   <p>Words like <code>None</code>, <code>NA</code> and <code>N/A</code> mean <em>missing</em> in a numeric column, but in a text column they're kept as categories. A category literally called "None" stays a category. The exact rule that was applied is recorded with every read, so you can always see which values were treated as missing.</p>
@@ -833,7 +833,7 @@ export MLFLOW_TRACKING_URI=sqlite:///$PWD/mlflow.db   # needed for training
 export SUPABASE_JWT_SECRET=$(openssl rand -hex 32)
 
 langgraph dev --no-browser --port 2024 &amp;
-uvicorn app.api.server:app --port 9000</code></pre></div>
+uvicorn app.api.server:app --port 9000 --loop asyncio</code></pre></div>
   <div class="code out" data-lang="GET /health"><pre><code class="language-json">{"status": "ok", "graph_ready": true, "upstream_reachable": true, "redis_connected": true, "redis_mode": "single"}</code></pre></div>
   <div class="note"><b>Readiness is in the body</b><p><code>/health</code> returns 200 even when Redis or the graph server is down. Check <code>redis_connected</code> and <code>upstream_reachable</code>. Interactive docs are served at <code>/docs</code>.</p></div>
 
@@ -1033,7 +1033,7 @@ if done["training_completed"] and not done["evaluation_beats_baseline"]:
   </table></div>
 
   <footer class="site">
-    <span>Avaloka 1.6 · Apache License 2.0</span>
+    <span>Avaloka 1.0.0 · Apache License 2.0</span>
     <a href="https://avaloka.ai/blog">Blog</a>
     <a href="../INSTALL.md">Install Guide</a>
     <a href="../../README_CLI.md">CLI Guide</a>

@@ -869,27 +869,36 @@ class TestInferenceInput:
         assert "stop_inference_service" in tool_names
         assert "configured service" in SYSTEM_PROMPT
 
-    def test_configure_inference_service_schedules_then_configures(self):
-        state = _make_state(
-            messages=[HumanMessage(content="configure the inference service")],
-            training_result={"mlflow_run_id": "run-123"},
-        )
+    def test_configure_inference_service_enqueues_and_returns_a_job_handle(self):
+        """The node hands the deploy to the infra layer (app/infra/training_tasks)
+        and returns; it no longer schedules a RedBeat start_inference entry and
+        never calls InferenceServiceManager in the turn."""
+        from app.core import ml_store
 
-        scheduled = self.agent._configure_inference_service(state)
-        assert scheduled["configure_inference_service_scheduled"] is True
-        assert scheduled["task_schedule"]["task_type"] == "start_inference"
+        store = ml_store.InMemoryMLStore()
+        ml_store.set_ml_store(store)
+        try:
+            state = _make_state(
+                messages=[HumanMessage(content="configure the inference service")],
+                training_result={"mlflow_run_id": "run-123"},
+            )
+            manager = MagicMock()
+            deploy = MagicMock()
+            deploy.apply_async.return_value = MagicMock(id="celery-task-1")
+            with patch("app.agents.mta_v2.agent.InferenceServiceManager", return_value=manager), \
+                 patch("app.infra.training_tasks._worker_available", return_value=True), \
+                 patch("app.infra.training_tasks.tasks", return_value=(deploy, MagicMock())):
+                out = self.agent._configure_inference_service(state)
 
-        manager = MagicMock()
-        manager.configure_inference_service.return_value = {
-            "backend": "rayserve",
-            "endpoint": "http://avaloka-inference-serve-svc:8000",
-        }
-        with patch("app.agents.mta_v2.agent.InferenceServiceManager", return_value=manager):
-            configured = self.agent._configure_inference_service(scheduled)
-
-        manager.configure_inference_service.assert_called_once_with("run-123")
-        assert configured["configure_inference_service_scheduled"] is False
-        assert configured["inference_service_details"]["backend"] == "rayserve"
+            manager.configure_inference_service.assert_not_called()
+            assert out["configure_inference_service_scheduled"] is False
+            assert not out.get("task_schedule")
+            job = store.get_job(out["ml_job_id"])
+            assert (job.kind, job.mlflow_run_id, job.celery_task_id) == ("deploy_endpoint", "run-123", "celery-task-1")
+            assert store.get_endpoint("run-123").status == "pending"
+            deploy.apply_async.assert_called_once()
+        finally:
+            ml_store.set_ml_store(None)
 
 
 class TestInferenceEncoding:

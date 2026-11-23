@@ -28,6 +28,35 @@ def redact_conn_str(value: Optional[str]) -> str:
         return "***"
 
 
+def redact_secrets(value: Any, secrets: Any = ()) -> str:
+    """``redact_conn_str``, plus every known secret value masked wherever it appears.
+
+    ``secrets`` are the values a transfer is carrying (passwords, connection
+    strings, bucket keys). Each is masked as given and URL-encoded, the form it
+    takes inside a database URL; a URL's own password is masked on its own too.
+    Values shorter than 4 characters are left alone: masking them would shred
+    unrelated text and protect nothing.
+    """
+    from urllib.parse import quote, quote_plus, unquote, urlsplit
+    text = redact_conn_str("" if value is None else str(value))
+    values = []
+    for s in secrets or ():
+        s = "" if s is None else str(s)
+        values.append(s)
+        if "://" in s:
+            try:
+                values.append(unquote(urlsplit(s).password or ""))
+            except ValueError:
+                pass
+    forms = set()
+    for s in values:
+        if len(s) >= 4:
+            forms.update({s, quote_plus(s), quote(s, safe="")})
+    for form in sorted(forms, key=len, reverse=True):
+        text = text.replace(form, "***")
+    return text
+
+
 class db_credentials(BaseModel):
     db_type: str = Field(default="mysql", description="Database dialect (e.g., mysql, postgres, sqlite)")
     host: str = Field(..., description="Hostname or IP address of the database server")

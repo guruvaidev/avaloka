@@ -577,31 +577,38 @@ def test_execution_error_surfaces_real_cause_not_generic(monkeypatch):
 
 # ── AWS/Azure creds mapped to pod env + valid RayJob render ───────────────────
 
-def test_render_cloud_env_vars():
-    from app.data_transfer_docker.gke_run import _render_cloud_env_vars
-    assert _render_cloud_env_vars({}) == ""
-    assert _render_cloud_env_vars(None) == ""
-    out = _render_cloud_env_vars({"AWS_ACCESS_KEY_ID": "ak", "AWS_REGION": "us-east-1"})
-    assert 'AWS_ACCESS_KEY_ID: "ak"' in out
-    assert 'AWS_REGION: "us-east-1"' in out
-    assert out.startswith("      ")  # 6-space indent: nests under env_vars:
+def test_render_secret_env_refs_names_keys_never_values():
+    from app.data_transfer_docker.gke_run import _render_secret_env_refs
+    assert _render_secret_env_refs("dta-x-env", {}, "  ") == ""
+    assert _render_secret_env_refs("dta-x-env", None, "  ") == ""
+    out = _render_secret_env_refs("dta-x-env", {"AWS_ACCESS_KEY_ID": "ak-value", "AWS_REGION": "us-east-1"}, "    ")
+    assert "ak-value" not in out and "us-east-1" not in out
+    assert "    - name: AWS_ACCESS_KEY_ID" in out and "key: AWS_REGION" in out
+    assert out.count("secretKeyRef:") == 2 and out.count("name: dta-x-env") == 2
 
 
-def test_rayjob_injects_cloud_env_vars_and_renders_valid_yaml():
-    from app.data_transfer_docker.gke_run import _render_cloud_env_vars
+def test_rayjob_reads_cloud_env_from_the_job_secret_and_renders_valid_yaml():
+    from app.data_transfer_docker.gke_run import _render_secret_env_refs
+    import re as _re
     tmpl = RAYJOB_TMPL.read_text()
     rendered = (
         tmpl.replace("__RAYJOB_NAME__", "dta-x")
         .replace("__JOB_ID__", "x")
         .replace("__GCS_SECRET_NAME__", "gcs-sa-key")
         .replace("    __INJECTION_SCRIPT__", "    pass")
-        .replace("      __CLOUD_ENV_VARS__", _render_cloud_env_vars({"AWS_ACCESS_KEY_ID": "ak"}))
     )
+    rendered = _re.sub(r"(?m)^([ \t]*)__SECRET_ENV_REFS__[ \t]*\n",
+                       lambda m: _render_secret_env_refs("dta-x-env", {"AWS_ACCESS_KEY_ID": "ak"}, m.group(1)) + "\n",
+                       rendered)
     assert "__" not in rendered  # no leftover placeholders
     docs = list(pyyaml.safe_load_all(rendered))
-    # runtimeEnvYAML is a nested YAML string; the cloud var must land under env_vars.
     inner = pyyaml.safe_load(docs[0]["spec"]["runtimeEnvYAML"])
-    assert inner["env_vars"]["AWS_ACCESS_KEY_ID"] == "ak"
+    assert "AWS_ACCESS_KEY_ID" not in inner["env_vars"]  # never in the CR's runtime env
+    head = docs[0]["spec"]["rayClusterSpec"]["headGroupSpec"]["template"]["spec"]["containers"][0]
+    worker = docs[0]["spec"]["rayClusterSpec"]["workerGroupSpecs"][0]["template"]["spec"]["containers"][0]
+    for container in (head, worker):
+        ref = {e["name"]: e for e in container["env"]}["AWS_ACCESS_KEY_ID"]
+        assert ref["valueFrom"]["secretKeyRef"] == {"name": "dta-x-env", "key": "AWS_ACCESS_KEY_ID"}
 
 
 def test_runtime_requirements_has_no_pathlib_backport():

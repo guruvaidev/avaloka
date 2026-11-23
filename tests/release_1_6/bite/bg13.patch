@@ -1,0 +1,13 @@
+diff --git a/ui/src/routes/proanalysis.index.tsx b/ui/src/routes/proanalysis.index.tsx
+index 1c5d99cc..dace0f7b 100644
+--- a/ui/src/routes/proanalysis.index.tsx
++++ b/ui/src/routes/proanalysis.index.tsx
+@@ -448,7 +448,7 @@ function PreviewPage() {
+             <div className="mx-auto w-full max-w-[640px]">
+               <header className="text-center">
+                 <h1 className="text-display-md font-semibold tracking-tight text-primary">
+-                  {firstName ? `Welcome ${firstName}` : "Welcome"}
++                  {firstName ? `Welcome, ${firstName.charAt(0).toUpperCase()}${firstName.slice(1)}` : "Welcome"}
+                 </h1>
+                 <p className="mt-2 text-sm text-tertiary">
+                   Get started by uploading your data to get instant Insights

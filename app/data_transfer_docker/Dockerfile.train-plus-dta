@@ -1,4 +1,4 @@
-# Merged image for the SHARED `ray-gke-cluster` Ray cluster (dashboard 34.132.134.104:8265).
+# Merged image for the SHARED Ray cluster (the one RAY_DASHBOARD_URL points at).
 #
 # That cluster serves ML training workloads AND — via RAY_DASHBOARD_URL — the DTA
 # data-transfer jobs. Its base image (train-docker-image) has no daft/connectorx, so

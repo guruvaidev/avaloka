@@ -1,0 +1,12 @@
+diff --git a/app/core/celery_app.py b/app/core/celery_app.py
+index 5223219f..3c1f6dd0 100644
+--- a/app/core/celery_app.py
++++ b/app/core/celery_app.py
+@@ -76,7 +76,6 @@ class AvalokaEntry(RedBeatSchedulerEntry):
+             'last_run_at': self.last_run_at,
+         }
+         with get_redis(self.app).pipeline() as pipe:
+-            pipe.hset(self.key, 'definition', json.dumps(definition, cls=AvalokaJSONEncoder))
+             pipe.hsetnx(self.key, 'meta', json.dumps(meta, cls=AvalokaJSONEncoder))
+             pipe.zadd(self.app.redbeat_conf.schedule_key, {self.key: self.score})
+             pipe.execute()

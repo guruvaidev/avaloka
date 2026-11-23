@@ -83,7 +83,7 @@ export function DataSourceGrid({ onSelect, disabled = false }: { onSelect?: (id:
             onClick={() => handleTileClick(s)}
             disabled={s.comingSoon || disabled}
             className={cn(
-              "flex h-[96px] w-full flex-col items-center justify-center gap-1.5 rounded-xl border border-border bg-card px-2 py-2 transition hover:border-primary",
+              "flex h-[96px] w-full flex-col items-center justify-center gap-1.5 rounded-xl border border-border bg-card px-2 py-2 transition hover:border-primary dark:border-white/10 dark:bg-[#131316]",
               (s.comingSoon || disabled) && "cursor-not-allowed opacity-60",
             )}
           >

@@ -181,8 +181,8 @@ def test_execution_agent_node_infra_failure():
 
         result_state = execution_agent_node(state)
 
-    # Provisioning was attempted before giving up.
-    mock_infra.assert_called_once()
+    # Running code no longer provisions infrastructure as a side effect.
+    mock_infra.assert_not_called()
 
     assert "execution_result" in result_state
     assert result_state["execution_result"]["status"] == "failed"

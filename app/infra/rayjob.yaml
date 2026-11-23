@@ -10,6 +10,10 @@ spec:
   ttlSecondsAfterFinished: 600
   backoffLimit: 3
 
+  # No credential is ever rendered into this CR. __CLOUD_SECRET_NAME__ is the
+  # job's own Secret (<rayjob>-env) holding only its connection's keys, which
+  # app/infra/ray_job_runner.py creates owned by this RayJob right after it is
+  # applied and deletes when the job ends. The pods wait for it on their own.
   runtimeEnvYAML: |
     pip:
       - requests==2.26.0
@@ -132,7 +136,7 @@ spec:
     workerGroupSpecs:
       - groupName: small-group
         replicas: 2           # start with 2 workers
-        minReplicas: 1        # scale DOWN to 1 when idle
+        minReplicas: 0        # scale DOWN to 0 when idle (K8-11)
         maxReplicas: 10       # scale UP to 10 for large datasets
         rayStartParams:
           num-cpus: "2"

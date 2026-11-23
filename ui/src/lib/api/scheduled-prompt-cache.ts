@@ -131,3 +131,13 @@ export function relativeTime(iso?: string | null): string {
     `${d}d`;
   return diff >= 0 ? `${rel} ago` : `in ${rel}`;
 }
+
+/**
+ * The Last Run cell. A task that has never run shows "Never", even when a
+ * timestamp is present: RedBeat's last_run_at starts as the creation time
+ * (the schedule anchor), and older servers report it as the last run.
+ */
+export function lastRunLabel(lastRunAt: string | null | undefined, runCount: number): string {
+  if (!lastRunAt || !(runCount > 0)) return "Never";
+  return relativeTime(lastRunAt);
+}

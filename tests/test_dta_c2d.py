@@ -30,7 +30,7 @@ def run_c2d_test():
     )
 
     dest_creds = {
-        "host": "10.111.16.4",
+        "host": "10.0.0.4",
         "port": 5432,
         "user": "avaloka",
         "password": "avaL0kapa$$word",

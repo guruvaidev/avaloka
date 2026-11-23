@@ -1,14 +1,16 @@
 from __future__ import annotations
 import base64
 import hashlib
+import json
 import logging
 import os
 import re
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from fastapi import HTTPException, status
+from fastapi import APIRouter, HTTPException, Request, status
+from pydantic import BaseModel, Field
 
 from app.core.storage import IBlobStore, GCSBlobStore, S3BlobStore, AzureBlobStore
 
@@ -732,3 +734,313 @@ async def normalize_storage_uri(storage_uri: str, conn: Dict[str, Any]) -> str:
     store, prefix = await _store_from_connection_uri(raw, conn)
     base = f"az://{store.account}/{store.container}"
     return f"{base}/{prefix}" if prefix else base
+
+
+# ---------------------------------------------------------------------------
+# Sealed object-store credentials (hotfix/1.6-cloud-keys-sealed; 1.7's D15.3)
+# ---------------------------------------------------------------------------
+#
+# A cloud_datasets row carries its keys sealed (AES-GCM under DB_ENCRYPTION_KEY,
+# the *_ciphertext / *_iv columns). Since migration 20261116130000 the table
+# refuses plaintext keys, so writes go through POST /api/cloud-connections,
+# which seals in this process, and rows written before that are sealed by
+# seal_plaintext_rows() at start-up. Reading stays as it was: get_cloud_connection
+# opens the ciphertext in memory, and every reader (rayjob_submitter,
+# k8s_secrets, the planner, the server routes) works on the opened dict.
+
+CLOUD_PROVIDERS = {"aws": "s3", "s3": "s3", "aws_s3": "s3", "amazon_s3": "s3",
+                   "gcp": "gcs", "gcs": "gcs", "gs": "gcs", "google": "gcs", "google_cloud_platform": "gcs",
+                   "google_cloud_storage": "gcs",
+                   "azure": "azure", "az": "azure", "azure_blob": "azure", "azure_blob_storage": "azure",
+                   "microsoft_azure": "azure"}
+
+
+def seal_row(values: Dict[str, Any]) -> Dict[str, Any]:
+    """Turn plaintext ``access_key``/``secret_key`` in a row dict into the
+    sealed columns. Raises when no key is configured: a row is never written
+    unsealed."""
+    out = dict(values)
+    access, secret = out.pop("access_key", None), out.pop("secret_key", None)
+    if access is None and secret is None and out.get("access_key_ciphertext") and out.get("secret_key_ciphertext"):
+        return out
+    if not (access and secret):
+        raise ValueError("both halves of the key are needed (an access key or account/project id, and its secret)")
+    a_enc, s_enc = encrypt_secret(str(access)), encrypt_secret(str(secret))
+    if not (a_enc and s_enc):
+        raise RuntimeError("DB_ENCRYPTION_KEY is not configured; cloud keys cannot be stored unsealed")
+    out.update(access_key=None, secret_key=None,
+               access_key_ciphertext=a_enc["ciphertext"], access_key_iv=a_enc["iv"],
+               secret_key_ciphertext=s_enc["ciphertext"], secret_key_iv=s_enc["iv"])
+    return out
+
+
+#: The shapes a cloud_datasets row can be in, as the old code wrote them.
+#: ``sealed`` needs nothing; the three in SEALABLE are rewritten in place;
+#: ``needs_reentering`` is a row with no secret anywhere, which only its owner
+#: can repair.
+SHAPES = ("sealed", "plaintext", "gcp_without_project", "raw_ciphertext_no_iv", "needs_reentering")
+SEALABLE = ("plaintext", "gcp_without_project", "raw_ciphertext_no_iv")
+_ROW_COLUMNS = ("id,provider,access_key,secret_key,access_key_ciphertext,access_key_iv,"
+                "secret_key_ciphertext,secret_key_iv")
+
+
+def _half(row: Dict[str, Any], plain_col: str, ct_col: str, iv_col: str) -> Tuple[Optional[str], bool]:
+    """``(plaintext_value, already_sealed)`` for one half of the key pair.
+
+    The old RPC stored the raw value in the *_ciphertext column with no IV: that
+    is plaintext too, and is read as such. A ciphertext with an IV is sealed.
+    """
+    plain = row.get(plain_col)
+    ct, iv = row.get(ct_col), row.get(iv_col)
+    if plain is not None and str(plain) != "":
+        return str(plain), False
+    if ct and not iv:
+        return str(ct), False
+    if ct and iv:
+        return None, True
+    return None, False
+
+
+def gcp_access_for(secret: str) -> str:
+    """The GCP "access key": the service account's project id when the JSON has
+    one, else the marker the new route writes. Never empty."""
+    try:
+        parsed = json.loads(secret)
+        project = parsed.get("project_id") if isinstance(parsed, dict) else None
+    except (ValueError, TypeError):
+        project = None
+    return str(project).strip() if project else "service_account"
+
+
+def classify_row(row: Dict[str, Any]) -> str:
+    """Which SHAPES a row is in. Decided from the row alone, never from a log."""
+    access, access_sealed = _half(row, "access_key", "access_key_ciphertext", "access_key_iv")
+    secret, secret_sealed = _half(row, "secret_key", "secret_key_ciphertext", "secret_key_iv")
+    if access_sealed and secret_sealed:
+        return "sealed"
+    raw = (row.get("access_key_ciphertext") and not row.get("access_key_iv")) or \
+          (row.get("secret_key_ciphertext") and not row.get("secret_key_iv"))
+    if raw and (secret or secret_sealed):
+        return "raw_ciphertext_no_iv"
+    provider = CLOUD_PROVIDERS.get(str(row.get("provider") or "").lower())
+    if (secret or secret_sealed) and not access and not access_sealed and provider == "gcs":
+        return "gcp_without_project"
+    if (access or access_sealed) and (secret or secret_sealed):
+        return "plaintext"
+    return "needs_reentering"
+
+
+def seal_update_for(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The UPDATE that seals ``row``, or ``None`` when its shape is not sealable.
+
+    Only the halves that are plaintext are encrypted; a half already sealed is
+    kept as it is. The result always satisfies check_credentials_sealed: both
+    ciphertexts, both IVs, no plaintext.
+    """
+    shape = classify_row(row)
+    if shape not in SEALABLE:
+        return None
+    access, access_sealed = _half(row, "access_key", "access_key_ciphertext", "access_key_iv")
+    secret, secret_sealed = _half(row, "secret_key", "secret_key_ciphertext", "secret_key_iv")
+    if shape == "gcp_without_project":
+        access = gcp_access_for(secret or "")
+    update: Dict[str, Any] = {"access_key": None, "secret_key": None}
+    for value, sealed, ct_col, iv_col in ((access, access_sealed, "access_key_ciphertext", "access_key_iv"),
+                                          (secret, secret_sealed, "secret_key_ciphertext", "secret_key_iv")):
+        if sealed:
+            continue
+        enc = encrypt_secret(str(value))
+        if not enc:
+            raise RuntimeError("DB_ENCRYPTION_KEY is not configured; cloud keys cannot be stored unsealed")
+        update[ct_col], update[iv_col] = enc["ciphertext"], enc["iv"]
+    return update
+
+
+def _candidate_rows(client: Any, table: str) -> List[Dict[str, Any]]:
+    """Every row that may hold a plaintext key: a non-NULL plaintext column, or a
+    ciphertext column with no IV (the old RPC's shape). One query per shape,
+    joined on id; PostgREST has no OR across these without a filter string."""
+    found: Dict[Any, Dict[str, Any]] = {}
+    queries = (
+        lambda: client.table(table).select(_ROW_COLUMNS).not_.is_("access_key", "null"),
+        lambda: client.table(table).select(_ROW_COLUMNS).not_.is_("secret_key", "null"),
+        lambda: client.table(table).select(_ROW_COLUMNS).not_.is_("access_key_ciphertext", "null").is_("access_key_iv", "null"),
+        lambda: client.table(table).select(_ROW_COLUMNS).not_.is_("secret_key_ciphertext", "null").is_("secret_key_iv", "null"),
+    )
+    for build in queries:
+        for row in (getattr(build().execute(), "data", None) or []):
+            found[row.get("id")] = row
+    return list(found.values())
+
+
+def count_plaintext_rows(client: Any, table: str = SUPABASE_CLOUD_CONN_TABLE) -> Dict[str, int]:
+    """How many rows are in each unsealed shape. Counts only: this is what the
+    dry run prints. ``needs_reentering`` is a row with no secret anywhere."""
+    counts = {shape: 0 for shape in SHAPES if shape != "sealed"}
+    for row in _candidate_rows(client, table):
+        shape = classify_row(row)
+        if shape != "sealed":
+            counts[shape] += 1
+    return counts
+
+
+def seal_plaintext_rows(client: Any, table: str = SUPABASE_CLOUD_CONN_TABLE, *, apply: bool = True) -> int:
+    """Seal every row in a sealable shape. Returns how many were (or, with
+    ``apply=False``, would be) sealed.
+
+    Run at API start-up and by ``python -m app.api.cloud_connections seal``
+    (a dry run unless ``--apply``). Each row is one UPDATE that writes the
+    missing ciphertext and IV and nulls the plaintext, which is the only shape
+    check_credentials_sealed accepts; a GCP row written without a project id
+    gets the project from its service account, else "service_account", as the
+    new route does. A row with no secret anywhere is left for its owner and
+    counted, never printed.
+    """
+    if _get_aesgcm_key() is None:
+        raise RuntimeError("DB_ENCRYPTION_KEY is not configured; plaintext rows cannot be sealed")
+    sealed = 0
+    for row in _candidate_rows(client, table):
+        shape = classify_row(row)
+        if shape == "sealed":
+            continue
+        if shape == "needs_reentering":
+            logger.warning("[cloud-credentials] row %s has no secret in any column; its owner must re-enter it", row.get("id"))
+            continue
+        if apply:
+            client.table(table).update(seal_update_for(row)).eq("id", row["id"]).execute()
+        sealed += 1
+    if sealed and apply:
+        logger.info("[cloud-credentials] sealed %d cloud connection(s) that carried plaintext keys", sealed)
+    return sealed
+
+
+class CloudConnectionIn(BaseModel):
+    """What the UI posts to create a connection; the keys never go anywhere else."""
+
+    name: str = Field(min_length=1, max_length=200)
+    provider: str
+    bucket_name: str = Field(min_length=1)
+    region: Optional[str] = None
+    endpoint_url: Optional[str] = None
+    project_id: Optional[str] = None
+    access_key: Optional[str] = None
+    secret_key: str = Field(min_length=1)
+
+
+def build_router(resolve_user_id) -> APIRouter:
+    """``POST /api/cloud-connections``: the one place a cloud key enters the
+    database, sealed in this process. The UI posts here (ui/src/lib/api/backendApi.ts)."""
+    router = APIRouter(prefix="/api/cloud-connections", tags=["cloud-connections"])
+
+    @router.post("", status_code=status.HTTP_201_CREATED)
+    async def create_cloud_connection(request: Request, body: CloudConnectionIn) -> Dict[str, Any]:
+        user_id = resolve_user_id(request)
+        if not user_id:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing or invalid auth token")
+        provider = CLOUD_PROVIDERS.get(body.provider.strip().lower())
+        if provider is None:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "provider must be aws, gcp or azure")
+        access = (body.access_key or "").strip()
+        secret = body.secret_key
+        if provider == "gcs":
+            try:
+                parsed = json.loads(secret)
+                if not isinstance(parsed, dict):
+                    raise ValueError
+            except ValueError:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "the service account key must be a JSON object")
+            if body.project_id and not parsed.get("project_id"):
+                parsed["project_id"] = body.project_id.strip()
+            secret = json.dumps(parsed)
+            access = (body.project_id or parsed.get("project_id") or "service_account").strip()
+        elif not access:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                                "an access key (S3) or storage account (Azure) is needed with the secret")
+        stored_provider = {"s3": "aws", "gcs": "gcp", "azure": "azure"}[provider]
+        row = {"user_id": str(user_id), "name": body.name.strip(), "provider": stored_provider,
+               "region": (body.region or "").strip() or None,
+               "endpoint_url": (body.endpoint_url or "").strip() or None,
+               "bucket_name": body.bucket_name.strip(), "connection_status": "active",
+               "access_key": access, "secret_key": secret}
+        try:
+            sealed = seal_row(row)
+        except RuntimeError as exc:
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc))
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
+        assert sealed.get("access_key") is None and sealed.get("secret_key") is None
+        try:
+            from app.agents.sampling_persistence import get_supabase_client
+            client = get_supabase_client()
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, f"cloud connections need Supabase: {type(exc).__name__}")
+        try:
+            res = client.table(SUPABASE_CLOUD_CONN_TABLE).insert(
+                {k: v for k, v in sealed.items() if v is not None}).execute()
+        except Exception as exc:  # noqa: BLE001
+            logger.error("[cloud-connections] insert failed: %s", type(exc).__name__)
+            raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Could not save the connection")
+        data = (getattr(res, "data", None) or [{}])[0] or {}
+        return {"id": data.get("id"), "name": data.get("name", row["name"]), "provider": stored_provider,
+                "bucket_name": data.get("bucket_name", row["bucket_name"])}
+
+    return router
+
+
+def seal_at_startup() -> Optional[int]:
+    """Best-effort start-up pass: seal plaintext rows when Supabase and the key
+    are configured. Never raises; the API must start either way."""
+    try:
+        from app.agents.sampling_persistence import get_supabase_client
+        if _get_aesgcm_key() is None:
+            return None
+        return seal_plaintext_rows(get_supabase_client())
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[cloud-credentials] start-up sealing skipped: %s", type(exc).__name__)
+        return None
+
+
+def seal_cli(argv: list[str], *, client_factory: Any = None, out: Any = None) -> int:
+    """``seal`` is a dry run that prints counts; ``seal --apply`` seals. Never a value."""
+    import sys as _sys
+    write = (out or _sys.stdout).write
+    if not argv or argv[0] != "seal" or any(a not in ("--apply",) for a in argv[1:]):
+        write("usage: python -m app.api.cloud_connections seal [--apply]\n")
+        return 2
+    apply = "--apply" in argv[1:]
+    if _get_aesgcm_key() is None:
+        write("DB_ENCRYPTION_KEY is not configured; nothing can be sealed\n")
+        return 1
+    if client_factory is None:
+        from app.agents.sampling_persistence import get_supabase_client
+        client_factory = get_supabase_client
+    client = client_factory()
+    counts = count_plaintext_rows(client)
+    sealable = counts["plaintext"] + counts["gcp_without_project"] + counts["raw_ciphertext_no_iv"]
+    shapes = (f"{counts['plaintext']} with a plaintext key pair, {counts['gcp_without_project']} GCP without a "
+              f"project id (sealed with the service account's project, else 'service_account'), "
+              f"{counts['raw_ciphertext_no_iv']} with raw text in the ciphertext columns from the old RPC")
+    if not apply:
+        write(f"dry run: {sealable} row(s) would be sealed: {shapes}. "
+              f"{counts['needs_reentering']} row(s) have no secret in any column and need re-entering by their owner. "
+              "Run with --apply to seal.\n")
+        return 0
+    sealed = seal_plaintext_rows(client, apply=True)
+    write(f"sealed {sealed} row(s): {shapes}. "
+          f"{counts['needs_reentering']} row(s) have no secret in any column and need re-entering by their owner.\n")
+    remaining = count_plaintext_rows(client)
+    if any(remaining.values()):
+        write("Rows remain unsealed (see above), so the deferred VALIDATE would fail; seal or re-enter them first.\n")
+    else:
+        # The sealer reaches the database through the REST client, which cannot
+        # see pg_constraint, so the check and the fix are both printed.
+        write("Every row is sealed. check_credentials_sealed was added NOT VALID; if it is not validated yet\n"
+              "  (SELECT convalidated FROM pg_constraint WHERE conname = 'check_credentials_sealed';  -- f)\n"
+              "validate it now:\n"
+              "  ALTER TABLE public.cloud_datasets VALIDATE CONSTRAINT check_credentials_sealed;\n")
+    return 0
+
+
+if __name__ == "__main__":  # pragma: no cover
+    import sys
+    raise SystemExit(seal_cli(sys.argv[1:]))

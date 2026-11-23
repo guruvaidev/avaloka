@@ -50,7 +50,7 @@ def test_ordinary_columns_are_not_pii():
 
 
 def test_ip_addresses_detected():
-    assert classify_column("src", ["10.0.0.1", "192.168.1.7", "8.8.8.8"]).kind is PIIKind.IP_ADDRESS
+    assert classify_column("src", ["10.0.0.1", "192.168.1.7", "198.51.100.8"]).kind is PIIKind.IP_ADDRESS
 
 
 def test_scan_reports_residual_risk_from_quasi_identifiers():

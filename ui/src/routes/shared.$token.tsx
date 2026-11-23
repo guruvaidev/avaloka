@@ -228,8 +228,8 @@ function SharedAnalysisPage() {
 
 
   return (
-    <div className="min-h-screen bg-primary text-primary">
-      <header className="border-b border-secondary bg-primary px-6 py-4">
+    <div className="min-h-screen bg-primary text-primary dark:bg-[#0b0d10]">
+      <header className="border-b border-secondary bg-primary px-6 py-4 dark:border-white/10 dark:bg-[#111418]">
         <div className="mx-auto max-w-6xl">
           <p className="text-xs uppercase tracking-wide text-tertiary">Shared analysis · Read-only</p>
           <h1 className="mt-1 text-xl font-semibold text-primary">{payload.analysis.name}</h1>
@@ -241,11 +241,11 @@ function SharedAnalysisPage() {
 
       <main className="mx-auto max-w-6xl space-y-6 px-6 py-6">
         {userSlides.length > 0 ? (
-          <section className="rounded-xl border border-secondary bg-primary p-4">
+          <section className="rounded-xl border border-secondary bg-primary p-4 dark:border-white/10 dark:bg-[#111418]">
             <h2 className="mb-3 text-sm font-semibold text-primary">Chart</h2>
             <div className="grid gap-4 sm:grid-cols-2">
               {userSlides.map((slide: any, i: number) => (
-                <div key={i} className="rounded-lg border border-secondary bg-primary p-3">
+                <div key={i} className="rounded-lg border border-secondary bg-primary p-3 dark:border-white/10 dark:bg-[#15191f]">
                   <p className="mb-2 text-sm font-medium text-primary">{slide.title}</p>
                   <DynamicChart slide={slide} height={240} />
                 </div>
@@ -255,7 +255,7 @@ function SharedAnalysisPage() {
         ) : null}
 
         {outputRows.length > 0 ? (
-          <section className="rounded-xl border border-secondary bg-primary p-4">
+          <section className="rounded-xl border border-secondary bg-primary p-4 dark:border-white/10 dark:bg-[#111418]">
             <h2 className="mb-3 text-sm font-semibold text-primary">Data table</h2>
             <AnalysisOutputTable rows={outputRows} title="Result" pageSize={10} />
           </section>
@@ -275,8 +275,8 @@ function SharedAnalysisPage() {
                   key={m.id}
                   className={
                     m.role === "user"
-                      ? "rounded-lg border border-secondary bg-secondary/30 p-3"
-                      : "rounded-lg border border-secondary bg-primary p-3"
+                      ? "rounded-lg border border-secondary bg-secondary/30 p-3 dark:border-white/10 dark:bg-[#15191f]"
+                      : "rounded-lg border border-secondary bg-primary p-3 dark:border-white/10 dark:bg-[#111418]"
                   }
                 >
                   <p className="mb-1 text-xs font-medium uppercase tracking-wide text-tertiary">

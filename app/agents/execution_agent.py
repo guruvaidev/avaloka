@@ -28,16 +28,50 @@ from pathlib import Path
 from app.graph.etl_state import ETLState
 from app.utils import generate_filename_timestamp
 from app.infra.ray_job_runner import run_rayjob_from_yaml
+from app.core import job_ledger
+
+
+def _looks_like_uuid(value) -> bool:
+    try:
+        import uuid as _uuid
+        return bool(value) and str(_uuid.UUID(str(value))) == str(value).lower()
+    except (ValueError, AttributeError, TypeError):
+        return False
+from app.agents.output_contract import (
+    check_output,
+    frame_from_output_file,
+    local_reference,
+    parse_reference,
+    reference_script,
+    refusal_text,
+    spec_from_state,
+)
 
 import asyncio
 import concurrent.futures
 from urllib.parse import urlparse
 
 from app.api.cloud_connections import get_cloud_connection
-from app.infra.k8s_secrets import create_cloud_secret, kubectl_delete_secret
+from app.infra.k8s_secrets import cloud_secret_env
+from app.executor.env import scrubbed_env
+from app.executor.execute_service import URL_ENV as EXECUTE_SERVICE_URL_ENV, auth_headers, configured_host_port
 
 logger = logging.getLogger(__name__)
-AVALOKA_LOCAL_EXEC_TIMEOUT = 120
+AVALOKA_LOCAL_EXEC_TIMEOUT = 180
+AVALOKA_FULL_DATA_EXEC_TIMEOUT = 300
+
+
+def _get_local_exec_timeout(fidelity: Optional[str] = None) -> int:
+    """Resolve local subprocess timeout, honoring AVALOKA_LOCAL_EXEC_TIMEOUT env override."""
+    env_val = os.getenv("AVALOKA_LOCAL_EXEC_TIMEOUT")
+    if env_val:
+        try:
+            return int(env_val)
+        except ValueError:
+            pass
+    if fidelity == "entire_dataset":
+        return AVALOKA_FULL_DATA_EXEC_TIMEOUT
+    return AVALOKA_LOCAL_EXEC_TIMEOUT
 
 
 import os
@@ -54,6 +88,7 @@ try:
 except Exception:
     pass
 import pandas as pd
+import numpy as np
 import json as _avaloka_json
 
 def avaloka_result(value, kind=None, columns=None, **kw):
@@ -340,9 +375,14 @@ def render_rayjob_yaml(
 
     y = re.sub(r"(?m)^(\s*)namespace:\s*\S+\s*$", rf"\1namespace: {namespace}", y)
 
-    y = re.sub(r"(?m)^(\s*)replicas:\s*\d+\s*$",    rf"\1replicas: {workers}", y)
-    y = re.sub(r"(?m)^(\s*)minReplicas:\s*\d+\s*$", rf"\1minReplicas: {workers}", y)
-    y = re.sub(r"(?m)^(\s*)maxReplicas:\s*\d+\s*$", rf"\1maxReplicas: {workers}", y)
+    # NEW-RS-01: count lines may end in a comment (the shipped rayjob.yaml's
+    # do), so anchor on the key and allow one; the comment goes with the old
+    # number. Anchored at end of line, the requested count was ignored.
+    # K8-10/K8-11: idle workers scale to zero. minReplicas used to be pinned to
+    # the worker count (== maxReplicas), which left the autoscaler no room.
+    y = re.sub(r"(?m)^([ \t]*)replicas:[ \t]*\d+[ \t]*(?:#.*)?$", rf"\1replicas: {workers}", y)
+    y = re.sub(r"(?m)^([ \t]*)minReplicas:[ \t]*\d+[ \t]*(?:#.*)?$", r"\1minReplicas: 0", y)
+    y = re.sub(r"(?m)^([ \t]*)maxReplicas:[ \t]*\d+[ \t]*(?:#.*)?$", rf"\1maxReplicas: {workers}", y)
 
     y = y.replace("__DATA_SOURCE_URI__", data_uri or "")
     y = y.replace("__OUTPUT_ARTIFACT_URI__", output_artifact_uri or "")
@@ -529,7 +569,15 @@ def _sanitize_k8s_name(name: str, max_len: int = 63) -> str:
 # ---------------------------------------------------------------------------
 
 def get_service_details(infrastructure_provisioned: Dict[str, Any]) -> Dict[str, Any]:
-    """Extract service IP and port from infrastructure details"""
+    """Where the ``/execute`` service is.
+
+    The deployment's ``AVALOKA_EXECUTE_SERVICE_URL`` (the Helm chart sets it
+    when ``executeService.enabled``) wins. Otherwise the address an earlier
+    provisioning step recorded, if any.
+    """
+    configured = configured_host_port()
+    if configured:
+        return {"status": "success", "service_ip": configured[0], "service_port": configured[1]}
     if not infrastructure_provisioned or infrastructure_provisioned.get("status") != "provisioned":
         return {
             "status": "failed",
@@ -540,7 +588,8 @@ def get_service_details(infrastructure_provisioned: Dict[str, Any]) -> Dict[str,
     service_port = None
 
     for outcome in infrastructure_provisioned.get("details", []):
-        if outcome.get("step_name") == "Get infra-agent-service IP/Port" and outcome.get("status") == "SUCCESS":
+        if outcome.get("step_name") in ("Get infra-agent-service IP/Port", "Locate execute service") \
+                and outcome.get("status") == "SUCCESS":
             service_ip = outcome.get("details", {}).get("ip")
             service_port = outcome.get("details", {}).get("port")
             break
@@ -620,7 +669,10 @@ def execute_code_on_k8s(
     try:
         logger.info(f"Sending code execution request to {url}")
         logger.info(f"Modified code being sent:\n{modified_code}")
-        res = requests.post(url, json=payload, timeout=timeout)
+        headers = auth_headers()
+        if not headers:
+            logger.warning("EXECUTE_SERVICE_TOKEN is not set; the execute service will refuse this call")
+        res = requests.post(url, json=payload, headers=headers, timeout=timeout)
         logger.info(f"Response status code: {res.status_code}")
         logger.info(f"Response headers: {dict(res.headers)}")
         res.raise_for_status()
@@ -709,18 +761,17 @@ def execution_agent_node(state: ETLState) -> ETLState:
     infrastructure_provisioned = state.get("infrastructure_provisioned", {})
     service_details = get_service_details(infrastructure_provisioned)
 
-    if service_details.get("message") == "Infrastructure not properly provisioned":
-        logger.warning("Infrastructure not properly provisioned; attempting reprovision on GCP python-docker.")
-        state.update({
-            "infrastructure_request": {"type": "gcp", "app_type": "python-docker"}
-        })
-        state = infra_agent_node(state)
-        infrastructure_provisioned = state.get("infrastructure_provisioned", {})
-        service_details = get_service_details(infrastructure_provisioned)
-        logger.debug("Service details after reprovision attempt: %s", service_details)
-
+    # No silent provisioning here. This used to call infra_agent_node for GCP
+    # python-docker, which created a cluster and docker-built and kubectl-applied
+    # an unauthenticated LoadBalancer exec service, as a side effect of running
+    # an analysis. Provisioning now needs the user's confirmation (planner), and
+    # the service itself ships with the Helm chart (executeService.enabled).
     if service_details.get("status") != "success":
-        message = f"Infrastructure service not available: {service_details.get('message')}"
+        message = (
+            f"Infrastructure service not available: {service_details.get('message')}. "
+            f"The execute service is deployed by the Helm chart (executeService.enabled), "
+            f"which sets {EXECUTE_SERVICE_URL_ENV}."
+        )
         new_state = state.copy()
         new_state.update({
             "messages": new_state.get("messages", []) + [AIMessage(content=message)],
@@ -886,7 +937,8 @@ def execution_agent_node(state: ETLState) -> ETLState:
             postgres_client.connect()
             postgres_client.record_artifact(
                 query=query_intent,
-                artifact_metadata={"file_data": file_data, "status": "success", "session": session_id},
+                artifact_metadata={"file_data": file_data, "status": "success", "session": session_id,
+                                   "thread_id": new_state.get("thread_id")},
                 user_id=new_state.get("user_id", "default"),
             )
         except Exception as e:
@@ -900,7 +952,19 @@ def execution_agent_node(state: ETLState) -> ETLState:
 # ---------------------------------------------------------------------------
 
 def execution_agent_node_local(state: ETLState) -> ETLState:
-    """LangGraph node that executes Python code locally"""
+    """LangGraph node that executes Python code locally.
+
+    When the turn was meant for Ray (``ray_fallback_reason`` is set), the reply
+    and the run record say that it ran locally, on how many rows, and why.
+    """
+    reason = state.get("ray_fallback_reason")
+    new_state = _execution_agent_node_local(state)
+    if reason:
+        new_state = _label_ray_local_fallback(new_state, state, reason)
+    return new_state
+
+
+def _execution_agent_node_local(state: ETLState) -> ETLState:
     logger.info("Execution Agent: Starting local execution process")
     started = time.monotonic()
 
@@ -930,6 +994,7 @@ def execution_agent_node_local(state: ETLState) -> ETLState:
         input_data_location=resolved_input_location,
         output_location=candidate_output_location,
         read_path_map=read_path_map,
+        analysis_fidelity=state.get("analysis_fidelity"),
     )
 
     new_state = state.copy()
@@ -1201,7 +1266,8 @@ def execution_agent_node_local(state: ETLState) -> ETLState:
             postgres_client.connect()
             postgres_client.record_artifact(
                 query=query_intent,
-                artifact_metadata={"file_data": file_data, "status": execution_status, "session": session_id},
+                artifact_metadata={"file_data": file_data, "status": execution_status, "session": session_id,
+                                   "thread_id": new_state.get("thread_id")},
                 user_id=new_state.get("user_id", "default"),
             )
         except Exception as e:
@@ -1216,6 +1282,9 @@ _SCHEDULED_EXECUTION_DEPLOYMENT = os.getenv(
 _SCHEDULED_EXECUTION_SELECTOR = os.getenv(
     "AVALOKA_SCHEDULED_EXECUTION_SELECTOR",
     "app.kubernetes.io/component=celery-executor",
+)
+_API_POD_SELECTOR = os.getenv(
+    "AVALOKA_API_POD_SELECTOR", "app.kubernetes.io/component=api"
 )
 _SCHEDULED_EXECUTION_SCRIPT = "\n".join([
     "import contextlib, io, json, sys",
@@ -1240,7 +1309,7 @@ def _run_scheduled_pod_command(args: list[str], **kwargs) -> subprocess.Complete
     return result
 
 
-def _get_scheduled_execution_pod() -> tuple[str, str]:
+def _get_scheduled_execution_pod() -> tuple[str, str, str]:
     namespace = os.getenv(
         "AVALOKA_SCHEDULED_EXECUTION_NAMESPACE",
         os.getenv("POD_NAMESPACE", os.getenv("K8S_NAMESPACE", "default")),
@@ -1262,7 +1331,17 @@ def _get_scheduled_execution_pod() -> tuple[str, str]:
     pod_name = result.stdout.strip()
     if not pod_name:
         raise RuntimeError("Scheduled execution Deployment has no ready pod")
-    return namespace, pod_name
+    result = _run_scheduled_pod_command(
+        [
+            "get", "pods", "-n", namespace, "-l", _API_POD_SELECTOR,
+            "-o", "jsonpath={.items[0].metadata.name}",
+        ],
+        timeout=30,
+    )
+    api_pod_name = result.stdout.strip()
+    if not api_pod_name:
+        raise RuntimeError("Api Deployment has no ready pod")
+    return namespace, pod_name, api_pod_name
 
 
 _SCHEDULED_INPUT_PATH_FIELDS = (
@@ -1392,7 +1471,31 @@ def execution_agent_node_scheduled_pod(state: ETLState) -> ETLState:
     original_output_path = state.get("output_location")
     remote_output_path = None
     try:
-        namespace, pod_name = _get_scheduled_execution_pod()
+        namespace, pod_name, api_pod_name = _get_scheduled_execution_pod()
+
+        candidates = [("dataset", state.get("data_source_location"))]
+        candidates.extend(
+            ("multi-dataset input", dataset.get("data_source_location"))
+            for dataset in state.get("multi_dataset_state") or []
+            if isinstance(dataset, dict)
+        )
+
+        for _, path in candidates:
+            r = _run_scheduled_pod_command(
+                ["exec", "-n", namespace, api_pod_name, "--", "test", "-e", path],
+                timeout=30,
+            )
+
+            if r.returncode == 0:
+                local_dir = os.path.dirname(path)
+                if local_dir:
+                    os.makedirs(local_dir, exist_ok=True)
+
+                r = _run_scheduled_pod_command(
+                    ["cp", f"{namespace}/{api_pod_name}:{path}", path],
+                    timeout=30,
+                )
+
 
         from app.services import storage_service
 
@@ -1700,7 +1803,8 @@ def execution_agent_node_ssh(state: ETLState, server: str) -> ETLState:
             postgres_client.connect()
             postgres_client.record_artifact(
                 query=query_intent,
-                artifact_metadata={"file_data": file_data, "status": execution_status, "session": session_id},
+                artifact_metadata={"file_data": file_data, "status": execution_status, "session": session_id,
+                                   "thread_id": new_state.get("thread_id")},
                 user_id=new_state.get("user_id", "default"),
             )
         except Exception as e:
@@ -1712,6 +1816,75 @@ def execution_agent_node_ssh(state: ETLState, server: str) -> ETLState:
 # ---------------------------------------------------------------------------
 # Ray-specific helpers
 # ---------------------------------------------------------------------------
+
+RAY_NO_CONNECTION_REASON = "no cloud storage connection is linked to this dataset"
+
+
+def _is_scheduled_run(state: Dict[str, Any]) -> bool:
+    """True inside a Celery scheduled run (the scheduler tags schedule_id)."""
+    from app.core.scheduled_run_context import current_scheduled_run
+    return bool(state.get("schedule_id")) or current_scheduled_run() is not None
+
+
+def _local_input_row_count(path: Optional[str]) -> Optional[int]:
+    """Data rows in a local CSV or Parquet file; None when not cheaply known."""
+    try:
+        p = str(path or "")
+        if not p or not os.path.isfile(p):
+            return None
+        if p.lower().endswith(".parquet"):
+            import pyarrow.parquet as pq
+            return int(pq.ParquetFile(p).metadata.num_rows)
+        if p.lower().endswith((".csv", ".tsv", ".txt")):
+            breaks, last = 0, b"\n"
+            with open(p, "rb") as fh:
+                for block in iter(lambda: fh.read(8 * 1024 * 1024), b""):
+                    breaks += block.count(b"\n")
+                    last = block[-1:]
+            return max(0, breaks - 1 + (0 if last == b"\n" else 1))
+    except Exception:
+        logger.debug("row count failed for %s", path, exc_info=True)
+    return None
+
+
+def ray_local_fallback_note(reason: str, rows: Optional[int]) -> str:
+    """The line a reply carries when a turn meant for Ray ran locally."""
+    where = f"on {rows:,} rows" if rows is not None else "on the local copy of the data"
+    return f"\n\n> Note: this ran locally {where}, not on Ray, because {reason}."
+
+
+def _label_ray_local_fallback(new_state: dict, state: dict, reason: str) -> dict:
+    """Put a Ray-to-local fallback in the reply and on the run record."""
+    input_path = _resolve_local_execution_input(
+        state, state.get("data_source_location"), state.get("output_location")
+    )
+    rows = _local_input_row_count(input_path)
+    note = ray_local_fallback_note(reason, rows)
+    new_state = dict(new_state)
+    er = dict(new_state.get("execution_result") or {})
+    er["ray_fallback"] = {"from": "k8s-ray", "to": "local", "reason": reason,
+                          "rows_used": rows, "note": note}
+    new_state["execution_result"] = er
+    msgs = list(new_state.get("messages") or [])
+    before = len(state.get("messages") or [])
+    for i in range(len(msgs) - 1, before - 1, -1):
+        if isinstance(msgs[i], AIMessage):
+            msgs[i] = AIMessage(content=str(msgs[i].content).rstrip() + note)
+            break
+    else:
+        msgs.append(AIMessage(content=note.strip()))
+    new_state["messages"] = msgs
+    # Consumed: a later turn must not inherit this turn's fallback.
+    new_state["ray_fallback_reason"] = None
+    logger.warning("ray_fallback to=local reason=%r rows=%s", reason, rows)
+    return new_state
+
+
+# The batch Ray script runs the generated analysis on this many rows (the
+# first rows of the file) and reports that scope; it does not analyse the
+# whole file. See _build_ray_wrapper and _ray_data_scope.
+RAY_ANALYSIS_SAMPLE_ROWS = 50_000
+
 
 def _size_bytes(uri: str) -> int:
     """Best-effort file size from cloud URI. Returns 0 on failure."""
@@ -1749,6 +1922,9 @@ def _build_ray_wrapper(data_uri: str, output_artifact_uri: str, output_metrics_u
         f"OUTPUT_ARTIFACT_URI = {repr(output_artifact_uri)}",
         f"OUTPUT_METRICS_URI = {repr(output_metrics_uri)}",
         "print('DATA_SOURCE_URI =', repr(DATA_SOURCE_URI))",
+        "# Parquet is binary: its rows come from the file's own metadata and its",
+        "# sample from the Arrow reader. Everything else is read as delimited text.",
+        "IS_PARQUET = DATA_SOURCE_URI.split('?', 1)[0].lower().endswith(('.parquet', '.pq'))",
         "",
         "def _gcs_token():",
         "    bundled = 'gcp_sa.json'",
@@ -1792,10 +1968,15 @@ def _build_ray_wrapper(data_uri: str, output_artifact_uri: str, output_metrics_u
         "num_workers = len(workers)",
         "print('cluster_resources =', ray.cluster_resources())",
         "",
-        "# ---- true partitioned read — each worker reads its own chunk ----",
-        "@ray.remote(num_cpus=1, max_retries=3)",
-        "def process_partition(uri, partition_id, total, row_offset, rows_per_partition):",
-        "    import pandas as pd, fsspec, os, io, time",
+        "# ---- row count: each worker counts the lines in its own byte range ----",
+        "# The ranges tile the file exactly, so every byte is read once and the",
+        "# total is the file's real row count (a quoted field that holds a line",
+        "# break counts as an extra row). Nothing here is analysed; see SAMPLE_ROWS.",
+        "PARTITION_MEMORY = int(os.getenv('AVALOKA_RAY_PARTITION_MEMORY_MB', '900')) * 1024 * 1024",
+        "",
+        "@ray.remote(num_cpus=1, memory=PARTITION_MEMORY, max_retries=3)",
+        "def process_partition(uri, partition_id, total, byte_start, byte_end):",
+        "    import fsspec, os, time",
         "    from pathlib import Path",
         "    opts = {}",
         "    if uri.startswith('gs://') or uri.startswith('gcs://'):",
@@ -1815,62 +1996,120 @@ def _build_ray_wrapper(data_uri: str, output_artifact_uri: str, output_metrics_u
         "    from ray.util import get_node_ip_address",
         "    node_ip = get_node_ip_address()",
         "    t0 = time.time()",
-        "    print(f'Partition {partition_id}/{total} on node {node_ip}: row_offset={row_offset} nrows={rows_per_partition}')",
-        "    BYTES_PER_ROW = 130",
-        "    byte_offset = row_offset * BYTES_PER_ROW",
-        "    read_size = rows_per_partition * BYTES_PER_ROW * 3",
+        "    print(f'Partition {partition_id}/{total} on node {node_ip}: bytes {byte_start}-{byte_end}')",
+        "    newlines, read = 0, 0",
         "    with fsspec.open(uri, 'rb', **opts) as fh:",
-        "        fh.seek(0)",
-        "        header_bytes = fh.readline()",
-        "        header = header_bytes.decode('utf-8', errors='replace').rstrip('\\n\\r').split(',')",
-        "        if row_offset > 0:",
-        "            fh.seek(byte_offset)",
-        "            fh.readline()",  # align to row boundary
-        "        raw = fh.read(read_size)",
-        "    buf = io.BytesIO(header_bytes + raw)",
-        "    try:",
-        "        chunk = pd.read_csv(buf, names=header, nrows=rows_per_partition, encoding='utf-8')",
-        "    except UnicodeDecodeError:",
-        "        buf.seek(0)",
-        "        chunk = pd.read_csv(buf, names=header, nrows=rows_per_partition, encoding='latin1')",
+        "        fh.seek(byte_start)",
+        "        while read < byte_end - byte_start:",
+        "            block = fh.read(min(8 * 1024 * 1024, byte_end - byte_start - read))",
+        "            if not block: break",
+        "            newlines += block.count(b'\\n')",
+        "            read += len(block)",
         "    elapsed = time.time() - t0",
-        "    print(f'Partition {partition_id} done: {len(chunk)} rows in {elapsed:.1f}s on {node_ip}')",
-        "    return {'partition_id': partition_id, 'rows': len(chunk), 'node_ip': node_ip,",
-        "            'columns': list(chunk.columns), 'elapsed_s': elapsed}",
+        "    print(f'Partition {partition_id} done: {newlines} line breaks in {read} bytes in {elapsed:.1f}s on {node_ip}')",
+        "    return {'partition_id': partition_id, 'rows': newlines, 'bytes': read,",
+        "            'node_ip': node_ip, 'elapsed_s': elapsed}",
         "",
-        "# ---- calculate partition sizes dynamically ----",
+        "@ray.remote(num_cpus=1, max_retries=3)",
+        "def process_parquet_partition(uri, partition_id, total, row_groups):",
+        "    # Rows and bytes of these row groups, from the footer metadata only.",
+        "    import fsspec, time",
+        "    import pyarrow.parquet as pq",
+        "    from ray.util import get_node_ip_address",
+        "    node_ip = get_node_ip_address()",
+        "    t0 = time.time()",
+        "    with fsspec.open(uri, 'rb', **_storage_options(uri)) as fh:",
+        "        md = pq.ParquetFile(fh).metadata",
+        "        rows = sum(md.row_group(i).num_rows for i in row_groups)",
+        "        nbytes = sum(md.row_group(i).total_byte_size for i in row_groups)",
+        "    elapsed = time.time() - t0",
+        "    print(f'Partition {partition_id}/{total} on node {node_ip}: row groups {row_groups[0]}-{row_groups[-1]}, {rows} rows')",
+        "    return {'partition_id': partition_id, 'rows': rows, 'bytes': nbytes,",
+        "            'node_ip': node_ip, 'elapsed_s': elapsed}",
+        "",
+        "def _ends_with_newline(uri, size):",
+        "    try:",
+        "        with fsspec.open(uri, 'rb', **_storage_options(uri)) as fh:",
+        "            fh.seek(size - 1)",
+        "            return fh.read(1) == b'\\n'",
+        "    except Exception:",
+        "        return True",
+        "",
+        "# ---- partitions by bytes ----",
         "total_size = _size_bytes(DATA_SOURCE_URI)",
         "print(f'Total file size: {total_size:,} bytes')",
-        "estimated_total_rows = max(total_size // 130, 1)",
-        "ROWS_PER_PARTITION = 500_000",
-        "total_partitions = max(1, math.ceil(estimated_total_rows / ROWS_PER_PARTITION))",
-        "print(f'Estimated total rows: {estimated_total_rows:,}, rows per partition: {ROWS_PER_PARTITION:,}')",
+        "PARTITION_BYTES = int(os.getenv('AVALOKA_RAY_PARTITION_MB', '64')) * 1024 * 1024",
+        "total_partitions = max(1, math.ceil(total_size / PARTITION_BYTES)) if total_size else 0",
         "print(f'Total partitions to submit: {total_partitions}')",
         "",
         "t0 = time.time()",
         "futures = []",
-        "for i in range(total_partitions):",
-        "    row_offset = i * ROWS_PER_PARTITION",
-        "    futures.append(process_partition.remote(DATA_SOURCE_URI, i+1, total_partitions, row_offset, ROWS_PER_PARTITION))",
+        "if IS_PARQUET:",
+        "    import pyarrow.parquet as pq",
+        "    with fsspec.open(DATA_SOURCE_URI, 'rb', **_storage_options(DATA_SOURCE_URI)) as fh:",
+        "        PARQUET_META = pq.ParquetFile(fh).metadata",
+        "    n_rg = PARQUET_META.num_row_groups",
+        "    per = max(1, math.ceil(n_rg / max(1, num_workers)))",
+        "    groups = [list(range(i, min(n_rg, i + per))) for i in range(0, n_rg, per)]",
+        "    total_partitions = len(groups)",
+        "    print(f'Parquet: {PARQUET_META.num_rows} rows in {n_rg} row groups -> {total_partitions} partitions')",
+        "    for i, rg in enumerate(groups):",
+        "        futures.append(process_parquet_partition.remote(DATA_SOURCE_URI, i+1, total_partitions, rg))",
+        "else:",
+        "    for i in range(total_partitions):",
+        "        byte_start = i * PARTITION_BYTES",
+        "        byte_end = min(total_size, byte_start + PARTITION_BYTES)",
+        "        futures.append(process_partition.remote(DATA_SOURCE_URI, i+1, total_partitions, byte_start, byte_end))",
         "",
         "print(f'Submitted {total_partitions} partitions across workers')",
-        "partition_results = ray.get(futures)",
+        "partition_results = ray.get(futures) if futures else []",
+        "scan_runtime_s = max(0.001, time.time() - t0)",
+        "scan_bytes = sum(r['bytes'] for r in partition_results)",
         "",
         "nodes_used = sorted({r['node_ip'] for r in partition_results})",
-        "total_rows = sum(r['rows'] for r in partition_results)",
+        "if IS_PARQUET:",
+        "    # Footer counts, summed over the partitions; must equal the file's own total.",
+        "    ROWS_TOTAL = sum(r['rows'] for r in partition_results)",
+        "    if ROWS_TOTAL != PARQUET_META.num_rows: ROWS_TOTAL = None",
+        "elif total_size and scan_bytes == total_size:",
+        "    # data rows = line breaks - header line + a last line with no trailing break",
+        "    ROWS_TOTAL = max(0, sum(r['rows'] for r in partition_results) - 1",
+        "                     + (0 if _ends_with_newline(DATA_SOURCE_URI, total_size) else 1))",
+        "else:",
+        "    ROWS_TOTAL = None   # size unknown or a range came back short: no total is claimed",
         "print(f'NODES USED = {nodes_used}')",
         "print(f'NUM NODES = {len(nodes_used)}')",
-        "print(f'TOTAL ROWS PROCESSED = {total_rows}')",
+        "print(f'ROWS IN FILE = {ROWS_TOTAL}')",
         "for r in partition_results:",
-        "    print(f'  Partition {r[\"partition_id\"]}: {r[\"rows\"]} rows on {r[\"node_ip\"]} in {r[\"elapsed_s\"]:.1f}s')",
+        "    print(f'  Partition {r[\"partition_id\"]}: {r[\"rows\"]} line breaks on {r[\"node_ip\"]} in {r[\"elapsed_s\"]:.1f}s')",
         "",
-        "# ---- build df from first partition result for user code compatibility ----",
+        "# ---- the analysis runs on the first SAMPLE_ROWS rows, not the whole file ----",
+        "# main(df) runs in this driver process. Reading a >=1 GB CSV whole into one",
+        "# pandas frame here needs several times the file size in memory, so the",
+        "# analysis is scoped to a sample and the scope is reported (rows_used,",
+        "# rows_total, sample) in the metrics, the artifact and the reply.",
+        f"SAMPLE_ROWS = {RAY_ANALYSIS_SAMPLE_ROWS}",
+        "t_analysis = time.time()",
         "opts = _storage_options(DATA_SOURCE_URI)",
-        "try:",
-        "    df = next(iter(pd.read_csv(DATA_SOURCE_URI, nrows=50000, encoding='utf-8', storage_options=opts, chunksize=50000)))",
-        "except UnicodeDecodeError:",
-        "    df = next(iter(pd.read_csv(DATA_SOURCE_URI, nrows=50000, encoding='latin-1', storage_options=opts, chunksize=50000)))",
-        "print('SHAPE (sample):', df.shape)",
+        "if IS_PARQUET:",
+        "    import pyarrow as pa",
+        "    import pyarrow.parquet as pq",
+        "    with fsspec.open(DATA_SOURCE_URI, 'rb', **opts) as fh:",
+        "        pf = pq.ParquetFile(fh)",
+        "        batches, got = [], 0",
+        "        for b in pf.iter_batches(batch_size=SAMPLE_ROWS):",
+        "            batches.append(b); got += b.num_rows",
+        "            if got >= SAMPLE_ROWS: break",
+        "        table = pa.Table.from_batches(batches, schema=pf.schema_arrow) if batches else pf.schema_arrow.empty_table()",
+        "    df = table.slice(0, SAMPLE_ROWS).to_pandas()",
+        "else:",
+        "    try:",
+        "        df = next(iter(pd.read_csv(DATA_SOURCE_URI, nrows=SAMPLE_ROWS, encoding='utf-8', storage_options=opts, chunksize=SAMPLE_ROWS)))",
+        "    except UnicodeDecodeError:",
+        "        df = next(iter(pd.read_csv(DATA_SOURCE_URI, nrows=SAMPLE_ROWS, encoding='latin-1', storage_options=opts, chunksize=SAMPLE_ROWS)))",
+        "ROWS_USED = int(len(df))",
+        "IS_SAMPLE = ROWS_TOTAL is None or ROWS_USED < ROWS_TOTAL",
+        "print('SHAPE (sample):' if IS_SAMPLE else 'SHAPE (all rows):', df.shape)",
     ]
     return "\n".join(lines) + "\n"
 
@@ -1881,14 +2120,20 @@ def _build_ray_footer(data_uri: str) -> str:
         "if 'main' in globals() and callable(globals().get('main')):",
         "    df = globals()['main'](df)",
         "",
-        "bytes_processed = _size_bytes(DATA_SOURCE_URI)",
         "t1 = time.time()",
         "runtime_s = max(0.001, t1 - t0)",
-        "throughput_mb_s = (bytes_processed / (1024 * 1024)) / runtime_s if runtime_s else 0.0",
+        "analysis_runtime_s = max(0.001, t1 - t_analysis)",
         "worker_count = len(set(r['node_ip'] for r in partition_results))",
+        "# Each rate is over what was actually processed: the workers read every",
+        "# byte to count rows (scan_*); the analysis code saw ROWS_USED rows.",
         "metrics = {",
-        "    'bytes_processed': int(bytes_processed),",
-        "    'throughput_mb_s': round(float(throughput_mb_s), 4),",
+        "    'rows_used': ROWS_USED,",
+        "    'rows_total': ROWS_TOTAL,",
+        "    'sample': int(IS_SAMPLE),",
+        "    'analysed_rows_per_s': round(ROWS_USED / analysis_runtime_s, 2),",
+        "    'analysis_runtime_s': round(float(analysis_runtime_s), 3),",
+        "    'scan_bytes': int(scan_bytes),",
+        "    'scan_mb_s': round((scan_bytes / (1024 * 1024)) / scan_runtime_s, 4),",
         "    'runtime_s': round(float(runtime_s), 3),",
         "    'worker_count': int(worker_count),",
         "}",
@@ -1913,10 +2158,9 @@ def _build_ray_footer(data_uri: str) -> str:
         "",
         "_write_json(OUTPUT_METRICS_URI, metrics)",
         "_write_json(OUTPUT_ARTIFACT_URI, artifact)",
-        "print(f\"METRIC bytes_processed={metrics['bytes_processed']}\")",
-        "print(f\"METRIC throughput_mb_s={metrics['throughput_mb_s']}\")",
-        "print(f\"METRIC runtime_s={metrics['runtime_s']}\")",
-        "print(f\"METRIC worker_count={metrics['worker_count']}\")",
+        "for _k, _v in metrics.items():",
+        "    if _v is not None:",
+        "        print(f'METRIC {_k}={_v}')",
         "print(f'ARTIFACT_URI={OUTPUT_ARTIFACT_URI}')",
         "print(f'METRICS_URI={OUTPUT_METRICS_URI}')",
     ]
@@ -2047,14 +2291,51 @@ def _build_interactive_sample_footer() -> str:
 def _apply_interactive_profile_to_yaml(yaml_text: str) -> str:
     """Shrink the RayJob footprint for lightweight portfolio-sample analysis."""
     y = yaml_text
-    y = re.sub(r'(?m)^(\s*)replicas:\s*\d+\s*$', r'\g<1>replicas: 1', y, count=1)
-    y = re.sub(r'(?m)^(\s*)minReplicas:\s*\d+\s*$', r'\g<1>minReplicas: 1', y, count=1)
-    y = re.sub(r'(?m)^(\s*)maxReplicas:\s*\d+\s*$', r'\g<1>maxReplicas: 1', y, count=1)
+    # Same rule as render_rayjob_yaml (NEW-RS-01): a count line may carry a
+    # trailing comment. This used to work only because the renderer had
+    # already stripped them.
+    y = re.sub(r'(?m)^([ \t]*)replicas:[ \t]*\d+[ \t]*(?:#.*)?$', r'\g<1>replicas: 1', y, count=1)
+    y = re.sub(r'(?m)^([ \t]*)minReplicas:[ \t]*\d+[ \t]*(?:#.*)?$', r'\g<1>minReplicas: 0', y, count=1)
+    y = re.sub(r'(?m)^([ \t]*)maxReplicas:[ \t]*\d+[ \t]*(?:#.*)?$', r'\g<1>maxReplicas: 1', y, count=1)
     y = y.replace('cpu: "2"', 'cpu: "1"', 2)
     y = y.replace('memory: "8Gi"', 'memory: "2Gi"', 2)
     y = y.replace('memory: "6Gi"', 'memory: "2Gi"', 2)
     y = y.replace('cpu: "500m"', 'cpu: "250m"', 1)
     return y
+
+
+_INPUT_LITERAL = r"""(?P<q>['"])input\.csv(?P=q)"""
+_READER_CALL = r"(?P<call>\b(?:pd\.)?read_(?:csv|parquet|json|excel|table|feather|orc)\(\s*)"
+
+
+def _point_input_at_source(code: str) -> str:
+    """Point generated code's placeholder 'input.csv' at the real data source.
+
+    1. Inside a reader call:   pd.read_csv('input.csv', ...) -> pd.read_csv(DATA_SOURCE_URI, storage_options=opts, ...)
+    2. Anywhere else:          INPUT_PATH = 'input.csv'       -> INPUT_PATH = DATA_SOURCE_URI
+    3. Reader calls that use a variable from step 2 get storage_options=opts.
+    The old single replacement turned case 2 into
+    `INPUT_PATH = DATA_SOURCE_URI, storage_options=opts` (a chained assignment that
+    fails with "not enough values to unpack").
+    """
+    code = re.sub(
+        _READER_CALL + _INPUT_LITERAL,
+        lambda m: m.group("call") + "DATA_SOURCE_URI, storage_options=opts",
+        code,
+    )
+    names = {
+        m.group("name")
+        for m in re.finditer(r"(?m)^\s*(?P<name>[A-Za-z_]\w*)\s*=\s*" + _INPUT_LITERAL + r"\s*(?:#.*)?$", code)
+    }
+    code = re.sub(_INPUT_LITERAL, "DATA_SOURCE_URI", code)
+    for name in names:
+        code = re.sub(
+            _READER_CALL + r"(?P<arg>" + re.escape(name) + r"\b)(?P<rest>[^()]*)\)",
+            lambda m: m.group(0) if "storage_options" in m.group("rest")
+            else m.group("call") + m.group("arg") + ", storage_options=opts" + m.group("rest") + ")",
+            code,
+        )
+    return code
 
 
 def _patch_csv_encoding(code: str) -> str:
@@ -2113,17 +2394,25 @@ def _autogenerate_code(state: dict) -> str:
     user_lower = user_text.lower()
 
     # ── Detect limit (top N) ──────────────────────────────────────────
-    limit = 20
+    # Only an explicit "top N" truncates; a per-group listing keeps every group.
+    limit = None
     m = _re.search(r"top\s+(\d+)", user_lower)
     if m:
         limit = int(m.group(1))
 
-    # ── Detect aggregation function ───────────────────────────────────
-    agg_func = "count"
-    if any(k in user_lower for k in ["sum", "total amount", "total revenue"]):
-        agg_func = "sum"
-    elif any(k in user_lower for k in ["avg", "average", "mean"]):
-        agg_func = "mean"
+    # ── Detect aggregation(s) and the measure they apply to ───────────
+    # MAJ-031: the aggregation used to be detected here and then ignored (the
+    # script always emitted groupby(col).size()). The question is read by the
+    # same parser the output contract checks the result with.
+    from app.agents.output_contract import parse_question
+    spec = parse_question(user_text, schema)
+    aggs = list(spec.aggs) if spec else ["count"]
+    measure = spec.measure if spec else None
+    if any(a != "count" for a in aggs) and not measure:
+        # A min/max/mean/sum with no column to apply it to: emitting a count
+        # under the measure's name is the defect, so emit nothing.
+        logger.warning("[_autogenerate_code] %s requested but no measure column found; no code generated", aggs)
+        return ""
 
     # ── Detect sort order ─────────────────────────────────────────────
     sort_asc = "asc" in user_lower and "desc" not in user_lower
@@ -2144,12 +2433,12 @@ def _autogenerate_code(state: dict) -> str:
 
     # ── Detect group-by column using semantic context ─────────────────
     # Priority 1: "by <col>", "per <col>", "for each <col>", "group by <col>"
-    group_col = None
+    group_col = spec.group_by[0] if spec and spec.group_by else None
     context_patterns = [
         r"(?:group(?:ed)?\s+by|by|per|for\s+each)\s+([\w_]+)",
         r"([\w_]+)\s+(?:with\s+the\s+most|with\s+highest|ranked\s+by)",
     ]
-    for pat in context_patterns:
+    for pat in ([] if group_col else context_patterns):
         cm = _re.search(pat, user_lower)
         if cm:
             candidate = cm.group(1).strip()
@@ -2203,15 +2492,39 @@ def _autogenerate_code(state: dict) -> str:
         agg_col_name = "purchase_count"
 
     # ── Extra columns to join in (from requested_output_cols minus group_col & agg) ──
+    # Only columns the question asked for. A first-row value of some other
+    # column, attached to each group, reads as that group's figure (MAJ-031).
     extra_cols = [
         c for c in requested_output_cols
-        if c != group_col and c in columns
+        if c != group_col and c in columns and c != measure
     ]
-    # If no explicit return list, use up to 3 non-group schema columns
-    if not extra_cols:
-        extra_cols = [c for c in columns if c != group_col][:3]
+    head = f"\n        .head({limit})" if limit else ""
 
     # ── Build the script ──────────────────────────────────────────────
+    if any(a != "count" for a in aggs):
+        # The requested aggregation(s) of the requested measure; .size() only
+        # for a count that was asked for alongside them.
+        named = {
+            ("count" if a == "count" else f"{a}_{measure}"): (measure, "size" if a == "count" else a)
+            for a in aggs
+        }
+        sort_col = next(iter(named))
+        agg_args = "**{" + ", ".join(f"{k!r}: ({v[0]!r}, {v[1]!r})" for k, v in named.items()) + "}"
+        code = f"""
+import pandas as pd
+
+def main(df):
+    result = (
+        df.groupby({repr(group_col)}, as_index=False)
+        .agg({agg_args})
+        .sort_values({repr(sort_col)}, ascending={sort_asc}){head}
+    )
+    return result
+"""
+        logger.info("[_autogenerate_code] group_col=%s measure=%s aggs=%s", group_col, measure, aggs)
+        logger.info("[_autogenerate_code] generated code:\n%s", code)
+        return code.strip()
+
     code = f"""
 import pandas as pd
 
@@ -2220,8 +2533,7 @@ def main(df):
         df.groupby({repr(group_col)})
         .size()
         .reset_index(name={repr(agg_col_name)})
-        .sort_values({repr(agg_col_name)}, ascending={sort_asc})
-        .head({limit})
+        .sort_values({repr(agg_col_name)}, ascending={sort_asc}){head}
     )
     # Join extra columns from original dataframe
     extra_cols = {repr(extra_cols)}
@@ -2235,6 +2547,61 @@ def main(df):
                 group_col, agg_col_name, extra_cols)
     logger.info("[_autogenerate_code] generated code:\n%s", code)
     return code.strip()
+
+
+def _apply_output_contract(new_state: dict, spec, report: dict) -> bool:
+    """Record an output-contract report on the run; on a refusal, replace the
+    reply with the plain reason and withdraw the table. Returns True if refused."""
+    er = dict(new_state.get("execution_result") or {})
+    er["output_contract"] = report
+    new_state["execution_result"] = er
+    if report.get("status") != "refused":
+        return False
+    text = refusal_text(spec, report)
+    logger.warning("[output-contract] refused: %s", "; ".join(v["rule"] for v in report["violations"]))
+    er.update(status="refused", message=text, error=text)
+    new_state["execution_error"] = text
+    new_state["output_file_data"] = None
+    msgs = list(new_state.get("messages") or [])
+    if msgs and isinstance(msgs[-1], AIMessage):
+        msgs[-1] = AIMessage(content=text)
+    else:
+        msgs.append(AIMessage(content=text))
+    new_state["messages"] = msgs
+    return True
+
+
+def apply_scheduled_output_contract(final_state: dict) -> dict:
+    """The output contract for a scheduled run that did not go through Ray
+    (the Ray node checks its own result). The reference is recomputed from the
+    run's local input when it is small enough to re-read."""
+    er = final_state.get("execution_result") or {}
+    if not isinstance(er, dict) or "output_contract" in er:
+        return final_state
+    if str(er.get("status", "")).lower() not in ("success", "succeeded", "completed", "done"):
+        return final_state
+    spec = spec_from_state(final_state)
+    frame = frame_from_output_file(final_state.get("output_file_data")) if spec else None
+    if frame is None:
+        return final_state
+    input_path = _resolve_local_execution_input(
+        final_state, final_state.get("data_source_location"), final_state.get("output_location")
+    )
+    code = (final_state.get("coder_definition") or {}).get("code")
+    report = check_output(spec, frame, local_reference(spec, input_path), code=code)
+    final_state = dict(final_state)
+    messages = final_state.get("messages") or []
+    if messages and isinstance(messages[-1], dict):
+        # agent_task serialises messages before this runs; keep the shape.
+        from app.utils import convert_message_dicts_to_objects, convert_message_objects_to_dicts
+        final_state["messages"] = convert_message_dicts_to_objects(messages)
+        _apply_output_contract(final_state, spec, report)
+        final_state["messages"] = convert_message_objects_to_dicts(final_state["messages"])
+    else:
+        _apply_output_contract(final_state, spec, report)
+    return final_state
+
+
 # ---------------------------------------------------------------------------
 # execution_agent_node_ray
 # ---------------------------------------------------------------------------
@@ -2277,8 +2644,23 @@ def execution_agent_node_ray(state: ETLState) -> ETLState:
         or state.get("storage_connection_id")
     )
 
-    # ── Soft fallback to local when connection_id missing ─────────────
+    # ── No connection_id: refuse a scheduled run, fall back visibly otherwise ──
     if not connection_id and not is_dryrun:
+        if _is_scheduled_run(state):
+            msg = (
+                f"This scheduled run was not started: it needs Ray, but "
+                f"{RAY_NO_CONNECTION_REASON}. Link the dataset's cloud connection "
+                f"and the next run will use Ray."
+            )
+            logger.warning("execution_agent_node_ray: scheduled run refused: %s", RAY_NO_CONNECTION_REASON)
+            ns_ = state.copy()
+            ns_["messages"] = state.get("messages", []) + [AIMessage(content=msg)]
+            ns_["execution_result"] = {
+                "mode": "k8s-ray", "status": "error", "message": msg, "error": msg,
+                "refused_reason": RAY_NO_CONNECTION_REASON,
+            }
+            ns_["execution_error"] = msg
+            return ns_
         logger.warning(
             "execution_agent_node_ray: k8s-ray but connection_id=None "
             "and data_source_location_cloud=%s -> falling back to local execution",
@@ -2287,6 +2669,7 @@ def execution_agent_node_ray(state: ETLState) -> ETLState:
         fallback_state = {
             **state,
             "execution_mode": "local",
+            "ray_fallback_reason": RAY_NO_CONNECTION_REASON,
             "data_source_location": (
                 state.get("data_source_location_local")
                 or state.get("full_data_location")
@@ -2331,9 +2714,19 @@ def execution_agent_node_ray(state: ETLState) -> ETLState:
         user_code,
     )
 
+    # Point the placeholder 'input.csv' at the real source. A plain text swap used to
+    # turn `INPUT_PATH = 'input.csv'` into a chained assignment (ValueError: unpack);
+    # left as-is, a module-level read of 'input.csv' fails on Ray (file not found).
+    user_code = _point_input_at_source(user_code)
+
     # Patch any pd.read_csv in user code to use encoding fallback
     user_code = _patch_csv_encoding(user_code)
     helper_code = _with_csv_reader(textwrap.dedent(HELPER_FUNCTIONS).lstrip())
+
+    # Output contract (MAJ-030): what the question asks for, and the script
+    # lines that recompute it on the rows main(df) is given.
+    output_spec = spec_from_state(state)
+    reference_block = reference_script(output_spec) if output_spec else ""
 
     if execution_profile == "interactive_sample_analysis":
         workers = 1
@@ -2341,6 +2734,7 @@ def execution_agent_node_ray(state: ETLState) -> ETLState:
         script_text = (
             _build_interactive_sample_wrapper(str(data_uri), output_artifact_uri, output_metrics_uri)
             + "\n\n"
+            + reference_block
             + helper_code
             + "\n\n"
             + user_code
@@ -2351,6 +2745,7 @@ def execution_agent_node_ray(state: ETLState) -> ETLState:
         script_text = (
             _build_ray_wrapper(str(data_uri), output_artifact_uri, output_metrics_uri)
             + "\n\n"
+            + reference_block
             + helper_code
             + "\n\n"
             + user_code
@@ -2358,10 +2753,8 @@ def execution_agent_node_ray(state: ETLState) -> ETLState:
             + _build_ray_footer(str(data_uri))
         )
 
-    # ── Secret name placeholder for YAML render ───────────────────────
-    secret_name_for_yaml = _sanitize_k8s_name(
-        f"avaloka-conn-{connection_id}" if connection_id else "avaloka-dryrun-secret"
-    )
+    # ── The job's own Secret (KubeRay mode), named after the RayJob ──────
+    secret_name_for_yaml = _sanitize_k8s_name(f"{rayjob_name}-env")
 
     yaml_text_dry = render_rayjob_yaml(
         base_yaml=BASE_RAYJOB_YAML,
@@ -2412,6 +2805,8 @@ def execution_agent_node_ray(state: ETLState) -> ETLState:
     artifact_uri = output_artifact_uri
     conn         = None
 
+    _ledger_id = None
+    _owns_ledger_row = False
     try:
         # 1) Fetch creds from Supabase (with retry for stale connections)
         last_err = None
@@ -2429,19 +2824,19 @@ def execution_agent_node_ray(state: ETLState) -> ETLState:
         raw_provider = conn.get("provider") or conn.get("backend") or ""
         provider     = _normalize_secret_provider(raw_provider, str(data_uri))
 
-        # 2) Create K8s secret — skip in Direct mode (SA JSON already bundled as gcp_sa.json)
+        # 2) The connection's keys, and only those, for this job. The runner
+        #    puts them in a Secret owned by the RayJob (KubeRay mode) or in the
+        #    job's env (direct mode); the shared Ray pods never hold them.
         _is_direct_mode = bool(os.getenv("RAY_DASHBOARD_URL"))
-        if not _is_direct_mode:
-            secret_name = create_cloud_secret(
-                namespace=ns,
-                provider=provider,
-                creds=conn,
-                dataset_id=str(dataset_id),
-            )
-            logger.info("[execution_agent_node_ray] KubeRay mode → created k8s secret: %s", secret_name)
-        else:
-            secret_name = secret_name_for_yaml  # placeholder only, not created in cluster
-            logger.info("[execution_agent_node_ray] Direct mode → skipping kubectl secret creation, gcp_sa.json bundled in working_dir") 
+        secret_name = secret_name_for_yaml
+        try:
+            secret_env = cloud_secret_env(provider, conn)
+        except ValueError:
+            if not _is_direct_mode:
+                raise
+            # Direct mode can still run on the cluster's own identity (GKE
+            # Workload Identity) or the bundled gcp_sa.json.
+            secret_env = {}
 
         # 3) Re-render YAML with real secret name
         yaml_text = render_rayjob_yaml(
@@ -2458,6 +2853,24 @@ def execution_agent_node_ray(state: ETLState) -> ETLState:
         if execution_profile == "interactive_sample_analysis":
             yaml_text = _apply_interactive_profile_to_yaml(yaml_text)
 
+        # The background-job ledger (app/core/job_ledger.py): a turn or a
+        # worker that opened a row for this work gets the RayJob's name on it;
+        # a bare call (refresh, save-and-execute) records its own row.
+        _ledger_id = state.get("ledger_job_id")
+        _owns_ledger_row = False
+        if _ledger_id:
+            job_ledger.running(_ledger_id, ray_job_name=rayjob_name)
+            if state.get("ledger_job_kind") == "ray_job":
+                job_ledger.claim(_ledger_id, resource_type="analysis", resource_id=state.get("analysis_id"))
+        else:
+            _ledger_id = job_ledger.start(
+                state.get("user_id"), "ray_job", thread_id=state.get("thread_id"), session_id=state.get("session_id"),
+                analysis_id=state.get("analysis_id") if _looks_like_uuid(state.get("analysis_id")) else None,
+                resource_type="analysis", resource_id=state.get("analysis_id") or state.get("dataset_id"),
+                ray_job_name=rayjob_name, status="running", origin="api",
+            )
+            _owns_ledger_row = _ledger_id is not None
+
         # 4) Submit + wait + collect logs
         outcome = run_rayjob_from_yaml(
             yaml_text=yaml_text,
@@ -2466,14 +2879,31 @@ def execution_agent_node_ray(state: ETLState) -> ETLState:
             timeout_s=timeout_s,
             poll_interval_s=5,
             cloud_creds=conn,
+            secret_env=secret_env,
+            secret_name=secret_name,
+            # Whose job this is: routes it to the user's own Ray cluster when
+            # they have one, tags it in Ray's metadata and the ray_jobs table.
+            job_tags={
+                "user_id": state.get("user_id"),
+                "thread_id": state.get("thread_id"),
+                "analysis_id": state.get("analysis_id") or state.get("dataset_id"),
+                "kind": "analysis",
+            },
         )
 
         logs         = outcome.logs or ""
         metrics      = _parse_kv_metrics(logs)
         artifact_uri = _parse_marker(logs, "ARTIFACT_URI") or output_artifact_uri
+        if _owns_ledger_row:
+            _ok = outcome.status == "SUCCEEDED"
+            job_ledger.finish(_ledger_id, "succeeded" if _ok else "failed",
+                              fail_reason=None if _ok else ("timed_out" if outcome.status == "TIMEOUT" else "cluster_error"),
+                              error_line=None if _ok else f"RayJob {outcome.status}")
 
     except Exception as e:
         logger.exception("[execution_agent_node_ray] Job failed: %s", e)
+        if _owns_ledger_row:
+            job_ledger.finish(_ledger_id, "failed", fail_reason="cluster_error", error_line=str(e))
         new_state = state.copy()
         new_state["ray_job_name"]      = rayjob_name
         new_state["ray_job_namespace"] = ns
@@ -2496,13 +2926,6 @@ def execution_agent_node_ray(state: ETLState) -> ETLState:
         ]
         return new_state
 
-    finally:
-        if secret_name and not bool(os.getenv("RAY_DASHBOARD_URL")):
-            # Only delete k8s secret in KubeRay mode — Direct mode never created one
-            try:
-                kubectl_delete_secret(secret_name, ns)
-            except Exception:
-                logger.exception("Failed to delete Ray secret %s in ns %s", secret_name, ns)
 
     new_state = state.copy()
     new_state["ray_job_name"]      = rayjob_name
@@ -2520,6 +2943,9 @@ def execution_agent_node_ray(state: ETLState) -> ETLState:
         "metrics":      metrics,
         "artifact_uri": artifact_uri,
     }
+    data_scope = _ray_data_scope(metrics)
+    if data_scope is not None:
+        new_state["execution_result"]["data_scope"] = data_scope
     # execution_error is a declared channel, so a value left by an earlier node
     # or turn stays until something clears it. It is set exactly when the
     # status is one route_after_execution already treats as a failure.
@@ -2607,10 +3033,20 @@ def execution_agent_node_ray(state: ETLState) -> ETLState:
         except Exception as e:
             logger.warning("[execution_agent_node_ray] Could not fetch artifact from %s: %s", artifact_uri, e)
 
+    if data_scope and data_scope.get("note") and outcome and outcome.status.upper() == "SUCCEEDED":
+        ai_message_content = ai_message_content.rstrip() + data_scope["note"]
+
     new_state["output_file_data"] = output_file_data
     new_state["messages"] = state.get("messages", []) + [
         AIMessage(content=ai_message_content)
     ]
+    if output_df is not None and outcome and outcome.status.upper() == "SUCCEEDED" and output_spec:
+        # Checked before lineage and memory see the result: a refused table is
+        # not recorded or remembered as an answer.
+        report = check_output(output_spec, output_df, parse_reference(logs), code=code)
+        if _apply_output_contract(new_state, output_spec, report):
+            output_df = None
+            ai_message_content = new_state["messages"][-1].content
     if output_df is not None and outcome and outcome.status.upper() == "SUCCEEDED":
         lineage_dataset_id = record_analysis_lineage(new_state, output_df)
         if lineage_dataset_id:
@@ -2622,6 +3058,34 @@ def execution_agent_node_ray(state: ETLState) -> ETLState:
         _dispatch_execution_memory_record(session_id, ai_message_content, "assistant")
 
     return new_state
+
+
+def _ray_data_scope(metrics: dict) -> Optional[dict]:
+    """The rows a batch Ray run analysed, read from the script's METRIC lines.
+
+    Returns None when the script reported no scope (an older script, or the
+    interactive profile, which reads its whole input). ``note`` is the line
+    the reply carries when the analysis saw fewer rows than the file has.
+    """
+    if not isinstance(metrics, dict) or "rows_used" not in metrics:
+        return None
+    rows_used = int(metrics.get("rows_used") or 0)
+    rows_total = metrics.get("rows_total")
+    rows_total = int(rows_total) if rows_total is not None else None
+    sample = bool(metrics.get("sample", rows_total is None or rows_used < rows_total))
+    note = None
+    if sample:
+        if rows_total:
+            scope = f"a {rows_used:,}-row sample of the {rows_total:,}-row file (its first rows)"
+        else:
+            scope = f"a {rows_used:,}-row sample (the first rows of the file)"
+        note = (
+            f"\n\n> Note: these figures were computed on {scope}, not the entire dataset. "
+            f"Ray counted the rows of the whole file, but the analysis itself ran on "
+            f"that sample, so counts, rates, distinct values and min/max may differ "
+            f"from the full file."
+        )
+    return {"rows_used": rows_used, "rows_total": rows_total, "sample": sample, "note": note}
 
 
 # ---------------------------------------------------------------------------
@@ -2812,6 +3276,7 @@ def execute_code_on_local(
     input_data_location: Optional[np.ndarray] = None,
     output_location: Optional[str] = None,
     read_path_map: Optional[dict] = None,
+    analysis_fidelity: Optional[str] = None,
 ) -> Dict[str, Any]:
     out: Dict[str, Any] = {}
 
@@ -2930,13 +3395,19 @@ def execute_code_on_local(
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write(script_to_run)
 
+    # Model-written code: the child gets the allowlisted environment and a
+    # private HOME/TMPDIR, never this process's provider keys, database
+    # passwords, DB_ENCRYPTION_KEY or MCP_SERVICE_TOKEN.
+    timeout_s = _get_local_exec_timeout(analysis_fidelity)
+    exec_home = tempfile.mkdtemp(prefix="avaloka_exec_home_")
     try:
         result = subprocess.run(
             [sys.executable, temp_script_path],
             capture_output=True,
             text=True,
             check=False,
-            timeout=int(os.getenv("AVALOKA_LOCAL_EXEC_TIMEOUT", "60")),
+            timeout=timeout_s,
+            env=scrubbed_env(extra={"HOME": exec_home, "TMPDIR": exec_home}),
         )
 
         stdout = result.stdout or ""
@@ -2966,7 +3437,7 @@ def execute_code_on_local(
         out["execution_stdout"] = (e.stdout or "")
         out["execution_stderr"] = (e.stderr or "")
         out["status"] = "error"
-        out["execution_error"] = f"Script execution timed out after {int(os.getenv('AVALOKA_LOCAL_EXEC_TIMEOUT', '60'))} seconds"
+        out["execution_error"] = f"Script execution timed out after {timeout_s} seconds"
         logger.error(out["execution_error"])
 
     except FileNotFoundError:
@@ -2980,6 +3451,7 @@ def execute_code_on_local(
                 os.remove(temp_script_path)
         except Exception:
             pass
+        shutil.rmtree(exec_home, ignore_errors=True)
 
     return out
 
@@ -3036,12 +3508,13 @@ def execute_code_on_ssh(code: str, server: str, input_data_location: str, output
             logger.error("Stderr:\n%s", stderr)
             return out
 
+        timeout_s = _get_local_exec_timeout()
         result = subprocess.run(
             ["ssh", server, f"cd {output_location} && bash execute.sh {remote_script_name}"],
             capture_output=True,
             text=True,
             check=False,
-            timeout=int(os.getenv("AVALOKA_LOCAL_EXEC_TIMEOUT", "60")),
+            timeout=timeout_s,
         )
 
         stdout = result.stdout or ""
@@ -3070,7 +3543,7 @@ def execute_code_on_ssh(code: str, server: str, input_data_location: str, output
         out["execution_stdout"] = (e.stdout or "")
         out["execution_stderr"] = (e.stderr or "")
         out["status"] = "error"
-        out["execution_error"] = f"Script execution timed out after {int(os.getenv('AVALOKA_LOCAL_EXEC_TIMEOUT', '60'))} seconds"
+        out["execution_error"] = f"Script execution timed out after {timeout_s} seconds"
         logger.error(out["execution_error"])
 
     except FileNotFoundError:

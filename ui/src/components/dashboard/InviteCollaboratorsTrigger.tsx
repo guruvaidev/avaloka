@@ -49,6 +49,7 @@ export function InviteCollaboratorsTrigger({
           open={inviteOpen}
           onClose={() => setInviteOpen(false)}
           analysisId={analysisId}
+          projectId={projectId}
         />
       ) : (
         <InviteCollaboratorsPopover

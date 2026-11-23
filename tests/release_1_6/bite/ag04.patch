@@ -1,0 +1,13 @@
+diff --git a/app/agents/coder.py b/app/agents/coder.py
+index f03f7ce6..8fe97a89 100644
+--- a/app/agents/coder.py
++++ b/app/agents/coder.py
+@@ -975,7 +975,7 @@ def coder_node(state: CodingAgentState) -> dict:
+     # and the previous code is the wrong thing to iterate on -- so the blueprint
+     # is regenerated with the violation in hand.
+     contract_retry = bool(state.get("contract_error"))
+-    if feedback and previous_code and not contract_retry:
++    if False:
+         pseudocode_plan = ""
+         contract = _contract_from_state(state)
+     else:

@@ -1,0 +1,63 @@
+diff --git a/tests/prompt_suite/suites/heavy_suite.json b/tests/prompt_suite/suites/heavy_suite.json
+index aee01b86..a07ca875 100644
+--- a/tests/prompt_suite/suites/heavy_suite.json
++++ b/tests/prompt_suite/suites/heavy_suite.json
+@@ -14,15 +14,6 @@
+      "raw": "\"Compute tip percentage (tip_amount / fare_amount) for card trips only, and give its mean and median.\"",
+      "prompt": "Compute tip percentage (tip_amount / fare_amount) for card trips only, and give its mean and median.",
+      "thread": "taxi-main"
+-    },
+-    {
+-     "id": "TR-9",
+-     "kind": "chat",
+-     "dataset": "nyc-taxi/yellow_tripdata_2015-01.csv",
+-     "expect": "Duration col computed from tpep_* timestamps",
+-     "raw": "\"Add trip_minutes from pickup/dropoff timestamps and show the 5 longest trips.\"",
+-     "prompt": "Add trip_minutes from pickup/dropoff timestamps and show the 5 longest trips.",
+-     "thread": "taxi-main"
+     }
+    ]
+   },
+diff --git a/tests/prompt_suite/suites/v2_suite.json b/tests/prompt_suite/suites/v2_suite.json
+index 2aab5000..d006b336 100644
+--- a/tests/prompt_suite/suites/v2_suite.json
++++ b/tests/prompt_suite/suites/v2_suite.json
+@@ -293,18 +293,6 @@
+      "purpose": "A-correct",
+      "expected": "No \u2014 393 cols vs train's 394. Tests honest schema reporting",
+      "depends_on_prior": false
+-    },
+-    {
+-     "id": "v2-ieee-fraud-26",
+-     "order": 26,
+-     "kind": "chat",
+-     "file": "test_transaction.csv",
+-     "phase": "transform",
+-     "tier": "A",
+-     "prompt": "Give me the ProductCD mix here. I want to see whether test looks like train or whether there's drift.",
+-     "purpose": "A-correct",
+-     "expected": "5 values; similar proportions",
+-     "depends_on_prior": false
+     }
+    ]
+   },
+diff --git a/tests/prompt_suite/suites/v4_suite.json b/tests/prompt_suite/suites/v4_suite.json
+index c162e459..b369c483 100644
+--- a/tests/prompt_suite/suites/v4_suite.json
++++ b/tests/prompt_suite/suites/v4_suite.json
+@@ -102,15 +102,6 @@
+      "raw": "**Negative:** register the 0-byte file in `talkingdata-adtracking-fraud/` (exact key from ING-7 listing)",
+      "op": "register_negative",
+      "conn": "talkingdata-adtracking-fraud"
+-    },
+-    {
+-     "id": "ING-9",
+-     "kind": "chat",
+-     "dataset": "\u2014",
+-     "expect": "Catalog answer from metadata, no codegen",
+-     "raw": "\"Which of my datasets is the largest, and when did I register each?\"",
+-     "prompt": "Which of my datasets is the largest, and when did I register each?",
+-     "thread": "housing-main"
+     }
+    ]
+   },

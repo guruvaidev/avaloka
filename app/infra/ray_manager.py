@@ -106,6 +106,31 @@ def deploy_ray_serve(manifest: str = RAYSERVICE_MANIFEST, namespace: str = "defa
     return run_command(["kubectl", "apply", "-n", namespace, "-f", manifest], "Deploy Ray Serve (RayService)")
 
 
+def remove_ray_serve(name: str = "avaloka-inference", namespace: str = "default") -> dict:
+    """Delete the opt-in RayService if an older install left it running (idempotent)."""
+    return run_command(
+        ["kubectl", "delete", "-n", namespace, "rayservice", name, "--ignore-not-found"],
+        "Remove the pre-2026-11 RayService (the model server serves its models now)",
+    )
+
+
+RAY_DASHBOARD_NODEPORT_MANIFEST = os.path.join(_RAY_DIR, "ray_dashboard_nodeport.yaml")
+
+
+def dashboard_nodeport_requested() -> bool:
+    """The kind-only NodePort for the Ray dashboard is opt-in (RAY_DASHBOARD_EXPOSE_NODEPORT=1)."""
+    return os.environ.get("RAY_DASHBOARD_EXPOSE_NODEPORT", "").strip().lower() in {"1", "true", "yes"}
+
+
+def apply_ray_dashboard_nodeport(namespace: str = "default") -> dict:
+    if not dashboard_nodeport_requested():
+        return {"step_name": "Expose Ray dashboard (NodePort)", "status": "SKIPPED",
+                "message": "RAY_DASHBOARD_EXPOSE_NODEPORT not set; the dashboard is reached through the API proxy",
+                "details": ""}
+    return run_command(["kubectl", "apply", "-n", namespace, "-f", RAY_DASHBOARD_NODEPORT_MANIFEST],
+                       "Expose Ray dashboard (NodePort, kind only)")
+
+
 def resolve_ray_address(explicit: str | None = None) -> str | None:
     """Return the Ray address to connect to, if any (arg > env)."""
     return explicit or os.environ.get("RAY_ADDRESS") or None

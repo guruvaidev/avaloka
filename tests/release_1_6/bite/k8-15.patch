@@ -1,0 +1,13 @@
+diff --git a/app/agents/mta_v2/inference_service_manager.py b/app/agents/mta_v2/inference_service_manager.py
+index 2a4c2e36..3524e1b6 100644
+--- a/app/agents/mta_v2/inference_service_manager.py
++++ b/app/agents/mta_v2/inference_service_manager.py
+@@ -61,7 +61,7 @@ class InferenceServiceManager:
+             raise ValueError(
+                 f"Unsupported INFERENCE_BACKEND {INFERENCE_BACKEND!r}; expected 'rayserve' or 'gateway'."
+             )
+-        if INFERENCE_BACKEND == "gateway" and not ALLOW_LEGACY_GATEWAY:
++        if INFERENCE_BACKEND == "gateway" and False:
+             raise RuntimeError(
+                 "INFERENCE_BACKEND=gateway creates a new GKE namespace and GCP API "
+                 "Gateway for every deployment and does not reclaim them; 18 such "

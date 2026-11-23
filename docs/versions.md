@@ -22,7 +22,7 @@ pinned numbers, so there is one place to update when a version changes.
 | Ray / Ray Serve (app client) | 2.49.2 | `requirements.txt` (`ray[air,serve]==2.49.2`) |
 | Ray (cluster image) | 2.49.2 | `deploy/docker/Dockerfile.ray` (`rayproject/ray:2.49.2-py311`) |
 | RayCluster CR `rayVersion` | 2.49.2 | `deploy/helm/ray/raycluster.yaml` |
-| RayService CR `rayVersion` | 2.49.2 | `deploy/helm/ray/rayservice.yaml` |
+| RayService CR `rayVersion` (opt-in backend, `INFERENCE_BACKEND=rayserve`) | 2.49.2 | `deploy/helm/ray/rayservice.yaml` |
 | KubeRay operator | set by `KUBERAY_OPERATOR_VERSION` | `app/infra/ray_manager.py` |
 | Daft (getdaft) | `>=0.5.0,<0.6` | `requirements.txt` |
 
@@ -100,12 +100,12 @@ pinned numbers, so there is one place to update when a version changes.
 | `ghcr.io/guruvaidev/avaloka-ray` | same set | `main` (used by `ui.image`; the Ray CRs name `avaloka-ray:latest` bare) |
 | `ghcr.io/guruvaidev/avaloka-functions` | same set | `main` |
 
-All four pull anonymously. **No semver tag exists** — `images.yml` would
-publish one on a `v*` git tag, but none has been pushed, so `:1.0.0` / `:1.6.0`
-do not resolve. Neither does `:develop-1.6`. Verify before pinning:
+All four pull anonymously. **Semver tags start at 1.0.0** — `images.yml`
+publishes `:<version>` and `:<major>.<minor>` on a `v*` git tag, so `v1.0.0` gives `:1.0.0` and `:1.0`;
+no earlier semver tag exists, and `:develop-1.6` does not resolve. Verify before pinning:
 `docker manifest inspect ghcr.io/guruvaidev/avaloka-api:<tag>`.
 
-Chart version is `1.6.0` / appVersion `1.6.0` (`deploy/helm/avaloka/Chart.yaml`),
+Chart version is `1.0.0` / appVersion `1.0.0` (`deploy/helm/avaloka/Chart.yaml`),
 which is independent of the image tags above.
 
 ### Third-party images that do not pull

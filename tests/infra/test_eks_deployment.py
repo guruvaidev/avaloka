@@ -105,16 +105,23 @@ class TestEksDeployment(unittest.TestCase):
             print(f"EKS cluster {self.cluster_name} does not exist, skipping deletion.")
 
     def test_deploy_to_eks(self):
-        config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'app', 'infra', 'config')
-        # Apply the kubernetes manifests
-        subprocess.run(["kubectl", "apply", "-f", config_path], check=True)
+        # The hardened /execute service from the Helm chart (app/infra/config,
+        # the unauthenticated LoadBalancer manifest this used to apply, is gone).
+        chart = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'deploy', 'helm', 'avaloka')
+        rendered = subprocess.run([
+            "helm", "template", "avaloka", chart, "--set", "executeService.enabled=true",
+            "--show-only", "templates/secret.yaml", "--show-only", "templates/execute-service.yaml",
+        ], check=True, capture_output=True, text=True).stdout
+        subprocess.run(["kubectl", "apply", "-f", "-"], input=rendered, text=True, check=True)
 
         # Wait for the deployment to be ready
-        subprocess.run(["kubectl", "wait", "--for=condition=available", "deployment/infra-agent", "--timeout=300s"], check=True)
+        subprocess.run(["kubectl", "wait", "--for=condition=available", "deployment/avaloka-execute-service", "--timeout=300s"], check=True)
 
-        # Check that the deployment is available
-        result = subprocess.run(["kubectl", "get", "deployment", "infra-agent"], capture_output=True, text=True)
+        # Check that the deployment is available, and that nothing exposes it outside the cluster
+        result = subprocess.run(["kubectl", "get", "deployment", "avaloka-execute-service"], capture_output=True, text=True)
         self.assertIn("1/1", result.stdout)
+        svc = subprocess.run(["kubectl", "get", "service", "avaloka-execute-service", "-o", "jsonpath={.spec.type}"], capture_output=True, text=True)
+        self.assertEqual(svc.stdout.strip(), "ClusterIP")
 
 if __name__ == '__main__':
     unittest.main()

@@ -49,7 +49,6 @@ GCP_KEY_PATH="Users/$USER/.config/gcloud/application_default_credentials.json"
 ## 3. Add Local Hostnames
 Edit `/etc/hosts` and add:
 ```
-127.0.0.1       avaloka-langgraph.local
 127.0.0.1       avaloka-api.local
 127.0.0.1       avaloka avaloka.local
 ```
@@ -80,7 +79,6 @@ avaloka-redis-master
 |---------------|--------------------------------------------------------------------------|
 | Frontend      | [http://localhost](http://localhost)                            |
 | Backend API   | [http://avaloka-api.local/health](http://avaloka-api.local/health)    |
-| LangGraph | [http://avaloka-langgraph.local/docs](http://avaloka-langgraph.local/docs) |
 
 ---
 
@@ -289,8 +287,15 @@ ownership check, so nothing serves HTTPS before propagation. Install once DNS is
 ```bash
 helm upgrade --install avaloka deploy/helm/avaloka \
   -f deploy/helm/avaloka/values/values-gke.yaml \
+  --set config.deployment=self_hosted \
   --set image.repository=us-central1-docker.pkg.dev/MY_PROJECT/avaloka/avaloka-api
 ```
+
+`values-gke.yaml` declares `config.deployment: avaloka_hosted`, because it is also
+a hosted service's overlay, and that turns on plan gates. On your own cluster keep
+`--set config.deployment=self_hosted` as above (`make up PROVIDER=gcp` passes it for
+you). Only a hosted service that bills plans leaves the flag out. See
+[Deployment type](../docs/deployment.md#deployment-type).
 
 Watch it come up — the first provision takes a few minutes:
 
@@ -391,7 +396,16 @@ these volumes, or point the chart at its S3 gateway as external object storage.
 With SeaweedFS enabled and no cloud backend configured, the chart sets
 `STORAGE_BACKEND=s3` and publishes the endpoint and credentials to everything
 that reads `s3://` — the API, LangGraph, the Celery workers, and the Ray head and
-workers (via `envFrom` on `deploy/helm/ray/raycluster.yaml`):
+workers. The Ray pods take `avaloka-config` whole (`envFrom`) but only named keys
+from `avaloka-secrets` (`secretKeyRef` on `deploy/helm/ray/raycluster.yaml` and
+`rayservice.yaml`): `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and, on the
+RayCluster head only, `AVALOKA_PII_KEY`. They run user code, so they never get
+the database, JWT, payment or model-provider keys. An analysis job's own
+connection keys, and a data transfer's database URLs and bucket keys, reach that
+job alone — a Secret owned by its RayJob in KubeRay mode (see
+`rbac.rayJobSecretsNamespace`, which also sets the transfers' `KUBE_NAMESPACE`),
+or the job's env in direct mode; neither the RayJob nor its ConfigMap holds one.
+The platform values the pods get:
 
 | Variable | Value |
 |----------|-------|

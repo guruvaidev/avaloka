@@ -1,4 +1,7 @@
 import { supabase } from "@/integrations/supabase/external-client";
+import { BACKEND_API_BASE as API_BASE } from "@/lib/api/backend-config";
+// The configured MCP bases (runtime env, else localhost); never a hardcoded tunnel.
+import { MCP_API_BASE, MCP_TOOL_BASE } from "@/lib/api/mcp-config";
 
 export const SERVICE_RESTARTING_MESSAGE =
   "The Avaloka backend is temporarily unavailable and may be restarting or rolling out. " +
@@ -50,6 +53,8 @@ interface UploadResponse {
 
 // Multi-dataset upload response format
 /** One entry of GET /threads/{id}/datasets. */
+import type { JobNoteBatch, ThreadJobNotesResponse } from "@/lib/job-notes";
+
 export interface ThreadDatasetItem {
   dataset_id: string;
   filename?: string | null;
@@ -114,10 +119,17 @@ interface MessageResponse {
   multi_action_actions?: Array<{ id: string; operation: string; column?: string | null; group_by: string[] }>;
   multi_action_missing?: Array<{ label: string }>;
   multi_action_notes?: string[];
-  task_info?: { task_id: string; next_due_at?: number };
+  task_info?: { task_id: string; next_due_at?: number; max_runs?: number; [k: string]: unknown };
+  // Background-job notes delivered at this turn's end (one coalesced batch per
+  // flush, written by code on the API). Rendered after the reply; never
+  // persisted again by the UI, the API wrote the transcript row.
+  job_notes?: JobNoteBatch[] | null;
   analysis_fidelity?: "quick_sample" | "portfolio_samples" | "entire_dataset";
   selected_sample_name?: string;
   analysis_task_id?: string;
+  // Slow-turn signals: "running" means poll /pending-turn; kind says what it is.
+  pending_status?: "running" | string | null;
+  pending_kind?: "analysis" | "training" | string | null;
   // Long-running (training) turn signals
   training_status?: string;
   training_completed?: boolean;
@@ -128,6 +140,14 @@ interface MessageResponse {
   error?: string;
   fallback?: boolean;
   execution_context?: { mode: string; mode_label: string; sample?: string | null };
+  /** Set when a fallback model tier answered instead of the configured model. */
+  answered_by?: {
+    configured_model: string;
+    answered_model: string;
+    provider: string;
+    reason: string;
+    note?: string;
+  } | null;
   datasets?: Array<{
     dataset_id: string;
     filename?: string;
@@ -201,8 +221,6 @@ interface DatabaseQueryResponse {
   execution_time_ms: number;
 }
 
-import { BACKEND_API_BASE as API_BASE } from "@/lib/api/backend-config";
-
 export interface PendingTurnResponse {
   status: "running" | "done" | "error" | "superseded" | "none" | string;
   message?: string;
@@ -210,24 +228,27 @@ export interface PendingTurnResponse {
 }
 
 /**
- * A chat turn is "deferred" when the backend accepted it but is still
- * training in the background, or when our proxy gave up waiting on a
- * synchronous response. Both cases resolve later via /pending-turn.
+ * A reply is a scheduled task when task_info.task_id is set and the turn is
+ * not still running. Scheduled tasks deliver results outside the chat turn
+ * (notifications / Scheduled Analysis), so they never show loaders or poll.
+ */
+export function isScheduledTaskReply(res: any): boolean {
+  if (!res || typeof res !== "object") return false;
+  const taskId = res.task_info?.task_id;
+  return Boolean(taskId) && String(res.pending_status ?? "").toLowerCase() !== "running";
+}
+
+/**
+ * A chat turn is "deferred" only when the backend says pending_status ===
+ * "running" (slow turns, model training), or when our proxy gave up waiting
+ * on a synchronous response. Both resolve later via /pending-turn.
  */
 export function isDeferredTurn(res: any): boolean {
   if (!res || typeof res !== "object") return false;
   if (res.fallback === true && res.error === "UPSTREAM_TIMEOUT") return true;
-  if (String(res.pending_status ?? "").toLowerCase() === "running" && res.analysis_task_id) return true;
-  const hasRows = Array.isArray(res.output_json) && res.output_json.length > 0;
-  return (
-    (String(res.training_status ?? "").toLowerCase() === "running" ||
-      String(res.pending_status ?? "").toLowerCase() === "running") &&
-    res.training_completed !== true &&
-    !hasRows
-  );
+  if (isScheduledTaskReply(res)) return false;
+  return String(res.pending_status ?? "").toLowerCase() === "running";
 }
-const MCP_API_BASE = "https://avaloka-mcp.ngrok.app";
-const MCP_TOOL_BASE = "https://avaloka-mcp-tool.ngrok.app";
 
 const _previewInflight: Map<string, Promise<any>> = new Map();
 const _previewControllers: Map<string, AbortController> = new Map();
@@ -336,7 +357,7 @@ function parsePredictionFromReply(reply: string): unknown {
 
 
 
-async function getAccessToken(): Promise<string> {
+export async function getAccessToken(): Promise<string> {
   const {
     data: { session },
   } = await supabase.auth.getSession();
@@ -360,7 +381,7 @@ function proxyUrl(): string {
  * /api/public/backend-proxy to avoid CORS issues with the upstream host.
  * `path` is the backend path (e.g. "/api/upload" or "/threads/x/messages").
  */
-async function proxyFetch(path: string, init: RequestInit & { sessionId?: string } = {}): Promise<Response> {
+export async function proxyFetch(path: string, init: RequestInit & { sessionId?: string } = {}): Promise<Response> {
   const { sessionId, headers: initHeaders, ...rest } = init;
   const headers = new Headers(initHeaders as HeadersInit | undefined);
   headers.set("X-Backend-Path", path);
@@ -371,14 +392,12 @@ async function proxyFetch(path: string, init: RequestInit & { sessionId?: string
 
 // MCP calls reuse the same backend-proxy, but forward to the MCP base.
 // The proxy runs server-side, so the in-cluster MCP URL resolves there.
-async function mcpProxyFetch(base: string, path: string, init: RequestInit = {}): Promise<Response> {
+export async function mcpProxyFetch(base: string, path: string, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers as HeadersInit | undefined);
   headers.set("X-Backend-Path", path);
   headers.set("X-Backend-Base", base);
   return fetch(proxyUrl(), { ...init, headers });
 }
-
-export { mcpProxyFetch, proxyFetch };
 
 export type AppNotificationKind =
   | "analysis_done"
@@ -414,6 +433,10 @@ export interface UploadLimits {
   max_file_mb?: number | null;
   max_total_mb?: number | null;
   batch_jobs?: boolean;
+  /** True when the plan could not be checked (hosted, lookup failed): not an upgrade case. */
+  plan_check_unavailable?: boolean;
+  /** Per gated feature: on the plan, not on the plan, or not checkable right now. */
+  feature_states?: Record<string, "allowed" | "not_on_plan" | "unavailable">;
   [k: string]: unknown;
 }
 
@@ -431,6 +454,19 @@ function processingTimeoutMs(totalBytes: number) {
   const mb = totalBytes / (1024 * 1024);
   return Math.min(180_000, 60_000 + Math.ceil(mb) * 1000);
 }
+
+/** GET /api/llm-models: the language model per agent role and its fallback chain. */
+export type LlmModelsResponse = {
+  roles: Array<{
+    role: string;
+    agent: string;
+    provider: string;
+    model: string;
+    chain: Array<{ provider: string; model: string; armed: boolean; providers_only: string[] | null }>;
+    routing: Record<string, unknown> | null;
+  }>;
+  note?: string;
+};
 
 export const backendApi = {
   async getPlannerGraph(threadId: string): Promise<Blob> {
@@ -466,7 +502,12 @@ export const backendApi = {
       throw new Error("Limits unavailable");
     }
     const nested = json?.limits && typeof json.limits === "object" ? json.limits : json;
-    return { ...nested, plan: json?.plan ?? nested?.plan };
+    return {
+      ...nested,
+      plan: json?.plan ?? nested?.plan,
+      plan_check_unavailable: json?.plan_check_unavailable === true,
+      feature_states: json?.feature_states ?? nested?.feature_states,
+    };
   },
 
   async getVersion(): Promise<{ version: string }> {
@@ -475,14 +516,25 @@ export const backendApi = {
     return response.json();
   },
 
+  /**
+   * Health of the database query service: GET /health on MCP_TOOL_BASE, the
+   * MCP server that List tables and queries call, through the same proxy.
+   * (It used to invoke a "check-mcp-health" edge function that no install
+   * ships -- ui/supabase/functions has none -- so it read unhealthy even
+   * while registration and queries worked.) An unreachable upstream comes
+   * back from the proxy as 200 + { fallback: true }, so only the server's own
+   * { status: "healthy" } counts as healthy.
+   */
   async checkMcpHealth(): Promise<{ status: string; healthy: boolean }> {
     try {
-      const response = await supabase.functions.invoke("check-mcp-health", { method: "GET" });
-      if (response.error) return { status: "unhealthy", healthy: false };
-      const data = response.data;
-      return { status: data?.status || "healthy", healthy: data?.healthy !== false };
-    } catch {
+      const response = await mcpProxyFetch(MCP_TOOL_BASE, "/health", { method: "GET" });
+      const data: any = await response.json().catch(() => null);
+      if (data?.fallback === true) return { status: "unreachable", healthy: false };
+      if (!response.ok) return { status: `unhealthy (HTTP ${response.status})`, healthy: false };
+      if (data?.status === "healthy") return { status: "healthy", healthy: true };
       return { status: "unhealthy", healthy: false };
+    } catch {
+      return { status: "unreachable", healthy: false };
     }
   },
 
@@ -719,9 +771,9 @@ export const backendApi = {
     sessionId: string,
     content: string,
     datasetIds?: string[],
-    analysisFidelity?: "quick_sample" | "portfolio_samples" | "entire_dataset",
-    selectedSampleName?: string,
-    metadata?: { dataset_id?: string | null },
+    _analysisFidelity?: "quick_sample" | "portfolio_samples" | "entire_dataset",
+    _selectedSampleName?: string,
+    metadata?: { dataset_id?: string | null; analysis_id?: string | null },
   ): Promise<MessageResponse> {
     try {
       this.abortAllPreviews();
@@ -734,9 +786,13 @@ export const backendApi = {
       content,
       stream: false,
       ...(datasetIds && datasetIds.length > 0 && { dataset_ids: datasetIds }),
-      ...(analysisFidelity && { analysis_fidelity: analysisFidelity }),
-      ...(selectedSampleName && { selected_sample_name: selectedSampleName }),
-      ...(metadata?.dataset_id && { metadata: { dataset_id: metadata.dataset_id } }),
+      // The analysis mode and sample are not sent: the server ignores them in a
+      // chat message, and the "Analysis on" switch writes them to the session
+      // through /api/datasets/{id}/fidelity. The parameters stay for legacy callers.
+      ...(metadata && { metadata: {
+        ...(metadata.dataset_id && { dataset_id: metadata.dataset_id }),
+        ...(metadata.analysis_id && { analysis_id: metadata.analysis_id }),
+      } }),
     };
 
     const accessToken = await getAccessToken();
@@ -801,10 +857,6 @@ export const backendApi = {
     return response.json();
   },
 
-  /**
-   * Poll the backend for the result of a long-running (deferred) chat turn.
-   * Returns the raw envelope: { status: "running" | "done" | "error" | "superseded" | "none", ... }
-   */
   async listNotifications(opts: { limit?: number; unread?: boolean } = {}): Promise<AppNotificationsResponse> {
     const accessToken = await getAccessToken();
     const params = new URLSearchParams({ limit: String(opts.limit ?? 20) });
@@ -834,6 +886,27 @@ export const backendApi = {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     if (!response.ok) throw new Error(`Mark all read failed: ${response.status}`);
+    return response.json();
+  },
+
+  /**
+   * Poll the backend for the result of a long-running (deferred) chat turn.
+   * Returns the raw envelope: { status: "running" | "done" | "error" | "superseded" | "none", ... }
+   * Only for turns where isDeferredTurn() is true — never for scheduled tasks.
+   */
+  /**
+   * Deliver and return the thread's finished-job notes. When a turn is in
+   * flight the API keeps them queued (`deferred: true`); they then arrive with
+   * that turn's reply as `job_notes`.
+   */
+  async getThreadJobNotes(threadId: string, sessionId: string): Promise<ThreadJobNotesResponse> {
+    const accessToken = await getAccessToken();
+    const response = await proxyFetch(`/threads/${threadId}/job-notes`, {
+      method: "GET",
+      sessionId,
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!response.ok) throw new Error(`Job notes fetch failed: ${response.statusText}`);
     return response.json();
   },
 
@@ -968,8 +1041,6 @@ export const backendApi = {
     return data?.runs ?? data?.items ?? [];
   },
 
-
-
   async deleteTask(taskId: string, sessionId: string): Promise<void> {
     const accessToken = await getAccessToken();
     const response = await proxyFetch(`/tasks/${taskId}`, {
@@ -1082,9 +1153,6 @@ export const backendApi = {
     }
   },
 
-
-
-
   async listBucketObjects(params: {
     backend: "gcs" | "gs" | "s3" | "azure" | "az";
     bucket: string;
@@ -1157,12 +1225,11 @@ export const backendApi = {
   },
 
   /**
-   * Create a cloud storage connection row in `cloud_datasets`. Matches the
-   * existing production pattern (see src/lib/gcp-connection.ts) which stores
-   * plaintext access_key/secret_key so the backend can initialise the cloud
-   * SDK on /buckets/list and /api/register-existing-storage. When
-   * DB_ENCRYPTION_KEY is set server-side, the backend rotates values into the
-   * *_ciphertext / *_iv columns transparently.
+   * Create a cloud storage connection. The keys go to the backend over HTTPS,
+   * which seals them under DB_ENCRYPTION_KEY and writes only the
+   * *_ciphertext / *_iv columns of `cloud_datasets`: since migration
+   * 20261116130000 the table refuses plaintext access_key/secret_key, so the
+   * UI never writes a key itself (app/api/cloud_connections.py, build_router).
    */
   async createCloudConnection(payload: {
     name: string;
@@ -1174,11 +1241,6 @@ export const backendApi = {
     secret_key: string;
     bucket_name: string;
   }): Promise<{ id: string; name: string; provider: string; bucket_name: string }> {
-    const { supabase } = await import("@/integrations/supabase/client");
-    const { getCachedAuthUser } = await import("@/lib/auth-user");
-    const uid = (await getCachedAuthUser())?.id;
-    if (!uid) throw new Error("Not signed in");
-
     if (payload.provider === "gcp") {
       try {
         const parsed = JSON.parse(payload.secret_key) as Record<string, unknown>;
@@ -1188,35 +1250,30 @@ export const backendApi = {
         throw new Error("Service account key must be valid JSON.");
       }
     }
-
-    // For GCP the `access_key` column stores the Project ID (matches
-    // gcp-connection.ts + backend get_cloud_connection).
-    const access_key =
-      payload.provider === "gcp"
-        ? (payload.project_id ?? "").trim()
-        : (payload.access_key ?? "").trim();
-
-    const { data, error } = await supabase
-      .from("cloud_datasets")
-      .insert({
-        user_id: uid,
+    const accessToken = await getAccessToken();
+    const response = await proxyFetch(`/api/cloud-connections`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
         name: payload.name.trim() || `${payload.provider.toUpperCase()} connection`,
         provider: payload.provider,
         region: payload.region ?? null,
         endpoint_url: payload.endpoint_url ?? null,
+        project_id: payload.project_id ?? null,
         bucket_name: payload.bucket_name.trim(),
-        access_key,
+        access_key: payload.access_key ?? null,
         secret_key: payload.secret_key,
-      })
-      .select("id,name,provider,bucket_name")
-      .single();
-
-    if (error) throw new Error(error.message);
-    return data as { id: string; name: string; provider: string; bucket_name: string };
+      }),
+    });
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}) as any);
+      const message =
+        (typeof errorData.detail === "string" ? errorData.detail : errorData.detail?.message) ||
+        `Failed to save the connection: ${response.statusText}`;
+      throw new Error(message);
+    }
+    return response.json();
   },
-
-
-
 
   async registerDatabase(connectionData: {
     connection_name: string;
@@ -1322,6 +1379,16 @@ export const backendApi = {
     return response.json().catch(() => ({}));
   },
 
+  async getLlmModels(): Promise<LlmModelsResponse> {
+    const accessToken = await getAccessToken();
+    const response = await proxyFetch(`/api/llm-models`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!response.ok) throw new Error(`Failed to load language models: ${response.statusText}`);
+    return response.json();
+  },
+
   async listModels(): Promise<{ models: BackendModel[] }> {
     const accessToken = await getAccessToken();
     const response = await proxyFetch(`/api/models`, {
@@ -1420,9 +1487,6 @@ export const backendApi = {
       rawResponse: res,
     };
   },
-
-
-
 
   _mcpApi: MCP_API_BASE,
 

@@ -15,6 +15,7 @@ import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
 import { Toaster } from "@/components/ui/sonner";
 import { useThemeApplier } from "@/lib/theme";
+import { TeamInvitationClaim } from "@/components/dashboard/TeamInvitationClaim";
 import { TrainingJobsProvider } from "@/lib/training-jobs";
 
 function NotFoundComponent() {
@@ -169,6 +170,7 @@ function RootComponent() {
 
   return (
     <QueryClientProvider client={queryClient}>
+      <TeamInvitationClaim />
       <TrainingJobsProvider>
         <Outlet />
       </TrainingJobsProvider>

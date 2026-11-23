@@ -8,6 +8,7 @@ import { DashboardMiniChart } from "@/components/dashboard/dashboardMiniChart";
 import { dashboardFromVizConfig, type DashboardWidget } from "@/lib/api/project-dashboard";
 import { Button } from "@/components/base/buttons/button";
 import { toast } from "sonner";
+import { InlineMarkdown } from "@/components/analysis/ChartCarousel";
 
 export const Route = createFileRoute("/shared-report/$token")({
   head: () => ({
@@ -334,14 +335,14 @@ function SharedReportPage() {
   const datasetLabel = payload.analysis?.filename ?? "Dataset";
 
   return (
-    <div className="flex min-h-screen flex-col bg-primary text-primary">
-      <header className="border-b border-secondary bg-primary px-6 py-4">
+    <div className="flex min-h-screen flex-col bg-primary text-primary dark:bg-[#0b0d10]">
+      <header className="border-b border-secondary bg-primary px-6 py-4 dark:border-white/10 dark:bg-[#111418]">
         <div className="mx-auto flex max-w-6xl items-center justify-between gap-3">
           <div className="leading-tight">
             <p className="text-xs uppercase tracking-wide text-tertiary">Shared report · Read-only</p>
             <div className="mt-1 flex items-center gap-2">
               <h1 className="text-md font-semibold text-primary">{title}</h1>
-              <span className="inline-flex items-center rounded-full bg-success-secondary px-2 py-0.5 text-xs font-medium text-fg-success-primary ring-1 ring-inset ring-success-subtle">
+              <span className="inline-flex items-center rounded-full bg-success-secondary px-2 py-0.5 text-xs font-medium text-fg-success-primary ring-1 ring-inset ring-success-subtle dark:bg-green-500/15 dark:text-green-300 dark:ring-green-500/25">
                 {datasetLabel}
               </span>
             </div>
@@ -354,7 +355,7 @@ function SharedReportPage() {
       <main className="flex-1 overflow-y-auto">
         <div className="mx-auto max-w-6xl px-6 py-6">
           {widgets.length === 0 ? (
-            <div className="mt-4 rounded-xl border border-secondary bg-secondary/30 p-4 text-sm text-secondary">
+            <div className="mt-4 rounded-xl border border-secondary bg-secondary/30 p-4 text-sm text-secondary dark:border-white/10 dark:bg-[#111418]">
               No charts or insights available for this report.
             </div>
           ) : (
@@ -362,17 +363,17 @@ function SharedReportPage() {
               {widgets.map((widget) => {
                 const widgetInsights = insightsFromWidget(widget);
                 return (
-                  <div key={widget.id} className="rounded-xl border border-secondary bg-primary p-4">
+                  <div key={widget.id} className="rounded-xl border border-secondary bg-primary p-4 dark:border-white/10 dark:bg-[#111418]">
                     <p className="text-sm font-semibold text-primary">{widget.title}</p>
                     <div className="mt-3 min-h-[220px]">
                       <DashboardMiniChart widget={widget} samples={samples} height={220} />
                     </div>
                     {widgetInsights.length > 0 && (
-                      <div className="mt-4 rounded-lg border border-secondary bg-secondary/30 p-3">
+                      <div className="mt-4 rounded-lg border border-secondary bg-secondary/30 p-3 dark:border-white/10 dark:bg-[#171b20]">
                         <p className="text-xs font-semibold text-primary">Key Insights</p>
                         <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-secondary">
                           {widgetInsights.map((insight, index) => (
-                            <li key={index}>{insight}</li>
+                            <li key={index}><InlineMarkdown content={insight} /></li>
                           ))}
                         </ul>
                       </div>
@@ -383,7 +384,7 @@ function SharedReportPage() {
             </div>
           )}
 
-          <section className="mt-6 rounded-xl border border-secondary bg-primary p-4">
+          <section className="mt-6 rounded-xl border border-secondary bg-primary p-4 dark:border-white/10 dark:bg-[#111418]">
             <h2 className="text-sm font-semibold text-primary">
               Comments {payload.comments?.length ? `(${payload.comments.length})` : ""}
             </h2>

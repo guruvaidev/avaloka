@@ -12,6 +12,7 @@ from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from app.core.inference import build_chat_model
 from app.agents.state import CodingAgentState
 from app.agents.preparation_agent import parse_numeric_token
+from app.services.memory_actions import analysis_memory_context
 # Re-exported: app/agents/data_transfer_agent/daft_coder.py imports this
 # through app.agents.coder, so the name must stay importable here even
 # though coder.py no longer calls it itself.
@@ -57,6 +58,20 @@ _TRUNCATION_RETRY_NOTE = (
     "at runtime), loop over columns instead of repeating blocks, and keep "
     "comments to a minimum. The script must end with the __main__ block."
 )
+
+
+
+def _without_job_notes(messages):
+    """Drop code-written background-job notes (app/core/job_notes.py) before
+    scanning the history for the user's instruction or the plan: a note is
+    system context, never an instruction."""
+    out = []
+    for m in messages:
+        ak = getattr(m, "additional_kwargs", None) or {}
+        if isinstance(ak, dict) and ak.get("avaloka_job_note"):
+            continue
+        out.append(m)
+    return out
 
 
 def _finish_reason(response: Any) -> str:
@@ -234,7 +249,7 @@ def _generate_pseudocode(state: CodingAgentState) -> str:
     instruction = plan_text or user_prompt
 
     if not instruction:
-        messages = state.get("messages") or []
+        messages = _without_job_notes(state.get("messages") or [])
         for message in reversed(messages):
             candidate = getattr(message, "content", None)
             if candidate:
@@ -345,13 +360,15 @@ Rules for the contract itself:
     if sample_row:
         human_prompt += f"\nSample row:\n{_json_for_prompt(sample_row)}\n"
 
-    # Inject Context Memory directly into the Pseudocode planner's awareness
-    if state.get("memory_hints"):
-        hints_str = "\n- ".join(state["memory_hints"])
+    # Inject Context Memory directly into the Pseudocode planner's awareness.
+    # A write or transfer in memory never steers a blueprint (memory_actions).
+    memory_hints, logic_signature = analysis_memory_context(state)
+    if memory_hints:
+        hints_str = "\n- ".join(memory_hints)
         human_prompt += f"\n[CONTEXT MEMORY - USER PREFERENCES & PAST INSIGHTS]:\n- {hints_str}\n"
     
-    if state.get("session_logic_signature"):
-        human_prompt += f"\n[SESSION LOGIC SIGNATURE]:\n{state['session_logic_signature']}\n"
+    if logic_signature:
+        human_prompt += f"\n[SESSION LOGIC SIGNATURE]:\n{logic_signature}\n"
 
     human_prompt += (
         "\nRespond with the numbered pseudocode steps, then the fenced json "
@@ -492,7 +509,7 @@ def _detect_math_on_string_column_coder(state: CodingAgentState) -> Optional[str
     # whose wording ("assumption", "column named ...") must not trip the guard.
     plan_raw = state.get("user_prompt") or state.get("plan") or ""
     if not plan_raw:
-        messages = state.get("messages") or []
+        messages = _without_job_notes(state.get("messages") or [])
         for message in reversed(messages):
             content = getattr(message, "content", None)
             if content:
@@ -551,7 +568,7 @@ def _generate_stub_code(state: CodingAgentState) -> str:
             instruction_raw = user_prompt
 
     if not instruction_raw:
-        messages = state.get("messages") or []
+        messages = _without_job_notes(state.get("messages") or [])
         for message in reversed(messages):
             content = getattr(message, "content", None)
             if content:
@@ -1413,6 +1430,12 @@ SECURITY AND STABILITY (OOM TRAP PREVENTION):
 - If no suitable alternative fits what was asked, say so to the analyst (raise ValueError with a clear message naming the estimator and why it cannot run at this size) rather than silently reducing the input.
 - This does not relax NEVER RE-SAMPLE THE DATAFRAME above: constrain or replace the model, never shrink the dataframe to make it fit.
 
+ALGORITHMIC COMPLEXITY & VECTORIZATION (ANTI-TIMEOUT TRAP):
+- NEVER use `.iterrows()`, `.itertuples()`, or repeated DataFrame boolean filtering (`df[df['col'] == x]`) inside a `for` or `while` loop. Scanning a DataFrame inside a Python loop has O(N^2) time complexity and will exceed the execution timeout on medium and large datasets.
+- Always prefer vectorized pandas/NumPy operations (`groupby`, `merge`, `merge_asof`, `map`, `isin`, boolean masks, `.to_numpy()`, `np.where`, `np.searchsorted`) over row-by-row Python iteration.
+- When matching ordered intervals, time windows, or sequential dependencies across rows, sort once and use `pd.merge_asof` or binary search (`np.searchsorted`) on pre-extracted NumPy arrays rather than nested loops.
+- When comparing or sorting datetime columns, coerce both sides with `pd.to_datetime(..., errors='coerce')` first. NEVER compare `pd.Timestamp` or `datetime64` values against raw integers (`0` or `-1`), which raises `TypeError: '<' not supported between instances of 'int' and 'Timestamp'`.
+
 Example expected output format:
 ```python
 import pandas as pd
@@ -1432,13 +1455,15 @@ if __name__ == "__main__":
         "If you aggregate a column (such as summing Price), keep the resulting column labeled with the original name.\n\n"
     )
 
-    # Inject Context Memory directly into the Coder's awareness
-    if state.get("memory_hints"):
-        hints_str = "\n- ".join(state["memory_hints"])
+    # Inject Context Memory directly into the Coder's awareness. A write or
+    # transfer in memory never steers the code (memory_actions).
+    memory_hints, logic_signature = analysis_memory_context(state)
+    if memory_hints:
+        hints_str = "\n- ".join(memory_hints)
         human_prompt += f"[CONTEXT MEMORY - USER PREFERENCES & PAST INSIGHTS]:\n- {hints_str}\n\n"
     
-    if state.get("session_logic_signature"):
-        human_prompt += f"[SESSION LOGIC SIGNATURE]:\n{state['session_logic_signature']}\n\n"
+    if logic_signature:
+        human_prompt += f"[SESSION LOGIC SIGNATURE]:\n{logic_signature}\n\n"
 
     if pseudocode_plan:
         human_prompt += f"Pseudocode blueprint (follow exactly):\n{pseudocode_plan}\n\n"

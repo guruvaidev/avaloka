@@ -93,7 +93,7 @@ resolution order and the per-provider quirks are documented in
 
 ```bash
 # FastAPI backend (the HTTP API)
-uvicorn app.api.server:app --host 0.0.0.0 --port 9000 --reload
+uvicorn app.api.server:app --host 0.0.0.0 --port 9000 --loop asyncio --reload
 
 # Streamlit UI
 streamlit run app/api/streamlit_app.py
@@ -371,9 +371,7 @@ avaloka-dev/
 │   │   │   ├── aws_eks.py         # Amazon EKS
 │   │   │   ├── azure_aks.py       # Azure Kubernetes Service
 │   │   │   └── base.py            # run_command + provider interface
-│   │   ├── config/                # Kubernetes configurations
-│   │   ├── manifests/             # Helm values (Postgres, Kafka, Milvus, etc.)
-│   │   └── python_app/            # Containerized Python app
+│   │   └── manifests/             # Helm values (Postgres, Kafka, Milvus, etc.)
 │   ├── core/                      # Shared runtime utilities
 │   │   ├── celery_app.py          # Celery/RedBeat scheduler backend
 │   │   ├── cache.py               # Redis cache with circuit-breaker

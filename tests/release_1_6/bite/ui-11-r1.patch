@@ -1,0 +1,13 @@
+diff --git a/app/api/server.py b/app/api/server.py
+index c61b6d4a..848f8a61 100644
+--- a/app/api/server.py
++++ b/app/api/server.py
+@@ -9458,7 +9458,7 @@ async def inference(
+         from app.agents.mta_v2.inference_service_manager import InferenceServiceManager
+ 
+         manager = InferenceServiceManager()
+-        result = await asyncio.to_thread(manager.inference, run_id, input_data)
++        result = await asyncio.to_thread(manager.inference, run_details.get("latest_run_id") or "latest", input_data)
+         return {"result": result}
+     except ValueError as exc:
+         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))

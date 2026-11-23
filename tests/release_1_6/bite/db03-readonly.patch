@@ -1,0 +1,13 @@
+diff --git a/app/mcp_server/multi_tenant_mcp_server.py b/app/mcp_server/multi_tenant_mcp_server.py
+index b23387dd..f28a203c 100644
+--- a/app/mcp_server/multi_tenant_mcp_server.py
++++ b/app/mcp_server/multi_tenant_mcp_server.py
+@@ -798,7 +798,7 @@ def query(sql: str) -> dict:
+ 
+     # ---- SQL path (unchanged) ----
+     first_word = sql.strip().split()[0].lower() if sql.strip() else ""
+-    if first_word not in {"select", "with", "show", "describe", "explain"}:
++    if first_word not in {"select", "with", "show", "describe", "explain", "delete"}:
+         return {"error": "Only read-only queries are allowed (SELECT, WITH, SHOW, DESCRIBE, EXPLAIN)"}
+ 
+     try:

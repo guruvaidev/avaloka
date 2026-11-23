@@ -1,0 +1,13 @@
+diff --git a/deploy/helm/ray/raycluster.yaml b/deploy/helm/ray/raycluster.yaml
+index 9645a394..8b0478b9 100644
+--- a/deploy/helm/ray/raycluster.yaml
++++ b/deploy/helm/ray/raycluster.yaml
+@@ -66,7 +66,7 @@ spec:
+   workerGroupSpecs:
+     - groupName: cpu-workers
+       replicas: 1
+-      minReplicas: 0     # idle workers scale to zero (K8-11)
++      minReplicas: 1
+       maxReplicas: 4
+       rayStartParams: {}
+       template:

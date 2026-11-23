@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
+import { isAdminEmail } from "@/lib/admin-emails";
 
 // Statuses that count as an active/paid subscription.
 // NOTE: "past_due" is intentionally excluded — a failed payment revokes access
@@ -148,12 +149,11 @@ export const getMyActivePlan = createServerFn({ method: "GET" })
       }
     }
 
-    // The support desk account is always treated as Enterprise and never
-    // requires a subscription. Scoped strictly to that single email.
-    const claimEmail = String(
-      (context.claims as any)?.email ?? (context.claims as any)?.user_metadata?.email ?? "",
-    ).toLowerCase();
-    if (claimEmail === "support@avaloka.ai") {
+    // Support-desk admins (ADMIN_EMAILS, server env) are always treated as
+    // Enterprise and never require a subscription. Empty list: nobody. Only the
+    // verified email claim counts: user_metadata is writable by the user.
+    const claimEmail = String((context.claims as any)?.email ?? "").toLowerCase();
+    if (isAdminEmail(claimEmail)) {
       plan = "enterprise";
     }
 

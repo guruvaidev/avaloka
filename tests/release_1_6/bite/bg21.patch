@@ -1,0 +1,13 @@
+diff --git a/ui/src/components/dashboard/UploadModal.tsx b/ui/src/components/dashboard/UploadModal.tsx
+index 20abbbef..49947abc 100644
+--- a/ui/src/components/dashboard/UploadModal.tsx
++++ b/ui/src/components/dashboard/UploadModal.tsx
+@@ -938,7 +938,7 @@ export function UploadModal({
+           </div>}
+           {summaryLine && <p className="mt-3 text-sm text-tertiary">{summaryLine}</p>}
+         </div>
+-        <footer className="upload-review-footer sticky bottom-0 z-10 shrink-0 border-t border-ai-border bg-primary px-5 py-3">
++        <footer className="upload-review-footer border-t border-ai-border bg-primary px-5 py-3">
+           <p className="mb-3 text-xs text-tertiary">Avaloka does not capture your data to train on it beyond customization for your needs.</p>
+           {step === 2 && canStart && !canFinish && <p className="mb-2 text-xs font-medium text-secondary">Select the file(s) you want to analyse.</p>}
+           {step === 1 ? <ReviewButton className="w-full bg-brand-solid text-primary_on-brand hover:bg-brand-solid_hover" disabled={!canStart} onClick={() => setStep(2)}>Continue</ReviewButton> : <div className="grid grid-cols-2 gap-3">

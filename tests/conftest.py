@@ -45,6 +45,22 @@ os.environ["AVALOKA_LINEAGE_DB_URL"] = "sqlite:///" + os.path.join(
     _LINEAGE_TEST_DIR, "lineage.db").replace(os.sep, "/")
 os.environ.pop("AVALOKA_LINEAGE", None)
 
+# ---------------------------------------------------------------------------
+# A deployment key for sealed credentials -- MUST run before any app import.
+#
+# Customer database credentials are sealed at rest and in transit under
+# DB_ENCRYPTION_KEY (app/mcp_server/credentials.py); a registration with no
+# key is refused. A real deployment always has one; so does the suite: a fresh
+# random value per run, never a published one. setdefault so a key from the
+# environment still wins. Tests about a missing or published key set their own.
+# ---------------------------------------------------------------------------
+import secrets as _secrets
+
+os.environ.setdefault("DB_ENCRYPTION_KEY", "pytest-" + _secrets.token_hex(32))
+# Services provision generated secrets into the .env file at startup
+# (app/core/provisioning.py). The suite never writes the repository's .env.
+os.environ["AVALOKA_ENV_FILE"] = os.path.join(_LINEAGE_TEST_DIR, "avaloka-test.env")
+
 import pytest
 
 
@@ -104,9 +120,27 @@ collect_ignore = [
 # converse also happened: tests that looked mocked still shelled out to scp and
 # kubectl or read a gs:// object. Before naming a file either way, run it with
 # the network off and read what it touches.
+#
+# tests/e2e/ is NOT in the list. Its own harness runs every leg in-process over
+# fakes by default (tests/e2e/conftest.py, "safe as a PR gate"); the legs that
+# need a deployment skip via requires_deployed(), and the files that need cloud
+# data or a model provider say so with a module marker (test_e3_real_dataset_gcs
+# is `cloud`, test_e5_golden_missions is `integration`). Marking the whole
+# directory took 500+ hermetic tests out of every gate from 2026-09-24, and the
+# pack rotted unseen. Verified with the container network off before removal.
 _TESTS_ROOT = "tests/"
-_INTEGRATION_DIRS = ("tests/e2e/", "tests/k8s/", "tests/infra/", "tests/containers/")
+_INTEGRATION_DIRS = ("tests/k8s/", "tests/infra/", "tests/containers/")
 _INTEGRATION_SUFFIXES = ("_integration.py",)
+
+
+@pytest.fixture(autouse=True)
+def _no_live_ray_env(monkeypatch):
+    """Tests must not inherit the developer's Ray cluster address. With
+    RAY_DASHBOARD_URL set, ray_job_runner switches to DIRECT mode and builds a
+    real JobSubmissionClient instead of the mocked kubectl path. A test that
+    needs DIRECT mode sets the variable itself."""
+    for var in ("RAY_DASHBOARD_URL", "RAY_API_SERVER_ADDRESS", "RAY_ADDRESS"):
+        monkeypatch.delenv(var, raising=False)
 
 
 def _wants_integration_marker(relpath: str) -> bool:

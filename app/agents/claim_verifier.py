@@ -16,7 +16,7 @@ check different things.
 | Asks | will this run against this schema? | is this conclusion supported? |
 | Catches | bad column, unsafe join | overreach, causal language, unsupported numbers |
 
-Five checks, each targeting a way an automated analysis misleads:
+Eight checks, each targeting a way an automated analysis misleads:
 
 1. **Causal language from correlational evidence** — "drives", "causes",
    "because of" asserted from a correlation. The single most common overreach,
@@ -28,6 +28,13 @@ Five checks, each targeting a way an automated analysis misleads:
 4. **Unhedged extrapolation** — "will", "guarantees", "always" beyond the data.
 5. **Significance asserted without a test** — "significant" used where no test
    was run, which readers hear as statistical significance.
+6. **A superlative naming the wrong group** — "the lowest is Autos & Vehicles"
+   when another group in the result is lower.
+7. **A threshold the result breaks** — "no category exceeds 30 million" when
+   one does, or "all categories are above N" when one is not.
+8. **A method the code never ran** — "the gradient-boosted model achieves…"
+   over a script that fitted a linear regression. The numbers are real, so the
+   other checks pass; what is wrong is the description of how they were made.
 
 Deterministic and dependency-free. The checks are string- and evidence-level,
 so they run without an LLM, cost nothing, and cannot themselves hallucinate.
@@ -94,6 +101,95 @@ _CAUSAL_EVIDENCE_KEYS = ("experiment", "randomized", "randomised", "ab_test",
                          "treatment", "control", "causal", "uplift",
                          "instrument", "did", "difference_in_differences")
 
+#: Evidence key holding the script that produced the result. It is read by
+#: ``check_method_not_in_code`` only: a script is full of literals (a split
+#: ratio, a tree count) that are not results, so it is kept out of the numeric
+#: evidence the invented-number check trusts.
+_CODE_KEY = "executed_code"
+
+#: Model families a narrative can name, as (terms a reader sees, substrings the
+#: script must contain for the name to be true). Markers are matched against
+#: the lower-cased script with its comments and string literals removed, so
+#: "gradientboosting" covers GradientBoostingRegressor and
+#: HistGradientBoostingClassifier alike, "xgb" covers both the xgboost import
+#: and XGBRegressor, and a comment saying "a RandomForest would be better" does
+#: not count as one being fitted.
+_METHOD_FAMILIES = {
+    "gradient boosting": (
+        ("gradient-boosted", "gradient boosted", "gradient boosting",
+         "gradient-boosting", "boosted tree", "boosted trees", "boosted model",
+         "boosting model", "gbm", "gbdt", "gbrt",
+         "xgboost", "lightgbm", "catboost"),
+        ("gradientboosting", "xgb", "lightgbm", "lgbm", "catboost"),
+    ),
+    "random forest": (
+        ("random forest", "random-forest", "random forests"),
+        ("randomforest",),
+    ),
+    "neural network": (
+        ("neural network", "neural networks", "neural net", "neural-network",
+         "deep learning", "multilayer perceptron", "multi-layer perceptron",
+         "perceptron", "mlp"),
+        ("torch", "keras", "tensorflow", "mlpregressor", "mlpclassifier"),
+    ),
+}
+
+#: Words that, just before a model's name, say the sentence is not claiming it
+#: produced the result: a negation ("no", "never", "unlike"), a comparison
+#: ("outperforms", "compared with", "versus"), a suggestion ("could", "consider")
+#: or a restated request ("you asked for"). Judged on the few words before the
+#: mention, not the whole sentence: "the random forest reached 0.91, which
+#: isn't bad" claims the forest ran, and the "isn't" three clauses later does
+#: not change that. The cue may be followed by up to three words ("never
+#: trained a neural network", "you asked for a gradient-boosted model").
+_NOT_ASSERTED_BEFORE = re.compile(
+    r"(?:\b(?:no|not|never|neither|nor|without|unlike|than|versus|vs\.?|against|over|"
+    r"instead of|rather than|compared (?:with|to)|comparable (?:with|to)|relative to|"
+    r"beats?|outperform(?:s|ed|ing)?|exceed(?:s|ed)?|within|close to|near|similar to|like|"
+    r"as (?:good|accurate|well|fast) as|match(?:es|ed|ing)?|"
+    r"could|would|should|might|may|consider(?:ing)?|try(?:ing)?|recommend(?:s|ed)?|suggest(?:s|ed)?|"
+    r"asked for|requested|wanted|expected|instead)\b|n't)"
+    r"(?:\s+\S+){0,3}\s*$",
+    re.IGNORECASE)
+#: Words right after the mention that say it did not run or is only an option.
+_NOT_ASSERTED_AFTER = re.compile(
+    r"^\s*(?:\w+\s+){0,3}?(?:timed out|failed|was not|wasn't|were not|weren't|never|could not|"
+    r"couldn't|did not|didn't|is not|isn't|unavailable|unable|would|could|should|might|may|"
+    r"instead|baseline|alternative|option|next step|later)\b", re.IGNORECASE)
+#: How many words before a mention are read for a cue.
+_CUE_WINDOW = 6
+
+_COMMENT_OR_STRING = re.compile(
+    r'#[^\n]*|"""[\s\S]*?"""|\'\'\'[\s\S]*?\'\'\'|"(?:\\.|[^"\\\n])*"|\'(?:\\.|[^\'\\\n])*\'')
+
+
+def _code_only(script: str) -> str:
+    """The script with its comments and string literals blanked: a model named
+    in a comment, a docstring or a print() message was not fitted."""
+    return _COMMENT_OR_STRING.sub(" ", script).lower()
+
+
+def _asserted_mention(claim: str, terms) -> Optional[str]:
+    """The term of *terms* the claim asserts produced the result, else None.
+
+    Longer terms first, and a mention judged not asserted silences the shorter
+    terms inside it: "no gradient boosting model" is not re-read as a claim
+    about a "boosting model".
+    """
+    lowered = claim.lower()
+    silenced: List[Tuple[int, int]] = []
+    for term in sorted(terms, key=len, reverse=True):
+        for m in re.finditer(rf"\b{re.escape(term)}\b", lowered):
+            if any(s <= m.start() < e or s < m.end() <= e for s, e in silenced):
+                continue
+            before = " ".join(lowered[:m.start()].split()[-_CUE_WINDOW:])
+            after = lowered[m.end():]
+            if _NOT_ASSERTED_BEFORE.search(before) or _NOT_ASSERTED_AFTER.match(after):
+                silenced.append((m.start(), m.end()))
+                continue
+            return term
+    return None
+
 # _NUMBER = re.compile(r"-?\d+(?:\.\d+)?%?")
 #
 # A narrative writes large values compactly ("56.1B", "24 million") or with
@@ -101,11 +197,19 @@ _CAUSAL_EVIDENCE_KEYS = ("experiment", "randomized", "randomised", "ab_test",
 # pattern read those as 56.1 / 24, or as four separate numbers (56, 106, ...),
 # and flagged correct sentences: "cites 56, which does not appear in the
 # computed evidence" for a 56,106,087,508 value in the result table.
+#
+# gpt-oss writes "41.6\u202fM": a space before an upper-case scale letter is
+# still the scale. Read as 41.6, every such figure was "not in the evidence";
+# hidden while nothing else made the reply unsafe, but shown, and false, in
+# the notice as soon as a superlative or threshold did. A plain space counts
+# only after two digits or a decimal ("28 M", "41.6 M"): "Type 2 B" is a
+# label, and lower case keeps the old rule ("5 m" may be metres or minutes).
 _NUMBER = re.compile(
     r"(?<![\w.])-?"
     r"(?:\d{1,3}(?:[,\u00a0\u202f\u2009]\d{3})+|\d{1,3}(?: \d{3}){2,}|\d+)"
     r"(?:\.\d+)?"
-    r"(?:\s?%|\s?percent\b|\s?(?:thousand|million|billion|trillion)\b|(?:[kKmMbBtT]|bn|Bn|BN|mn|tn)(?![\w]))?"
+    r"(?:\s?%|\s?percent\b|\s?(?:thousand|million|billion|trillion)\b|(?:[kKmMbBtT]|bn|Bn|BN|mn|tn)(?![\w])"
+    r"|(?:[\u00a0\u202f\u2009]|(?<=\d\d) |(?<=\.\d) )(?:[KMBT]|Bn|BN)(?![\w&]))?"
 )
 _SCALES = {
     "k": 1e3, "thousand": 1e3,
@@ -200,7 +304,9 @@ def _flatten(evidence: Any, prefix: str = "") -> Dict[str, Any]:
 
 def _evidence_numbers(flat: Dict[str, Any]) -> List[float]:
     numbers: List[float] = []
-    for value in flat.values():
+    for key, value in flat.items():
+        if key == _CODE_KEY:
+            continue
         if isinstance(value, bool):
             continue
         if isinstance(value, (int, float)):
@@ -406,6 +512,347 @@ def check_ordering_contradicted(claim: str, flat: Dict[str, Any]) -> Optional[Cl
             )
     return None
 
+# --------------------------------------------------------------------------- #
+# Superlatives and thresholds over a grouped result
+# --------------------------------------------------------------------------- #
+#
+# The 1.6 demo said "The lowest average is for Autos & Vehicles at about
+# 17.9M" beside a table whose lowest was Travel & Events (12,500,000), and "No
+# category exceeds 30 million" beside Trailers at 39,000,000. Neither was
+# flagged. check_ordering_contradicted reads a claim's *figure*, never the
+# group it names, and it skips every scaled figure ("17.9M"); nothing read a
+# threshold at all, so the sentence fell to check_invented_numbers, whose
+# UNSUPPORTED verdict does not raise the notice.
+#
+# These two checks read the group and the bound instead. They run only on a
+# result with exactly one label column and one row per label, and only when
+# the claim resolves to one direction and to columns that all agree; anything
+# else is skipped, never guessed. The superlative lexicon (rank words, "at
+# least", "top three", scoped phrases, null labels) follows 2.0's
+# claim_extremes.
+
+_ROW_CELL = re.compile(r"^(?:execution_output|output_json|output_data)\[(\d+)\]\.(.+)$")
+_NORM_CHARS = str.maketrans({
+    "\u2010": "-", "\u2011": "-", "\u2012": "-", "\u2013": "-", "\u2014": "-", "\u2212": "-",
+    "\u2018": "'", "\u2019": "'", "\u201c": '"', "\u201d": '"', "*": " ",
+})
+#: Labels that are no group: the missing-value row is not a category.
+_NULL_LABELS = frozenset({"", "nan", "none", "null", "missing", "n/a", "na", "<na>", "nat", "-"})
+#: A row that sums the others is not one of them.
+_TOTAL_LABELS = frozenset({"total", "grand total", "subtotal", "all", "overall", "sum"})
+#: Measure words that name no column: "the highest average value".
+_MEASURE_FILLER = frozenset({"the", "a", "an", "of", "per", "overall", "value", "values", "figure",
+                             "level", "number", "amount"})
+_MEASURE_SYNONYMS = {"average": "mean", "avg": "mean", "total": "sum"}
+#: A column whose name gives its unit: "median_subscribers_million" holds 39.0 for 39,000,000.
+_COLUMN_UNITS = {"thousand": 1e3, "k": 1e3, "million": 1e6, "mn": 1e6, "mil": 1e6,
+                 "billion": 1e9, "bn": 1e9}
+_HIGH_TERMS = frozenset({"highest", "largest", "biggest", "greatest", "most", "top"})
+_SUP = (r"(?P<sup>highest|largest|biggest|greatest|lowest|smallest|fewest"
+        r"|(?<=the )(?:most|least|top|bottom))")
+#: Not the extreme itself: "second highest", "one of the lowest", "not the top", "at least".
+_SUP_RANKED = re.compile(r"(?:\b(?:second|third|fourth|fifth|sixth|2nd|3rd|4th|5th|6th|next|one of|among|"
+                         r"near|nearly|almost|close to|not|n't|never)\s+(?:the\s+)?|"
+                         r"\b(?:second|third|fourth|fifth|2nd|3rd|4th|5th|next)-)$")
+#: A count after it is a list, not an extreme: "the top three", "lowest 5".
+_SUP_COUNT = re.compile(r"^[\s-]*(?:\d|one|two|three|four|five|six|seven|eight|nine|ten)\b")
+#: Says the claim is about a selection or an exception; the result cannot say.
+_SCOPED = re.compile(
+    r"\b(?:among|of these|of those|of the (?:top|selected|listed|shown|ones?)|in (?:this|the) "
+    r"(?:list|selection|sample|subset)|in the top|within|listed|shown|selected|excluding|except|"
+    r"other than|apart from|aside from|besides|outside|ignoring)\b")
+_CLAUSE_END = re.compile(r",\s|;|:\s|\s-\s|\b(?:while|whereas|but|although|though)\b")
+_CLAUSE_LEAD = re.compile(r"^\s*(?:(?:[-+\u2022]|\d+[.)])\s+)?(?:(?:and|so|thus|hence|also|yet|indeed|"
+                          r"notably|overall|in fact|in short)\s+)*")
+_THRESHOLD_HINT = re.compile(r"\b(?:no|none|all|every|each|not a single|not one)\b")
+_SUPERLATIVE_HINT = re.compile(r"\b(?:highest|largest|biggest|greatest|lowest|smallest|fewest|most|least|"
+                               r"top|bottom)\b")
+_UP_CMP = (r"(?:exceeds?|exceeded|surpass(?:es|ed)?|tops|topped"
+           r"|(?:goes|go|went|rises?|rose|climbs?|climbed)\s+(?:above|over|beyond)"
+           r"|(?:(?:is|are|was|were|sits?|sat|stays?|stayed|remains?|remained)\s+)?"
+           r"(?:above|over|more than|greater than|higher than|larger than|bigger than))")
+_DOWN_CMP = (r"(?:(?:falls?|fell|dips?|dipped|drops?|dropped|goes|go|went|sinks?|sank)\s+(?:below|under|beneath)"
+             r"|(?:(?:is|are|was|were|sits?|sat|stays?|stayed|remains?|remained)\s+)?"
+             r"(?:below|under|beneath|less than|lower than|smaller than|fewer than))")
+#: A word that starts the comparison, so it is never a measure word.
+_NOT_VERB = (r"(?!(?:is|are|was|were|has|have|had|goes|go|went|falls?|fell|sits?|sat|stays?|stayed|remains?|"
+             r"remained|dips?|dipped|drops?|dropped|rises?|rose|climbs?|climbed|sinks?|sank|exceeds?|surpass\w*|"
+             r"tops?|above|over|below|under|beneath|more|less|fewer|greater|higher|lower|larger|smaller|"
+             r"bigger)\b)")
+_THRESHOLD = re.compile(
+    r"^(?:(?P<neg>not a single|not one|none of the|none of them|none|no)|(?P<all>all of the|all the|all|every|each))"
+    r"(?:\s+(?:\d+\s+)?(?P<noun>[a-z_]+)(?:'s?(?=\s))?)?"
+    r"(?:\s+(?P<m1>(?:" + _NOT_VERB + r"[a-z_]+\s+){0,2}?" + _NOT_VERB + r"[a-z_]+)(?=\s+(?:exceed|surpass|top|go|went|rise|rose|climb|is|are|"
+    r"was|were|sit|sat|stay|remain|above|over|more|greater|higher|larger|bigger|fall|fell|dip|drop|sink|sank|"
+    r"below|under|beneath|less|lower|smaller|fewer|has|have|had)))?"
+    r"(?:\s+(?:has|have|had)\s+(?:an?\s+|any\s+|the\s+)?(?P<m2>(?:[a-z_]+\s+){0,2}?[a-z_]+)?(?:\s+of)?)?"
+    r"\s+(?:(?P<up>" + _UP_CMP + r")|(?P<down>" + _DOWN_CMP + r"))"
+    r"\s+[$\u20ac\u00a3]?(?P<num>\d[\d,]*(?:\.\d+)?)"
+    r"(?:\s?(?P<scale>thousand|million|billion|trillion|mn|bn|tn|k|m|b))?(?P<pct>\s?%|\s?percent)?(?![\w])"
+    r"(?P<after>.*)$")
+_AFTER_STOP = frozenset({"and", "so", "which", "because", "while", "but", "than", "as", "in", "per", "each",
+                         "or", "for", "across", "on", "at", "with", "to", "the", "a", "an", "is", "are",
+                         "was", "were", "this", "that", "it"})
+_THRESHOLD_SCALES = {"thousand": 1e3, "k": 1e3, "million": 1e6, "mn": 1e6, "m": 1e6,
+                     "billion": 1e9, "bn": 1e9, "b": 1e9, "trillion": 1e12, "tn": 1e12}
+
+
+def _norm(text: Any) -> str:
+    """Casefolded, one kind of space, dash and quote; "&" read as "and"."""
+    text = str(text).translate(_NORM_CHARS)
+    text = re.sub(r"\s*&\s*", " and ", text)
+    return re.sub(r"\s+", " ", text).strip().casefold()
+
+
+def _stem(word: str) -> str:
+    word = _MEASURE_SYNONYMS.get(word, word)
+    if word.endswith("ies") and len(word) > 4:
+        return word[:-3] + "y"
+    if word.endswith("s") and not word.endswith("ss") and len(word) > 3:
+        return word[:-1]
+    return word
+
+
+def _tokens(name: str) -> List[str]:
+    spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", str(name))
+    return [_stem(t) for t in re.split(r"[^a-z0-9]+", spaced.lower()) if t]
+
+
+def _cell_number(value: Any) -> Optional[float]:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value.strip().replace(",", "")) if isinstance(value, str) else float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number == number and abs(number) != float("inf") else None
+
+
+def _null_label(value: Any) -> bool:
+    if value is None or (isinstance(value, float) and value != value):
+        return True
+    return isinstance(value, str) and _norm(value) in _NULL_LABELS
+
+
+def _fmt(value: float) -> str:
+    if abs(value) >= 1000:
+        return f"{value:,.0f}" if float(value).is_integer() else f"{value:,.2f}"
+    return f"{value:.4g}"
+
+
+@dataclass
+class _Grouped:
+    """A result of one label column and one row per label."""
+    label_column: str
+    labels: List[str]                              # as the result writes them
+    by_label: Dict[str, int]                       # normalised label -> row
+    columns: Dict[str, List[Optional[float]]]      # numeric column -> value per row
+    group_pattern: "re.Pattern[str]"
+
+    def resolve(self, words: Sequence[str]) -> Optional[List[str]]:
+        """The numeric columns *words* name; all of them for no words; None when
+        the words name no column, or name the groups themselves ("the largest
+        category" is a count the result may not hold)."""
+        label_tokens = set(_tokens(self.label_column)) | {"group", "category", "segment"}
+        wanted = [_stem(w) for w in words if w and w not in _MEASURE_FILLER]
+        if any(w in label_tokens for w in wanted):
+            return None
+        if not wanted:
+            return list(self.columns)
+        hits = [c for c in self.columns if all(w in _tokens(c) for w in wanted)]
+        return hits or None
+
+    def unit(self, column: str) -> float:
+        for token in _tokens(column):
+            if token in _COLUMN_UNITS:
+                return _COLUMN_UNITS[token]
+        return 1.0
+
+
+def _grouped_result(flat: Dict[str, Any]) -> Optional[_Grouped]:
+    cells: Dict[int, Dict[str, Any]] = {}
+    for key, value in flat.items():
+        m = _ROW_CELL.match(key)
+        if m:
+            cells.setdefault(int(m.group(1)), {})[m.group(2)] = value
+    if len(cells) < 2:
+        return None
+    rows = [cells[i] for i in sorted(cells)]
+    names = list(dict.fromkeys(c for row in rows for c in row))
+    numeric, text = [], []
+    for name in names:
+        present = [row.get(name) for row in rows if not _null_label(row.get(name))]
+        if not present:
+            continue
+        (numeric if all(_cell_number(v) is not None for v in present) else text).append(name)
+    if len(text) != 1 or not numeric:
+        return None
+    label_column = text[0]
+    labels: List[str] = []
+    by_label: Dict[str, int] = {}
+    columns: Dict[str, List[Optional[float]]] = {c: [] for c in numeric}
+    for row in rows:
+        label = row.get(label_column)
+        if _null_label(label) or _norm(label) in _TOTAL_LABELS:
+            continue
+        key = _norm(label)
+        if key in by_label:
+            return None                            # two rows per label: not one row per group
+        by_label[key] = len(labels)
+        labels.append(str(label))
+        for c in numeric:
+            columns[c].append(_cell_number(row.get(c)))
+    names_in_text = sorted((k for k in by_label if len(k) >= 2), key=len, reverse=True)
+    if len(labels) < 2 or not names_in_text:
+        return None
+    pattern = re.compile(r"(?<![\w])(?:" + "|".join(re.escape(k) for k in names_in_text) + r")(?![\w])")
+    return _Grouped(label_column, labels, by_label, columns, pattern)
+
+
+def _clauses(claim: str) -> List[str]:
+    text = re.sub(r"^\s*(?:[-+\u2022]|\d+[.)])\s+", "", _norm(claim))
+    return [_CLAUSE_LEAD.sub("", c).strip() for c in _CLAUSE_END.split(text) if c and c.strip()]
+
+
+def _measure_words(text: Optional[str]) -> List[str]:
+    return re.findall(r"[a-z_]+", (text or "").replace("-", " "))
+
+
+def check_superlative_contradicted(claim: str, flat: Dict[str, Any]) -> Optional[ClaimFinding]:
+    """"The lowest average is for Autos & Vehicles" when another group's average is lower.
+
+    The group the superlative names must hold the maximum (or minimum) of the
+    column the claim's words name. With no measure word every numeric column
+    is a candidate, and they must agree; a claim about a group the result does
+    not hold is not this check's to judge.
+    """
+    said_text = _norm(claim)
+    if not _SUPERLATIVE_HINT.search(said_text) or _SCOPED.search(said_text):
+        return None
+    table = _grouped_result(flat)
+    if table is None:
+        return None
+    group = table.group_pattern.pattern
+    measure = r"(?P<measure>(?:[\s-]+[a-z_']+){0,4}?)"
+    sup_first = re.compile(rf"(?:^|(?<=[\s(]))(?:the\s+)?{_SUP}{measure}\s+(?:is|was)\s+"
+                           rf"(?:for\s+|in\s+|from\s+)?(?:the\s+)?(?P<group>{group})")
+    group_first = re.compile(
+        rf"^(?:the\s+)?(?P<group>{group})\s+(?:has|have|had|is|are|was|were|posts|records|holds|ranks|ranked|"
+        rf"comes|came|sits)\s+(?:at\s+)?(?:the\s+)?{_SUP}{measure}"
+        rf"(?=\s*$|\s*[.!?()]|\s+(?:at|with|of|on|in|by|for|across|overall)\b)")
+    for clause in _clauses(claim):
+        said = None
+        for pattern in (sup_first, group_first):
+            m = pattern.search(clause)
+            if m is None:
+                continue
+            if _SUP_RANKED.search(clause[:m.start("sup")]) or _SUP_COUNT.match(clause[m.end("sup"):]):
+                break
+            # One group, named once: "the highest are Shows and Trailers" names two.
+            others = [g for g in table.group_pattern.findall(clause) if g != m.group("group")]
+            if others and pattern is sup_first:
+                break
+            said = m
+            break
+        if said is None:
+            continue
+        columns = table.resolve(_measure_words(said.group("measure")))
+        if not columns:
+            continue
+        high = said.group("sup") in _HIGH_TERMS
+        row = table.by_label[said.group("group")]
+        verdicts = []
+        for column in columns:
+            values = table.columns[column]
+            pool = [(v, i) for i, v in enumerate(values) if v is not None]
+            if values[row] is None or len(pool) < 2:
+                verdicts = []
+                break
+            extreme, at = (max if high else min)(pool, key=lambda p: p[0])
+            margin = 1e-9 * max(1.0, abs(extreme))
+            holds = values[row] >= extreme - margin if high else values[row] <= extreme + margin
+            verdicts.append((holds, column, extreme, at))
+        if not verdicts or any(v[0] for v in verdicts) != all(v[0] for v in verdicts):
+            continue                                       # unresolved, or the columns disagree
+        if verdicts[0][0]:
+            continue
+        _holds, column, extreme, at = verdicts[0]
+        name, other = table.labels[row], table.labels[at]
+        return ClaimFinding(
+            claim=claim, verdict=Verdict.CONTRADICTED, check="superlative_contradicted",
+            detail=(f"names {name} as the {said.group('sup')} by {column} "
+                    f"({_fmt(table.columns[column][row])}), but {other} is "
+                    f"{'higher' if high else 'lower'} at {_fmt(extreme)} in the computed result"),
+            evidence_ref=f"execution_output.{column}",
+        )
+    return None
+
+
+def check_threshold_contradicted(claim: str, flat: Dict[str, Any]) -> Optional[ClaimFinding]:
+    """"No category exceeds 30 million" when a row of the result does.
+
+    "No / none / not one X is above|below N" and "all / every / each X is
+    above|below N" must hold for every group in the result. X must be the
+    result's own groups ("category" for a ``category`` column, or a bare
+    "none"); the bound is read at the precision it is stated, so "30 million"
+    is broken only beyond 30.5 million.
+    """
+    if not _THRESHOLD_HINT.search(_norm(claim)) or _SCOPED.search(_norm(claim)):
+        return None
+    table = None
+    for clause in _clauses(claim):
+        m = _THRESHOLD.match(clause)
+        if m is None or m.group("pct"):
+            continue
+        quantifier, noun = (m.group("neg") or m.group("all")), m.group("noun")
+        bare = quantifier in ("none", "none of them")
+        if table is None:
+            table = _grouped_result(flat)
+            if table is None:
+                return None
+        if bare:
+            if noun is not None:
+                continue
+        elif noun is None or _stem(noun) not in set(_tokens(table.label_column)) | {"group"}:
+            continue
+        after: List[str] = []
+        for word in _measure_words(m.group("after").split(",")[0].split(".")[0])[:3]:
+            if word in _AFTER_STOP:
+                break
+            after.append(word)
+        columns = table.resolve(_measure_words(m.group("m1")) + _measure_words(m.group("m2")) + after)
+        if not columns:
+            continue
+        raw = m.group("num") + (f" {m.group('scale')}" if m.group("scale") else "")
+        digits = m.group("num").replace(",", "")
+        scale = _THRESHOLD_SCALES.get(m.group("scale") or "", 1.0)
+        bound = float(digits) * scale
+        tol = 0.5 * 10 ** -(len(digits.split(".", 1)[1]) if "." in digits else 0) * scale
+        # The claim says every group is at most the bound (exceeds) or at least it (below);
+        # "all X exceed N" says the reverse of "no X exceeds N".
+        at_most = bool(m.group("up")) == bool(m.group("neg"))
+        verdicts = []
+        for column in columns:
+            unit = table.unit(column)
+            broken = [(v * unit, i) for i, v in enumerate(table.columns[column]) if v is not None
+                      and (v * unit > bound + tol if at_most else v * unit < bound - tol)]
+            verdicts.append((broken, column))
+        if any(b for b, _c in verdicts) != all(b for b, _c in verdicts) or not verdicts[0][0]:
+            continue                                       # holds, or the columns disagree
+        broken, column = verdicts[0]
+        worst, at = (max if at_most else min)(broken, key=lambda p: p[0])
+        who = quantifier if bare else f"{'no' if m.group('neg') else 'every'} {noun}"
+        side = "above" if m.group("up") else "below"
+        more = f"; {len(broken)} groups break it" if len(broken) > 1 else ""
+        return ClaimFinding(
+            claim=claim, verdict=Verdict.CONTRADICTED, check="threshold_contradicted",
+            detail=(f"says {who} is {side} {raw}, but {table.labels[at]} is at "
+                    f"{_fmt(worst / table.unit(column))} by {column} in the computed result{more}"),
+            evidence_ref=f"execution_output.{column}",
+        )
+    return None
+
+
 
 def check_absolute_language(claim: str, flat: Dict[str, Any]) -> Optional[ClaimFinding]:
     """Promises about the future that no finite sample licenses."""
@@ -433,9 +880,39 @@ def check_unsupported_significance(claim: str, flat: Dict[str, Any]) -> Optional
     )
 
 
+def check_method_not_in_code(claim: str, flat: Dict[str, Any]) -> Optional[ClaimFinding]:
+    """A model family named in the narrative that the executed script never used.
+
+    "The gradient-boosted tree model achieves a test RMSE of 10.44" passes every
+    other check when 10.44 really is in the result table. It is still false if
+    the script that produced 10.44 fitted ``np.linalg.lstsq``: the reader is told
+    which method earned the number, and that is the part they will repeat.
+
+    Silent without a script to compare against, and silent when the words
+    around the mention only suggest, compare or rule the method out.
+    """
+    code = flat.get(_CODE_KEY)
+    if not isinstance(code, str) or not code.strip():
+        return None
+    script = _code_only(code)
+    for family, (terms, markers) in _METHOD_FAMILIES.items():
+        term = _asserted_mention(claim, terms)
+        if term and not any(marker in script for marker in markers):
+            return ClaimFinding(
+                claim=claim, verdict=Verdict.CONTRADICTED, check="method_not_in_code",
+                detail=(f"names a {family} model ({term!r}), but the executed code "
+                        f"contains no {family} estimator"),
+                evidence_ref=_CODE_KEY,
+            )
+    return None
+
+
 CHECKS = (
     check_contradicted_by_metrics,
+    check_method_not_in_code,
     check_ordering_contradicted,
+    check_superlative_contradicted,
+    check_threshold_contradicted,
     check_causal_overreach,
     check_unsupported_significance,
     check_absolute_language,
@@ -540,6 +1017,18 @@ def claim_verifier_node(state: Dict[str, Any]) -> Dict[str, Any]:
             },
             "verification_safe_to_present": True,
         }
+
+    # Attached after the guard above on purpose: ``generated_code`` survives in
+    # state from an earlier turn, so on its own it is not evidence that this
+    # turn ran anything. It is only offered when the result table came from the
+    # script and no training agent contributed -- a model trained by the MTA is
+    # described by training_metrics, not by the coder's script, and comparing
+    # its narrative to that script would flag a true sentence.
+    code = state.get("generated_code")
+    if (isinstance(code, str) and code.strip() and execution_output
+            and state.get("training_metrics") is None
+            and state.get("evaluation_report") is None):
+        evidence[_CODE_KEY] = code
 
     report = verify_claims(narrative, evidence)
     return {

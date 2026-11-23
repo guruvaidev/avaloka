@@ -1,0 +1,13 @@
+diff --git a/ui/src/lib/use-plan-features.ts b/ui/src/lib/use-plan-features.ts
+index 3741f805..7d06f288 100644
+--- a/ui/src/lib/use-plan-features.ts
++++ b/ui/src/lib/use-plan-features.ts
+@@ -33,7 +33,7 @@ export function usePlanFeatures() {
+     /** Projects section (rail item + /dashboard route). */
+     canUseProjects: true,
+     /** Teams (Professional teams take Professional-or-higher members only). */
+-    canUseTeams: isProfessionalOrHigher,
++    canUseTeams: false,
+     /** Creating or managing roles, branches, divisions and users. */
+     canManageOrgEntities: isEnterprise,
+     /** Share panel access (email results + public link): every plan. */

@@ -67,6 +67,9 @@ from app.services.memory_plane import MemoryOrchestrator
 
 QUERY = "plot monthly revenue by region"
 SESSION = "sess-top3-relevance"
+# The artifact was made in this thread and the schema is this dataset's: only
+# then are they served (app/services/memory_scope.py).
+DATASET = "orders"
 
 L3_MARKER = "[L3] Prior artifact"
 DOMAIN_HINT = "Domain insight: orders(order_id, user_id, region, amount, created_at)"
@@ -93,6 +96,7 @@ def _stubbed_orchestrator(with_artifact=True, with_schema=True,
     mo.postgres.get_artifact.return_value = {
         "status": "success",
         "chart_url": "https://storage.googleapis.com/charts/monthly_revenue.png",
+        "thread_id": SESSION,
     } if with_artifact else None
 
     mo.redis = MagicMock()
@@ -132,7 +136,7 @@ def _wait_for_learning() -> None:
 def _turn(mo, **kwargs):
     """One retrieval, then let its background learning land."""
     result = mo._retrieve_memory_internal(
-        QUERY, session_id=SESSION, dataset_id=kwargs.pop("dataset_id", "unknown_dataset"), **kwargs)
+        QUERY, session_id=SESSION, dataset_id=kwargs.pop("dataset_id", DATASET), **kwargs)
     _wait_for_learning()
     return result
 
@@ -165,7 +169,7 @@ def test_llm_noise_does_not_evict_relevant_hints():
 
 def test_relevance_order_is_artifact_then_domain_then_similar():
     mo = _stubbed_orchestrator()
-    result = mo._retrieve_memory_internal(QUERY, session_id=SESSION, dataset_id="unknown_dataset")
+    result = mo._retrieve_memory_internal(QUERY, session_id=SESSION, dataset_id=DATASET)
 
     top = result["memory_hints"]
     assert L3_MARKER in top[0]
@@ -217,7 +221,7 @@ def test_stale_session_noise_does_not_outrank_fresh_relevant_hints():
 def test_preference_keeps_reserved_slot_over_relevant_hints():
     mo = _stubbed_orchestrator()
     assert mo.store_user_preference(PREFERENCE, SESSION) is True
-    result = mo._retrieve_memory_internal(QUERY, session_id=SESSION, dataset_id="unknown_dataset")
+    result = mo._retrieve_memory_internal(QUERY, session_id=SESSION, dataset_id=DATASET)
 
     top = result["memory_hints"]
     assert len(top) == 3
@@ -231,7 +235,7 @@ def test_three_preferences_leave_no_fill_slots():
     mo = _stubbed_orchestrator()
     for i in range(3):
         mo.store_user_preference(f"pref-{i}", SESSION)
-    result = mo._retrieve_memory_internal(QUERY, session_id=SESSION, dataset_id="unknown_dataset")
+    result = mo._retrieve_memory_internal(QUERY, session_id=SESSION, dataset_id=DATASET)
 
     assert result["memory_hints"] == ["pref-0", "pref-1", "pref-2"]
 
@@ -243,7 +247,7 @@ def test_degrades_to_recent_session_hints_without_relevant_sources():
     mo = _stubbed_orchestrator(with_artifact=False, with_schema=False,
                                milvus_hits=(), llm_hints=None)
     MemoryOrchestrator._session_hints_store[SESSION] = [f"old-{i}" for i in range(5)]
-    result = mo._retrieve_memory_internal(QUERY, session_id=SESSION, dataset_id="unknown_dataset")
+    result = mo._retrieve_memory_internal(QUERY, session_id=SESSION, dataset_id=DATASET)
 
     assert result["memory_hints"] == ["old-2", "old-3", "old-4"]
 
@@ -319,8 +323,8 @@ def test_mcp_hot_loaded_schema_ranks_as_domain_tier():
 def test_l3_metadata_without_known_fields_still_ranks_as_artifact():
     """The raw-summary fallback branch must carry the artifact tier too."""
     mo = _stubbed_orchestrator()
-    mo.postgres.get_artifact.return_value = {"unrecognised_field": "x"}
-    result = mo._retrieve_memory_internal(QUERY, session_id=SESSION, dataset_id="unknown_dataset")
+    mo.postgres.get_artifact.return_value = {"unrecognised_field": "x", "thread_id": SESSION}
+    result = mo._retrieve_memory_internal(QUERY, session_id=SESSION, dataset_id=DATASET)
 
     assert any("[L3] Prior artifact detected" in h for h in result["memory_hints"])
 
@@ -355,7 +359,7 @@ def test_one_store_down_costs_only_its_own_hints():
     reports itself available -- three stores answered."""
     mo = _stubbed_orchestrator()
     mo.postgres.connect.side_effect = RuntimeError("postgres down")
-    result = mo._retrieve_memory_internal(QUERY, session_id=SESSION, dataset_id="unknown_dataset")
+    result = mo._retrieve_memory_internal(QUERY, session_id=SESSION, dataset_id=DATASET)
 
     assert result["memory_hints"] == [DOMAIN_HINT, MILVUS_HINT]
     assert result["prior_artifact_found"] is False
@@ -367,7 +371,7 @@ def test_every_store_down_is_reported_as_unavailable():
     mo = _stubbed_orchestrator()
     for name in MemoryOrchestrator._STORES:
         getattr(mo, name).connect.side_effect = RuntimeError(f"{name} down")
-    result = mo._retrieve_memory_internal(QUERY, session_id=SESSION, dataset_id="unknown_dataset")
+    result = mo._retrieve_memory_internal(QUERY, session_id=SESSION, dataset_id=DATASET)
 
     assert result["memory_hints"] == []
     assert result["memory_context_unavailable"] is True
@@ -376,7 +380,7 @@ def test_every_store_down_is_reported_as_unavailable():
 def test_retrieve_memory_wrapper_preserves_relevance_contract():
     """The public timeout wrapper must return the same tiered top-3."""
     mo = _stubbed_orchestrator()
-    result = mo.retrieve_memory(QUERY, session_id=SESSION, dataset_id="unknown_dataset")
+    result = mo.retrieve_memory(QUERY, session_id=SESSION, dataset_id=DATASET)
 
     top = result["memory_hints"]
     assert any(L3_MARKER in h for h in top)
@@ -389,6 +393,6 @@ def test_four_preferences_newest_three_win_with_tiered_sources():
     mo = _stubbed_orchestrator()
     for i in range(4):
         mo.store_user_preference(f"pref-{i}", SESSION)
-    result = mo._retrieve_memory_internal(QUERY, session_id=SESSION, dataset_id="unknown_dataset")
+    result = mo._retrieve_memory_internal(QUERY, session_id=SESSION, dataset_id=DATASET)
 
     assert result["memory_hints"] == ["pref-1", "pref-2", "pref-3"]

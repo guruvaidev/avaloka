@@ -65,6 +65,19 @@ spec:
             - configMapRef:
                 name: avaloka-backend-env
                 optional: true
+          env:
+            # Required on every call but GET /ok (app/api/langgraph_service_auth.py).
+            - name: LANGGRAPH_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "avaloka-backend.fullname" . }}-langgraph-token
+                  key: LANGGRAPH_SERVICE_TOKEN
+            # `langgraph dev` otherwise reports each start to LangChain's
+            # analytics and asks PyPI for a newer version.
+            - name: LANGGRAPH_CLI_NO_ANALYTICS
+              value: "1"
+            - name: LANGGRAPH_NO_VERSION_CHECK
+              value: "true"
           {{- with .Values.resources.langgraph }}
           resources:
             {{- toYaml . | nindent 12 }}
@@ -110,6 +123,13 @@ spec:
             - configMapRef:
                 name: avaloka-backend-env
                 optional: true
+          env:
+            # Sent on every call to the langgraph container.
+            - name: LANGGRAPH_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "avaloka-backend.fullname" . }}-langgraph-token
+                  key: LANGGRAPH_SERVICE_TOKEN
           {{- with .Values.resources.api }}
           resources:
             {{- toYaml . | nindent 12 }}

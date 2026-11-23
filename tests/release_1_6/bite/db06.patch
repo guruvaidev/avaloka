@@ -1,0 +1,15 @@
+diff --git a/app/mcp_server/multi_tenant_mcp_server.py b/app/mcp_server/multi_tenant_mcp_server.py
+index b23387dd..c861b423 100644
+--- a/app/mcp_server/multi_tenant_mcp_server.py
++++ b/app/mcp_server/multi_tenant_mcp_server.py
+@@ -813,7 +813,9 @@ def query(sql: str) -> dict:
+         with engine.connect() as conn:
+             if config.database_type == 'postgresql':
+                 conn.execute(text(f"SET statement_timeout = '{config.query_timeout}s'"))
+-            elif config.database_type in ['mysql', 'mariadb']:
++            elif config.database_type == 'mariadb':
++                conn.execute(text(f"SET SESSION max_statement_time = {config.query_timeout}"))
++            elif config.database_type == 'mysql':
+                 conn.execute(text(f"SET SESSION max_execution_time = {config.query_timeout * 1000}"))
+ 
+             result = conn.execute(text(safe_sql))

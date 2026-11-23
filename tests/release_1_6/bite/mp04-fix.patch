@@ -1,0 +1,13 @@
+diff --git a/app/core/model_fallback.py b/app/core/model_fallback.py
+index f5e4bdea..cd8ce085 100644
+--- a/app/core/model_fallback.py
++++ b/app/core/model_fallback.py
+@@ -463,7 +463,7 @@ LOCAL_BASE_URL = os.getenv("AVALOKA_LOCAL_LLM_URL", "http://avaloka-local-llm:80
+ 
+ #: Cluster-profile local models: a GPU deployment can hold a real model.
+ #: gemma-4-31b is the strongest open-weight fit; qwen3.8-27b the alternate.
+-LOCAL_MODEL_CLUSTER = os.getenv("AVALOKA_LOCAL_MODEL_CLUSTER", "google/gemma-4-31b-it")
++LOCAL_MODEL_CLUSTER = os.getenv("AVALOKA_LOCAL_MODEL_CLUSTER", "qwen-local")
+ LOCAL_MODEL_CLUSTER_ALT = os.getenv("AVALOKA_LOCAL_MODEL_CLUSTER_ALT", "qwen/qwen3.8-27b")
+ 
+ #: Laptop-profile local model: small enough to serve on CPU/metal without

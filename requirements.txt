@@ -44,7 +44,7 @@ pydantic>=2.7
 starlette>=0.37
 langchain-core>=0.3.79,<0.4
 redis>=5.0.4
-cachetools>=5.0
+cachetools>=7.2.8
 
 google-cloud-container>=1.0.0
 google-cloud-storage>=3.4
@@ -125,8 +125,8 @@ pymysql>=1.1.0
 google-auth>=2.23.0
 
 
-celery==5.5.3
-celery-redbeat==2.3.3
+celery==5.6.3
+celery-redbeat==2.4.2
 azure-storage-blob
 supabase>=2.0.0
 
@@ -139,7 +139,7 @@ gcsfs==2025.9.0
 #data transfer
 sentence_transformers>=3.2.1
 daft>=0.7.1,<0.8
-sqlglot
+sqlglot==30.27.0
 connectorx
 markdownify
 chromadb
@@ -155,7 +155,7 @@ PyJWT>=2.8.0
 langchain_anthropic>=0.3.21,<0.4
 # urllib3 / charset-normalizer must be compatible with requests
 urllib3>=1.21.1,<2.0
-charset-normalizer>=3.0.0   # MIT; replaces chardet (LGPL, ASF Category X)
+charset-normalizer>=3.5.2   # MIT; replaces chardet (LGPL, ASF Category X)
 psutil>=5.9.0              # for memory stats in test scripts
 s3fs==2025.9.0
 

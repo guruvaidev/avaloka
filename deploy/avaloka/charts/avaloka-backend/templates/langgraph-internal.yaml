@@ -1,0 +1,50 @@
+{{- /*
+The langgraph container is internal. The api container in the same pod is its
+only caller (LANGGRAPH_API_URL=http://localhost:3000, templates/configmap.yaml).
+
+Token: every call but GET /ok needs LANGGRAPH_SERVICE_TOKEN or gets 401
+(app/api/langgraph_service_auth.py, wired in through langgraph.json http.app).
+Generated on first install, kept on every upgrade (lookup of this Secret), never
+printed. Per color: a color's api and langgraph containers share a pod, so each
+color has its own.
+
+NetworkPolicy: the backend pod accepts the API port from anywhere (the ingress
+and the router reach it) and nothing else, so no other pod reaches the LangGraph
+port. Traffic inside the pod (localhost) is not subject to it. Enforced by the
+CNI (Calico, Cilium, GKE Dataplane V2 do; some do not); without enforcement the
+token still guards every call.
+*/ -}}
+{{- $name := printf "%s-langgraph-token" (include "avaloka-backend.fullname" .) }}
+{{- $token := "" }}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $name }}
+{{- if and $existing $existing.data (index $existing.data "LANGGRAPH_SERVICE_TOKEN") }}
+{{- $token = index $existing.data "LANGGRAPH_SERVICE_TOKEN" | b64dec }}
+{{- end }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "avaloka-backend.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
+type: Opaque
+stringData:
+  LANGGRAPH_SERVICE_TOKEN: {{ $token | default (randAlphaNum 48) | quote }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "avaloka-backend.fullname" . }}-langgraph
+  labels:
+    {{- include "avaloka-backend.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "avaloka-backend.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - ports:
+        - port: {{ .Values.service.api.port }}
+          protocol: TCP

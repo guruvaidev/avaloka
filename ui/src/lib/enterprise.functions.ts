@@ -604,6 +604,15 @@ export const upgradeToEnterprise = createServerFn({ method: "POST" })
         .single();
       if (orgErr) throw new Error(`organizations insert failed: ${orgErr.message}`);
       organizationId = orgCreated.id as string;
+
+      // Move the owner's personal reports into the new org. reports.created_by
+      // stores auth.uid() (context.userId), not the profile id.
+      const { error: rptErr } = await supabase
+        .from("reports")
+        .update({ organization_id: organizationId })
+        .eq("created_by", userId)
+        .is("organization_id", null);
+      if (rptErr) console.error("[enterprise] moving personal reports failed", rptErr.message);
     }
 
     // Seed defaults (division, roles, owner app_user) — idempotent, also

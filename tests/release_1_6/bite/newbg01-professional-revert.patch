@@ -1,0 +1,20 @@
+diff --git a/ui/src/lib/use-plan-features.ts b/ui/src/lib/use-plan-features.ts
+index 3741f805..5c8e1df0 100644
+--- a/ui/src/lib/use-plan-features.ts
++++ b/ui/src/lib/use-plan-features.ts
+@@ -33,13 +33,13 @@ export function usePlanFeatures() {
+     /** Projects section (rail item + /dashboard route). */
+     canUseProjects: true,
+     /** Teams (Professional teams take Professional-or-higher members only). */
+-    canUseTeams: isProfessionalOrHigher,
++    canUseTeams: isEnterprise,
+     /** Creating or managing roles, branches, divisions and users. */
+     canManageOrgEntities: isEnterprise,
+     /** Share panel access (email results + public link): every plan. */
+     canShare: true,
+     /** Inviting collaborators onto a resource; the invitee may be on any plan. */
+-    canInviteCollaborators: isProfessionalOrHigher,
++    canInviteCollaborators: isEnterprise,
+     /** All configuration sections; Professional gets Models and Teams. */
+     canUseAllConfigSections: !isProfessional,
+   };

@@ -1,0 +1,12 @@
+diff --git a/ui/src/components/dashboard/AttachDatasetsModal.tsx b/ui/src/components/dashboard/AttachDatasetsModal.tsx
+--- a/ui/src/components/dashboard/AttachDatasetsModal.tsx
++++ b/ui/src/components/dashboard/AttachDatasetsModal.tsx
+@@ -149,7 +149,7 @@ export function AttachDatasetsModal({ open, onOpenChange, threadId, currentAnaly
+         undefined,
+         undefined,
+         (p) => setProgress(p.total ? Math.round((p.loaded / p.total) * 100) : null),
+-        threadId,
++        undefined,
+       );
+       const datasets = (res?.datasets ?? []) as any[];
+       const next: FileStatus[] = files.map((f) => {

@@ -843,6 +843,7 @@ def training_main(
     activation: str = "relu",
     dropout: float = 0.2,
     batch_norm: bool = True,
+    cv_folds: int = 5,
 ) -> dict[str, Any]:
     start_time = time.time()
 
@@ -1152,12 +1153,21 @@ def training_main(
         save_model_onnx(model, local_onnx_named)
 
         # ---- Log model artifacts to MLflow (identical to ray_job.py) ----
+        # With a signature and a 5-row input example so the registry version
+        # (app/core/ml_registry) describes its tensor contract. Registration
+        # itself happens in the worker after training, not here.
         logger.info("[MLflow] Logging model artifacts ...")
+        from app.agents.mta_v2.model_signature import build_signature
+
+        signature, input_example = build_signature(model, val_df, model_feature_cols)
+        output_metrics_signature_logged = signature is not None
         mlflow.pytorch.log_model(
             pytorch_model=model,
             artifact_path="model",
             registered_model_name=None,
-            serialization_format="pickle"
+            serialization_format="pickle",
+            signature=signature,
+            input_example=input_example,
         )
         mlflow.log_artifact(local_pth_named,  artifact_path="model_files")
         mlflow.log_artifact(local_onnx_named, artifact_path="model_files")
@@ -1272,6 +1282,8 @@ def training_main(
             "created_at":        datetime.now(timezone.utc).isoformat(),
         })
 
+    output_metrics["signature_logged"] = bool(output_metrics_signature_logged)
+    output_metrics["cv_folds"] = int(cv_folds)
     logger.info(
         "[Done] task_id=%s  mlflow_run_id=%s  model=%s  version=%s  runtime=%.3fs",
         task_id, mlflow_run_id, model_name, model_version, runtime_s,
@@ -1376,6 +1388,7 @@ class LocalTrainer:
                 class_names        = _get(dc, "class_names") or [],
                 feature_cols       = _get(dc, "feature_columns") or _get(dc, "feature_cols") or [],
                 model_name         = _get(training_plan, "model_name", "dynamic-mlp"),
+                cv_folds           = int((_get(training_plan, "cross_validation") or {}).get("k", 5)),
                 model_description  = _get(training_plan, "model_description", ""),
                 model_version      = _get(training_plan, "model_version", "1"),
                 learning_rate      = _get(hp, "learning_rate", 0.001),

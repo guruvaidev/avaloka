@@ -71,13 +71,20 @@ CREATE TABLE IF NOT EXISTS dataset_profiles (
     exact_rows          BIGINT,
     file_size_mb        DOUBLE PRECISION,
     sample_pct          DOUBLE PRECISION,
-    quick_elapsed_s     DOUBLE PRECISION,
-    full_elapsed_s      DOUBLE PRECISION,
+    phase_a_elapsed_s   DOUBLE PRECISION,
+    phase_b_elapsed_s   DOUBLE PRECISION,
     column_count        INT,
     completeness_pct    DOUBLE PRECISION,
     profiling_result    JSONB,
     error               TEXT
 );
+
+-- The deployed schema (supabase-migrations/0-schema.sql) names the elapsed
+-- columns phase_a/phase_b. Tables created from an older copy of this block
+-- had quick_elapsed_s/full_elapsed_s instead; add the real names so the
+-- upsert below is not rejected as naming unknown columns.
+ALTER TABLE dataset_profiles ADD COLUMN IF NOT EXISTS phase_a_elapsed_s DOUBLE PRECISION;
+ALTER TABLE dataset_profiles ADD COLUMN IF NOT EXISTS phase_b_elapsed_s DOUBLE PRECISION;
 
 CREATE INDEX IF NOT EXISTS idx_dataset_profiles_dataset_id ON dataset_profiles (dataset_id);
 CREATE INDEX IF NOT EXISTS idx_dataset_profiles_updated_at ON dataset_profiles (updated_at DESC);
@@ -269,8 +276,8 @@ def upsert_profile(
     if exact_rows is not None:       row["exact_rows"]        = exact_rows
     if file_size_mb is not None:     row["file_size_mb"]      = file_size_mb
     if sample_pct is not None:       row["sample_pct"]        = sample_pct
-    if phase_a_elapsed_s is not None: row["quick_elapsed_s"]  = phase_a_elapsed_s
-    if phase_b_elapsed_s is not None: row["full_elapsed_s"]   = phase_b_elapsed_s
+    if phase_a_elapsed_s is not None: row["phase_a_elapsed_s"] = phase_a_elapsed_s
+    if phase_b_elapsed_s is not None: row["phase_b_elapsed_s"] = phase_b_elapsed_s
     if column_count is not None:     row["column_count"]      = column_count
     if completeness_pct is not None: row["completeness_pct"]  = completeness_pct
     if profiling_result is not None: row["profiling_result"]  = _safe_json(profiling_result)

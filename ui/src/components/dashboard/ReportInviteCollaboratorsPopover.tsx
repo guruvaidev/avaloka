@@ -258,7 +258,11 @@ export function ReportInviteCollaboratorsPopover({
     }
   };
 
-  const { canInviteCollaborators } = usePlanFeatures();
+  const { canInviteCollaborators: planAllowsInvites } = usePlanFeatures();
+  // Free/Professional users have no organization; inviting collaborators is
+  // an Enterprise feature, so show a friendly message instead of an error.
+  const [noOrganization, setNoOrganization] = useState(false);
+  const canInviteCollaborators = planAllowsInvites && !noOrganization;
   const [teams, setTeams] = useState<TeamRow[]>([]);
 
   const [teamSearch, setTeamSearch] = useState("");
@@ -284,7 +288,14 @@ export function ReportInviteCollaboratorsPopover({
     setConfigLoading(true);
     try {
       const [users, teamsRes, membersRes, rows, existingLink] = await Promise.all([
-        listAppUsersFn(),
+        listAppUsersFn().catch((err: unknown) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (/No organization found/i.test(msg)) {
+            setNoOrganization(true);
+            return [] as AppUserRow[];
+          }
+          throw err;
+        }),
         supabase.from("organization_teams").select("id,name").eq("status", "Active"),
         supabase.from("app_users").select("id,email,team_id").not("team_id", "is", null),
         loadResourceCollaboratorRows("report", reportId),
@@ -852,6 +863,12 @@ export function ReportInviteCollaboratorsPopover({
           )}
         </div>
         </>
+        ) : noOrganization ? (
+          <div className="mx-5 my-4 rounded-lg border border-secondary bg-secondary px-4 py-3">
+            <p className="text-sm text-secondary">
+              Inviting collaborators is available on the Enterprise plan.
+            </p>
+          </div>
         ) : null}
       </div>
 

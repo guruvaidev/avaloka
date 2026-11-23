@@ -66,15 +66,17 @@ _EFFORT_STEP_DOWN = {"high": "medium", "medium": "low"}
 _VIZ_MAX_TOKENS = int(os.getenv("AVALOKA_VIZ_MAX_TOKENS", "8192"))
 
 # OpenRouter host routing. With default routing OpenRouter picks a host per
-# request; measured on gpt-oss-120b that was 15-48s per call (AkashML,
-# DekaLLM, CoreWeave, DeepInfra) against 1.2-1.7s on throughput-sorted hosts.
+# request; measured on gpt-oss-120b that was 15-48s per call on four hosts
+# against 1.2-1.7s on throughput-sorted hosts. This agent keeps "throughput"
+# even though the platform default is now "price" (owner ruling 2026-11-02);
+# the provider allowlist still applies (see _viz_request_kwargs).
 # "throughput" is what the ":nitro" model suffix does, so this works with or
 # without AVALOKA_VIZ_MODEL_OPENROUTER=openai/gpt-oss-120b:nitro.
 # Set to "none" for OpenRouter's default routing, or "price" / "latency".
 _VIZ_OPENROUTER_SORT = (os.getenv("AVALOKA_VIZ_OPENROUTER_SORT", "throughput") or "").strip().lower()
 
 # -------------------------------------------------------------------
-# Leela's wide-table rules: prompt size control
+# Wide-table rules: prompt size control
 # -------------------------------------------------------------------
 # The insight prompt describes every column, so it grows with the number of
 # columns (~170 tokens per column measured on the 84-column ICU file). Rules:
@@ -169,11 +171,21 @@ def _build_viz_llm() -> Optional[Any]:
         logger.warning("Visualization LLM: backend=%s but no API key is set", _VIZ_BACKEND)
         return None
 
+    pinned: dict = {}
+    if _VIZ_BACKEND == "openrouter":
+        # The same provider pinning as every other OpenRouter client.
+        from app.core.inference import openrouter_extra_body
+
+        extra = openrouter_extra_body("VISUALIZATION", _VIZ_MODEL)
+        if extra:
+            pinned["extra_body"] = extra
+
     return ChatOpenAI(
         model=_VIZ_MODEL,
         base_url=base_url,
         api_key=api_key,
         temperature=0.2,
+        **pinned,
     )
 
 
@@ -257,11 +269,20 @@ def _viz_request_kwargs(effort: str) -> Dict[str, Any]:
     """
     kwargs: Dict[str, Any] = {"max_tokens": _VIZ_MAX_TOKENS}
     if _VIZ_PROVIDER == "openrouter":
-        extra: Dict[str, Any] = {}
+        # Start from the pinned body (provider allowlist, allow_fallbacks false,
+        # data_collection deny, zdr): a per-call extra_body REPLACES the client's,
+        # so without this every viz call left the allowlist.
+        from app.core.inference import openrouter_extra_body
+
+        extra: Dict[str, Any] = openrouter_extra_body("VIZ", _VIZ_ACTIVE_MODEL)
         if _VIZ_IS_REASONING:
             extra["reasoning"] = {"effort": effort}
         if _VIZ_SORT_ACTIVE:
-            extra["provider"] = {"sort": _VIZ_OPENROUTER_SORT}
+            extra["provider"] = {**extra.get("provider", {}), "sort": _VIZ_OPENROUTER_SORT}
+        elif "provider" in extra:
+            # Sorting off lets OpenRouter pick among the pinned hosts; the
+            # pinning itself (allowlist, zdr, no data collection) always stays.
+            extra["provider"].pop("sort", None)
         if extra:
             kwargs["extra_body"] = extra
     elif _VIZ_IS_REASONING:
@@ -2179,7 +2200,7 @@ def _ground_all(
 
 
 # -------------------------------------------------------------------
-# Leela's wide-table rules: prompt building, key columns, row/split plan
+# Wide-table rules: prompt building, key columns, row/split plan
 # -------------------------------------------------------------------
 
 
@@ -4694,7 +4715,7 @@ def build_visualization_config_from_sample(
         viz_profile["dataset"]["chart_numbers"] = "full_file"
 
     # 3) Primary path: LLM finds the insights and picks a chart for each.
-    #    The request is planned first (Leela's rules): all columns with as
+    #    The request is planned first (the wide-table rules): all columns with as
     #    many example rows as fit, down to 1; only if that is still over the
     #    token budget, column parts that each carry the key columns, run in
     #    parallel and consolidated.

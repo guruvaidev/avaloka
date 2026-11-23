@@ -115,4 +115,7 @@ EXPOSE 9000
 
 # /health returns 200 with {status, redis_connected, graph_ready} even when Redis
 # is down, so it is a valid readiness signal for the chart's probes.
-CMD ["uvicorn", "app.api.server:app", "--host", "0.0.0.0", "--port", "9000"]
+# --loop asyncio, not uvicorn's default uvloop: under uvloop the API segfaults
+# (SIGSEGV in libuv uv__read) when a graph thread touches the shared Redis pool
+# from its own event loop. tests/contract/test_api_server_loop.py pins this.
+CMD ["uvicorn", "app.api.server:app", "--host", "0.0.0.0", "--port", "9000", "--loop", "asyncio"]

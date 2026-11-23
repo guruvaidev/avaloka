@@ -125,11 +125,16 @@ def validate_memory_runtime_config() -> Dict[str, str]:
     if not _module_available("pymilvus"):
         issues.append("pymilvus package is required for Layer 4 time-series memory.")
 
-    has_openai_embeddings = bool(os.environ.get("OPENAI_API_KEY"))
-    has_local_embeddings = _module_available("sentence_transformers")
-    if not has_openai_embeddings and not has_local_embeddings:
+    # Same selection embed_text() makes: local unless the operator opted in to
+    # OpenAI with EMBEDDING_PROVIDER=openai AND EMBEDDING_OPENAI_API_KEY. The
+    # chat key OPENAI_API_KEY does not count -- it never selects embeddings.
+    from app.services.embedding_utils import OPENAI, resolve_provider  # noqa: PLC0415 (cycle)
+
+    if resolve_provider() != OPENAI and not _module_available("sentence_transformers"):
         issues.append(
-            "A real embedding provider is required: set OPENAI_API_KEY or install sentence-transformers."
+            "A real embedding provider is required: install sentence-transformers (local, the "
+            "default), or opt in to OpenAI with EMBEDDING_PROVIDER=openai and "
+            "EMBEDDING_OPENAI_API_KEY."
         )
 
     if strict and issues:

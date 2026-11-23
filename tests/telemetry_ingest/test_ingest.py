@@ -419,7 +419,7 @@ class TestEveryProcessValueIsClosed:
     #: Still not free text.
     NOT_VERSIONS = [
         "Q3 payroll.xlsx", "payroll.xlsx", "/data/acme/churn.csv", "1.0/../etc",
-        "https://1.2.3.4", "s3://acme/1.0", "what version is this", "3.11 payroll",
+        "https://203.0.113.4", "s3://acme/1.0", "what version is this", "3.11 payroll",
         "db01.internal.acme.example", "acme-internal-build", "v1.6.2", "latest",
         "1.6.2 (acme fork)", "1.6.2_final", "1.2.3.4.5", "1.6.2+" + "x" * 25,
         "1." * 20 + "1", "", "١.٢",
@@ -601,13 +601,13 @@ class TestRateLimiting:
 
     def test_the_window_resets(self):
         limiter = RateLimiter(limit=1, window_seconds=60)
-        assert limiter.allow("1.2.3.4", now=1000.0)
-        assert not limiter.allow("1.2.3.4", now=1010.0)
-        assert limiter.allow("1.2.3.4", now=1070.0)
+        assert limiter.allow("203.0.113.4", now=1000.0)
+        assert not limiter.allow("203.0.113.4", now=1010.0)
+        assert limiter.allow("203.0.113.4", now=1070.0)
 
     def test_expired_windows_are_swept(self):
         limiter = RateLimiter(limit=5, window_seconds=60)
-        limiter.allow("1.2.3.4", now=1000.0)
+        limiter.allow("203.0.113.4", now=1000.0)
         assert limiter.tracked == 1
         limiter.sweep(now=2000.0)
         assert limiter.tracked == 0
@@ -718,7 +718,7 @@ class TestRateLimitCannotBeEvaded:
         assert codes.count(429) > 0
 
     def test_genuinely_different_senders_are_not_over_blocked(self, store):
-        codes = self._hammer(store, lambda i: {"X-Forwarded-For": f"9.9.9.9, 198.51.100.{i}"})
+        codes = self._hammer(store, lambda i: {"X-Forwarded-For": f"192.0.2.9, 198.51.100.{i}"})
         assert codes.count(429) == 0, "distinct senders behind one proxy were blocked"
 
     def test_the_address_is_never_echoed_back(self, store):

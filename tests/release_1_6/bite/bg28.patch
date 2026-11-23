@@ -1,0 +1,14 @@
+diff --git a/ui/src/lib/chart-display.ts b/ui/src/lib/chart-display.ts
+index 0b9a1449..97b01656 100644
+--- a/ui/src/lib/chart-display.ts
++++ b/ui/src/lib/chart-display.ts
+@@ -18,7 +18,8 @@ export function niceAxis(values: unknown[], startAtZero = false) {
+     const step = multiplier * power;
+     if (step < rawStep || step < 0.01) continue;
+     const low = Math.floor(min / step) * step;
+-    const high = Math.ceil(max / step) * step;
++    let high = Math.ceil(max / step) * step;
++    if (startAtZero && max > 0 && high <= max) high += step;
+     const count = Math.round((high - low) / step) + 1;
+     if (count > 6) continue;
+     const ticks = Array.from({ length: count }, (_, i) => Number((low + i * step).toFixed(10)));

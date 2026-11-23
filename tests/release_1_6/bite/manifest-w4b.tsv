@@ -1,0 +1,17 @@
+BG02	revert	vitest	bg02.patch	tests/release_1_6/bugs16-auto-insights.test.tsx -t BG02:
+BG13	fix	vitest	bg13.patch	tests/release_1_6/bugs16-welcome-nav.test.tsx -t BG13
+BG14	revert	vitest	bg14.patch	tests/release_1_6/bugs16-welcome-nav.test.tsx -t BG14:
+BG15	revert	vitest	bg15.patch	tests/release_1_6/bugs16-welcome-nav.test.tsx -t BG15:
+BG16	revert	vitest	bg16.patch	tests/release_1_6/bugs16-welcome-nav.test.tsx -t BG16:
+BG17	revert	vitest	bg17.patch	tests/release_1_6/bugs16-contrast.test.ts -t BG17:
+BG18	revert	vitest	bg18.patch	tests/release_1_6/bugs16-upload-modal.test.tsx -t BG18:
+BG19	revert	vitest	bg19.patch	tests/release_1_6/bugs16-welcome-nav.test.tsx -t BG19:
+BG20	revert	vitest	bg20.patch	tests/release_1_6/bugs16-upload-modal.test.tsx -t BG20:
+BG21	revert	vitest	bg21.patch	tests/release_1_6/bugs16-upload-modal.test.tsx -t BG21:
+BG23	revert	vitest	bg23.patch	tests/release_1_6/bugs16-upload-modal.test.tsx -t BG23:
+BG26	revert	vitest	bg26.patch	tests/release_1_6/bugs16-upload-modal.test.tsx -t BG26:
+BG28	fix	vitest	bg28.patch	tests/release_1_6/bugs16-charts.test.ts -t BG28
+BG29	revert	vitest	bg29.patch	tests/release_1_6/bugs16-auto-insights.test.tsx -t BG29:
+BG30	revert	vitest	bg30.patch	tests/release_1_6/bugs16-auto-insights.test.tsx -t BG30:
+BG36	revert	vitest	bg36.patch	tests/release_1_6/bugs16-charts.test.ts -t BG36:
+BG39	revert	vitest	bg39.patch	tests/release_1_6/bugs16-data-view.test.tsx -t BG39:

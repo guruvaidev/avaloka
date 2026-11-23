@@ -5,6 +5,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
+import { COMMENTS_NEED_PRO_SERVER, assertPlanFeature } from "@/lib/org-features";
 
 export const fanOutCommentNotifications = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
@@ -15,6 +16,10 @@ export const fanOutCommentNotifications = createServerFn({ method: "POST" })
     }),
   )
   .handler(async ({ data, context }) => {
+    // Notifying other people is Professional or higher (owner ruling 2026-11-01).
+    // The inserts below use the admin client, which RLS does not apply to.
+    await assertPlanFeature(context.supabase, "professional", "fanOutCommentNotifications", COMMENTS_NEED_PRO_SERVER);
+
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
 
     // Load the comment (admin, bypasses RLS).
@@ -118,10 +123,34 @@ export const fanOutCommentNotifications = createServerFn({ method: "POST" })
       }
     }
 
+    const { data: commenterPlan } = await (context.supabase as any).rpc("current_plan_tier");
+    if (commenterPlan === "professional") {
+      // Profile and team shares are independent of organization app_users.
+      const sharesClient = supabaseAdmin as any;
+      const shareResourceId = a?.project_id ?? c.analysis_id;
+      const shareRows = await sharesClient
+        .from(a?.project_id ? "project_shares" : "analysis_shares")
+        .select("recipient_profile_id,team_id")
+        .eq(a?.project_id ? "project_id" : "analysis_id", shareResourceId);
+      if (shareRows.error) throw new Error(shareRows.error.message);
+      for (const share of shareRows.data ?? []) {
+        if (share.recipient_profile_id) recipients.add(share.recipient_profile_id);
+        if (!share.team_id) continue;
+        const [members, team] = await Promise.all([
+          sharesClient.from("team_memberships").select("user_id").eq("team_id", share.team_id),
+          sharesClient.from("teams").select("owner_profile_id,lead_profile_id").eq("id", share.team_id).maybeSingle(),
+        ]);
+        if (members.error || team.error) throw new Error(members.error?.message ?? team.error.message);
+        for (const member of members.data ?? []) recipients.add(member.user_id);
+        if (team.data?.owner_profile_id) recipients.add(team.data.owner_profile_id);
+        if (team.data?.lead_profile_id) recipients.add(team.data.lead_profile_id);
+      }
+    }
+
     const preview =
       c.content.length > 120 ? c.content.slice(0, 117) + "…" : c.content;
     const analysisName = a?.name ?? "your analysis";
-    const link = `/analysis?id=${c.analysis_id}`;
+    const link = `/analysis?aid=${c.analysis_id}`;
 
     // @mentions → dedicated notification, gated by the "Mentions & Tags" pref.
     const mentioned = (data.mentionedProfileIds ?? []).filter((id) => id !== c.author_id);

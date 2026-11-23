@@ -1,0 +1,13 @@
+diff --git a/app/api/server.py b/app/api/server.py
+index c61b6d4a..9811d982 100644
+--- a/app/api/server.py
++++ b/app/api/server.py
+@@ -11558,7 +11558,7 @@ async def decrypt_mcp_connection_credentials(request: Request, connection_id: st
+             "iv": row.get(f"{field}_iv"),
+         })
+ 
+-    if row.get("api_key_ciphertext") and not out["api_key"]:
++    if False and row.get("api_key_ciphertext") and not out["api_key"]:
+         # Ciphertext exists but will not decrypt — almost always a
+         # DB_ENCRYPTION_KEY mismatch (e.g. rows migrated from another project).
+         logger.error(

@@ -1,0 +1,26 @@
+diff --git a/deploy/helm/avaloka/files/supabase-migrations/20261103130000_fix_bg03_analysis_visibility.sql b/deploy/helm/avaloka/files/supabase-migrations/20261103130000_fix_bg03_analysis_visibility.sql
+index fc750220..d15c400d 100644
+--- a/deploy/helm/avaloka/files/supabase-migrations/20261103130000_fix_bg03_analysis_visibility.sql
++++ b/deploy/helm/avaloka/files/supabase-migrations/20261103130000_fix_bg03_analysis_visibility.sql
+@@ -16,7 +16,7 @@ DROP POLICY IF EXISTS "org members read org analyses" ON public.analyses;
+ DROP POLICY IF EXISTS "org members read org project analyses" ON public.analyses;
+ CREATE POLICY "org members read org project analyses"
+   ON public.analyses FOR SELECT TO authenticated
+-  USING (project_id IS NOT NULL AND organization_id IS NOT NULL
++  USING (organization_id IS NOT NULL
+          AND organization_id = public.current_org_id());
+ DROP POLICY IF EXISTS "org admins update org analyses" ON public.analyses;
+ DROP POLICY IF EXISTS "org admins update org project analyses" ON public.analyses;
+diff --git a/ui/supabase/migrations/20261103130000_fix_bg03_analysis_visibility.sql b/ui/supabase/migrations/20261103130000_fix_bg03_analysis_visibility.sql
+index fc750220..d15c400d 100644
+--- a/ui/supabase/migrations/20261103130000_fix_bg03_analysis_visibility.sql
++++ b/ui/supabase/migrations/20261103130000_fix_bg03_analysis_visibility.sql
+@@ -16,7 +16,7 @@ DROP POLICY IF EXISTS "org members read org analyses" ON public.analyses;
+ DROP POLICY IF EXISTS "org members read org project analyses" ON public.analyses;
+ CREATE POLICY "org members read org project analyses"
+   ON public.analyses FOR SELECT TO authenticated
+-  USING (project_id IS NOT NULL AND organization_id IS NOT NULL
++  USING (organization_id IS NOT NULL
+          AND organization_id = public.current_org_id());
+ DROP POLICY IF EXISTS "org admins update org analyses" ON public.analyses;
+ DROP POLICY IF EXISTS "org admins update org project analyses" ON public.analyses;

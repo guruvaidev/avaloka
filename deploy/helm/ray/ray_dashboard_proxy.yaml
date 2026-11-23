@@ -1,0 +1,136 @@
+# Ray's own dashboard at /ray/, behind Avaloka's sign-in and plan check.
+#
+# Every /ray/ request is first sent to the backend (GET /api/ray/authz, via
+# nginx auth_request). The backend answers:
+#   200 + X-Ray-Upstream: <the signed-in user's own Ray head>:8265   -> forwarded there
+#   401 (no / expired /ray cookie)                                   -> "open it from Avaloka" page
+#   403 (plan, or an action other than view / stop a job)            -> refused
+# The cookie is set by POST /api/ray/session when the user clicks
+# "Ray dashboard" in the app. Ray's head services stay ClusterIP.
+#
+# Set AVALOKA_API below to where this pod reaches the Avaloka backend:
+#   local kind  -> the host's uvicorn, e.g. 172.18.0.1:8010 (uvicorn --host 0.0.0.0)
+#   test / app  -> the backend Service, e.g. avaloka-backend.default.svc.cluster.local:8000
+#
+# Apply:  kubectl apply -n default -f deploy/helm/ray/ray_dashboard_proxy.yaml
+#         kubectl rollout restart -n default deploy/ray-dashboard-proxy
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ray-dashboard-proxy
+  labels: {app: ray-dashboard-proxy}
+data:
+  default.conf: |
+    map $http_upgrade $connection_upgrade {
+      default upgrade;
+      ''      close;
+    }
+
+    server {
+      listen 8080;
+      resolver kube-dns.kube-system.svc.cluster.local valid=10s ipv6=off;
+
+      set $avaloka_api avaloka.default.svc.cluster.local:9000;   # <-- AVALOKA_API, see the header
+
+      location = /healthz { access_log off; return 200 "ok\n"; }
+      location = /ray     { return 301 /ray/; }
+      # Everything that is not /ray/ (e.g. /api/ray/session) goes to the Avaloka backend,
+      # so the /ray cookie is set by the same host that serves /ray/.
+      location / {
+        proxy_pass http://$avaloka_api;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_buffering off;
+        proxy_read_timeout 3600s;
+        client_max_body_size 0;
+      }
+
+      # Asked before every /ray/ request; never reachable from outside.
+      location = /_authz {
+        internal;
+        proxy_pass http://$avaloka_api/api/ray/authz;
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length "";
+        proxy_set_header Cookie $http_cookie;
+        proxy_set_header X-Original-Method $request_method;
+        proxy_set_header X-Original-URI $request_uri;
+      }
+
+      location /ray/ {
+        auth_request /_authz;
+        auth_request_set $ray_upstream $upstream_http_x_ray_upstream;
+
+        error_page 401 = @signin;
+        error_page 403 = @forbidden;
+
+        rewrite ^/ray/(.*)$ /$1 break;
+        proxy_pass http://$ray_upstream;
+
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Prefix /ray;
+        proxy_set_header Cookie "";          # Ray never sees the Avaloka cookie
+        proxy_buffering off;
+        proxy_read_timeout 3600s;
+      }
+
+      location @signin {
+        default_type text/html;
+        return 401 '<!doctype html><meta charset="utf-8"><title>Ray dashboard</title><body style="font-family:system-ui;padding:40px"><h2>Open the Ray dashboard from Avaloka</h2><p>Your session has expired or you are not signed in. Go back to Avaloka and click <b>Ray dashboard</b> in the sidebar.</p></body>';
+      }
+      location @forbidden {
+        default_type text/plain;
+        return 403 "This action is not available in the Ray dashboard. Start and manage jobs from Avaloka chat.\n";
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ray-dashboard-proxy
+  labels: {app: ray-dashboard-proxy}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: ray-dashboard-proxy}
+  template:
+    metadata:
+      labels: {app: ray-dashboard-proxy}
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:1.27-alpine
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: conf
+              mountPath: /etc/nginx/conf.d
+          readinessProbe:
+            httpGet: {path: /healthz, port: 8080}
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 20m, memory: 32Mi}
+            limits: {cpu: 200m, memory: 128Mi}
+      volumes:
+        - name: conf
+          configMap:
+            name: ray-dashboard-proxy
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ray-dashboard-proxy
+  labels: {app: ray-dashboard-proxy}
+spec:
+  type: ClusterIP
+  selector: {app: ray-dashboard-proxy}
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080

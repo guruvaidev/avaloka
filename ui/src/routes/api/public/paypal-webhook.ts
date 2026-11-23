@@ -335,6 +335,26 @@ export async function recordPayPalInvoice(
   if (error) console.warn("[paypal-webhook] billing_invoices insert failed", error.message);
 }
 
+
+/**
+ * Move the owner's personal reports (organization_id IS NULL) into the newly
+ * created Enterprise organization. `authUserId` must be the AUTH user id
+ * (profiles.user_id / auth.uid()), because reports.created_by stores auth.uid().
+ */
+async function movePersonalReportsToOrg(
+  supabase: any,
+  authUserId: string | null | undefined,
+  organizationId: string,
+): Promise<void> {
+  if (!authUserId) return;
+  const { error } = await supabase
+    .from("reports")
+    .update({ organization_id: organizationId })
+    .eq("created_by", authUserId)
+    .is("organization_id", null);
+  if (error) console.error("[paypal-webhook] moving personal reports failed", error.message);
+}
+
 // Finalizer: profile → customer_accounts → organization → enterprise_license → profile flags.
 // Idempotent. Profile flags are updated in a `finally`-style block so a
 // license failure doesn't lock the user out of the app after payment.
@@ -381,11 +401,11 @@ export async function upsertFromSubscription(
 
 
   // Resolve profile.
-  let profile: { id: string; organization_id: string | null } | null = null;
+  let profile: { id: string; organization_id: string | null; user_id?: string | null } | null = null;
   {
     const { data } = await supabase
       .from("profiles")
-      .select("id, organization_id")
+      .select("id, organization_id, user_id")
       .or(`id.eq.${userId},user_id.eq.${userId}`)
       .maybeSingle();
     profile = (data as any) ?? null;
@@ -400,6 +420,8 @@ export async function upsertFromSubscription(
     profile = created as any;
   }
   const ownerProfileId = profile!.id as string;
+  // reports.created_by stores auth.uid(); custom_id user_id is the auth user id.
+  const ownerAuthUserId = (profile!.user_id as string | null | undefined) ?? userId;
 
   // Resolve which plan was purchased from the PayPal plan id. Defaults to
   // enterprise for legacy subscriptions with no matching plans row.
@@ -456,8 +478,12 @@ export async function upsertFromSubscription(
     }
   }
 
-  // Organization.
-  let organizationId = profile!.organization_id as string | null;
+  // Organization — Enterprise only. Professional/self-serve plans keep
+  // profiles.organization_id and subscriptions.organization_id NULL.
+  const isEnterprise = planType === "enterprise";
+  let organizationId: string | null = null;
+  if (isEnterprise) {
+  organizationId = profile!.organization_id as string | null;
   if (organizationId) {
     const { data: orgRow } = await supabase
       .from("organizations")
@@ -474,6 +500,7 @@ export async function upsertFromSubscription(
       .single();
     if (orgErr) throw new Error("organizations insert failed: " + orgErr.message);
     organizationId = orgCreated.id as string;
+    await movePersonalReportsToOrg(supabase, ownerAuthUserId, organizationId);
   }
 
   // Seed defaults (division, roles, owner app_user) — idempotent.
@@ -502,6 +529,7 @@ export async function upsertFromSubscription(
     "organizations update",
   );
   if (orgUpdErr) throw new Error("organizations update failed: " + orgUpdErr.message);
+  }
 
   // subscriptions — the single source of truth the app reads for plan/state.
   if (planRowId) {
@@ -640,13 +668,13 @@ export async function upsertFromSubscription(
   const { error: pErr } = await supabase
     .from("profiles")
     .update({
-      organization_id: organizationId,
+      // Only Enterprise links the profile to an org and grants admin.
+      ...(isEnterprise ? { organization_id: organizationId, is_admin: true } : {}),
       selected_plan: planType,
       subscription_active: effectiveActive,
       subscription_status: effectiveStatus,
       trial_ends_at: trialEnd,
       next_billing_date: nextBillingTime,
-      is_admin: true,
     })
     .eq("id", ownerProfileId);
   if (pErr) console.error("[paypal-webhook] profile flags update failed", pErr.message);

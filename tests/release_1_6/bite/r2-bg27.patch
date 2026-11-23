@@ -1,0 +1,13 @@
+diff --git a/ui/src/lib/chart-display.ts b/ui/src/lib/chart-display.ts
+index 0b9a1449..c5989c06 100644
+--- a/ui/src/lib/chart-display.ts
++++ b/ui/src/lib/chart-display.ts
+@@ -31,7 +31,7 @@ export function measureLabel(value: unknown): string {
+   const number = Number(value);
+   if (!Number.isFinite(number)) return String(value ?? "");
+   const magnitude = Math.abs(number);
+-  const unit = magnitude >= 1e9 ? [1e9, "B"] : magnitude >= 1e6 ? [1e6, "M"] : magnitude >= 1e3 ? [1e3, "K"] : [1, ""];
++  const unit = magnitude >= 1e9 ? [1e9, "B"] : magnitude >= 1e6 ? [1e6, "M"] : magnitude >= 1e12 ? [1e3, "K"] : [1, ""];
+   return `${Number((number / Number(unit[0])).toFixed(2))}${unit[1]}`;
+ }
+ 

@@ -13,7 +13,13 @@ def test_scheduled_executor_discovery_uses_helm_deployment(monkeypatch):
 
     def fake_run(args, **kwargs):
         calls.append((args, kwargs))
-        stdout = "scheduled-pod" if args[1] == "get" else ""
+        if args[1] == "get":
+            if args[6].endswith("celery-executor"):
+                stdout = "scheduled-pod"
+            else:
+                stdout = "api-pod"
+        else:
+            stdout = ""
         return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
 
     monkeypatch.setattr(execution_agent.subprocess, "run", fake_run)
@@ -28,15 +34,21 @@ def test_scheduled_executor_discovery_uses_helm_deployment(monkeypatch):
         "_SCHEDULED_EXECUTION_SELECTOR",
         "app.kubernetes.io/component=celery-executor",
     )
+    monkeypatch.setattr(
+        execution_agent,
+        "_API_POD_SELECTOR",
+        "app.kubernetes.io/component=api",
+    )
 
-    namespace, pod_name = execution_agent._get_scheduled_execution_pod()
+    namespace, pod_name, api_pod = execution_agent._get_scheduled_execution_pod()
 
-    assert (namespace, pod_name) == ("avaloka-test", "scheduled-pod")
+    assert (namespace, pod_name, api_pod) == ("avaloka-test", "scheduled-pod", "api-pod")
     assert calls[0][0][:4] == [
         "kubectl", "rollout", "status", "deployment/avaloka-celery-executor"
     ]
     assert calls[1][0][1:3] == ["get", "pods"]
     assert "app.kubernetes.io/component=celery-executor" in calls[1][0]
+    assert "app.kubernetes.io/component=api" in calls[2][0]
 
 
 def test_scheduled_local_execution_uses_pod_executor(monkeypatch):
@@ -102,7 +114,7 @@ def test_scheduled_pod_stages_cloud_input_from_blob_store(monkeypatch):
     monkeypatch.setattr(
         execution_agent,
         "_get_scheduled_execution_pod",
-        lambda: ("avaloka-test", "scheduled-pod"),
+        lambda: ("avaloka-test", "scheduled-pod", "api-pod"),
     )
     from app.services import storage_service
 
@@ -113,10 +125,31 @@ def test_scheduled_pod_stages_cloud_input_from_blob_store(monkeypatch):
     )
 
     def fake_command(args, **kwargs):
-        if "cp" in args:
-            source_path = args[args.index("cp") + 3]
-            copied_paths.append(source_path)
-            assert os.path.isfile(source_path)
+        if args[:2] == ["exec", "-n"] or args[:1] == ["exec"]:
+            if "--" in args:
+                command = args[args.index("--") + 1 :]
+                if command[:1] == ["python"] and "-c" in command:
+                    pod_state = json.loads(kwargs["input"])
+                    pod_states.append(pod_state)
+                    result = json.dumps(pod_state, default=str)
+                    return SimpleNamespace(
+                        stdout=f"AVALOKA_EXECUTION_RESULT:{result}\n",
+                        stderr="",
+                        returncode=0,
+                    )
+            return SimpleNamespace(stdout="", stderr="", returncode=0)
+
+        if args[:1] == ["cp"]:
+            if len(args) >= 5 and args[1] == "-n":
+                source_path = args[3]
+                if source_path and os.path.exists(source_path):
+                    copied_paths.append(source_path)
+                    assert os.path.isfile(source_path)
+            elif len(args) >= 3:
+                source_path = args[1]
+                if source_path.startswith("/") and os.path.exists(source_path):
+                    copied_paths.append(source_path)
+                    assert os.path.isfile(source_path)
             return SimpleNamespace(stdout="", stderr="", returncode=0)
         if "-i" in args:
             pod_state = json.loads(kwargs["input"])

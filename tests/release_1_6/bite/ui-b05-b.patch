@@ -1,0 +1,11 @@
+diff --git a/ui/src/routes/api/public/send-analysis-email.ts b/ui/src/routes/api/public/send-analysis-email.ts
+--- a/ui/src/routes/api/public/send-analysis-email.ts
++++ b/ui/src/routes/api/public/send-analysis-email.ts
+@@ -25,7 +25,6 @@ export const Route = createFileRoute("/api/public/send-analysis-email")({
+       OPTIONS: async () => new Response(null, { status: 204, headers: CORS }),
+       POST: async ({ request }) => {
+         const auth = request.headers.get("authorization");
+-        if (!auth?.startsWith("Bearer ")) return json({ error: "Unauthorized" }, 401);
+ 
+         const body = await request.text();
+         const response = await fetch(FUNCTION_URL, {

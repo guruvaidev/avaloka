@@ -973,7 +973,7 @@ os.environ.setdefault("EXECUTION_ENV", "gke")
 os.environ.setdefault("DTA_GKE_REACHES_PRIVATE", "1")
 
 SOURCE_CREDS = {
-    "host": "10.111.16.4",
+    "host": "10.0.0.4",
     "port": 5432,
     "user": "avaloka",
     "password": "avaL0kapa$$word",
@@ -984,7 +984,7 @@ SOURCE_CREDS = {
 
 # Destination lives on the same Postgres; `table` is set per test.
 BASE_DEST_CREDS = {
-    "host": "10.111.16.4",
+    "host": "10.0.0.4",
     "port": 5432,
     "user": "avaloka",
     "password": "avaL0kapa$$word",

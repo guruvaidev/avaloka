@@ -93,10 +93,10 @@ describe("new project dialog (issues 6 and 7)", () => {
     await act(async () => root.render(<NewProjectDialog open onOpenChange={onOpenChange} onCreate={onCreate} />));
     const name = screen.getByPlaceholderText("Project name") as HTMLInputElement;
     await act(async () => fireEvent.change(name, { target: { value: "test" } }));
-    await act(async () => fireEvent.click(screen.getByText("Create")));
+    await act(async () => (screen.getByRole("button", { name: "Create" }) as HTMLButtonElement).click());
     expect(onCreate).toHaveBeenCalledWith("test", null);
     expect(name.readOnly).toBe(true);
-    expect(screen.getByLabelText("Creating project")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Creating…" }) as HTMLButtonElement).disabled).toBe(true);
     await act(async () => resolve());
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
@@ -107,7 +107,7 @@ describe("new project dialog (issues 6 and 7)", () => {
     await act(async () => root.render(<NewProjectDialog open onOpenChange={onOpenChange} onCreate={onCreate} />));
     const name = screen.getByPlaceholderText("Project name") as HTMLInputElement;
     await act(async () => fireEvent.change(name, { target: { value: "test" } }));
-    await act(async () => fireEvent.click(screen.getByText("Create")));
+    await act(async () => (screen.getByRole("button", { name: "Create" }) as HTMLButtonElement).click());
     expect(onOpenChange).not.toHaveBeenCalledWith(false);
     expect((screen.getByPlaceholderText("Project name") as HTMLInputElement).value).toBe("test");
   });

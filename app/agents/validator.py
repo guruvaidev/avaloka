@@ -534,15 +534,132 @@ class NumericColumnStringComparisonVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
 
+_NUMERIC_ASTYPE_NAMES = frozenset({
+    "int", "float", "complex", "number", "numeric", "int8", "int16", "int32", "int64",
+    "uint8", "uint16", "uint32", "uint64", "float16", "float32", "float64", "double",
+    "Int8", "Int16", "Int32", "Int64", "UInt8", "UInt16", "UInt32", "UInt64",
+    "Float32", "Float64",
+})
+# Methods that keep a numeric Series numeric: pd.to_numeric(...).fillna(0) is still numeric.
+_NUMERIC_PRESERVING_METHODS = frozenset({
+    "fillna", "round", "clip", "abs", "dropna", "copy", "interpolate", "ffill", "bfill",
+})
+
+
+def _is_numeric_astype_arg(node: ast.AST) -> bool:
+    """int / float / np.int64 / 'float64' / 'Int64' as an astype() argument."""
+    if isinstance(node, ast.Name):
+        return node.id in _NUMERIC_ASTYPE_NAMES
+    if isinstance(node, ast.Attribute):
+        return node.attr in _NUMERIC_ASTYPE_NAMES or node.attr.capitalize() in _NUMERIC_ASTYPE_NAMES
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value in _NUMERIC_ASTYPE_NAMES or node.value.lower() in _NUMERIC_ASTYPE_NAMES
+    return False
+
+
+def _is_numeric_coercion(node: ast.AST) -> bool:
+    """Does this expression produce a numeric Series? pd.to_numeric(...),
+    x.astype(int|float), x.apply(pd.to_numeric), possibly followed by a
+    numeric-preserving method such as .fillna(0). A lambda is judged by its body."""
+    if isinstance(node, ast.Lambda):
+        return _is_numeric_coercion(node.body)
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    name = func.attr if isinstance(func, ast.Attribute) else (func.id if isinstance(func, ast.Name) else None)
+    if name == "to_numeric":
+        return True
+    if name == "astype" and node.args:
+        return _is_numeric_astype_arg(node.args[0])
+    if name in {"apply", "transform", "map"} and node.args:
+        arg = node.args[0]
+        arg_name = arg.attr if isinstance(arg, ast.Attribute) else (arg.id if isinstance(arg, ast.Name) else None)
+        return arg_name in {"to_numeric", "int", "float"} or _is_numeric_coercion(arg)
+    if name in _NUMERIC_PRESERVING_METHODS and isinstance(func, ast.Attribute):
+        return _is_numeric_coercion(func.value)
+    return False
+
+
+def _df_column_targets(target: ast.AST) -> list[str]:
+    """Column names written by df['c'] = …, df[['a', 'b']] = … or df.loc[:, 'c'] = …."""
+    if not isinstance(target, ast.Subscript):
+        return []
+    base, key = target.value, target.slice
+    if hasattr(ast, "Index") and isinstance(key, ast.Index):  # py<3.9 compat
+        key = key.value
+    if isinstance(base, ast.Attribute) and base.attr in {"loc", "iloc"}:
+        base = base.value
+        if isinstance(key, ast.Tuple) and len(key.elts) == 2:
+            key = key.elts[1]
+    if not (isinstance(base, ast.Name) and base.id == "df"):
+        return []
+    elts = key.elts if isinstance(key, (ast.List, ast.Tuple)) else [key]
+    return [e.value for e in elts if isinstance(e, ast.Constant) and isinstance(e.value, str)]
+
+
+def _numerically_coerced_columns(tree: ast.AST) -> dict[str, int]:
+    """Columns of ``df`` the code itself makes numeric, with the first line that does it.
+
+    rc9: ``df['stroke'] = pd.to_numeric(df['stroke'], errors='coerce')`` followed
+    by ``df[df['stroke'] == 1]`` was blocked twice because the schema said string,
+    and the fallback then answered without the filter. Recognised:
+
+        df['c'] = pd.to_numeric(...)            df['c'] = df['c'].astype(int)
+        df[['a', 'c']] = df[['a', 'c']].apply(pd.to_numeric)
+        df = df.assign(c=pd.to_numeric(...))    df = df.astype({'c': float})
+    """
+    coerced: dict[str, int] = {}
+
+    def _mark(col: str, line: int) -> None:
+        coerced[col] = min(line, coerced.get(col, line))
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            targets, value = node.targets, node.value
+        elif isinstance(node, (ast.AnnAssign, ast.AugAssign)) and node.value is not None:
+            targets, value = [node.target], node.value
+        else:
+            continue
+        for target in targets:
+            cols = _df_column_targets(target)
+            if cols and _is_numeric_coercion(value):
+                for col in cols:
+                    _mark(col, node.lineno)
+            if (
+                isinstance(target, ast.Name) and target.id == "df"
+                and isinstance(value, ast.Call) and isinstance(value.func, ast.Attribute)
+            ):
+                if value.func.attr == "assign":
+                    for kw in value.keywords:
+                        if kw.arg and _is_numeric_coercion(kw.value):
+                            _mark(kw.arg, node.lineno)
+                elif value.func.attr == "astype" and value.args and isinstance(value.args[0], ast.Dict):
+                    for k, v in zip(value.args[0].keys, value.args[0].values):
+                        if isinstance(k, ast.Constant) and isinstance(k.value, str) and _is_numeric_astype_arg(v):
+                            _mark(k.value, node.lineno)
+    return coerced
+
+
 class ObjectColumnNumericComparisonVisitor(ast.NodeVisitor):
     """
     Flags comparisons like df['month'] == 6 when schema says the column is
     object/string. CSV reads can store numeric-looking values as strings, so
     raw numeric comparisons may silently return an empty dataset.
+
+    A column the code has already made numeric (``df['c'] = pd.to_numeric(...)``
+    and the like, on an earlier line) is no longer string-typed and is not
+    flagged. Comparisons on a coerced local (``s = pd.to_numeric(df['c'])``;
+    ``s == 1``) or inline (``pd.to_numeric(df['c']) == 1``) never match the
+    df['c'] pattern in the first place.
     """
     def __init__(self, schema: dict[str, Any]):
         self.schema = schema or {}
         self.errors: list[str] = []
+        self._coerced: dict[str, int] = {}
+
+    def visit_Module(self, node: ast.Module):
+        self._coerced = _numerically_coerced_columns(node)
+        self.generic_visit(node)
 
     def _extract_str_key(self, slice_node):
         if isinstance(slice_node, ast.Constant) and isinstance(slice_node.value, str):
@@ -577,6 +694,8 @@ class ObjectColumnNumericComparisonVisitor(ast.NodeVisitor):
 
             col = self._extract_str_key(df_sub.slice)
             dtype = self.schema.get(col)
+            if col in self._coerced and self._coerced[col] < node.lineno:
+                continue
             if col and _is_string_like_dtype(dtype) and _is_numeric_literal(const_val_node.value):
                 self.errors.append(
                     f"SemanticError on line {node.lineno}: "
@@ -1925,6 +2044,134 @@ class FilteredMLTrainingVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
 
+class RowIterationComplexityVisitor(ast.NodeVisitor):
+    """Flags the O(N^2) row-iteration shapes on full-dataset executions.
+
+    Two shapes, both on the frame ``main()`` is given (``df``) and only when the
+    run is on the entire dataset (``analysis_fidelity == "entire_dataset"``):
+
+    * iterating its rows one by one: ``df.iterrows()`` / ``df.itertuples()``;
+    * filtering it again inside a loop over its rows (``df[mask]``,
+      ``df.loc[mask]``, ``df.query(...)`` under ``for ... in df.iterrows()``,
+      ``df.itertuples()``, ``df.index``, ``df[col]``, ``range(len(df))``):
+      every row rescans the whole frame.
+
+    Everything else passes, because the guard must never reject legitimate
+    code: a loop over a short list (categories, column names,
+    ``df[col].unique()``, ``df.groupby(...)``) that filters ``df`` once per
+    group is O(k*N); ``iterrows()`` on an aggregate (``summary.iterrows()``)
+    walks a few rows; a filter outside any loop is one scan.
+    """
+
+    FRAME = "df"
+    #: Methods on the frame whose result is a small set of groups or keys, not its rows.
+    _GROUPING = frozenset({"groupby", "unique", "drop_duplicates", "nunique", "value_counts",
+                           "head", "tail", "nlargest", "nsmallest", "sample", "keys", "columns"})
+    _ROW_ITERATORS = frozenset({"iterrows", "itertuples"})
+    _FILTER_ACCESSORS = frozenset({"loc", "iloc"})
+
+    def __init__(self, enforce_full_data: bool = False):
+        self.enforce_full_data = enforce_full_data
+        self._row_loop_depth = 0
+        self.errors: list[str] = []
+
+    def _add_error(self, msg: str):
+        if msg not in self.errors:
+            self.errors.append(msg)
+
+    def _is_frame(self, node: ast.AST) -> bool:
+        return isinstance(node, ast.Name) and node.id == self.FRAME
+
+    def _rooted_in_frame(self, node: ast.AST) -> bool:
+        """``df``, ``df[...]``, ``df.x``, ``df.f(...)`` and chains of those."""
+        while True:
+            if self._is_frame(node):
+                return True
+            if isinstance(node, ast.Attribute):
+                node = node.value
+            elif isinstance(node, ast.Subscript):
+                node = node.value
+            elif isinstance(node, ast.Call):
+                node = node.func
+            else:
+                return False
+
+    def _chain_methods(self, node: ast.AST) -> set:
+        names: set = set()
+        while isinstance(node, (ast.Attribute, ast.Subscript, ast.Call)):
+            if isinstance(node, ast.Call):
+                node = node.func
+                continue
+            if isinstance(node, ast.Attribute):
+                names.add(node.attr)
+            node = node.value
+        return names
+
+    def _iterates_frame_rows(self, iterator: ast.AST) -> bool:
+        """True when a ``for`` over *iterator* visits the frame row by row."""
+        if isinstance(iterator, ast.Call) and isinstance(iterator.func, ast.Name):
+            if iterator.func.id == "range" and iterator.args:
+                inner = iterator.args[-1]
+                return (isinstance(inner, ast.Call) and isinstance(inner.func, ast.Name)
+                        and inner.func.id == "len" and inner.args and self._rooted_in_frame(inner.args[0]))
+            if iterator.func.id in ("enumerate", "zip", "reversed", "list", "tuple"):
+                return any(self._iterates_frame_rows(a) for a in iterator.args)
+            return False
+        if not self._rooted_in_frame(iterator):
+            return False
+        # df.groupby(...), df[col].unique(), df.head(20): a few groups or rows, not N.
+        return not (self._chain_methods(iterator) & self._GROUPING)
+
+    def _is_filter_of_frame(self, node: ast.Subscript) -> bool:
+        base = node.value
+        if isinstance(base, ast.Attribute) and base.attr in self._FILTER_ACCESSORS:
+            base = base.value
+        if not self._is_frame(base):
+            return False
+        sl = node.slice
+        return (isinstance(sl, (ast.Compare, ast.BoolOp, ast.UnaryOp, ast.BinOp))
+                or (not isinstance(sl, ast.Constant) and self._rooted_in_frame(sl)))
+
+    def visit_For(self, node: ast.For):
+        rows = self.enforce_full_data and self._iterates_frame_rows(node.iter)
+        self._row_loop_depth += int(rows)
+        self.generic_visit(node)
+        self._row_loop_depth -= int(rows)
+
+    def visit_While(self, node: ast.While):
+        rows = self.enforce_full_data and any(self._rooted_in_frame(n) for n in ast.walk(node.test))
+        self._row_loop_depth += int(rows)
+        self.generic_visit(node)
+        self._row_loop_depth -= int(rows)
+
+    def visit_Call(self, node: ast.Call):
+        if self.enforce_full_data and isinstance(node.func, ast.Attribute):
+            if node.func.attr in self._ROW_ITERATORS and self._is_frame(node.func.value):
+                self._add_error(
+                    f"PerformanceError on line {node.lineno}: DataFrame.{node.func.attr}() over the whole "
+                    "dataset is too slow for full-dataset execution and risks hitting the timeout. Use "
+                    "vectorized pandas/NumPy operations, groupby, merge/merge_asof, or pre-extracted NumPy "
+                    "arrays (.to_numpy()) with np.searchsorted."
+                )
+            elif (node.func.attr == "query" and self._is_frame(node.func.value)
+                  and self._row_loop_depth > 0):
+                self._add_error(
+                    f"PerformanceError on line {node.lineno}: df.query(...) inside a loop over df's rows "
+                    "rescans the whole dataset once per row (O(N^2)). Pre-sort/group once outside the loop "
+                    "or use np.searchsorted / pd.merge_asof."
+                )
+        self.generic_visit(node)
+
+    def visit_Subscript(self, node: ast.Subscript):
+        if self.enforce_full_data and self._row_loop_depth > 0 and self._is_filter_of_frame(node):
+            self._add_error(
+                f"PerformanceError on line {node.lineno}: Filtering DataFrame 'df[...]' inside a loop over "
+                "df's rows rescans the whole dataset once per row (O(N^2)) and times out on large datasets. "
+                "Pre-sort/group once outside the loop or use np.searchsorted / pd.merge_asof."
+            )
+        self.generic_visit(node)
+
+
 def _prompt_requests_filtered_ml(user_prompt: str) -> bool:
     prompt = (user_prompt or "").lower()
     ml_terms = (
@@ -2057,6 +2304,12 @@ def static_semantic_validator_node(state: CodingAgentState) -> dict:
         deprecated_api_visitor = DeprecatedApiVisitor()
         deprecated_api_visitor.visit(tree)
 
+        # Full-dataset O(N^2) row-iteration / loop-scan guardrail
+        complexity_visitor = RowIterationComplexityVisitor(
+            enforce_full_data=(state.get("analysis_fidelity") == "entire_dataset")
+        )
+        complexity_visitor.visit(tree)
+
         # Combine errors from both checks
         all_errors: list[str] = []
         all_errors.extend(col_visitor.errors)
@@ -2074,6 +2327,7 @@ def static_semantic_validator_node(state: CodingAgentState) -> dict:
         all_errors.extend(label_encoder_visitor.errors)
         all_errors.extend(synthetic_prediction_visitor.errors)
         all_errors.extend(deprecated_api_visitor.errors)
+        all_errors.extend(complexity_visitor.errors)
 
         if (
             _prompt_requests_filtered_ml(state.get("user_prompt", ""))
@@ -2203,78 +2457,15 @@ def execute_code_node(state: CodingAgentState) -> dict:
             "execution_output_data": None
         }
 
-    # Single exec scope so top-level imports/helpers are visible inside main();
-    # __name__ is deliberately not "__main__" so the script's entry block
-    # (which reads the full dataset and writes the real output) stays inert here.
-    exec_scope = {"pd": pd, "__name__": "avaloka_sample_execution"}
-
-    # Capture stdout and stderr
-    stdout_capture = io.StringIO()
-    stderr_capture = io.StringIO()
-
-    try:
-        # Execute the entire script to define functions, including main()
-        exec(code, exec_scope)
-
-        # Now, call the main function with the dataframe
-        main_func = exec_scope.get('main')
-        if not callable(main_func):
-            raise NameError("main() function not found in the generated code.")
-
-        with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
-            output_data = main_func(sample_df.copy())
-        
-        stdout = stdout_capture.getvalue()
-        stderr = stderr_capture.getvalue()
-        
-        if not isinstance(output_data, pd.DataFrame):
-            message = f"main() must return a pandas DataFrame (got {type(output_data).__name__})."
-            logger.error(message)
-            return {
-                "execution_stdout": stdout,
-                "execution_stderr": stderr,
-                "execution_error": message,
-                "execution_output_data": None
-            }
-
-        if output_data.empty:
-            message = "Execution returned an empty DataFrame."
-            logger.warning(message)
-            # Graph state must stay serializable: a raw DataFrame here crashes
-            # the checkpointer (msgpack) and 500s the whole request.
-            return {
-                "execution_stdout": stdout,
-                "execution_stderr": stderr,
-                "execution_error": message,
-                "execution_output_data": [],
-                "execution_output_preview": [],
-            }
-
-        logger.info("✅ Code executed successfully.")
-        logger.info(f"STDOUT:\n{stdout}")
-        if stderr:
-            logger.warning(f"STDERR:\n{stderr}")
-
-        # Provide serializable artifacts for downstream consumers.
-        preview = output_data.head(2).reset_index(drop=True)
-        output_records = output_data.to_dict(orient="records")
-        preview_records = preview.to_dict(orient="records")
-
-        return {
-            "execution_stdout": stdout,
-            "execution_stderr": stderr,
-            "execution_error": None,
-            "execution_output_data": output_records,
-            "execution_output_preview": preview_records,
-        }
-    except Exception as e:
-        logger.error(f"❌ Code execution failed: {e}")
-        return {
-            "execution_stdout": stdout_capture.getvalue(),
-            "execution_stderr": stderr_capture.getvalue(),
-            "execution_error": str(e),
-            "execution_output_data": None
-        }
+    # Model-written code: it runs in a child process with the scrubbed
+    # environment and time and memory limits, never exec()'d in this one,
+    # where it could read every secret in os.environ and every module global.
+    # app/executor/_sample_runner.py repeats the old in-process steps exactly:
+    # one exec scope with ``pd``, __name__ deliberately not "__main__" so the
+    # script's entry block (which reads the full dataset and writes the real
+    # output) stays inert, and stdout/stderr captured around main() only.
+    from app.executor.sample import run_main_on_sample
+    return run_main_on_sample(code, sample_df)
 
 def contract_validator_node(state: CodingAgentState) -> dict:
     """Check the executed result against the blueprint's own acceptance criteria.

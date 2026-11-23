@@ -33,6 +33,7 @@ class CodingAgentState(TypedDict):
     syntax_error: Optional[bool]
     static_semantic_error: Optional[bool]
     logical_semantic_error: Optional[bool]
+    sample_crash_error: Optional[bool]
     # What the logical reviewer decided, recorded by logical_review_verdict.py.
     # Booleans/None and one closed-vocabulary string; never acted on.
     logical_review_decided_by: Optional[str]

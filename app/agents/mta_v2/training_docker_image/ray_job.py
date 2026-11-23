@@ -1852,11 +1852,31 @@ def training_main() -> None:
         # under the "model" artifact path, enabling mlflow.pytorch.load_model().
         # The raw .pth and .onnx files are also logged for direct download/serving.
         print("[MLflow] Logging model artifacts ...")
+        # Signature + 5-row input example (the saved tensor contract: encoded
+        # features in, raw output out) so the registry version describes
+        # itself. Self-contained on purpose: this file ships in the standalone
+        # training image without app.agents. Never fails the run.
+        signature, input_example = None, None
+        try:
+            from mlflow.models import infer_signature
+
+            _example_rows = val_ds.take(5)
+            _X = np.asarray(
+                [[float(r[c]) for c in model_feature_cols] for r in _example_rows], dtype="float32"
+            ).reshape(-1, len(model_feature_cols))
+            if _X.size:
+                with torch.no_grad():
+                    _y = model(torch.as_tensor(_X)).detach().cpu().numpy().astype("float32")
+                signature, input_example = infer_signature(_X, _y), _X
+        except Exception as _sig_exc:  # noqa: BLE001
+            print(f"[MLflow] signature not built: {_sig_exc}")
         mlflow.pytorch.log_model(
             pytorch_model=model,
             artifact_path="model",
-            registered_model_name=None,   # set a name here to auto-register
-            serialization_format="pickle"
+            registered_model_name=None,   # registration happens in the worker (app/core/ml_registry)
+            serialization_format="pickle",
+            signature=signature,
+            input_example=input_example,
         )
         mlflow.log_artifact(local_pth_named,  artifact_path="model_files")
         mlflow.log_artifact(local_onnx_named, artifact_path="model_files")
@@ -1983,6 +2003,7 @@ def training_main() -> None:
         f"\n[Done] task_id={task_id}  mlflow_run_id={mlflow_run_id}  "
         f"model={model_name}  version={model_version}  runtime={runtime_s}s"
     )
+    output_metrics["cv_folds"] = int(os.getenv("CV_FOLDS", "5") or 5)
     print(f"```json\n{json.dumps(output_metrics, indent=2)}\n```")
 
 

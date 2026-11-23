@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
-from app.core.editions import (EDITIONS, GATE_REASON, Capabilities, GateReason,
+from app.core.editions import (CAPABILITY_STATUS, DEPLOYMENTS, EDITIONS, GATE_REASON,
+                               Capabilities, GateReason,
                                explain, normalize_deployment,
                                normalize_edition, resolve_capabilities)
 
@@ -74,13 +77,50 @@ def test_an_oss_build_cannot_claim_swarm_by_setting_an_edition():
     assert forged.swarm_intelligence is False
 
 
-def test_collaboration_is_the_enterprise_line():
-    pro = caps("avaloka_hosted", "professional")
-    ent = caps("avaloka_hosted", "enterprise")
-    for capability in ("team_collaboration", "share_analysis",
-                       "comment_on_analysis", "notifications", "sso_audit"):
-        assert getattr(pro, capability) is False, capability
-        assert getattr(ent, capability) is True, capability
+def test_teams_and_invites_are_professional_and_up():
+    """Owner ruling 2026-11-01 (NEW-BG-01, revised): Professional forms teams and
+    invites collaborators; Free does neither."""
+    assert caps("avaloka_hosted", "free").team_collaboration is False
+    assert caps("avaloka_hosted", "professional").team_collaboration is True
+    assert caps("avaloka_hosted", "enterprise").team_collaboration is True
+
+
+def test_org_structure_is_the_enterprise_line():
+    """Departments, roles, branches and users stay Enterprise-only."""
+    assert GATE_REASON["org_structure"] is GateReason.COMMERCIAL
+    for edition in ("oss", "free", "professional"):
+        assert caps("avaloka_hosted", edition).org_structure is False, edition
+    assert caps("avaloka_hosted", "enterprise").org_structure is True
+
+
+def test_sharing_comments_and_notifications_follow_the_owner_matrix():
+    """Owner ruling 2026-11-01: share_analysis, comment_on_analysis and
+    notifications are Professional and Enterprise; Free has none of them (it
+    shares reports by email and public link, which no flag gates)."""
+    flags = ("share_analysis", "comment_on_analysis", "notifications")
+    expected = {
+        "free": {"share_analysis": False, "comment_on_analysis": False, "notifications": False},
+        "professional": {"share_analysis": True, "comment_on_analysis": True, "notifications": True},
+        "enterprise": {"share_analysis": True, "comment_on_analysis": True, "notifications": True},
+    }
+    got = {
+        edition: {flag: getattr(caps("avaloka_hosted", edition), flag) for flag in flags}
+        for edition in expected
+    }
+    assert got == expected
+
+
+def test_sso_audit_stays_enterprise_only():
+    assert caps("avaloka_hosted", "professional").sso_audit is False
+    assert caps("avaloka_hosted", "enterprise").sso_audit is True
+
+
+def test_commercial_explanation_names_the_editions_that_grant_it():
+    free = caps("avaloka_hosted", "free")
+    assert explain("team_collaboration", free).endswith("Professional and Enterprise.")
+    assert explain("org_structure", free).endswith("in Avaloka Enterprise.")
+    for capability in ("share_analysis", "comment_on_analysis", "notifications"):
+        assert explain(capability, free).endswith("Professional and Enterprise."), capability
 
 
 # --------------------------------------------------------------------------- #
@@ -208,4 +248,53 @@ def test_every_capability_field_has_a_declared_gate_reason():
     assert declared == set(GATE_REASON), (
         f"missing gate reasons: {declared - set(GATE_REASON)}; "
         f"stale entries: {set(GATE_REASON) - declared}"
+    )
+
+
+def test_every_capability_field_has_a_declared_status():
+    from dataclasses import fields
+    declared = {f.name for f in fields(Capabilities)}
+    assert declared == set(CAPABILITY_STATUS), (
+        f"missing statuses: {declared - set(CAPABILITY_STATUS)}; "
+        f"stale entries: {set(CAPABILITY_STATUS) - declared}"
+    )
+    assert set(CAPABILITY_STATUS.values()) <= {"shipped", "coming"}
+
+
+def test_sso_audit_is_enterprise_and_coming():
+    """Owner ruling 2026-11-02: entitled on Enterprise, not shipped on 1.6."""
+    assert resolve_capabilities("avaloka_hosted", "enterprise", has_commercial_build=True).sso_audit
+    assert CAPABILITY_STATUS["sso_audit"] == "coming"
+
+
+def test_auto_insights_is_open_on_every_plan():
+    assert GATE_REASON["auto_insights"] is GateReason.OPEN
+    for edition in EDITIONS:
+        assert resolve_capabilities("avaloka_hosted", edition, has_commercial_build=True).auto_insights
+
+
+def test_reports_workspace_is_a_hosted_cost_gate_from_professional():
+    assert GATE_REASON["reports"] is GateReason.COST
+    hosted = {e: resolve_capabilities("avaloka_hosted", e, has_commercial_build=True).reports for e in EDITIONS}
+    assert hosted == {"oss": False, "free": False, "professional": True, "enterprise": True}
+    assert resolve_capabilities("self_hosted", "oss", has_commercial_build=False).reports
+
+
+def test_a_coming_capability_is_never_explained_as_available():
+    """Owner ruling 2026-11-03: explain() says a coming capability is coming,
+    for every deployment, edition and build shape, including the plans
+    entitled to it."""
+    coming = sorted(n for n, s in CAPABILITY_STATUS.items() if s == "coming")
+    assert "sso_audit" in coming
+    for deployment in DEPLOYMENTS:
+        for edition in EDITIONS:
+            for commercial in (True, False):
+                resolved = resolve_capabilities(deployment, edition, has_commercial_build=commercial)
+                for name in coming:
+                    message = explain(name, resolved)
+                    assert not re.search(r"\bis available\b", message), (deployment, edition, commercial, message)
+                    assert message.endswith("; it is not available yet."), message
+    assert (
+        explain("sso_audit", caps("avaloka_hosted", "enterprise"))
+        == "sso_audit is coming to Avaloka Enterprise; it is not available yet."
     )

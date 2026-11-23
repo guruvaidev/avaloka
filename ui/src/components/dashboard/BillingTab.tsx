@@ -22,6 +22,7 @@ import { STRIPE_PUBLISHABLE_KEY } from "@/integrations/supabase/config";
 import { loadStripe, type Stripe as StripeJs } from "@stripe/stripe-js";
 import { Elements, CardElement, useStripe, useElements } from "@stripe/react-stripe-js";
 import { useActivePlan } from "@/lib/use-active-plan";
+import { COMPARISON_TABS, comparisonSections, planCardFeatures, type ComparisonGroup, type ComparisonRow, type PlanCell } from "@/lib/edition-comparison";
 import {
   AmexIcon,
   DinersClubIcon,
@@ -62,31 +63,11 @@ export type PlanRow = {
   paypal_plan_id: string | null;
 };
 
-// Features are intentionally hardcoded (per requirements: monthly and yearly
-// share the same feature list per plan type; only pricing changes).
-const FREE_FEATURES = [
-  "Basic File Management",
-  "Limited Storage",
-  "Community support",
-  "Basic Analytics",
-  "Conversational AI (limited queries)",
-];
-const PRO_FEATURES = [
-  "Advanced file & cloud dataset management",
-  "SQL warehouse access",
-  "Auto Insights",
-  "Conversational AI (extended usage)",
-  "Inference model access",
-  "Advanced analytics",
-];
-const ENTERPRISE_FEATURES = [
-  "Unlimited users & multiple teams",
-  "Enterprise-grade security & compliance",
-  "Dedicated account manager",
-  "Custom AI model deployment",
-  "Custom integrations",
-  "Advanced admin controls",
-];
+// Card features come from the edition matrix (app/core/editions.py), like the
+// comparison table below: each card lists what that plan adds to the one before.
+const FREE_FEATURES = planCardFeatures("free");
+const PRO_FEATURES = planCardFeatures("professional");
+const ENTERPRISE_FEATURES = planCardFeatures("enterprise");
 
 function formatPlanPrice(price: number): string {
   if (!Number.isFinite(price) || price <= 0) return "$0";
@@ -775,7 +756,7 @@ function Pricing({
 }) {
   void enterpriseLoading;
   const [users, setUsers] = useState(20);
-  const [compareTab, setCompareTab] = useState<"all" | "overview" | "analytics" | "access">("all");
+  const [compareTab, setCompareTab] = useState<"all" | ComparisonGroup>("all");
 
   const intervalDb = cycle === "annual" ? "yearly" : "monthly";
   const matchesInterval = (val: string | null | undefined) => {
@@ -866,7 +847,7 @@ function Pricing({
             "For growing teams who need advanced ecommerce and reporting capabilities"
           }
           badge={cycle === "annual" ? "Save 17%" : "Popular"}
-          featuresHeading="Everything in Free"
+          featuresHeading="Everything in Free, plus"
           features={PRO_FEATURES}
           onClick={() =>
             onBuyNow(
@@ -888,7 +869,7 @@ function Pricing({
           unit={unitLabel}
           users={entPlan?.description ?? "Built for organizations with advanced AI and security needs"}
           badge={cycle === "annual" ? "Save 17%" : undefined}
-          featuresHeading="Everything in Professional"
+          featuresHeading="Everything in Professional, plus"
           features={ENTERPRISE_FEATURES}
           onClick={onContactSales}
           primaryLabel={isCurrent("enterprise") ? "Current plan" : "Contact sales"}
@@ -901,18 +882,13 @@ function Pricing({
 
       {/* Comparison */}
       <div className="mt-16">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <h3 className="text-lg font-semibold">Overall Comparison</h3>
-          <div className="inline-flex rounded-lg border border-border bg-card p-1 text-sm">
-            {[
-              { id: "all", label: "View all" },
-              { id: "overview", label: "Overview" },
-              { id: "analytics", label: "Analytics" },
-              { id: "access", label: "User Access" },
-            ].map((t) => (
+          <div className="inline-flex flex-wrap rounded-lg border border-border bg-card p-1 text-sm">
+            {COMPARISON_TABS.map((t) => (
               <button
                 key={t.id}
-                onClick={() => setCompareTab(t.id as typeof compareTab)}
+                onClick={() => setCompareTab(t.id)}
                 className={cn(
                   "rounded-md px-3 py-1.5 font-medium transition-colors",
                   compareTab === t.id ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground",
@@ -939,13 +915,22 @@ function Tick() {
 function Dash() {
   return <span className="text-muted-foreground">—</span>;
 }
+function Cell({ cell }: { cell: PlanCell }) {
+  if (cell === "yes") return <Tick />;
+  if (cell === "no") return <Dash />;
+  return (
+    <span className="rounded-full border border-border px-2 py-0.5 text-[11px] font-semibold text-muted-foreground">
+      Coming soon
+    </span>
+  );
+}
 
-function Rows({ rows }: { rows: [string, React.ReactNode, React.ReactNode, React.ReactNode][] }) {
+function Rows({ rows }: { rows: ComparisonRow[] }) {
   return (
     <div>
-      {rows.map(([label, a, b, c], i) => (
+      {rows.map(({ capability, label, cells }, i) => (
         <div
-          key={label}
+          key={capability}
           className={cn(
             "grid grid-cols-[1.4fr_1fr_1fr_1fr] items-center px-3 py-4 text-sm",
             i % 2 === 0 ? "bg-muted/40" : "bg-card",
@@ -955,9 +940,9 @@ function Rows({ rows }: { rows: [string, React.ReactNode, React.ReactNode, React
             {label}
             
           </div>
-          <div className="flex justify-center text-muted-foreground">{a}</div>
-          <div className="flex justify-center text-muted-foreground">{b}</div>
-          <div className="flex justify-center text-muted-foreground">{c}</div>
+          <div className="flex justify-center text-muted-foreground"><Cell cell={cells.free} /></div>
+          <div className="flex justify-center text-muted-foreground"><Cell cell={cells.professional} /></div>
+          <div className="flex justify-center text-muted-foreground"><Cell cell={cells.enterprise} /></div>
         </div>
       ))}
     </div>
@@ -972,7 +957,7 @@ function ComparisonTable({
   plans,
   currentPlan,
 }: {
-  tab: "all" | "overview" | "analytics" | "access";
+  tab: "all" | ComparisonGroup;
   onSelect: (p: PlanId) => void;
   onBuyNow: (
     p: PlanId,
@@ -985,55 +970,12 @@ function ComparisonTable({
   plans: PlanRow[];
   currentPlan?: "free" | "professional" | "enterprise";
 }) {
-  const overviewRows: [
-  string,
-  React.ReactNode,
-  React.ReactNode,
-  React.ReactNode
-][] = [
-  ["Individual analysis", <Tick />, <Tick />, <Tick />],
-  ["Basic file management", <Tick />, <Tick />, <Tick />],
-  ["Advanced dataset management", <Dash />, <Tick />, <Tick />],
-  ["Scheduled batch-job analysis", <Dash />, <Tick />, <Tick />],
-  ["Ray-cluster execution for large datasets", <Dash />, <Tick />, <Tick />],
-    ["Teams and groups", <Dash />, <Dash />, <Tick />],
-
-];
-
-const analyticsRows: [
-  string,
-  React.ReactNode,
-  React.ReactNode,
-  React.ReactNode
-][] = [
-  ["Basic analytics", <Tick />, <Tick />, <Tick />],
-  ["Auto Insights", <Tick />, <Tick />, <Tick />],
-  ["Advanced analytics", <Dash />, <Tick />, <Tick />],
-  ["SQL warehouse access", <Dash />, <Tick />, <Tick />],
-  ["Reports", <Dash />, <Dash />, <Tick />],
-  
-];
-
-const accessRows: [
-  string,
-  React.ReactNode,
-  React.ReactNode,
-  React.ReactNode
-][] = [
-  ["Individual usage", <Tick />, <Tick />, <Tick />],
-  ["Large-dataset workloads", <Dash />, <Tick />, <Tick />],
-  ["Team collaboration", <Dash />, <Dash />, <Tick />],
-  ["Group workloads", <Dash />, <Dash />, <Tick />],
-  
-];
-  const showO = tab === "all" || tab === "overview";
-  const showA = tab === "all" || tab === "analytics";
-  const showU = tab === "all" || tab === "access";
+  const sections = comparisonSections().filter((section) => tab === "all" || section.group === tab);
   return (
     <div className="mt-6">
       
       <div className="grid grid-cols-[1.4fr_1fr_1fr_1fr] items-center border-b border-border px-3 pb-4 text-base font-semibold">
-        <div>Overview</div>
+        <div>Included in each plan</div>
 
         <div className="text-center">Free</div>
 
@@ -1049,20 +991,25 @@ const accessRows: [
         <div className="text-center">Enterprise</div>
       </div>
 
-      {showO && <Rows rows={overviewRows} />}
-      {showA && (
-        <>
-          <div className="mt-6 px-3 py-3 text-sm font-semibold text-[#1565EF]">Reporting and analytics</div>
-          <Rows rows={analyticsRows} />
-        </>
+      {sections.map((section) => (
+        <div key={section.id}>
+          <div className="mt-6 px-3 py-3 text-sm font-semibold text-[#1565EF]">{section.title}</div>
+          <Rows rows={section.rows} />
+        </div>
+      ))}
+      {(tab === "all" || tab === "collaboration") && (
+        <p className="mt-4 px-3 text-sm text-muted-foreground">
+          Every plan can share a report by email or public link. On Professional, team members need
+          Professional or higher.
+        </p>
       )}
-      {showU && (
-        <>
-          <div className="mt-6 px-3 py-3 text-sm font-semibold text-[#1565EF]">User access</div>
-          <Rows rows={accessRows} />
-        </>
-      )}
-      <div className="mt-8 grid grid-cols-[1.4fr_1fr_1fr_1fr] gap-4">
+      {/* Under sm the gap tightens and the buttons may shrink and wrap their
+          label, so the row stays aligned with the columns above and never
+          widens the page at phone width. */}
+      <div
+        data-testid="plan-cta-row"
+        className="mt-8 grid grid-cols-[1.4fr_1fr_1fr_1fr] gap-2 sm:gap-4 [&>button]:h-auto [&>button]:min-h-11 [&>button]:min-w-0 [&>button]:whitespace-normal [&>button]:px-2 [&>button]:text-xs sm:[&>button]:px-4 sm:[&>button]:text-sm"
+      >
         <div />
         <Button
           onClick={() => onSelect("basic")}

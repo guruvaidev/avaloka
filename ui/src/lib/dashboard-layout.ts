@@ -18,6 +18,6 @@ export const DASHBOARD_SLOT_LAYOUT: DashboardSlotLayout[] = [
 
 export function dashboardSlotColClass(colSpan: 2 | 3) {
   return colSpan === 2
-    ? "col-span-1 sm:col-span-2 lg:col-span-2"
-    : "col-span-1 sm:col-span-2 lg:col-span-3";
+    ? "col-span-1 2xl:col-span-2"
+    : "col-span-1 2xl:col-span-3";
 }

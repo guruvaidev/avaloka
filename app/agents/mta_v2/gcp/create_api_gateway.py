@@ -31,7 +31,7 @@ Usage example
 >>> gateway_url = create_api_gateway(
 ...     project_id="my-gcp-project",
 ...     location="us-central1",
-...     backend_ip="34.56.78.90",
+...     backend_ip="203.0.113.10",
 ...     backend_port=8080,
 ... )
 >>> print(f"Public endpoint: https://{gateway_url}/inference")
@@ -1136,9 +1136,9 @@ def _ip_to_hostname(address: str) -> str:
 
     GCP API Gateway rejects bare IPv4/IPv6 addresses in ``x-google-backend``
     URLs.  When ``address`` is already a hostname it is returned unchanged.
-    When it is a raw IPv4 address (e.g. ``"35.188.70.201"``) we use the
-    public nip.io wildcard-DNS service: ``"35.188.70.201.nip.io"`` resolves
-    to ``35.188.70.201`` with no registration or configuration required.
+    When it is a raw IPv4 address (e.g. ``"203.0.113.10"``) we use the
+    public nip.io wildcard-DNS service: ``"203.0.113.10.nip.io"`` resolves
+    to ``203.0.113.10`` with no registration or configuration required.
     """
     import re
     ipv4_re = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")

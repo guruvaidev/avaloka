@@ -294,6 +294,8 @@ export async function appendMessage(input: {
   output?: unknown;
   author_id?: string | null;
 }): Promise<AnalysisMessage> {
+  // Profile state in the chat UI may still be loading on the first prompt.
+  const authorId = input.author_id ?? (input.role === "user" ? await requireCurrentProfileId() : null);
   const { data, error } = await supabase
     .from("analysis_messages")
     .insert({
@@ -301,7 +303,7 @@ export async function appendMessage(input: {
       role: input.role,
       content: input.content,
       output: input.output ?? null,
-      author_id: input.author_id ?? null,
+      author_id: authorId,
     } as any)
     .select("id,analysis_id,role,content,output,author_id,created_at")
     .single();

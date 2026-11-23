@@ -1,0 +1,12 @@
+diff --git a/app/agents/mta_v2/agent.py b/app/agents/mta_v2/agent.py
+index 65223f2c..60851530 100644
+--- a/app/agents/mta_v2/agent.py
++++ b/app/agents/mta_v2/agent.py
+@@ -3398,6 +3398,7 @@ class ModelTrainingAgent:
+                     "Initial MTA training request detected; generating plan and stopping before training."
+                 )
+                 new_state = self._generate_training_plan(state.copy())
++                new_state = self._execute_training(new_state)
+                 return self._finish_mta(new_state)
+ 
+             if "update_training_plan" in requested_tools:

@@ -35,7 +35,7 @@ constantly and consistently improve the data science agents.
 - **Yours, wherever it runs.** The same Helm chart runs on GKE, EKS, AKS,
   on-premises Kubernetes or your laptop. There is no lock-in and no cloud
   markup, and Avaloka operates no service that receives your data. Choose a
-  local model and nothing leaves your environment.
+  local model and local embeddings, and nothing leaves your environment.
 - **Bring your own model, or several.** Planning, coding and visualization can
   each use a different model and provider, with an automatic fallback. Swap or
   upgrade models without changing how you work.
@@ -55,9 +55,9 @@ constantly and consistently improve the data science agents.
 - **Built for teams.** Share projects, analyses and reports with view, comment
   or edit access, and build on each other's work.
 - **From question to production.** Turn an analysis into a scheduled job in one
-  step. Large sources run on autoscaling Ray clusters in your own cloud, and
-  Avaloka tells you up front when a job will be large or slow, before the bill
-  arrives.
+  step. Model training runs on autoscaling Ray (KubeRay) clusters in your own
+  cloud, and Avaloka tells you up front when a dataset is large enough to make
+  a job slow.
 - **Connects to what you already have.** PostgreSQL, MySQL, MariaDB, SQL
   Server, Oracle, SQLite, MongoDB, S3, Google Cloud Storage and Azure Blob.
 - **A laptop is enough.** The CLI runs a statistics-grounded analysis on your
@@ -139,12 +139,21 @@ vendor.
   `INFERENCE_PROVIDER=openai` and `OPENAI_API_KEY`, or to Gemini on Google
   Vertex AI with `INFERENCE_PROVIDER=vertex`.
 - **Or any model you like,** including one running on your own hardware. With
-  `INFERENCE_PROVIDER=local` (vLLM or Ollama), nothing leaves your environment.
+  `INFERENCE_PROVIDER=local` (vLLM or Ollama), nothing leaves your
+  environment. (Memory embeddings are local by default. OpenAI embeddings need
+  `EMBEDDING_PROVIDER=openai` plus `EMBEDDING_OPENAI_API_KEY`, and send memory
+  text, including table and column names, to OpenAI; `OPENAI_API_KEY` alone
+  never turns them on.)
 - **Mix them.** Planning, coding and visualization can each use a different
   provider (`INFERENCE_PROVIDER_PLANNING`, `_CODING`, `_VIZ`), and a single
-  agent can be overridden with `AVALOKA_<AGENT>_PROVIDER`. With
-  `OPENROUTER_API_KEY` set, a failing provider falls back to OpenRouter
-  automatically.
+  agent can be overridden with `AVALOKA_<AGENT>_PROVIDER`.
+
+**The default model is `openai/gpt-oss-120b` through OpenRouter**, so
+`OPENROUTER_API_KEY` is the one key a default install needs. OpenRouter is told
+which upstream providers may serve it (DeepInfra, Together, Crusoe, Parasail;
+no training, zero data retention, never routed elsewhere), and GPT-6 Luna is the
+optional higher-quality tier and the fallback when those providers are down.
+Details and how to change them: [docs/privacy-and-egress.md](docs/privacy-and-egress.md).
 
 | Provider | `INFERENCE_PROVIDER` | What it needs |
 | --- | --- | --- |
@@ -154,10 +163,10 @@ vendor.
 | Google Gemini on Vertex AI | `vertex` | Google Cloud credentials |
 | Azure OpenAI | `azure` | `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, a deployment name |
 | Groq | `groq` | `GROQ_API_KEY` |
-| OpenRouter (hundreds of models) | `openrouter` | `OPENROUTER_API_KEY` |
+| OpenRouter (**the default**: gpt-oss-120b, Luna as the higher tier) | `openrouter` | `OPENROUTER_API_KEY` |
 | Your own hardware (vLLM, Ollama) | `local` | `INFERENCE_LOCAL_BASE_URL` |
 
-The quickstart above needs no model at all. In 1.6, the CLI's `--llm` option
+The quickstart above needs no model at all. In 1.0.0, the CLI's `--llm` option
 uses Claude (`ANTHROPIC_API_KEY`). In 2.0, the CLI takes the same choice of
 providers as the platform.
 
@@ -226,9 +235,9 @@ machinery.
 
 ---
 
-## What's new in 1.6
+## What's new in 1.0.0
 
-1.6 is about **reading real-world data correctly, and being honest when it
+1.0.0 is about **reading real-world data correctly, and being honest when it
 can't.** The full list is in the [CHANGELOG](CHANGELOG.md); the stories behind
 it are on the [blog](https://avaloka.ai/blog).
 
@@ -299,7 +308,7 @@ need Redis, a server and cloud credentials and sit outside it
 local model server on their own cadence, so a provider outage cannot redden a
 pull request.
 
-**Known limitations in 1.6:**
+**Known limitations in 1.0.0:**
 
 - In a multi-sheet workbook, the upload path reads the longest sheet, not
   necessarily the one your question is about. Upload that sheet on its own for now.
@@ -315,9 +324,9 @@ Both are tracked in the [CHANGELOG](CHANGELOG.md).
 | --- | --- |
 | **On your laptop** | The [Quickstart](#quickstart) above. |
 | **On your own cluster, fully offline** | [Install Guide → Running completely offline](docs/INSTALL.md#running-avaloka-completely-offline): a local model server, the embedding model baked into the image, and storage, memory and auth deployed by the Helm chart. Nothing calls home, and a `--network none` check lets you prove it rather than trust it. |
-| **Let us run it** | [avaloka.ai](https://avaloka.ai) hosts the Professional and Enterprise editions with auto-scaling compute — nothing to stand up. Enterprise adds team workspaces, the cloud scheduler and connections to your own clusters. |
+| **In your cloud, provisioned by Avaloka** | The Professional and Enterprise editions ([avaloka.ai](https://avaloka.ai)) run in your own cloud, on your billing, and provision and autoscale the clusters there for you. Enterprise adds team workspaces, the cloud scheduler and connections to your own clusters. |
 
-The open-source edition is not a limited trial of the hosted ones. It is the
+The open-source edition is not a limited trial of the commercial ones. It is the
 same engine on your own hardware, and it stays useful with no account, no key
 and no network.
 
@@ -366,7 +375,7 @@ speed that makes the planner feel like a conversation rather than a batch job.
 | Model training, registry, inference serving | **●** | ○ | ● | ● |
 | Cloud / database connectors | ○ | ○ | ● | ● |
 | Provisioning & scheduling onto a cloud cluster | ○ | ○ | ● | ● |
-| Teams, sharing, comments, notifications | ○ | ○ | ○ | ● |
+| Teams, analysis sharing, comments, notifications | ○ | ○ | ● | ● |
 
 The open-source edition is sized for a laptop or a small self-managed cluster.
 That is the target, it is what gets tested, and it is what the capability
@@ -407,15 +416,41 @@ Every document, and who it is for: [docs/DOCS_MAP.md](docs/DOCS_MAP.md).
 
 ## Coming in 2.0
 
-A preview of the next release; follow the [blog](https://avaloka.ai/blog) for
-progress.
+Avaloka 2.0 is the next open-source release. Everything below is in the
+open-source edition; follow the [blog](https://avaloka.ai/blog) for the launch.
 
-- **The swarm:** Avaloka clones itself, works a dataset in parallel and
-  converges on one answer.
-- **A live planner graph** of exactly what ran on your data.
-- **Answers pitched to whoever is asking,** from a CIO's strategy to an
-  analyst's detail.
-- **Nested and semi-structured data, and fully air-gapped operation.**
+- **The swarm, in every edition.** `avaloka coordinate` clones Avaloka across
+  shards of one dataset and converges one answer: profiles merge exactly,
+  verdicts merge conservatively, and the work is narrated in the chat as it
+  happens. Open source runs two clones per mission, a limit written in open
+  code.
+- **Instant Analysis and the Analysis Recipe Library.** Ask one question of an
+  uploaded or sample dataset and get verified findings, an interactive report
+  and a notebook that reproduces it. Ten recipes, from profile and trend to
+  regression, anomalies, cohort retention and A/B tests, each on a stated
+  budget of rows, bytes, memory and time.
+- **Outcome Reports with source-data checks**, carrying the data-quality
+  checks, the recipe and the engine versions behind every finding.
+- **Workload planning from statistics.** Every job is sized from rows, bytes
+  and the source's own statistics, assigned a live, sampled or Ray-batch lane
+  with its reason, and given a scan plan recorded beside the results.
+- **Statistical specialists.** A feature engineer in every mission, and a
+  statistician, an experimenter and a conformal calibrator when the question
+  calls for them.
+- **An agent trace for every turn, and a planner graph of what actually ran**,
+  built from the executed operations with the columns on each one.
+- **Replanning on execution error.** A failed run is diagnosed, the data or
+  the code repaired, and the recovery recorded; a correction from you re-plans
+  and says why.
+- **A personal dataset catalog**, in chat (`use my.sales@2`) and on the command
+  line, with versions and lineage for every dataset an analysis touches.
+- **Generated code in an isolated executor**, with no route to your databases
+  or the internet and none of the server's secrets.
+- **Cross-validation with confusion matrices** and model families for training.
+- **Answers pitched to whoever is asking**, from a novice to an expert, and
+  memory scoped to the conversation it came from.
+- **Secure by default:** MLflow and Ray require authentication, and
+  third-party usage beacons are off on every deploy surface.
 
 ## Contributing
 

@@ -33,7 +33,6 @@ CREATE POLICY "admins manage roles" ON public.user_roles
   USING (public.has_role(auth.uid(), 'admin'))
   WITH CHECK (public.has_role(auth.uid(), 'admin'));
 
--- Seed admin for maulik@kamaliinc.com if account exists
-INSERT INTO public.user_roles (user_id, role)
-SELECT id, 'admin'::public.app_role FROM auth.users WHERE email = 'maulik@kamaliinc.com'
-ON CONFLICT (user_id, role) DO NOTHING;
+-- No admin is seeded here. The chart's migrate Job re-runs every file on each
+-- install and upgrade, so an email-keyed grant would re-grant admin to whoever
+-- holds that address. Grant the first admin explicitly with a user_roles insert.

@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { ChevronDown } from "lucide-react";
 import type { FindingGroup } from "../../../lib/multi-dataset-view";
+import { InlineMarkdown } from "@/components/analysis/ChartCarousel";
 
 function Collapsible({ title, children, defaultOpen = false }: { title: string; children: ReactNode; defaultOpen?: boolean }) {
   const [open, setOpen] = useState(defaultOpen);
@@ -25,7 +26,7 @@ export function TopKeyFindings({ picks, groups }: { picks: { text: string; datas
       <ul className="mt-1 list-disc space-y-1 pl-5 text-sm text-primary">
         {picks.map((pick, index) => (
           <li key={index}>
-            {pick.text} <span className="text-tertiary">· {pick.datasetName}</span>
+            <InlineMarkdown content={pick.text} /> <span className="text-tertiary">· {pick.datasetName}</span>
           </li>
         ))}
       </ul>
@@ -39,7 +40,7 @@ export function TopKeyFindings({ picks, groups }: { picks: { text: string; datas
           {nonEmpty.map((group) => (
             <Collapsible key={group.id} title={group.name}>
               <ul className="list-disc space-y-1 pl-5 text-sm text-primary">
-                {group.findings.map((text, index) => <li key={index}>{text}</li>)}
+                {group.findings.map((text, index) => <li key={index}><InlineMarkdown content={text} /></li>)}
               </ul>
             </Collapsible>
           ))}

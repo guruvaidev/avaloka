@@ -24,6 +24,28 @@ import pytest
 from app.agents import visualization_agent as va
 
 
+# The zero-retention pinning every OpenRouter viz call must carry (a per-call
+# extra_body replaces the client's, so the viz agent re-sends it itself).
+_GPT_OSS = "openai/gpt-oss-120b"
+_PIN = {
+    "only": ["deepinfra/bf16", "together", "crusoe", "parasail"],
+    "allow_fallbacks": False,
+    "data_collection": "deny",
+    "zdr": True,
+}
+_PIN_ENV = (
+    "AVALOKA_OPENROUTER_ONLY", "AVALOKA_VIZ_OPENROUTER_ONLY",
+    "AVALOKA_OPENROUTER_SORT", "AVALOKA_VIZ_OPENROUTER_SORT",
+    "AVALOKA_OPENROUTER_PROVIDERS", "AVALOKA_VIZ_OPENROUTER_PROVIDERS",
+)
+
+
+def _pinned_model(monkeypatch):
+    monkeypatch.setattr(va, "_VIZ_ACTIVE_MODEL", _GPT_OSS)
+    for name in _PIN_ENV:
+        monkeypatch.delenv(name, raising=False)
+
+
 def _profiles(rows, schema=None):
     return {p["name"]: p for p in va.profile_columns(rows, schema=schema)}
 
@@ -516,12 +538,13 @@ def test_openrouter_takes_the_effort_as_a_reasoning_object(monkeypatch):
     monkeypatch.setattr(va, "_VIZ_BACKEND", "openrouter")
     monkeypatch.setattr(va, "_VIZ_PROVIDER", "openrouter")
     monkeypatch.setattr(va, "_VIZ_SORT_ACTIVE", False)
+    _pinned_model(monkeypatch)
 
     va.invoke_viz_llm("prompt", effort="low")
 
     assert llm.calls == [{
         "max_tokens": va._VIZ_MAX_TOKENS,
-        "extra_body": {"reasoning": {"effort": "low"}},
+        "extra_body": {"reasoning": {"effort": "low"}, "provider": _PIN},
     }]
 
 
@@ -532,12 +555,13 @@ def test_openrouter_is_asked_for_the_fastest_host_when_sorting_is_on(monkeypatch
     monkeypatch.setattr(va, "_VIZ_PROVIDER", "openrouter")
     monkeypatch.setattr(va, "_VIZ_SORT_ACTIVE", True)
     monkeypatch.setattr(va, "_VIZ_OPENROUTER_SORT", "throughput")
+    _pinned_model(monkeypatch)
 
     va.invoke_viz_llm("prompt", effort="low")
 
     assert llm.calls == [{
         "max_tokens": va._VIZ_MAX_TOKENS,
-        "extra_body": {"reasoning": {"effort": "low"}, "provider": {"sort": "throughput"}},
+        "extra_body": {"reasoning": {"effort": "low"}, "provider": {**_PIN, "sort": "throughput"}},
     }]
 
 

@@ -183,7 +183,7 @@ export function AnalysisSidebar({ analyses: _analysesProp }: AnalysisSidebarProp
       )}
       <aside
         className={cx(
-          "flex h-full shrink-0 flex-col border-r border-secondary bg-primary",
+          "my-3 flex h-[calc(100%-1.5rem)] shrink-0 flex-col rounded-r-xl rounded-l-none border border-secondary bg-primary dark:border-white/10 dark:bg-[#1A1A1E]",
           collapsed && "hidden",
         )}
         style={collapsed ? undefined : { width: 300 }}
@@ -238,7 +238,7 @@ export function AnalysisSidebar({ analyses: _analysesProp }: AnalysisSidebarProp
       </div>
 
       {/* Sections */}
-      <div className="mt-4 flex flex-col gap-0.5 px-2">
+      <div className="mt-4 flex flex-col gap-1 px-4">
         <div className="group relative flex items-center">
           <Button
             color="tertiary"

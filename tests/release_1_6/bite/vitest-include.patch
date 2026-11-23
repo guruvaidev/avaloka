@@ -1,0 +1,11 @@
+diff --git a/ui/vitest.config.ts b/ui/vitest.config.ts
+--- a/ui/vitest.config.ts
++++ b/ui/vitest.config.ts
+@@ -24,7 +24,6 @@ export default defineConfig({
+     // checks that every *.test.ts(x) under tests/ matches one of these globs.
+     include: [
+       "tests/unit/**/*.test.{ts,tsx}",
+-      "tests/component/**/*.test.{ts,tsx}",
+       "tests/release_1_6/**/*.test.{ts,tsx}",
+     ],
+     setupFiles: ["tests/setup.ts"],

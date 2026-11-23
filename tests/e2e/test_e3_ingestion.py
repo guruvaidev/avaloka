@@ -6,9 +6,9 @@ Everything in this module runs hermetically (in-process app over the fake blob
 store / cache / graph from tests/test_server_unit.py). Two legs are
 deployed-only and skip otherwise:
 
-  * the byte/count limit cases, which monkeypatch the server's module-level
-    limit constants instead of generating 100MB payloads -- meaningless against
-    a remote process, so they run hermetically and skip when deployed;
+  * the byte/count limit cases, which narrow the pinned plan's limits
+    (server.limits_for) instead of generating 100MB payloads -- meaningless
+    against a remote process, so they run hermetically and skip when deployed;
   * the E3.13 tenant-isolation leg, which needs a real storage backend to prove
     whether a client-supplied destination URI can escape the caller's tenant.
 
@@ -33,7 +33,7 @@ from app.api.helpers import _alias_from_filename, _filename_ext
 from file_handler import handler as fh
 from file_handler.handler import FileHandler
 
-from tests.e2e.conftest import ApiClient, requires_deployed
+from tests.e2e.conftest import HERMETIC_PLAN, ApiClient, requires_deployed
 
 CSV_BYTES = b"a,b\n1,2\n3,4\n"
 
@@ -95,8 +95,10 @@ def fake_store(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) 
     working copy from storage". Calling the patched resolver hands back the very store the harness
     built, so writes and reads agree again.
 
-    The same lifespan leaves _schedule_small_file_persistence live, which posts profiles to the
-    real Supabase project named in .env; it is stubbed out here so ingestion tests stay offline.
+    The same lifespan leaves _schedule_small_file_persistence live, which would post profiles to
+    a real Supabase project if real credentials were loaded (e.g. a developer's .env); in CI none
+    are set and the call ends at "Supabase env vars not set". It is stubbed out here (and in
+    tests/e2e/conftest.py) so ingestion tests never depend on that.
     """
     if "api" not in request.fixturenames:
         yield None
@@ -320,18 +322,31 @@ def test_e3_02_pins_multi_file_all_register(api: ApiClient) -> None:
 
 
 def test_e3_02_pins_all_or_nothing_failure(api: ApiClient) -> None:
-    """Pins the undecided semantic: one bad file aborts the whole batch with a single 5xx and no per-file report.
+    """One bad file aborts the whole batch: a single 400 naming the problem, no per-file
+    report, and nothing of the good file kept -- no session, no stored object, nothing
+    under TMP_ROOT (the rollback in server.py's upload handler, plus the finalizer that
+    deletes an in-flight object once its session is gone).
 
-    Decision pinned: POST /api/upload is all-or-nothing (server.py:1417-1438 rolls back every
-    created tmp upload, work dir and session and re-raises). There is deliberately no partial
-    success payload, so a client cannot learn which of its files landed. If per-file partial
-    reporting is ever adopted, this test must be rewritten, not deleted.
-    """
+    Re-pinned for 1.6 from ">= 500": an empty file has been a 400 since DEFECT E3.03a
+    was fixed (7e0eee99). The old assertion only ever passed on the harness's 503 from
+    a clobbered cache, and with delete_session unfaked the rollback was unobservable."""
+    _require_hermetic(api, "inspecting the in-process stores after the rollback")
+    import time
+
+    from app.services import storage_service
+    from tests import test_server_unit as si
+
     resp = _upload_many(api, [("good.csv", CSV_BYTES), ("broken.csv", b"")], user="e3-multi-fail")
-    assert resp.status_code >= 500, resp.text
-    body = resp.json()
-    assert "datasets" not in body
-    assert "detail" in body
+    assert resp.status_code == 400, resp.text
+    assert resp.json() == {"detail": "Empty Dataset Provided \u2014 the file has no data rows."}
+
+    store = storage_service.blob_store
+    deadline = time.monotonic() + 3.0
+    while store.objects and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert si.SESSIONS == {}, f"sessions kept after a rejected batch: {list(si.SESSIONS)}"
+    assert dict(store.objects) == {}, f"objects kept after a rejected batch: {list(store.objects)}"
+    assert [p for p in server.TMP_ROOT.rglob("*")] == [], "files left under TMP_ROOT"
 
 
 def test_e3_02_pins_single_file_field_keeps_flat_response(api: ApiClient) -> None:
@@ -349,56 +364,92 @@ def test_e3_02_pins_single_file_field_keeps_flat_response(api: ApiClient) -> Non
 # ---------------------------------------------------------------------------
 
 
-def test_e3_03_limit_defaults() -> None:
-    """The three ingestion limits default to 10 files / 100MB per file / 200MB per request."""
-    assert server.MAX_UPLOAD_FILES == 10
-    assert server.MAX_UPLOAD_FILE_BYTES == 100 * 1024 * 1024
-    assert server.MAX_UPLOAD_TOTAL_BYTES == 200 * 1024 * 1024
+# Upload limits are per plan (app/core/plan_limits.py, enforced in /api/upload by
+# check_sizes since 71723a78). The hermetic harness pins the plan to
+# conftest.HERMETIC_PLAN ("free"); these tests replace limits_for with that plan's
+# limits narrowed to a few bytes, rather than generating 100 MB payloads.
+
+
+def _narrow_limits(monkeypatch: pytest.MonkeyPatch, **overrides: Any) -> Any:
+    import dataclasses
+
+    from app.core.plan_limits import limits_for
+
+    limits = dataclasses.replace(limits_for(HERMETIC_PLAN), **overrides)
+    monkeypatch.setattr(server, "limits_for", lambda plan: limits, raising=True)
+    return limits
+
+
+def _limit_body(resp: Any) -> Dict[str, Any]:
+    assert resp.status_code == 413, resp.text
+    detail = resp.json()["detail"]
+    assert detail["code"] == "plan_limit_exceeded" and detail["plan"] == HERMETIC_PLAN, detail
+    return detail
+
+
+def test_e3_03_limit_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The plan limits /api/upload enforces, with no env overrides: Free is 100 MB per
+    upload and per file, paid plans 200 MB per upload and 100 MB per file, all 10 files."""
+    for name in ("AVALOKA_MAX_UPLOAD_TOTAL_BYTES", "AVALOKA_MAX_UPLOAD_FILE_BYTES",
+                 "AVALOKA_MAX_UPLOAD_FILES", "AVALOKA_FREE_MAX_TOTAL_BYTES"):
+        monkeypatch.delenv(name, raising=False)
+    from app.core.plan_limits import limits_for
+
+    mb = 1024 * 1024
+    free = limits_for("free")
+    assert (free.max_total_bytes, free.max_file_bytes, free.max_files) == (100 * mb, 100 * mb, 10)
+    for plan in ("professional", "enterprise"):
+        paid = limits_for(plan)
+        assert (paid.max_total_bytes, paid.max_file_bytes, paid.max_files) == (200 * mb, 100 * mb, 10)
 
 
 def test_e3_03_over_per_file_limit_413(api: ApiClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A file one byte over MAX_UPLOAD_FILE_BYTES is rejected 413 while streaming."""
-    _require_hermetic(api, "patching server byte limits")
-    monkeypatch.setattr(server, "MAX_UPLOAD_FILE_BYTES", len(CSV_BYTES) - 1, raising=False)
-    resp = _upload_single(api, "big.csv", user="e3-limit")
-    assert resp.status_code == 413, resp.text
-    assert "exceeds max size" in resp.json()["detail"]
+    """Free plan: a file one byte over max_file_bytes is refused 413 with a file_size body."""
+    _require_hermetic(api, "patching the plan limits")
+    limits = _narrow_limits(monkeypatch, max_file_bytes=len(CSV_BYTES) - 1)
+    detail = _limit_body(_upload_single(api, "big.csv", user="e3-limit"))
+    assert (detail["reason"], detail["limit"], detail["actual"]) == (
+        "file_size", limits.max_file_bytes, len(CSV_BYTES))
 
 
 def test_e3_03_exactly_at_per_file_limit_not_rejected(
     api: ApiClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The comparison is strict '>', so a file exactly at MAX_UPLOAD_FILE_BYTES is accepted."""
-    _require_hermetic(api, "patching server byte limits")
-    monkeypatch.setattr(server, "MAX_UPLOAD_FILE_BYTES", len(CSV_BYTES), raising=False)
+    """Free plan: the comparison is strict '>', so a file exactly at max_file_bytes is accepted."""
+    _require_hermetic(api, "patching the plan limits")
+    _narrow_limits(monkeypatch, max_file_bytes=len(CSV_BYTES))
     resp = _upload_single(api, "exact.csv", user="e3-limit-exact")
-    assert resp.status_code != 413, resp.text
+    assert resp.status_code == 200, resp.text
 
 
 def test_e3_03_over_total_limit_413(api: ApiClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Per-file sizes may pass while the running total trips MAX_UPLOAD_TOTAL_BYTES -> 413."""
-    _require_hermetic(api, "patching server byte limits")
-    monkeypatch.setattr(server, "MAX_UPLOAD_FILE_BYTES", 1 << 20, raising=False)
-    monkeypatch.setattr(server, "MAX_UPLOAD_TOTAL_BYTES", len(CSV_BYTES), raising=False)
+    """Free plan: each file fits but the two together exceed max_total_bytes -> 413 total_size."""
+    _require_hermetic(api, "patching the plan limits")
+    limits = _narrow_limits(monkeypatch, max_file_bytes=1 << 20, max_total_bytes=len(CSV_BYTES))
     resp = _upload_many(api, [("one.csv", CSV_BYTES), ("two.csv", CSV_BYTES)], user="e3-limit-total")
-    assert resp.status_code == 413, resp.text
-    assert "Total upload size exceeds limit" in resp.json()["detail"]
+    detail = _limit_body(resp)
+    assert (detail["reason"], detail["limit"], detail["actual"]) == (
+        "total_size", limits.max_total_bytes, 2 * len(CSV_BYTES))
 
 
 def test_e3_03_too_many_files_413(api: ApiClient) -> None:
-    """More than MAX_UPLOAD_FILES (10) files is rejected 413 before any byte is read."""
-    items = [(f"f{i}.csv", CSV_BYTES) for i in range(server.MAX_UPLOAD_FILES + 1)]
-    resp = _upload_many(api, items, user="e3-limit-count")
-    assert resp.status_code == 413, resp.text
-    assert "Too many files" in resp.json()["detail"]
+    """Free plan, real limits: one file over max_files (10) is refused 413 file_count."""
+    from app.core.plan_limits import limits_for
+
+    max_files = limits_for(HERMETIC_PLAN).max_files
+    items = [(f"f{i}.csv", CSV_BYTES) for i in range(max_files + 1)]
+    detail = _limit_body(_upload_many(api, items, user="e3-limit-count"))
+    assert (detail["reason"], detail["limit"], detail["actual"]) == (
+        "file_count", max_files, max_files + 1)
+    assert detail["message"].startswith("Too many files")
 
 
 def test_e3_03_exactly_max_files_not_rejected(api: ApiClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The file-count check is also strict '>', so exactly MAX_UPLOAD_FILES is accepted."""
-    _require_hermetic(api, "patching the server file-count limit")
-    monkeypatch.setattr(server, "MAX_UPLOAD_FILES", 2, raising=False)
+    """Free plan: the file-count check is also strict '>', so exactly max_files is accepted."""
+    _require_hermetic(api, "patching the plan limits")
+    _narrow_limits(monkeypatch, max_files=2)
     resp = _upload_many(api, [("a.csv", CSV_BYTES), ("b.csv", CSV_BYTES)], user="e3-limit-count-exact")
-    assert resp.status_code != 413, resp.text
+    assert resp.status_code == 200, resp.text
 
 
 def test_e3_03_no_file_at_all_422(api: ApiClient) -> None:

@@ -6,11 +6,16 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
+import { COMMENTS_NEED_PRO_SERVER, assertPlanFeature } from "@/lib/org-features";
 
 export const fanOutReportCommentNotifications = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator(z.object({ commentId: z.string().uuid(), mentionedProfileIds: z.array(z.string().uuid()).optional() }))
   .handler(async ({ data, context }) => {
+    // Notifying other people is Professional or higher (owner ruling 2026-11-01).
+    // The inserts below use the admin client, which RLS does not apply to.
+    await assertPlanFeature(context.supabase, "professional", "fanOutReportCommentNotifications", COMMENTS_NEED_PRO_SERVER);
+
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
 
     const { data: comment, error: commentErr } = await supabaseAdmin

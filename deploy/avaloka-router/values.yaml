@@ -14,8 +14,6 @@ service:
     port: 8080
   api:
     port: 9000
-  langgraph:
-    port: 3000
 
 ingress:
   enabled: true
@@ -27,7 +25,8 @@ ingress:
   hosts:
     frontend: avaloka.local
     api: avaloka-api.local
-    langgraph: avaloka-langgraph.local
+    # No langgraph host: the LangGraph server is internal-only, and the router
+    # renders no route to it whatever is set here.
   tls: []
     # - hosts: [avaloka.example.com]
     #   secretName: avaloka-tls

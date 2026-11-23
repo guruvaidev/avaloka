@@ -18,7 +18,7 @@ This has now happened twice, independently:
 
 - `tests/analytics/test_redaction.py` (product analytics): four hits — AWS key,
   Groq key, PEM header, database URL with a password.
-- `tests/avaloka/test_telemetry_redaction.py:32,34` (PR #329): four hits in the
+- `tests/avaloka/test_telemetry_redaction.py:32,34`: four hits in the
   OSS generator's scan.
 
 It will happen to the third redactor too.

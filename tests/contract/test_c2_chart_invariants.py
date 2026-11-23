@@ -62,13 +62,20 @@ UNPINNED_LEGACY_COMPONENTS = frozenset({"mcp", "supabase-functions"})
 STORAGE_CHART_COMPONENTS = frozenset(
     {"seaweedfs", "seaweedfs-bucket", "chroma-seed", "minio", "mlflow"}
 )
+# Model serving (2026-11): one model-server Deployment serves every trained model
+# from the MLflow registry, zero replicas when idle; the GPU twin is values-gated
+# and also idles at zero. Both are workloads of the chart by design.
+SERVING_CHART_COMPONENTS = frozenset({"model-server", "model-server-gpu"})
 # Background execution. E6.08 was the defect that none of this shipped; celery.yaml
 # now runs a worker and a beat/RedBeat scheduler, so these are expected workloads.
 EXECUTOR_CHART_COMPONENTS = frozenset({"celery", "celery-executor", "celery-redbeat"})
 # Opt-in tiers, all disabled by default: the layer-4 vector store and its etcd,
-# the local inference server, and the remaining Supabase pieces.
+# the local inference server, the remaining Supabase pieces, the /execute
+# service for the k8s execution path (executeService.enabled), and the one-shot
+# Celery result backfill Job (ops.backfillCeleryResults).
 OPTIONAL_CHART_COMPONENTS = frozenset(
-    {"milvus", "etcd", "local-llm", "supabase-storage", "supabase-email-templates"}
+    {"milvus", "etcd", "local-llm", "supabase-storage", "supabase-email-templates", "execute-service",
+     "ops-backfill-celery-results"}
 )
 
 _CELERY_WORKER_RE = re.compile(r"celery[^\n]{0,120}\b(worker|beat)\b", re.IGNORECASE)
@@ -172,6 +179,7 @@ def test_e1_02_pins_chart_workload_inventory() -> None:
         - STORAGE_CHART_COMPONENTS
         - EXECUTOR_CHART_COMPONENTS
         - OPTIONAL_CHART_COMPONENTS
+        - SERVING_CHART_COMPONENTS
     )
     assert not unexpected, (
         f"chart gained unpinned workload(s) {sorted(unexpected)}; decide whether they belong "
@@ -575,13 +583,24 @@ def test_e14_10_pins_ray_manifests_use_mutable_image_tags() -> None:
     Pins the undecided decision that the Ray runtime image is unpinned; the overlay
     leg (test_e14_10_non_dev_overlay_pins_an_immutable_image) covers the app image,
     and this pin makes the Ray side fail loudly when someone pins one but not the other.
+
+    Only KubeRay manifests (a RayCluster, RayJob or RayService document) carry the
+    Ray runtime image. Other manifests in the folder, such as the dashboard's
+    nginx proxy (ray_dashboard_proxy.yaml), run other images and are not this pin.
     """
     if not RAY_MANIFEST_DIR.is_dir():
         pytest.skip(f"no KubeRay manifests at {RAY_MANIFEST_DIR}")
-    manifests = sorted(RAY_MANIFEST_DIR.glob("*.yaml"))
-    assert manifests, f"no KubeRay manifests under {RAY_MANIFEST_DIR}"
+    kuberay_kind = re.compile(r"^kind:\s*(?:RayCluster|RayJob|RayService)\s*$", re.MULTILINE)
+    manifests = sorted(p for p in RAY_MANIFEST_DIR.glob("*.yaml") if kuberay_kind.search(_read(p)))
+    names = [p.name for p in manifests]
+    assert {"raycluster.yaml", "rayservice.yaml"} <= set(names), f"KubeRay manifests found: {names}"
     for path in manifests:
-        images = re.findall(r"^\s*(?:- )?image:\s*(\S+)\s*$", _read(path), re.MULTILINE)
+        text = _read(path)
+        if "containers:" not in text:
+            # A Service-only manifest (ray_dashboard_nodeport.yaml, the kind-only
+            # dashboard NodePort) runs no container and pins no image.
+            continue
+        images = re.findall(r"^\s*(?:- )?image:\s*(\S+)\s*$", text, re.MULTILINE)
         assert images, f"{path.name} declares no container image"
         assert set(images) == {"avaloka-ray:latest"}, f"{path.name} image set changed: {sorted(set(images))}"
 
@@ -848,3 +867,105 @@ def test_gke_test_and_production_use_separate_buckets() -> None:
         rendered = "\n".join(str(d) for d in docs)
         other = ({"avaloka-test-user-filestore", "avaloka-app-user-filestore"} - {bucket}).pop()
         assert other not in rendered and "gs://avaloka-user-filestore" not in rendered, overlays
+
+
+# The hosted instances and the overlays they install with (deploy/README.md,
+# "Two GKE instances"; deploy/gcp-lb-prereqs.sh): test = values-gke.yaml,
+# production = values-gke.yaml + values-gke-app.yaml.
+_HOSTED_OVERLAYS = {"values-gke.yaml", "values-gke-app.yaml"}
+
+
+def test_plain_chart_declares_self_hosted() -> None:
+    """AVALOKA_DEPLOYMENT (app/core/editions.declared_deployment) is self_hosted by default."""
+    assert _load_values(CHART_VALUES)["config"]["deployment"] == "self_hosted"
+    code, docs, err = _render()
+    assert code == 0, err
+    assert _one(docs, "ConfigMap", "-config")["data"]["AVALOKA_DEPLOYMENT"] == "self_hosted"
+
+
+@pytest.mark.parametrize("overlays", [(_GKE_OVERLAY,), (_GKE_OVERLAY, _GKE_APP_OVERLAY)],
+                         ids=["test", "production"])
+def test_hosted_instances_declare_avaloka_hosted(overlays) -> None:
+    """The chart default is self_hosted, so each hosted instance's overlay must say
+    avaloka_hosted; without it an upgrade from that overlay runs the service with
+    no plan gates. Each hosted overlay states it itself, so neither depends on the other."""
+    for overlay in overlays:
+        declared = (_load_values(overlay).get("config") or {}).get("deployment")
+        assert declared == "avaloka_hosted", f"{overlay.name} does not declare config.deployment: avaloka_hosted"
+    code, docs, err = _render(*[a for o in overlays for a in ("-f", str(o))])
+    assert code == 0, err
+    assert _one(docs, "ConfigMap", "-config")["data"]["AVALOKA_DEPLOYMENT"] == "avaloka_hosted", overlays
+
+
+def test_only_the_hosted_overlays_declare_avaloka_hosted() -> None:
+    """The other overlays are for operators' own clusters, which pay their own bill."""
+    for overlay in sorted(OVERLAY_DIR.glob("*.yaml")):
+        if overlay.name in _HOSTED_OVERLAYS:
+            continue
+        declared = (_load_values(overlay).get("config") or {}).get("deployment")
+        assert declared in (None, "self_hosted"), f"{overlay.name} declares {declared!r}"
+
+
+def _provisioner_argv(provider) -> list:
+    """The helm argv `make up` (app/infra/deploy_stack.deploy_avaloka) would run."""
+    from unittest.mock import patch
+
+    from app.infra import deploy_stack
+
+    with patch.object(deploy_stack, "run_command") as run:
+        run.return_value = {"step_name": "x", "status": "SUCCESS", "message": "", "details": ""}
+        deploy_stack.deploy_avaloka(provider=provider)
+    assert run.called, "deploy_avaloka did not invoke run_command"
+    return list(run.call_args.args[0])
+
+
+def _values_args(argv: list) -> list:
+    """Only what decides the rendered values: every -f / --set / --set-string pair."""
+    out = []
+    for i, arg in enumerate(argv[:-1]):
+        if arg in ("-f", "--values", "--set", "--set-string"):
+            out += [arg, argv[i + 1]]
+    return out
+
+
+@pytest.mark.parametrize("provider", ["gcp", "aws", "azure", "local"])
+def test_the_self_hosted_provisioner_declares_self_hosted(monkeypatch, provider) -> None:
+    """`make up PROVIDER=gcp` applies values-gke.yaml, which a hosted service also uses
+    and which declares avaloka_hosted. An install made by the provisioner is the
+    operator's own: rendered with exactly its overlays and flags, it is self_hosted."""
+    monkeypatch.delenv("GCP_PROJECT_ID", raising=False)
+    args = _values_args(_provisioner_argv(provider))
+    if provider == "gcp":
+        assert str(_GKE_OVERLAY) in args, "the GKE provisioner no longer applies values-gke.yaml"
+    code, docs, err = _render(*args)
+    assert code == 0, err
+    assert _one(docs, "ConfigMap", "-config")["data"]["AVALOKA_DEPLOYMENT"] == "self_hosted", args
+
+
+def _readme_gke_install_args() -> list:
+    """The self-hosted GKE install command in deploy/README.md ("GCP — first deploy"),
+    exactly as written: the fenced command that applies values-gke.yaml for MY_PROJECT."""
+    import shlex
+
+    blocks = re.findall(r"```bash\n(.*?)```", _read(DEPLOY_README), re.S)
+    cmds = [b for b in blocks if "helm upgrade --install" in b and "values-gke.yaml" in b and "MY_PROJECT" in b]
+    assert len(cmds) == 1, f"expected one self-hosted GKE install command in deploy/README.md, got {len(cmds)}"
+    argv = shlex.split(cmds[0].replace("\\\n", " "))
+    args = []
+    for i, arg in enumerate(argv[:-1]):
+        if arg in ("-f", "--values"):
+            args += [arg, str(REPO_ROOT / argv[i + 1])]
+        elif arg in ("--set", "--set-string"):
+            args += [arg, argv[i + 1]]
+    return args
+
+
+def test_the_readme_self_hosted_gke_command_declares_self_hosted() -> None:
+    """deploy/README.md's GKE install (a MY_PROJECT placeholder: the reader's own
+    cluster) applies values-gke.yaml, which declares avaloka_hosted; as written it
+    must render self_hosted."""
+    args = _readme_gke_install_args()
+    assert str(_GKE_OVERLAY) in args, args
+    code, docs, err = _render(*args)
+    assert code == 0, err
+    assert _one(docs, "ConfigMap", "-config")["data"]["AVALOKA_DEPLOYMENT"] == "self_hosted", args

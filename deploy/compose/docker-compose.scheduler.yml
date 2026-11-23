@@ -10,6 +10,9 @@ services:
   celery-worker:
     image: python:3.11-slim
     environment:
+      # Who operates this deployment (app/core/editions.declared_deployment):
+      # self_hosted or avaloka_hosted. Declared so the worker never runs undeclared.
+      AVALOKA_DEPLOYMENT: ${AVALOKA_DEPLOYMENT:-self_hosted}
       # Required only when a selected training column needs keyed PII
       # pseudonymisation/tokenisation. Compose does not inherit host variables
       # unless they are declared here.
@@ -37,6 +40,8 @@ services:
 
   celery-redbeat-worker:
     image: python:3.11-slim
+    environment:
+      AVALOKA_DEPLOYMENT: ${AVALOKA_DEPLOYMENT:-self_hosted}
     command: >
       bash -c "
         cd /app &&

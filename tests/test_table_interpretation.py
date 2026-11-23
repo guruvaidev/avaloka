@@ -65,9 +65,9 @@ class TestConfirmUnderstanding:
     def test_names_the_user_the_domain_and_the_goal(self):
         line = confirm_understanding(
             {"kind": "rate_card", "title": "Rate Card", "description": None},
-            user="Leela", goal="the blended cost per video hour",
+            user="Alex", goal="the blended cost per video hour",
             dataset="pricing.xlsx")
-        assert "So Leela," in line
+        assert "So Alex," in line
         assert "rate card" in line
         assert "blended cost per video hour" in line
         assert line.rstrip().endswith("?"), "it has to actually ask"

@@ -91,6 +91,23 @@ async function resolvePlanId(
 }
 
 /**
+ * Resolve the lower-cased `plans.plan_type` for a Stripe price id.
+ */
+async function resolvePlanType(
+  supabase: any,
+  stripePriceId: string | null | undefined,
+): Promise<string | null> {
+  if (!stripePriceId) return null;
+  const { data } = await supabase
+    .from("plans")
+    .select("plan_type")
+    .eq("stripe_price_id", stripePriceId)
+    .limit(1)
+    .maybeSingle();
+  return data?.plan_type ? String(data.plan_type).toLowerCase() : null;
+}
+
+/**
  * Resolve owner_profile_id + organization_id from Stripe subscription metadata.
  * Falls back to looking up existing subscriptions or the profiles table.
  */
@@ -271,6 +288,26 @@ async function upsertSubscription(
 }
 
 
+
+/**
+ * Move the owner's personal reports (organization_id IS NULL) into the newly
+ * created Enterprise organization. `authUserId` must be the AUTH user id
+ * (profiles.user_id / auth.uid()), because reports.created_by stores auth.uid().
+ */
+async function movePersonalReportsToOrg(
+  supabase: any,
+  authUserId: string | null | undefined,
+  organizationId: string,
+): Promise<void> {
+  if (!authUserId) return;
+  const { error } = await supabase
+    .from("reports")
+    .update({ organization_id: organizationId })
+    .eq("created_by", authUserId)
+    .is("organization_id", null);
+  if (error) console.error("[stripe-webhook] moving personal reports failed", error.message);
+}
+
 async function handleCheckoutCompleted(
   supabase: any,
   stripe: Stripe,
@@ -297,11 +334,11 @@ async function handleCheckoutCompleted(
 
   // Resolve/ensure profile row (auto-create if the handle_new_user trigger
   // hasn't populated one yet).
-  let profile: { id: string; organization_id: string | null } | null = null;
+  let profile: { id: string; organization_id: string | null; user_id?: string | null } | null = null;
   {
     const { data } = await supabase
       .from("profiles")
-      .select("id, organization_id")
+      .select("id, organization_id, user_id")
       .or(`id.eq.${userId},user_id.eq.${userId}`)
       .maybeSingle();
     profile = (data as any) ?? null;
@@ -325,6 +362,15 @@ async function handleCheckoutCompleted(
     profile = created as any;
   }
   const ownerProfileId = profile!.id as string;
+  // reports.created_by stores auth.uid(); metadata user_id is the auth user id.
+  const ownerAuthUserId = (profile!.user_id as string | null | undefined) ?? userId;
+
+  // Only Enterprise purchases get an organization. Professional (and any
+  // other self-serve plan) keeps profiles.organization_id and
+  // subscriptions.organization_id NULL.
+  const purchasedItem = subscription.items?.data?.[0] as any;
+  const purchasedPlanType = await resolvePlanType(supabase, purchasedItem?.price?.id ?? null);
+  const isEnterprise = purchasedPlanType === "enterprise";
 
   // customer_accounts (unchanged)
   let customerAccountId: string | undefined;
@@ -361,8 +407,10 @@ async function handleCheckoutCompleted(
     }
   }
 
-  // organizations (identity only — name, no billing writes)
-  let organizationId = profile!.organization_id as string | null;
+  // organizations (identity only — name, no billing writes) — Enterprise only.
+  let organizationId: string | null = null;
+  if (isEnterprise) {
+  organizationId = profile!.organization_id as string | null;
   if (organizationId) {
     const { data: orgRow } = await supabase
       .from("organizations")
@@ -382,6 +430,7 @@ async function handleCheckoutCompleted(
       .single();
     if (orgErr) throw new Error("organizations insert failed: " + orgErr.message);
     organizationId = orgCreated.id as string;
+    await movePersonalReportsToOrg(supabase, ownerAuthUserId, organizationId);
   } else {
     // Keep the org name in sync with Checkout metadata.
     await supabase
@@ -402,6 +451,7 @@ async function handleCheckoutCompleted(
     .from("profiles")
     .update({ organization_id: organizationId, is_admin: true })
     .eq("id", ownerProfileId);
+  }
 
   // Upsert the subscription row — the single source of truth.
   const payload = await buildSubscriptionPayload(supabase, subscription, {
@@ -410,6 +460,9 @@ async function handleCheckoutCompleted(
     user_id: userId,
   });
   if (payload) {
+    // Non-Enterprise subscriptions are personal: never attach an org, even
+    // if stale metadata or a profile lookup supplied one.
+    if (!isEnterprise) payload.organization_id = null;
     await upsertSubscription(supabase, payload);
   }
 

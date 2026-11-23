@@ -47,6 +47,10 @@ from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, validator
 import asyncio
 
+from app.mcp_server.credentials import (
+    CredentialKeyMissing, load_registry, open_credential_handle, read_raw, save_registry,
+)
+
 # ---- Optional MongoDB driver (guarded so the module still imports without it) ----
 try:
     from pymongo import MongoClient
@@ -411,6 +415,33 @@ class DatabaseConfig(BaseModel):
     api_key: str
 
 
+class SealedDatabaseConfig(BaseModel):
+    """What /admin/customers is sent: the secrets as sealed handles
+    (app/mcp_server/credentials.py), opened here with DB_ENCRYPTION_KEY."""
+    customer_id: str
+    connection_string_enc: Dict[str, Any]
+    database_type: str
+    max_rows: int = 1000
+    query_timeout: int = 30
+    created_at: str
+    status: str = "active"
+    api_key_enc: Dict[str, Any]
+
+    def open(self) -> DatabaseConfig:
+        conn_str = open_credential_handle(self.connection_string_enc)
+        api_key = open_credential_handle(self.api_key_enc)
+        if not conn_str or not api_key:
+            raise CredentialKeyMissing(
+                "the registration's sealed credentials do not open under this "
+                "server's DB_ENCRYPTION_KEY (missing, or not the onboarding service's key)")
+        return DatabaseConfig(
+            customer_id=self.customer_id, connection_string=conn_str,
+            database_type=self.database_type, max_rows=self.max_rows,
+            query_timeout=self.query_timeout, created_at=self.created_at,
+            status=self.status, api_key=api_key,
+        )
+
+
 class CustomerAPI(BaseModel):
     customer_id: str
     api_key: str
@@ -705,10 +736,10 @@ def _persisted_registry() -> Optional[Dict[str, Any]]:
         if _registry_cache["stat"] == stamp:
             return _registry_cache["data"]
     try:
-        with open(CUSTOMERS_FILE, "r") as f:
-            data = json.load(f)
+        # Secrets are sealed on disk; opened here (app/mcp_server/credentials.py).
+        data = load_registry(CUSTOMERS_FILE, migrate=False)
     except Exception as e:
-        logger.error(f"Could not read '{CUSTOMERS_FILE}': {e}")
+        logger.error(f"Could not read '{CUSTOMERS_FILE}': {type(e).__name__}")
         return None
     with _registry_cache_lock:
         _registry_cache["stat"], _registry_cache["data"] = stamp, data
@@ -1061,10 +1092,11 @@ def load_registered_customers() -> int:
         logger.info(f"No customers file at '{path}'; starting with empty registry.")
         return 0
     try:
-        with open(path, "r") as f:
-            customers = json.load(f)
+        # Opens the sealed secrets, and re-seals a registry written before
+        # they were sealed (app/mcp_server/credentials.py).
+        customers = load_registry(path)
     except Exception as e:
-        logger.error(f"Could not read customers file '{path}': {e}")
+        logger.error(f"Could not read customers file '{path}': {type(e).__name__}")
         return 0
 
     for stale in [cid for cid in CUSTOMER_API_KEYS if (customers.get(cid) or {}).get("status", "inactive") == "inactive"]:
@@ -1105,12 +1137,13 @@ def _persist_customer(config: DatabaseConfig) -> None:
     """Write-through a registration to CUSTOMERS_FILE so it survives a restart."""
     with _customers_file_lock:
         data: Dict[str, Any] = {}
+        raw: Dict[str, Any] = {}
         if os.path.exists(CUSTOMERS_FILE):
             try:
-                with open(CUSTOMERS_FILE, "r") as f:
-                    data = json.load(f)
+                raw = read_raw(CUSTOMERS_FILE)
+                data = load_registry(CUSTOMERS_FILE, migrate=False)
             except Exception as e:
-                logger.warning(f"Could not read '{CUSTOMERS_FILE}' before write: {e}")
+                logger.warning(f"Could not read '{CUSTOMERS_FILE}' before write: {type(e).__name__}")
                 data = {}
 
         record = data.get(config.customer_id, {})
@@ -1126,15 +1159,16 @@ def _persist_customer(config: DatabaseConfig) -> None:
         })
         data[config.customer_id] = record
 
-        try:
-            with open(CUSTOMERS_FILE, "w") as f:
-                json.dump(data, f, indent=2)
-        except Exception as e:
-            logger.error(f"Failed to persist customer '{config.customer_id}': {e}")
+        # Sealed on disk; refuses to write the connection string in plaintext.
+        save_registry(CUSTOMERS_FILE, data, keep=raw)
 
 
 @app.on_event("startup")
 async def _startup_load_customers() -> None:
+    # Customer credentials are sealed at rest and in transit under
+    # DB_ENCRYPTION_KEY; without a private one the server does not start.
+    from app.core.encryption_key import require_db_encryption_key
+    require_db_encryption_key("The MCP server")
     load_registered_customers()
 
 
@@ -1181,14 +1215,20 @@ def _evict_customer(customer_id: str) -> bool:
 
 
 @app.post("/admin/customers")
-async def create_customer_database(config: DatabaseConfig, request: Request):
+async def create_customer_database(sealed: SealedDatabaseConfig, request: Request):
     """Create/update customer database configuration from onboarding service.
 
     Service-only (MCP_SERVICE_TOKEN): it overwrites a record's api_key and
     connection_string, so an open route would let anyone take over a customer.
+    The two secrets arrive sealed under DB_ENCRYPTION_KEY and are opened here;
+    a body carrying them in plaintext is refused (422).
     """
     if not _is_service_request(request):
         raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        config = sealed.open()
+    except CredentialKeyMissing as e:
+        raise HTTPException(status_code=400, detail=str(e))
     # 1.6/1.7 records carry no owner here, so the api_key stands in for one: a
     # re-sync of the same customer (same key) is allowed, a different key is a
     # takeover. Checked before any connection attempt.
@@ -1216,8 +1256,9 @@ async def create_customer_database(config: DatabaseConfig, request: Request):
             finally:
                 test_engine.dispose()
 
-        _register_in_memory(config)
+        # Persist first: a registration that cannot be stored sealed is not made.
         _persist_customer(config)
+        _register_in_memory(config)
 
         logger.info(f"Successfully registered customer {config.customer_id}")
 

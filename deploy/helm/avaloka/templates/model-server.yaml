@@ -1,0 +1,268 @@
+{{- if (.Values.modelServer | default dict).enabled }}
+{{- $fullname := include "avaloka.fullname" . }}
+# One Deployment serves every trained model (app/serve/model_server.py): models
+# load from the MLflow registry on first use into an LRU bounded by memory.
+#
+# Cost model (owner ruling, 2026-11): `replicas: 0` at install and after
+# modelServer.idleTimeoutS (2 h) without a request -- the Celery reaper patches
+# this Deployment's scale through the Kubernetes API, the HPA below owns 1..N
+# under load and does nothing at zero. The first request at zero replicas gets
+# a 503 + Retry-After from the API while the pod starts. Idle cost: no pods.
+#
+# Reachability: ClusterIP only, admitted from the api/langgraph/celery pods by
+# the NetworkPolicy. The browser reaches it only through
+# POST /api/models/{run_id}/predict, which does the owner check.
+#
+# No cloud-specific field here; GPU scheduling (modelServer.gpu) is a second,
+# zero-replica Deployment with the provider's nodeSelector/tolerations supplied
+# as values.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-model-server
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: model-server
+  annotations:
+    # The reaper and the HPA own replicas after install; `helm upgrade` must
+    # not reset a sleeping server to 1 or a busy one to 0.
+    avaloka.ai/replicas-managed-by: "model-server-scaler,hpa"
+spec:
+  replicas: {{ .Values.modelServer.initialReplicas }}
+  selector:
+    matchLabels:
+      {{- include "avaloka.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: model-server
+  template:
+    metadata:
+      labels:
+        {{- include "avaloka.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: model-server
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "avaloka.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      containers:
+        - name: model-server
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["python", "-m", "app.serve.model_server", "--host", "0.0.0.0", "--port", "{{ .Values.modelServer.port }}"]
+          ports:
+            - name: http
+              containerPort: {{ .Values.modelServer.port }}
+              protocol: TCP
+          # The model server loads artifacts only through the MLflow tracking
+          # server (its artifact proxy serves runs:/ and models:/ URIs), so it
+          # carries neither the object store's address nor its keys: not the whole
+          # avaloka-config (which names the store), only the MLflow settings by key.
+          # The object-store NetworkPolicy (seaweedfs.yaml) therefore does not
+          # admit it, and must not (contract c6_18).
+          env:
+            - name: MLFLOW_TRACKING_URI
+              valueFrom:
+                configMapKeyRef: { name: {{ $fullname }}-config, key: MLFLOW_TRACKING_URI, optional: true }
+            - name: MLFLOW_REGISTRY_URI
+              valueFrom:
+                configMapKeyRef: { name: {{ $fullname }}-config, key: MLFLOW_REGISTRY_URI, optional: true }
+            - name: MLFLOW_EXPERIMENT_NAME
+              valueFrom:
+                configMapKeyRef: { name: {{ $fullname }}-config, key: MLFLOW_EXPERIMENT_NAME, optional: true }
+            # MLflow basic-auth (when the chart runs the tracking server with auth).
+            - name: MLFLOW_TRACKING_USERNAME
+              valueFrom:
+                secretKeyRef: { name: {{ include "avaloka.secretName" . }}, key: MLFLOW_TRACKING_USERNAME, optional: true }
+            - name: MLFLOW_TRACKING_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: {{ include "avaloka.secretName" . }}, key: MLFLOW_TRACKING_PASSWORD, optional: true }
+            - name: MODEL_SERVER_MAX_MODELS
+              value: {{ .Values.modelServer.maxModels | quote }}
+            - name: MODEL_SERVER_MEMORY_BUDGET_FRACTION
+              value: {{ .Values.modelServer.memoryBudgetFraction | quote }}
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.modelServer.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-model-server
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: model-server
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "avaloka.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: model-server
+  ports:
+    - name: http
+      port: {{ .Values.modelServer.port }}
+      targetPort: http
+      protocol: TCP
+---
+# Ingress only from the pods that proxy predictions or warm models. Egress is
+# open: the server pulls artifacts from MLflow and the object store.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-model-server
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: model-server
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "avaloka.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: model-server
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "avaloka.selectorLabels" . | nindent 14 }}
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values: [api, langgraph, celery]
+      ports:
+        - port: {{ .Values.modelServer.port }}
+          protocol: TCP
+---
+# 1..N under load. Inactive while replicas == 0: the 0<->1 edge belongs to the
+# reaper (controller) or, where installed and chosen, KEDA.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ $fullname }}-model-server
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: model-server
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ $fullname }}-model-server
+  minReplicas: 1
+  maxReplicas: {{ .Values.modelServer.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.modelServer.targetCpuUtilization }}
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: {{ .Values.modelServer.scaleDownStabilizationS }}
+{{- if eq .Values.modelServer.scaleToZero "keda" }}
+---
+# Optional: KEDA owns 0<->1 instead of the reaper. Never a chart dependency; the
+# operator must already be installed. The reaper becomes a no-op for this
+# Deployment when this is rendered (MODEL_SERVER_SCALE_TO_ZERO=keda).
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ $fullname }}-model-server
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: model-server
+spec:
+  scaleTargetRef:
+    name: {{ $fullname }}-model-server
+  minReplicaCount: 0
+  maxReplicaCount: {{ .Values.modelServer.maxReplicas }}
+  cooldownPeriod: {{ .Values.modelServer.idleTimeoutS }}
+  triggers:
+    {{- toYaml .Values.modelServer.keda.triggers | nindent 4 }}
+{{- end }}
+{{- if .Values.modelServer.gpu.enabled }}
+---
+# GPU on request only: the same server, zero replicas unless a registry version
+# tagged requires_gpu=true is deployed; the same idle rule puts it back to zero.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-model-server-gpu
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: model-server-gpu
+  annotations:
+    avaloka.ai/replicas-managed-by: "model-server-scaler"
+spec:
+  replicas: 0
+  selector:
+    matchLabels:
+      {{- include "avaloka.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: model-server-gpu
+  template:
+    metadata:
+      labels:
+        {{- include "avaloka.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: model-server-gpu
+    spec:
+      serviceAccountName: {{ include "avaloka.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.modelServer.gpu.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.modelServer.gpu.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: model-server
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["python", "-m", "app.serve.model_server", "--host", "0.0.0.0", "--port", "{{ .Values.modelServer.port }}"]
+          ports:
+            - name: http
+              containerPort: {{ .Values.modelServer.port }}
+          # Same rule as the CPU server: MLflow settings by key, no store address or keys.
+          env:
+            - name: MLFLOW_TRACKING_URI
+              valueFrom:
+                configMapKeyRef: { name: {{ $fullname }}-config, key: MLFLOW_TRACKING_URI, optional: true }
+            - name: MLFLOW_REGISTRY_URI
+              valueFrom:
+                configMapKeyRef: { name: {{ $fullname }}-config, key: MLFLOW_REGISTRY_URI, optional: true }
+            - name: MLFLOW_TRACKING_USERNAME
+              valueFrom:
+                secretKeyRef: { name: {{ include "avaloka.secretName" . }}, key: MLFLOW_TRACKING_USERNAME, optional: true }
+            - name: MLFLOW_TRACKING_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: {{ include "avaloka.secretName" . }}, key: MLFLOW_TRACKING_PASSWORD, optional: true }
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+          resources:
+            {{- toYaml .Values.modelServer.gpu.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-model-server-gpu
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: model-server-gpu
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "avaloka.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: model-server-gpu
+  ports:
+    - name: http
+      port: {{ .Values.modelServer.port }}
+      targetPort: http
+{{- end }}
+{{- end }}

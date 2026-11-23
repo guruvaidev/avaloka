@@ -28,6 +28,11 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from urllib.parse import urlparse, unquote
 
+from app.mcp_server.credentials import (
+    CredentialKeyMissing, NEEDS_REREGISTERING, WRONG_KEY_MESSAGE, credential_handle, load_registry,
+    load_unreadable, read_raw, save_registry,
+)
+
 # ---- Optional MongoDB driver (guarded) ----
 try:
     from pymongo import MongoClient
@@ -179,6 +184,15 @@ def _owned_customer(
     customers: Dict[str, Any], customer_id: str, caller: Caller, *, service_may_use_unbound: bool = False
 ) -> Dict[str, Any]:
     record = customers.get(customer_id)
+    if record is None:
+        # Not openable under this key is not the same as not there: its owner is
+        # told the truth (409) instead of "not found".
+        unreadable = customer_manager.unreadable_customers().get(customer_id)
+        if unreadable is not None and unreadable.get("status") != "inactive" and (
+            _owner_of(customer_id, unreadable) == caller.owner
+            or (service_may_use_unbound and caller.is_service and _is_unbound(unreadable))
+        ):
+            raise HTTPException(status_code=409, detail=f"Connection {customer_id}: {WRONG_KEY_MESSAGE}.")
     if record is None or record.get("status") == "inactive":
         raise HTTPException(status_code=404, detail="Customer not found")
     if _owner_of(customer_id, record) == caller.owner:
@@ -427,25 +441,47 @@ class CustomerManager:
         self.db_manager = DatabaseConnectionManager()
 
     def _read_customers_file(self) -> dict:
-        """Read the customers registry FRESH from disk (see original notes)."""
+        """Read the customers registry FRESH from disk (see original notes).
+
+        Secrets are sealed on disk and opened here, in process
+        (app/mcp_server/credentials.py). A registry written before secrets
+        were sealed is re-sealed as it is read, when DB_ENCRYPTION_KEY is set.
+        """
         try:
-            if os.path.exists(self.customers_file):
-                with open(self.customers_file, 'r') as f:
-                    return json.load(f)
-            return {}
+            return load_registry(self.customers_file)
         except Exception as e:
-            print(f"Error reading customers file: {e}")
+            print(f"Error reading customers file: {type(e).__name__}")
             return getattr(self, "customers", {})
 
     def load_customers(self):
         self.customers = self._read_customers_file()
 
-    def save_customers(self):
+    def unreadable_customers(self) -> dict:
+        """Records on disk this deployment's key cannot open, shown without any
+        secret and with status NEEDS_REREGISTERING (credentials.load_unreadable)."""
         try:
-            with open(self.customers_file, 'w') as f:
-                json.dump(self.customers, f, indent=2)
+            return load_unreadable(self.customers_file)
         except Exception as e:
-            print(f"Error saving customers: {e}")
+            print(f"Error reading customers file: {type(e).__name__}")
+            return {}
+
+    def deactivate_unreadable(self, customer_id: str) -> None:
+        """Mark a record this key cannot open inactive, on disk, leaving its sealed fields as they are."""
+        raw = read_raw(self.customers_file)
+        raw[customer_id] = {**raw[customer_id], "status": "inactive",
+                            "deactivated_at": datetime.now().isoformat()}
+        save_registry(self.customers_file, self.customers, keep=raw)
+
+    def save_customers(self):
+        """Write the registry with every secret sealed. Raises CredentialKeyMissing
+        rather than write a password in plaintext."""
+        try:
+            # A record this key cannot open is not in memory; keep it on disk as it was.
+            save_registry(self.customers_file, self.customers, keep=read_raw(self.customers_file))
+        except CredentialKeyMissing:
+            raise
+        except Exception as e:
+            print(f"Error saving customers: {type(e).__name__}")
 
     def generate_api_key(self, customer_id: str) -> str:
         timestamp = str(int(datetime.now().timestamp()))
@@ -463,13 +499,23 @@ class CustomerManager:
         """
 
         self.load_customers()
-        existing = self.customers.get(registration.customer_id)
+        # A record this key cannot open still belongs to its owner: only they may
+        # register its id again (that replaces it).
+        existing = self.customers.get(registration.customer_id) or \
+            self.unreadable_customers().get(registration.customer_id)
         if existing is not None and _is_retired(existing):
             raise HTTPException(
                 status_code=409,
                 detail=f"Customer {registration.customer_id} was deleted; choose a new id",
             )
         if existing is not None and not _may_replace(existing, owner_user_id):
+            if (existing.get("status") == NEEDS_REREGISTERING
+                    and (existing.get("owner_user_id") or "") == (owner_user_id or "")):
+                # Its owner, re-sending it: say why it is refused, and what works.
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Connection {registration.customer_id}: {WRONG_KEY_MESSAGE}.",
+                )
             raise HTTPException(
                 status_code=409,
                 detail=f"Customer {registration.customer_id} already registered"
@@ -507,11 +553,13 @@ class CustomerManager:
 
         try:
             async with httpx.AsyncClient() as client:
+                # The secrets travel sealed under DB_ENCRYPTION_KEY; the MCP
+                # server opens them with its own copy of the key.
                 mcp_payload = {
                     "customer_id": registration.customer_id,
-                    "connection_string": connection_string,
+                    "connection_string_enc": credential_handle(connection_string),
                     "database_type": registration.database_type,
-                    "api_key": api_key,
+                    "api_key_enc": credential_handle(api_key),
                     "created_at": datetime.now().isoformat(),
                     "status": "active",
                     "max_rows": registration.max_rows,
@@ -538,7 +586,11 @@ class CustomerManager:
             )
 
         self.customers[registration.customer_id] = customer_data
-        self.save_customers()
+        try:
+            self.save_customers()
+        except CredentialKeyMissing as e:
+            del self.customers[registration.customer_id]
+            raise HTTPException(status_code=500, detail=str(e))
 
         print(f"Successfully registered {registration.database_type} customer: {registration.customer_id}")
 
@@ -657,6 +709,21 @@ class CustomerManager:
             }
             for cid, data in customers.items()
             if _owner_of(cid, data) == caller.owner
+        ] + [
+            # Saved, but not openable under this deployment's key: listed, with
+            # what is wrong and what to do, rather than silently left out.
+            {
+                "customer_id": cid,
+                "customer_name": data.get("customer_name"),
+                "database_type": data.get("database_type"),
+                "environment": data.get("environment"),
+                "status": NEEDS_REREGISTERING,
+                "message": f"This connection {WRONG_KEY_MESSAGE}.",
+                "created_at": data.get("created_at"),
+            }
+            for cid, data in self.unreadable_customers().items()
+            if data.get("status") != "inactive" and cid not in customers
+            and _owner_of(cid, data) == caller.owner
         ]
 
 
@@ -752,7 +819,15 @@ async def list_customers(caller: Caller = Depends(require_caller)):
 
 @router.delete("/customers/{customer_id}")
 async def deactivate_customer(customer_id: str, caller: Caller = Depends(require_caller)):
-    _owned_customer(customer_manager.customers, customer_id, caller)
+    try:
+        _owned_customer(customer_manager.customers, customer_id, caller)
+    except HTTPException as e:
+        if e.status_code != 409:
+            raise
+        # Its owner may still delete a connection this key cannot open.
+        customer_manager.deactivate_unreadable(customer_id)
+        await _evict_from_mcp(customer_id)
+        return {"message": f"Customer {customer_id} deactivated"}
 
     customer_manager.customers[customer_id]["status"] = "inactive"
     customer_manager.customers[customer_id]["deactivated_at"] = datetime.now().isoformat()
@@ -1010,6 +1085,14 @@ async def bind_customer_owner(customer_id: str, request: Request):
         record["owner_user_id"] = user_id
         customer_manager.save_customers()
     return {"customer_id": customer_id, "owner_bound": True}
+
+
+@app.on_event("startup")
+async def _require_encryption_key() -> None:
+    # The standalone onboarding service seals every connection string under
+    # DB_ENCRYPTION_KEY; without a private one it does not start.
+    from app.core.encryption_key import require_db_encryption_key
+    require_db_encryption_key("The onboarding service")
 
 
 @app.get("/health")

@@ -1,0 +1,13 @@
+diff --git a/app/core/editions.py b/app/core/editions.py
+index cad1777f..4483bdac 100644
+--- a/app/core/editions.py
++++ b/app/core/editions.py
+@@ -251,7 +251,7 @@ def commercial_build() -> bool:
+     try:
+         import avaloka_commercial  # noqa: F401  (import-only probe)
+     except ImportError:
+-        return False
++        return True
+     return True
+ 
+ 

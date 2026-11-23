@@ -1,3 +1,7 @@
+# Analysis fidelity
+- [x] Add backend-owned header selectors, chat synchronization, sample refresh and existing deferred-job visibility; 16 feature tests plus 6 proxy regressions pass, automatic build OK, isolated browser selection/light/dark/narrow checks pass.
+- [ ] Verify a real signed-in dataset mode change, preview rows and full-dataset task completion: external app account/session is unavailable; isolated fixtures do not verify the live backend flow.
+
 # Cloud bucket picker
 - [x] Fix six bucket picker presentation details; 24 focused tests pass, fixture navigation/48px rows/truncation checked in dark/light; preserve transport and exclusive selection. Full suite retains unrelated chart assertions and Ray auth-mock failures; real bucket metadata/session unavailable.
 

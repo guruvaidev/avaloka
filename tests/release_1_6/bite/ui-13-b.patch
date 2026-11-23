@@ -1,0 +1,12 @@
+diff --git a/ui/src/integrations/supabase/config.ts b/ui/src/integrations/supabase/config.ts
+--- a/ui/src/integrations/supabase/config.ts
++++ b/ui/src/integrations/supabase/config.ts
+@@ -12,7 +12,7 @@ if (Boolean(runtimeEnv.SUPABASE_URL) !== Boolean(runtimeEnv.SUPABASE_ANON_KEY))
+   throw new Error("SUPABASE_URL and SUPABASE_ANON_KEY must be configured together.");
+ }
+ 
+-export const SUPABASE_URL = runtimeEnv.SUPABASE_URL || LOCAL_SUPABASE_URL;
++export const SUPABASE_URL = LOCAL_SUPABASE_URL;
+ export const SUPABASE_INCLUSTER_URL = runtimeEnv.SUPABASE_INCLUSTER_URL || SUPABASE_URL;
+ export const SUPABASE_ANON_KEY =
+   runtimeEnv.SUPABASE_ANON_KEY || LOCAL_SUPABASE_ANON_KEY;

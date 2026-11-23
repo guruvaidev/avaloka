@@ -1,0 +1,13 @@
+diff --git a/app/core/inference.py b/app/core/inference.py
+index c51d617..c6858b1 100644
+--- a/app/core/inference.py
++++ b/app/core/inference.py
+@@ -697,7 +697,7 @@ def _with_fallback(llm, *, model: str, temperature: float, agent: str,
+         from app.core.model_fallback import attach_fallback
+     except Exception:  # noqa: BLE001
+         return llm
+-    return attach_fallback(llm, model, temperature=temperature, agent=(agent or "").lower())
++    return llm
+ 
+ 
+ #: The last tier, outside OpenRouter (owner ruling 2026-11-02): it answers when

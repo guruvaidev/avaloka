@@ -1,1 +1,15 @@
-INSERT INTO public.user_roles (user_id, role) VALUES ('ac31933e-953d-441f-8158-3ad5f4590a1f', 'admin') ON CONFLICT (user_id, role) DO NOTHING;
+-- Intentionally empty.
+--
+-- This migration used to grant the 'admin' role to one hard-coded auth user id.
+-- The chart's migrate Job re-ran every file on every deploy, so that grant came
+-- back on each upgrade, and a fixed id has no business in a migration that runs
+-- on every installation.
+--
+-- The file is kept, empty, rather than deleted: databases managed with the
+-- Supabase CLI already record this version in supabase_migrations.schema_migrations,
+-- and a recorded version with no local file makes `supabase db push` refuse to run.
+-- The chart's migrate Job lists it in db-migrations.baseline for the same reason.
+--
+-- Administrators now come from configuration (admin.emails / ADMIN_EMAILS). Nothing
+-- here revokes a grant that was already made.
+SELECT 1;

@@ -1,0 +1,13 @@
+diff --git a/deploy/helm/avaloka/files/supabase-migrations/20261101140000_plan_rules_pro_collab.sql b/deploy/helm/avaloka/files/supabase-migrations/20261101140000_plan_rules_pro_collab.sql
+index 6b638b7b..d1fd1a6e 100644
+--- a/deploy/helm/avaloka/files/supabase-migrations/20261101140000_plan_rules_pro_collab.sql
++++ b/deploy/helm/avaloka/files/supabase-migrations/20261101140000_plan_rules_pro_collab.sql
+@@ -389,7 +389,7 @@ DROP POLICY IF EXISTS "enterprise plan to change collaborators" ON public.resour
+ DROP POLICY IF EXISTS "paid plan to invite collaborators" ON public.resource_collaborators;
+ CREATE POLICY "paid plan to invite collaborators" ON public.resource_collaborators
+   AS RESTRICTIVE FOR INSERT TO authenticated
+-  WITH CHECK (public.collab_features_enabled());
++  WITH CHECK (true);
+ DROP POLICY IF EXISTS "paid plan to change collaborators" ON public.resource_collaborators;
+ CREATE POLICY "paid plan to change collaborators" ON public.resource_collaborators
+   AS RESTRICTIVE FOR UPDATE TO authenticated

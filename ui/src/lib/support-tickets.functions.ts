@@ -1,7 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/primary-auth-middleware";
 
-import { SUPPORT_ADMIN_EMAIL } from "./support-admin";
+import { isAdminEmail } from "./admin-emails";
 
 export type SupportTicket = {
   id: string;
@@ -54,8 +54,14 @@ function claimsEmail(context: unknown): string {
   return String((context as any)?.claims?.email ?? "").trim().toLowerCase();
 }
 
+// Support-desk admins are the addresses in ADMIN_EMAILS (server env); empty
+// means nobody. See ./admin-emails.
+function isSupportAdmin(context: unknown): boolean {
+  return isAdminEmail(claimsEmail(context));
+}
+
 function assertAdmin(context: unknown) {
-  if (claimsEmail(context) !== SUPPORT_ADMIN_EMAIL) {
+  if (!isSupportAdmin(context)) {
     throw new Error("Forbidden: support admin access only");
   }
 }
@@ -64,7 +70,7 @@ function assertAdmin(context: unknown) {
 export const amISupportAdmin = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .handler(async ({ context }) => ({
-    isAdmin: claimsEmail(context) === SUPPORT_ADMIN_EMAIL,
+    isAdmin: isSupportAdmin(context),
   }));
 
 /** Tickets created by the signed-in user (RLS scoped). */
@@ -92,7 +98,7 @@ export const getSupportThread = createServerFn({ method: "POST" })
     ticketId: String(input?.ticketId ?? ""),
   }))
   .handler(async ({ data, context }) => {
-    const isAdmin = claimsEmail(context) === SUPPORT_ADMIN_EMAIL;
+    const isAdmin = isSupportAdmin(context);
     // Admin reads go through the privileged client (verified above); every
     // other caller stays on their RLS-scoped client, so users only ever see
     // their own queries.
@@ -140,7 +146,7 @@ export const replyToSupportTicket = createServerFn({ method: "POST" })
   })
   .handler(async ({ data, context }) => {
     const { userId } = context as { userId: string };
-    const isAdmin = claimsEmail(context) === SUPPORT_ADMIN_EMAIL;
+    const isAdmin = isSupportAdmin(context);
     const db = isAdmin
       ? (await import("@/integrations/supabase/primary-client.server")).supabaseAdmin
       : (context as { supabase: any }).supabase;

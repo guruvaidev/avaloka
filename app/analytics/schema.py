@@ -10,7 +10,8 @@ Design rules, in the order they bind:
   makes the *record* invalid; it is rejected, not filtered. Filtering would
   quietly accept a client that had started sending something it should not.
 * **One free-text field exists: ``prompt``.** It is the analyst's question, it
-  is collected by the owner's decision, and it is the only value that passes
+  is stored locally by the owner's decision and is never exported (owner
+  decision D16.5), and it is the only value that passes
   through ``redact.scrub`` rather than a closed vocabulary. Every other string
   is an enum, an opaque id, or a version. Analysts type column and table names
   into questions, so ``prompt`` carries them; nothing here pretends otherwise.
@@ -247,8 +248,9 @@ SENSITIVE_FIELDS: FrozenSet[str] = frozenset(
 )
 
 #: Added by the collector, never accepted from a client. ``prompt_export`` and
-#: the three ``prompt_names_*`` counters belong to the disabled question-text
-#: export path (export.EXPORT_QUESTION_TEXT); they are NULL/absent in production.
+#: the three ``prompt_names_*`` counters belonged to the question-text export
+#: path that owner decision D16.5 removed; nothing writes them any more, and the
+#: column stays only so existing databases need no migration. None is exported.
 SERVER_FIELDS = ("actor_id", "received_at", "schema_version", "session_id",
                  "ui_version", "prompt_chars_bucket", "prompt_redactions",
                  "prompt_export", "prompt_names_exact",

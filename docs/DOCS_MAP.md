@@ -12,6 +12,7 @@ to start: **[README.md](../README.md)** for what Avaloka is,
 | [INSTALL.md](INSTALL.md) | anyone installing | Requirements, `scripts/install.sh`, editions, offline/air-gapped install, and the first-run failures that do not name their own cause |
 | [USER_GUIDE.md](USER_GUIDE.md) | people using the product | Signing in, uploading data, asking questions, reading the trust panel. No Kubernetes, no code |
 | [README_CLI.md](../README_CLI.md) | terminal users | The `avaloka` command — analyze, train, chat, batch, infer, deploy, coordinate, benchmark |
+| [DEMO_GUIDE.md](DEMO_GUIDE.md) | anyone presenting Avaloka | Step-by-step 5, 15 and 30-minute demos for data scientists, analysts and data engineers, in the web app and the CLI, with what not to claim |
 
 ## Running it
 
@@ -47,7 +48,7 @@ to start: **[README.md](../README.md)** for what Avaloka is,
 | Document | For | What it is |
 | --- | --- | --- |
 | [CONTRIBUTING.md](../CONTRIBUTING.md) | contributors | Environment setup, the house style, how to run the suite, the project layout, and how to sign your work |
-| [CHANGELOG.md](../CHANGELOG.md) | upgraders | What changed, including the breaking changes since 1.6.0 |
+| [CHANGELOG.md](../CHANGELOG.md) | upgraders | What changed in each release, starting with 1.0.0, the first public release, and the breaking changes it carries |
 | [oss-branch-model.md](oss-branch-model.md) | maintainers | How the public `main` is generated from `develop-1.6`, what is withheld, and the invariants that block a bad push |
 | [SECURITY.md](../SECURITY.md) | everyone | How to report a vulnerability. **Defect status lives in the issue tracker, not in `docs/`** |
 

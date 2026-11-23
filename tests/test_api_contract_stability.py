@@ -56,6 +56,16 @@ NEW_FIELDS = {
     # "model_training" when the hosted plan does not include the feature, so
     # the UI can show an upgrade prompt instead of parsing the chat message.
     "plan_upgrade_required",
+    # Item 8a run truth: outcome (succeeded|failed|partial), reason_code,
+    # reason and scope for the turn, written by app/core/run_truth.py.
+    "run_truth",
+    # Default switch (gpt-oss via OpenRouter): when a fallback tier answered,
+    # which model and provider did, and why the configured one did not
+    # (app/core/model_tiers.py). None when the configured model answered.
+    "answered_by",
+    # Background-job notes delivered at this turn's end (app/core/job_notes.py):
+    # finished-job notes for the thread, shown once after the reply.
+    "job_notes",
 }
 
 

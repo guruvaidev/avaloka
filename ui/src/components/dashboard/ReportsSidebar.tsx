@@ -20,7 +20,7 @@ export function ReportsSidebar({
   onSelect,
 }: ReportsSidebarProps) {
   return (
-    <aside className="flex h-full w-[300px] shrink-0 flex-col border-r border-secondary bg-primary">
+    <aside className="flex h-full w-[300px] shrink-0 flex-col border-r border-secondary bg-primary dark:border-white/10 dark:bg-[#111418]">
       <div className="flex items-center justify-between px-4 py-4">
         <h2 className="text-lg font-semibold text-primary">Reports</h2>
         <ButtonUtility size="sm" color="tertiary" icon={LayoutAlt01} tooltip="Collapse sidebar" />

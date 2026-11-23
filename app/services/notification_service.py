@@ -32,7 +32,19 @@ TYPES = frozenset({
     "training.completed", "training.failed",
     "batch_job.completed", "batch_job.failed",
     "insights.generated", "insights.failed",
+    # Background-job ledger families (app/core/job_ledger.py). One ``inference``
+    # family covers deploy, stop and batch, with the sub-kind in metadata.
+    "scheduled_run.completed", "scheduled_run.failed",
+    "transfer.completed", "transfer.failed",
+    "ray_job.completed", "ray_job.failed",
+    "sampling.completed", "sampling.failed",
+    "inference.completed", "inference.failed",
+    "swarm.completed", "swarm.failed",
+    "job.cancelled",
 })
+
+#: ``resource_type`` values a notification may carry; the default stays "analysis".
+RESOURCE_TYPES = frozenset({"analysis", "dataset", "model", "endpoint", "transfer", "schedule", "mission"})
 
 _MAX_TITLE = 200
 _MAX_BODY = 1000
@@ -126,11 +138,19 @@ async def create_notification(
     dataset_id: Optional[str] = None,
     ref: Optional[str] = None,
     extra: Optional[Dict[str, Any]] = None,
+    resource_type: Optional[str] = None,
+    resource_id: Optional[str] = None,
+    link: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """Write one notification for the user with this auth uid.
 
     ``ref`` identifies the work (deferred turn id, job id); a second call with
     the same ref for the same user writes nothing. Returns the row, or None.
+
+    Without ``resource_type``/``resource_id``/``link`` the row is exactly what
+    it always was: resource "analysis", linked to the thread's analysis when
+    one exists. A caller that knows the job's resource passes it; an unknown
+    ``resource_type`` falls back to the default rather than being written.
     """
     if ntype not in TYPES:
         logger.warning("[notify] unknown type %r; not written", ntype)
@@ -157,12 +177,20 @@ async def create_notification(
         "type": ntype,
         "title": _clip(title, _MAX_TITLE) or ntype,
         "body": _clip(body, _MAX_BODY),
-        "resource_type": "analysis",
-        "link": f"/analysis?aid={analysis_id}" if analysis_id else "/analysis",
+        "resource_type": resource_type if resource_type in RESOURCE_TYPES else "analysis",
+        "link": link or (f"/analysis?aid={analysis_id}" if analysis_id else "/analysis"),
         "metadata": metadata,
     }
     if analysis_id:
         row["resource_id"] = analysis_id
+    if resource_type in RESOURCE_TYPES and resource_type != "analysis" and resource_id:
+        # resource_id is a uuid column; a non-uuid id travels in metadata instead.
+        try:
+            import uuid as _uuid
+            row["resource_id"] = str(_uuid.UUID(str(resource_id)))
+        except (ValueError, AttributeError, TypeError):
+            row.pop("resource_id", None)
+            metadata["resource_id"] = str(resource_id)
 
     def _insert():
         return _client().table(TABLE).insert(row).execute()

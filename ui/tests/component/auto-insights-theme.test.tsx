@@ -4,6 +4,8 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
 // Charts are irrelevant to theming; recharts' CJS build loads a second React copy under Vitest.
+// AutoInsightsModal reads the plan for its auto_insights gate (every plan has it).
+vi.mock("@/lib/use-active-plan", () => ({ useActivePlan: () => ({ data: { plan: "free" }, isLoading: false }) }));
 vi.mock("@/components/dashboard/dynamicChart", () => ({
   DynamicChart: () => null,
   normalizeVizConfig: () => [] as never[],

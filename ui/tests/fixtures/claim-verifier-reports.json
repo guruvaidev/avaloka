@@ -1,0 +1,42 @@
+{
+  "unsafe": {
+    "verification_safe_to_present": false,
+    "verification_report": {
+      "safe_to_present": false,
+      "claims_checked": 4,
+      "n_problems": 3,
+      "findings": [
+        {
+          "claim": "South had revenue of 950.",
+          "verdict": "unsupported",
+          "check": "invented_number",
+          "detail": "cites 950, which does not appear in the computed evidence within tolerance",
+          "evidence_ref": null
+        },
+        {
+          "claim": "Higher discounts drive revenue.",
+          "verdict": "overreach",
+          "check": "causal_overreach",
+          "detail": "asserts causation ('drive') from evidence that is correlational; no experiment, treatment/control or causal estimate is present",
+          "evidence_ref": null
+        },
+        {
+          "claim": "North will always lead.",
+          "verdict": "overreach",
+          "check": "absolute_language",
+          "detail": "uses absolute/predictive language ('will always'); a finite sample cannot support a claim admitting no exception",
+          "evidence_ref": null
+        }
+      ]
+    }
+  },
+  "safe": {
+    "verification_safe_to_present": true,
+    "verification_report": {
+      "safe_to_present": true,
+      "claims_checked": 2,
+      "n_problems": 0,
+      "findings": []
+    }
+  }
+}

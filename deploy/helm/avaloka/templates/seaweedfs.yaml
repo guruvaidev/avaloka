@@ -1,6 +1,6 @@
 {{- $fullname := include "avaloka.fullname" . }}
 
-{{- if .Values.seaweedfs.enabled }}
+{{- if (.Values.seaweedfs).enabled }}
 # In-cluster S3-compatible object store, so a local/on-prem install has a real
 # shared data plane instead of a per-pod filesystem.
 #

@@ -1,0 +1,25 @@
+{
+  "zdr_swap": {
+    "answered_by": {
+      "configured_model": "openai/gpt-4o",
+      "answered_model": "openai/gpt-6-luna",
+      "provider": "openrouter",
+      "reason": "no allowed zero-retention provider serves openai/gpt-4o",
+      "status": 404,
+      "tiers_failed": [{"model": "openai/gpt-4o", "provider": "openrouter", "status": 404, "reason": "no allowed zero-retention provider serves openai/gpt-4o"}],
+      "note": "no allowed zero-retention provider serves openai/gpt-4o; answered by openai/gpt-6-luna"
+    }
+  },
+  "groq_last": {
+    "answered_by": {
+      "configured_model": "openai/gpt-oss-120b",
+      "answered_model": "openai/gpt-oss-120b",
+      "provider": "groq",
+      "reason": "the openrouter account is out of credit (HTTP 402)",
+      "status": 402,
+      "tiers_failed": [{"model": "openai/gpt-oss-120b", "provider": "openrouter", "status": 402, "reason": "the openrouter account is out of credit (HTTP 402)"}, {"model": "openai/gpt-6-luna", "provider": "openrouter", "status": 402, "reason": "the openrouter account is out of credit (HTTP 402)"}],
+      "note": "the openrouter account is out of credit (HTTP 402); answered by openai/gpt-oss-120b"
+    }
+  },
+  "configured_answered": {"answered_by": null}
+}

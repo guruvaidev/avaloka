@@ -2,6 +2,26 @@
 // Creates (or returns) a share link for an analysis. Auth via Bearer token.
 
 import { createFileRoute } from "@tanstack/react-router";
+import { createClient } from "@supabase/supabase-js";
+import { SUPABASE_ANON_KEY, SUPABASE_INCLUSTER_URL, SUPABASE_URL } from "@/integrations/supabase/config";
+import { ANALYSIS_LINKS_NEED_PRO_SERVER, assertPlanFeature } from "@/lib/org-features";
+
+/** Analysis share links are Professional or higher (owner ruling 2026-11-02).
+ *  The writes below use the admin client, which RLS does not apply to, so the
+ *  plan is checked here, as the caller, against the same database helper the
+ *  RLS policy uses. Returns a refusal message, or null when allowed. */
+async function analysisLinkRefusal(accessToken: string): Promise<string | null> {
+  const asCaller = createClient(SUPABASE_INCLUSTER_URL || SUPABASE_URL, SUPABASE_ANON_KEY, {
+    global: { headers: { Authorization: `Bearer ${accessToken}` } },
+    auth: { storage: undefined, persistSession: false, autoRefreshToken: false },
+  });
+  try {
+    await assertPlanFeature(asCaller, "professional", "createAnalysisShareLink", ANALYSIS_LINKS_NEED_PRO_SERVER);
+    return null;
+  } catch (err) {
+    return err instanceof Error ? err.message : ANALYSIS_LINKS_NEED_PRO_SERVER;
+  }
+}
 
 async function verifyOwner(analysisId: string, accessToken: string) {
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
@@ -48,6 +68,9 @@ export const Route = createFileRoute("/api/analysis/$analysisId/share-link")({
           return new Response(JSON.stringify({ error: check.error }), { status: check.status });
         }
         const { supabaseAdmin } = check;
+
+        const refusal = await analysisLinkRefusal(token);
+        if (refusal) return new Response(JSON.stringify({ error: refusal }), { status: 403 });
 
         const { data: existing } = await supabaseAdmin
           .from("resource_share_links")

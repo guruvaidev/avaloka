@@ -1,0 +1,21 @@
+diff --git a/app/core/model_config.py b/app/core/model_config.py
+index 6c3fb161..985a714d 100644
+--- a/app/core/model_config.py
++++ b/app/core/model_config.py
+@@ -228,14 +228,13 @@ def backend_for(agent: str) -> str:
+     """Provider for *agent*: env AVALOKA_<AGENT>_BACKEND, default groq."""
+     key = agent.lower()
+     var = f"AVALOKA_{key.upper()}_BACKEND"
+-    value = (os.getenv(var) or "groq").strip().lower()
++    value = (os.getenv(var) or os.getenv("INFERENCE_PROVIDER") or "groq").strip().lower()
+     if value not in SUPPORTED_BACKENDS:
+         raise UnsupportedModelError(
+             f"{agent}: {var}={value!r} is not one of {SUPPORTED_BACKENDS}."
+         )
+     if value != "groq" and key not in _ROUTABLE_AGENTS:
+-        logger.warning("[models] %s=%s ignored: %s can only run on Groq today.", var, value, key)
+-        return "groq"
++        raise UnsupportedModelError(f"{key} can only run on Groq today ({var}={value}).")
+     return value
+ 
+ 

@@ -1,5 +1,6 @@
 {{- include "avaloka.checkSupabaseCredentials" . -}}
 {{- include "avaloka.checkLineageDatabaseUrl" . -}}
+{{- include "avaloka.checkAdminAutoconfirm" . -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -7,6 +8,9 @@ metadata:
   labels:
     {{- include "avaloka.labels" . | nindent 4 }}
 data:
+  # The deployment signal (app/core/editions.declared_deployment). Always set, so
+  # no install runs undeclared; the default covers --reuse-values of older installs.
+  AVALOKA_DEPLOYMENT: {{ .Values.config.deployment | default "self_hosted" | quote }}
   {{- with .Values.config.gcpProjectId }}
   CLOUD_PROVIDER: "gcp"
   GCP_PROJECT_ID: {{ . | quote }}
@@ -16,6 +20,7 @@ data:
   RAY_CONNECT_EXISTING: {{ .Values.ray.connectExisting | quote }}
   # Ray Serve inference (D3): the API POSTs predictions to this in-cluster service.
   RAY_SERVE_URL: {{ .Values.config.rayServeUrl | quote }}
+  MODEL_SERVER_URL: {{ default (printf "http://%s-model-server:%v" (include "avaloka.fullname" .) (dig "port" 8000 (.Values.modelServer | default dict))) (.Values.config.modelServerUrl) | quote }}
   INFERENCE_BACKEND: {{ .Values.config.inferenceBackend | quote }}
   {{- with (include "avaloka.mlflowTrackingUri" .) }}
   MLFLOW_TRACKING_URI: {{ . | quote }}
@@ -29,7 +34,22 @@ data:
   MLFLOW_DEFAULT_ARTIFACT_ROOT: {{ . | quote }}
   {{- end }}
   # Agent LLM provider (separate from the trained-model inference backend).
-  INFERENCE_PROVIDER: {{ .Values.inference.provider | quote }}
+  {{- with include "avaloka.inferenceProvider" . }}
+  INFERENCE_PROVIDER: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.inference.openrouter }}
+  # OpenRouter provider pinning and the fallback tier (app/core/inference.py).
+  {{- with .providersOnly }}
+  AVALOKA_OPENROUTER_ONLY: {{ . | quote }}
+  {{- end }}
+  AVALOKA_OPENROUTER_ALLOW_FALLBACKS: {{ .allowFallbacks | quote }}
+  AVALOKA_OPENROUTER_DATA_COLLECTION: {{ .dataCollection | quote }}
+  AVALOKA_OPENROUTER_ZDR: {{ .zdr | quote }}
+  AVALOKA_OPENROUTER_FALLBACK_MODEL: {{ .fallbackModel | quote }}
+  {{- with .fallbackProvidersOnly }}
+  AVALOKA_OPENROUTER_FALLBACK_ONLY: {{ . | quote }}
+  {{- end }}
+  {{- end }}
   {{- if .Values.localLLM.enabled }}
   INFERENCE_LOCAL_BASE_URL: {{ include "avaloka.localLLMBaseUrl" . | quote }}
   INFERENCE_LOCAL_MODEL_LARGE: {{ .Values.localLLM.servedModelName | quote }}
@@ -44,6 +64,14 @@ data:
   # scheduler pointed at a service that does not exist, so enqueued tasks were
   # never executed and nothing said so. Derived from the release here.
   CELERY_REDIS_URL: {{ include "avaloka.redisUrl" . | quote }}
+  # Task results (app/core/celery_results.py). dig with defaults: an install
+  # upgraded with --reuse-values has no celery.resultExpires/resultRetentionDays.
+  CELERY_RESULT_EXPIRES: {{ dig "resultExpires" 604800 (.Values.celery | default dict) | int | quote }}
+  {{- $retention := dig "resultRetentionDays" 365 (.Values.celery | default dict) | int }}
+  {{- if or (lt $retention 1) (gt $retention 1095) }}
+  {{- fail (printf "celery.resultRetentionDays must be between 1 and 1095 (above 365 needs the Enterprise edition); got %d" $retention) }}
+  {{- end }}
+  CELERY_RESULT_RETENTION_DAYS: {{ $retention | quote }}
   {{- if .Values.celery.enabled }}
   AVALOKA_SCHEDULED_EXECUTION_DEPLOYMENT: {{ printf "%s-celery-executor" (include "avaloka.fullname" .) | quote }}
   AVALOKA_SCHEDULED_EXECUTION_NAMESPACE: {{ .Release.Namespace | quote }}
@@ -58,7 +86,7 @@ data:
   {{- if or .Values.postgres.enabled .Values.postgres.externalUrl }}
   POSTGRES_URL: {{ include "avaloka.postgresUrl" . | quote }}
   {{- end }}
-  {{- if not .Values.lineage.enabled }}
+  {{- if not (dig "enabled" true (.Values.lineage | default dict)) }}
   # Lineage otherwise follows POSTGRES_URL above (or AVALOKA_LINEAGE_DB_URL in
   # the Secret). Stated explicitly so "off" is a decision, not a missing URL.
   AVALOKA_LINEAGE: "off"
@@ -78,8 +106,15 @@ data:
   # install.
   HF_HUB_OFFLINE: {{ .Values.memory.offlineEmbeddings | ternary "1" "0" | quote }}
   {{- end }}
+  # Memory embeddings stay in the cluster unless the operator opts in to OpenAI
+  # (memory.embeddingProvider=openai plus EMBEDDING_OPENAI_API_KEY in the Secret).
+  EMBEDDING_PROVIDER: {{ .Values.memory.embeddingProvider | default "local" | quote }}
   {{- with (include "avaloka.mcpServerUrl" .) }}
   MCP_SERVER_URL: {{ . | quote }}
+  {{- end }}
+  {{- if (.Values.executeService).enabled }}
+  # The /execute service (templates/execute-service.yaml), for the k8s execution path.
+  AVALOKA_EXECUTE_SERVICE_URL: {{ printf "http://%s-execute-service:%v" (include "avaloka.fullname" .) .Values.executeService.port | quote }}
   {{- end }}
   {{- with (include "avaloka.onboardingApiUrl" .) }}
   ONBOARDING_API_URL: {{ . | quote }}
@@ -92,6 +127,12 @@ data:
   # Service name or *.svc.cluster.local) — a remote Ray cluster cannot resolve those.
   # Cloud-to-cloud transfers keep using RAY_DASHBOARD_URL above.
   RAY_DASHBOARD_URL_INCLUSTER: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.rbac.rayJobSecretsNamespace }}
+  # Where the data transfer agent's KubeRay RayJobs, and their per-job
+  # credentials Secrets, go: the namespace rbac.yaml grants Secret create/delete
+  # in (never get). Unset, app/data_transfer_docker/gke_run.py uses "default".
+  KUBE_NAMESPACE: {{ . | quote }}
   {{- end }}
   {{- with .Values.config.mtaRayDashboardUrl }}
   # Ray Jobs API used only by scheduled/distributed MTA training. This targets
