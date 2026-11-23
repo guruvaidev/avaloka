@@ -9,8 +9,10 @@ import { supabase } from "@/integrations/supabase/client";
 import { getCurrentProfileId } from "@/lib/current-profile";
 import { AvatarFace, type AvatarState } from "./AvatarFace";
 import { useInsightsAvatar } from "./InsightsAvatarContext";
+import { CommentaryText, commentaryPlainText } from "@/components/chat/CommentaryText";
+import type { ReplySegment } from "@/lib/reply-segments";
 
-type Msg = { id: number; role: "user" | "assistant"; text: string };
+type Msg = { id: number; role: "user" | "assistant"; text: string; segments?: ReplySegment[] | null };
 
 export type AvatarChart = { id: string; slide: Slide };
 
@@ -130,14 +132,14 @@ export function InsightsAvatar({
     setHighlightedIds([]);
   }, [setHighlightedIds]);
 
-  const push = (role: Msg["role"], text: string) => {
+  const push = (role: Msg["role"], text: string, segments?: ReplySegment[] | null) => {
     idRef.current += 1;
-    const msg = { id: idRef.current, role, text };
+    const msg = { id: idRef.current, role, text, segments };
     setMessages((m) => [...m, msg]);
   };
 
-  const respond = (text: string, focusIds: string[]) => {
-    push("assistant", text);
+  const respond = (text: string, focusIds: string[], segments?: ReplySegment[] | null) => {
+    push("assistant", text, segments);
     const ids = focusIds.filter(Boolean);
     if (ids.length) {
       setHighlightedIds(ids);
@@ -152,7 +154,8 @@ export function InsightsAvatar({
       if (ids.length) highlightTimer.current = setTimeout(() => setHighlightedIds([]), 6000);
       return;
     }
-    tts.speak(text, {
+    // Spoken without the "commentary — not checked" label; it is shown on screen.
+    tts.speak(commentaryPlainText(text, segments), {
       onBoundary: () => {
         boundaryRef.current = true;
          setPortraitPulse((p) => p + 1);
@@ -173,7 +176,7 @@ export function InsightsAvatar({
     push("user", q);
     setInput("");
     if (!aid) {
-      respond(EXPLAIN_MESSAGES[404], []);
+      respond(EXPLAIN_MESSAGES.unsaved, []);
       return;
     }
     const ctrl = new AbortController();
@@ -193,7 +196,7 @@ export function InsightsAvatar({
         ctrl.signal,
       );
       if (abortRef.current !== ctrl) return;
-      respond(res.answer, res.focus_chart_ids);
+      respond(res.answer, res.focus_chart_ids, res.answer_segments);
     } catch (err: any) {
       if (err?.name === "AbortError" || abortRef.current !== ctrl) return;
       respond(err?.message || EXPLAIN_MESSAGES.network, []);
@@ -367,7 +370,7 @@ export function InsightsAvatar({
                       : "rounded-bl-md border border-border bg-muted text-foreground")
                   }
                 >
-                  {m.text}
+                  {m.role === "assistant" ? <CommentaryText text={m.text} segments={m.segments} tone="light" /> : m.text}
                 </p>
               </div>
             ))}

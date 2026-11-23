@@ -1,0 +1,1378 @@
+{
+ "_generated_by": "scripts/gen_swarm_trace_fixture.py",
+ "_source": "MainAvaloka.coordinate on avaloka/examples/churn.csv, workers=3, limits=oss",
+ "mission": {
+  "schema_version": "1.0",
+  "mission_id": "fixture-churn",
+  "kind": "analyze",
+  "goal": "what drives churn",
+  "source": "/w/avaloka/examples/churn.csv",
+  "status": "done",
+  "started_at": "2026-10-18T01:09:10.424Z",
+  "ended_at": "2026-10-18T01:09:10.636Z",
+  "limits": {
+   "edition": "oss",
+   "max_clones_per_mission": 2,
+   "max_parallel_clones": 2,
+   "execution": "local",
+   "cluster_fan_out": false,
+   "preview": true,
+   "label": "the free open-source edition",
+   "summary": "Swarm on the free open-source edition: up to 2 clones per mission, run locally."
+  },
+  "grant": {
+   "requested_clones": 3,
+   "requested_parallel": null,
+   "granted_clones": 2,
+   "granted_parallel": 2,
+   "limited": true,
+   "message": "Swarm limited to 2 clones on the free open-source edition: you asked for 3, so 2 will run."
+  },
+  "clones": [
+   {
+    "clone_id": "ava-00",
+    "name": "Ava-00",
+    "shard_id": 0,
+    "status": "done",
+    "rows": 600,
+    "received": {
+     "rows": 600,
+     "columns": [
+      "customer_id",
+      "tenure_months",
+      "monthly_charges",
+      "support_tickets",
+      "contract",
+      "region",
+      "churned"
+     ],
+     "goal": "what drives churn",
+     "kind": "analyze",
+     "target": null,
+     "metric": null,
+     "shard_path": "/tmp/tmpqt5hxid5/fleet/sub-avaloka-00/shard.csv"
+    },
+    "dispatched_at": "2026-10-18T01:09:10.466Z",
+    "returned_at": "2026-10-18T01:09:10.569Z",
+    "steps": [
+     {
+      "step_id": "ava-00/s01",
+      "step_no": 1,
+      "firefly": "data_scout",
+      "human_role": "Data analyst",
+      "started_at": "2026-10-18T01:09:10.467Z",
+      "ended_at": "2026-10-18T01:09:10.486Z",
+      "status": "ok",
+      "output": "Profiled 7 columns x 600 rows; quality score 100/100 with 0 issues flagged.",
+      "duration_ms": 19,
+      "manual_minutes": 87.0,
+      "compute_cost_usd": 1.1e-05,
+      "model_cost_usd": 0.0,
+      "metadata": {
+       "quality_score": 100,
+       "n_issues": 0
+      },
+      "error_class": null,
+      "error": null
+     },
+     {
+      "step_id": "ava-00/s02",
+      "step_no": 2,
+      "firefly": "sampling_specialist",
+      "human_role": "Data scientist",
+      "started_at": "2026-10-18T01:09:10.486Z",
+      "ended_at": "2026-10-18T01:09:10.486Z",
+      "status": "ok",
+      "output": "Working sample: 600 rows (none). 600 rows fits the live full-analysis lane; the full dataset is used so no information is discarded.",
+      "duration_ms": 0,
+      "manual_minutes": 30.0,
+      "compute_cost_usd": 0.0,
+      "model_cost_usd": 0.0,
+      "metadata": {
+       "sampled": false,
+       "strategy": "none"
+      },
+      "error_class": null,
+      "error": null
+     },
+     {
+      "step_id": "ava-00/s03",
+      "step_no": 3,
+      "firefly": "data_engineer",
+      "human_role": "Data engineer",
+      "started_at": "2026-10-18T01:09:10.486Z",
+      "ended_at": "2026-10-18T01:09:10.500Z",
+      "status": "ok",
+      "output": "Applied 1 documented transformations; wrote transformed_dataset.parquet (600x7) + reproducible analysis.py / analysis.ipynb.",
+      "duration_ms": 14,
+      "manual_minutes": 146.0,
+      "compute_cost_usd": 8e-06,
+      "model_cost_usd": 0.0,
+      "metadata": {
+       "n_transformations": 1
+      },
+      "error_class": null,
+      "error": null
+     },
+     {
+      "step_id": "ava-00/s04",
+      "step_no": 4,
+      "firefly": "analysis_planner",
+      "human_role": "Senior data scientist",
+      "started_at": "2026-10-18T01:09:10.500Z",
+      "ended_at": "2026-10-18T01:09:10.500Z",
+      "status": "ok",
+      "output": "Planned task='exploratory_analysis' with 0 candidate(s); split='none'; 1 human approval gate(s).",
+      "duration_ms": 1,
+      "manual_minutes": 60.0,
+      "compute_cost_usd": 0.0,
+      "model_cost_usd": 0.0,
+      "metadata": {
+       "task": "exploratory_analysis",
+       "n_candidates": 0
+      },
+      "error_class": null,
+      "error": null
+     },
+     {
+      "step_id": "ava-00/s05",
+      "step_no": 5,
+      "firefly": "validator",
+      "human_role": "Model-risk specialist",
+      "started_at": "2026-10-18T01:09:10.500Z",
+      "ended_at": "2026-10-18T01:09:10.501Z",
+      "status": "ok",
+      "output": "Validation verdict='pass'; 1 checks; max safe deployment level 1.",
+      "duration_ms": 0,
+      "manual_minutes": 88.0,
+      "compute_cost_usd": 0.0,
+      "model_cost_usd": 0.0,
+      "metadata": {
+       "verdict": "pass",
+       "max_level": 1
+      },
+      "error_class": null,
+      "error": null
+     },
+     {
+      "step_id": "ava-00/s06",
+      "step_no": 6,
+      "firefly": "reporter",
+      "human_role": "Analyst / consultant",
+      "started_at": "2026-10-18T01:09:10.501Z",
+      "ended_at": "2026-10-18T01:09:10.567Z",
+      "status": "ok",
+      "output": "Wrote executive & technical reports, assumptions, lineage, environment lock and README.",
+      "duration_ms": 66,
+      "manual_minutes": 120.0,
+      "compute_cost_usd": 4e-05,
+      "model_cost_usd": 0.0,
+      "metadata": {},
+      "error_class": null,
+      "error": null
+     }
+    ],
+    "verdict": "pass",
+    "max_safe_deployment_level": 1,
+    "model": null,
+    "sampling": {
+     "sampled": false,
+     "reason": "600 rows fits the live full-analysis lane; the full dataset is used so no information is discarded.",
+     "n_input_rows": 600,
+     "n_working_rows": 600,
+     "strategy": "none",
+     "stratify_by": null
+    },
+    "cost_usd": 5.9e-05,
+    "duration_ms": 103,
+    "error_class": null,
+    "error": null
+   },
+   {
+    "clone_id": "ava-01",
+    "name": "Ava-01",
+    "shard_id": 1,
+    "status": "done",
+    "rows": 600,
+    "received": {
+     "rows": 600,
+     "columns": [
+      "customer_id",
+      "tenure_months",
+      "monthly_charges",
+      "support_tickets",
+      "contract",
+      "region",
+      "churned"
+     ],
+     "goal": "what drives churn",
+     "kind": "analyze",
+     "target": null,
+     "metric": null,
+     "shard_path": "/tmp/tmpqt5hxid5/fleet/sub-avaloka-01/shard.csv"
+    },
+    "dispatched_at": "2026-10-18T01:09:10.477Z",
+    "returned_at": "2026-10-18T01:09:10.634Z",
+    "steps": [
+     {
+      "step_id": "ava-01/s01",
+      "step_no": 1,
+      "firefly": "data_scout",
+      "human_role": "Data analyst",
+      "started_at": "2026-10-18T01:09:10.477Z",
+      "ended_at": "2026-10-18T01:09:10.586Z",
+      "status": "ok",
+      "output": "Profiled 7 columns x 600 rows; quality score 100/100 with 0 issues flagged.",
+      "duration_ms": 109,
+      "manual_minutes": 87.0,
+      "compute_cost_usd": 6.6e-05,
+      "model_cost_usd": 0.0,
+      "metadata": {
+       "quality_score": 100,
+       "n_issues": 0
+      },
+      "error_class": null,
+      "error": null
+     },
+     {
+      "step_id": "ava-01/s02",
+      "step_no": 2,
+      "firefly": "sampling_specialist",
+      "human_role": "Data scientist",
+      "started_at": "2026-10-18T01:09:10.587Z",
+      "ended_at": "2026-10-18T01:09:10.587Z",
+      "status": "ok",
+      "output": "Working sample: 600 rows (none). 600 rows fits the live full-analysis lane; the full dataset is used so no information is discarded.",
+      "duration_ms": 0,
+      "manual_minutes": 30.0,
+      "compute_cost_usd": 0.0,
+      "model_cost_usd": 0.0,
+      "metadata": {
+       "sampled": false,
+       "strategy": "none"
+      },
+      "error_class": null,
+      "error": null
+     },
+     {
+      "step_id": "ava-01/s03",
+      "step_no": 3,
+      "firefly": "data_engineer",
+      "human_role": "Data engineer",
+      "started_at": "2026-10-18T01:09:10.587Z",
+      "ended_at": "2026-10-18T01:09:10.590Z",
+      "status": "ok",
+      "output": "Applied 1 documented transformations; wrote transformed_dataset.parquet (600x7) + reproducible analysis.py / analysis.ipynb.",
+      "duration_ms": 3,
+      "manual_minutes": 146.0,
+      "compute_cost_usd": 2e-06,
+      "model_cost_usd": 0.0,
+      "metadata": {
+       "n_transformations": 1
+      },
+      "error_class": null,
+      "error": null
+     },
+     {
+      "step_id": "ava-01/s04",
+      "step_no": 4,
+      "firefly": "analysis_planner",
+      "human_role": "Senior data scientist",
+      "started_at": "2026-10-18T01:09:10.590Z",
+      "ended_at": "2026-10-18T01:09:10.590Z",
+      "status": "ok",
+      "output": "Planned task='exploratory_analysis' with 0 candidate(s); split='none'; 1 human approval gate(s).",
+      "duration_ms": 0,
+      "manual_minutes": 60.0,
+      "compute_cost_usd": 0.0,
+      "model_cost_usd": 0.0,
+      "metadata": {
+       "task": "exploratory_analysis",
+       "n_candidates": 0
+      },
+      "error_class": null,
+      "error": null
+     },
+     {
+      "step_id": "ava-01/s05",
+      "step_no": 5,
+      "firefly": "validator",
+      "human_role": "Model-risk specialist",
+      "started_at": "2026-10-18T01:09:10.590Z",
+      "ended_at": "2026-10-18T01:09:10.590Z",
+      "status": "ok",
+      "output": "Validation verdict='pass'; 1 checks; max safe deployment level 1.",
+      "duration_ms": 0,
+      "manual_minutes": 88.0,
+      "compute_cost_usd": 0.0,
+      "model_cost_usd": 0.0,
+      "metadata": {
+       "verdict": "pass",
+       "max_level": 1
+      },
+      "error_class": null,
+      "error": null
+     },
+     {
+      "step_id": "ava-01/s06",
+      "step_no": 6,
+      "firefly": "reporter",
+      "human_role": "Analyst / consultant",
+      "started_at": "2026-10-18T01:09:10.590Z",
+      "ended_at": "2026-10-18T01:09:10.624Z",
+      "status": "ok",
+      "output": "Wrote executive & technical reports, assumptions, lineage, environment lock and README.",
+      "duration_ms": 33,
+      "manual_minutes": 120.0,
+      "compute_cost_usd": 2e-05,
+      "model_cost_usd": 0.0,
+      "metadata": {},
+      "error_class": null,
+      "error": null
+     }
+    ],
+    "verdict": "pass",
+    "max_safe_deployment_level": 1,
+    "model": null,
+    "sampling": {
+     "sampled": false,
+     "reason": "600 rows fits the live full-analysis lane; the full dataset is used so no information is discarded.",
+     "n_input_rows": 600,
+     "n_working_rows": 600,
+     "strategy": "none",
+     "stratify_by": null
+    },
+    "cost_usd": 8.8e-05,
+    "duration_ms": 157,
+    "error_class": null,
+    "error": null
+   }
+  ],
+  "merge": {
+   "rules": {
+    "profile": "exact sufficient statistics",
+    "verdict": "worst case",
+    "model": "best honest score"
+   },
+   "verdict": "pass",
+   "max_safe_deployment_level": 1,
+   "selected_model": null,
+   "contributions": [
+    {
+     "clone_id": "ava-00",
+     "rows": 600,
+     "verdict": "pass",
+     "selected": false,
+     "cost_usd": 5.9e-05
+    },
+    {
+     "clone_id": "ava-01",
+     "rows": 600,
+     "verdict": "pass",
+     "selected": false,
+     "cost_usd": 8.8e-05
+    }
+   ],
+   "n_rows": 1200,
+   "columns": [
+    "customer_id",
+    "tenure_months",
+    "monthly_charges",
+    "support_tickets",
+    "contract",
+    "region",
+    "churned"
+   ]
+  },
+  "economics": {
+   "mission_duration_seconds": 0.246,
+   "estimated_manual_effort_hours": 17.7,
+   "human_review_hours": 1.59,
+   "compute_cost_usd": 0.0,
+   "model_cost_usd": 0.0,
+   "mission_charge_usd": 0.0,
+   "total_mission_cost_usd": 0.0,
+   "human_review_cost_usd": 127.2,
+   "total_customer_cost_usd": 127.2,
+   "estimated_labor_value_usd": 1416.0,
+   "economic_multiplier": 11.1,
+   "loaded_hourly_rate_usd": 80.0,
+   "tier": "community"
+  },
+  "error_class": null,
+  "sharding": {
+   "clones": 2,
+   "total_rows": 1200,
+   "rows_per_clone": [
+    600,
+    600
+   ],
+   "columns": [
+    "customer_id",
+    "tenure_months",
+    "monthly_charges",
+    "support_tickets",
+    "contract",
+    "region",
+    "churned"
+   ]
+  },
+  "duration_ms": 212,
+  "records": [
+   {
+    "seq": 1,
+    "ts": "2026-10-18T01:09:10.424Z",
+    "type": "swarm.requested",
+    "mission_id": "fixture-churn",
+    "kind": "analyze",
+    "goal": "what drives churn",
+    "source": "/w/avaloka/examples/churn.csv",
+    "requested_clones": 3,
+    "requested_parallel": null,
+    "granted_clones": 2,
+    "granted_parallel": 2,
+    "limited": true,
+    "message": "Swarm limited to 2 clones on the free open-source edition: you asked for 3, so 2 will run.",
+    "limits": {
+     "edition": "oss",
+     "max_clones_per_mission": 2,
+     "max_parallel_clones": 2,
+     "execution": "local",
+     "cluster_fan_out": false,
+     "preview": true,
+     "label": "the free open-source edition",
+     "summary": "Swarm on the free open-source edition: up to 2 clones per mission, run locally."
+    }
+   },
+   {
+    "seq": 2,
+    "ts": "2026-10-18T01:09:10.462Z",
+    "type": "swarm.sharded",
+    "mission_id": "fixture-churn",
+    "clones": 2,
+    "total_rows": 1200,
+    "rows_per_clone": [
+     600,
+     600
+    ],
+    "columns": [
+     "customer_id",
+     "tenure_months",
+     "monthly_charges",
+     "support_tickets",
+     "contract",
+     "region",
+     "churned"
+    ]
+   },
+   {
+    "seq": 3,
+    "ts": "2026-10-18T01:09:10.466Z",
+    "type": "clone.dispatched",
+    "mission_id": "fixture-churn",
+    "clone_id": "ava-00",
+    "name": "Ava-00",
+    "shard_id": 0,
+    "received": {
+     "rows": 600,
+     "columns": [
+      "customer_id",
+      "tenure_months",
+      "monthly_charges",
+      "support_tickets",
+      "contract",
+      "region",
+      "churned"
+     ],
+     "goal": "what drives churn",
+     "kind": "analyze",
+     "target": null,
+     "metric": null,
+     "shard_path": "/tmp/tmpqt5hxid5/fleet/sub-avaloka-00/shard.csv"
+    }
+   },
+   {
+    "seq": 4,
+    "ts": "2026-10-18T01:09:10.467Z",
+    "type": "clone.step.started",
+    "mission_id": "fixture-churn",
+    "clone_id": "ava-00",
+    "step_id": "ava-00/s01",
+    "step_no": 1,
+    "firefly": "data_scout",
+    "human_role": null
+   },
+   {
+    "seq": 5,
+    "ts": "2026-10-18T01:09:10.477Z",
+    "type": "clone.dispatched",
+    "mission_id": "fixture-churn",
+    "clone_id": "ava-01",
+    "name": "Ava-01",
+    "shard_id": 1,
+    "received": {
+     "rows": 600,
+     "columns": [
+      "customer_id",
+      "tenure_months",
+      "monthly_charges",
+      "support_tickets",
+      "contract",
+      "region",
+      "churned"
+     ],
+     "goal": "what drives churn",
+     "kind": "analyze",
+     "target": null,
+     "metric": null,
+     "shard_path": "/tmp/tmpqt5hxid5/fleet/sub-avaloka-01/shard.csv"
+    }
+   },
+   {
+    "seq": 6,
+    "ts": "2026-10-18T01:09:10.477Z",
+    "type": "clone.step.started",
+    "mission_id": "fixture-churn",
+    "clone_id": "ava-01",
+    "step_id": "ava-01/s01",
+    "step_no": 1,
+    "firefly": "data_scout",
+    "human_role": null
+   },
+   {
+    "seq": 7,
+    "ts": "2026-10-18T01:09:10.486Z",
+    "type": "clone.step.completed",
+    "mission_id": "fixture-churn",
+    "clone_id": "ava-00",
+    "step_id": "ava-00/s01",
+    "step_no": 1,
+    "firefly": "data_scout",
+    "human_role": "Data analyst",
+    "output": "Profiled 7 columns x 600 rows; quality score 100/100 with 0 issues flagged.",
+    "duration_ms": 19,
+    "manual_minutes": 87.0,
+    "compute_cost_usd": 1.1e-05,
+    "model_cost_usd": 0.0,
+    "metadata": {
+     "quality_score": 100,
+     "n_issues": 0
+    },
+    "outcome": "ok"
+   },
+   {
+    "seq": 8,
+    "ts": "2026-10-18T01:09:10.486Z",
+    "type": "clone.step.started",
+    "mission_id": "fixture-churn",
+    "clone_id": "ava-00",
+    "step_id": "ava-00/s02",
+    "step_no": 2,
+    "firefly": "sampling_specialist",
+    "human_role": null
+   },
+   {
+    "seq": 9,
+    "ts": "2026-10-18T01:09:10.486Z",
+    "type": "clone.step.completed",
+    "mission_id": "fixture-churn",
+    "clone_id": "ava-00",
+    "step_id": "ava-00/s02",
+    "step_no": 2,
+    "firefly": "sampling_specialist",
+    "human_role": "Data scientist",
+    "output": "Working sample: 600 rows (none). 600 rows fits the live full-analysis lane; the full dataset is used so no information is discarded.",
+    "duration_ms": 0,
+    "manual_minutes": 30.0,
+    "compute_cost_usd": 0.0,
+    "model_cost_usd": 0.0,
+    "metadata": {
+     "sampled": false,
+     "strategy": "none"
+    },
+    "outcome": "ok"
+   },
+   {
+    "seq": 10,
+    "ts": "2026-10-18T01:09:10.486Z",
+    "type": "clone.step.started",
+    "mission_id": "fixture-churn",
+    "clone_id": "ava-00",
+    "step_id": "ava-00/s03",
+    "step_no": 3,
+    "firefly": "data_engineer",
+    "human_role": null
+   },
+   {
+    "seq": 11,
+    "ts": "2026-10-18T01:09:10.500Z",
+    "type": "clone.step.completed",
+    "mission_id": "fixture-churn",
+    "clone_id": "ava-00",
+    "step_id": "ava-00/s03",
+    "step_no": 3,
+    "firefly": "data_engineer",
+    "human_role": "Data engineer",
+    "output": "Applied 1 documented transformations; wrote transformed_dataset.parquet (600x7) + reproducible analysis.py / analysis.ipynb.",
+    "duration_ms": 14,
+    "manual_minutes": 146.0,
+    "compute_cost_usd": 8e-06,
+    "model_cost_usd": 0.0,
+    "metadata": {
+     "n_transformations": 1
+    },
+    "outcome": "ok"
+   },
+   {
+    "seq": 12,
+    "ts": "2026-10-18T01:09:10.500Z",
+    "type": "clone.step.started",
+    "mission_id": "fixture-churn",
+    "clone_id": "ava-00",
+    "step_id": "ava-00/s04",
+    "step_no": 4,
+    "firefly": "analysis_planner",
+    "human_role": null
+   },
+   {
+    "seq": 13,
+    "ts": "2026-10-18T01:09:10.500Z",
+    "type": "clone.step.completed",
+    "mission_id": "fixture-churn",
+    "clone_id": "ava-00",
+    "step_id": "ava-00/s04",
+    "step_no": 4,
+    "firefly": "analysis_planner",
+    "human_role": "Senior data scientist",
+    "output": "Planned task='exploratory_analysis' with 0 candidate(s); split='none'; 1 human approval gate(s).",
+    "duration_ms": 1,
+    "manual_minutes": 60.0,
+    "compute_cost_usd": 0.0,
+    "model_cost_usd": 0.0,
+    "metadata": {
+     "task": "exploratory_analysis",
+     "n_candidates": 0
+    },
+    "outcome": "ok"
+   },
+   {
+    "seq": 14,
+    "ts": "2026-10-18T01:09:10.500Z",
+    "type": "clone.step.started",
+    "mission_id": "fixture-churn",
+    "clone_id": "ava-00",
+    "step_id": "ava-00/s05",
+    "step_no": 5,
+    "firefly": "validator",
+    "human_role": null
+   },
+   {
+    "seq": 15,
+    "ts": "2026-10-18T01:09:10.501Z",
+    "type": "clone.step.completed",
+    "mission_id": "fixture-churn",
+    "clone_id": "ava-00",
+    "step_id": "ava-00/s05",
+    "step_no": 5,
+    "firefly": "validator",
+    "human_role": "Model-risk specialist",
+    "output": "Validation verdict='pass'; 1 checks; max safe deployment level 1.",
+    "duration_ms": 0,
+    "manual_minutes": 88.0,
+    "compute_cost_usd": 0.0,
+    "model_cost_usd": 0.0,
+    "metadata": {
+     "verdict": "pass",
+     "max_level": 1
+    },
+    "outcome": "ok"
+   },
+   {
+    "seq": 16,
+    "ts": "2026-10-18T01:09:10.501Z",
+    "type": "clone.step.started",
+    "mission_id": "fixture-churn",
+    "clone_id": "ava-00",
+    "step_id": "ava-00/s06",
+    "step_no": 6,
+    "firefly": "reporter",
+    "human_role": null
+   },
+   {
+    "seq": 17,
+    "ts": "2026-10-18T01:09:10.567Z",
+    "type": "clone.step.completed",
+    "mission_id": "fixture-churn",
+    "clone_id": "ava-00",
+    "step_id": "ava-00/s06",
+    "step_no": 6,
+    "firefly": "reporter",
+    "human_role": "Analyst / consultant",
+    "output": "Wrote executive & technical reports, assumptions, lineage, environment lock and README.",
+    "duration_ms": 66,
+    "manual_minutes": 120.0,
+    "compute_cost_usd": 4e-05,
+    "model_cost_usd": 0.0,
+    "metadata": {},
+    "outcome": "ok"
+   },
+   {
+    "seq": 18,
+    "ts": "2026-10-18T01:09:10.569Z",
+    "type": "clone.returned",
+    "mission_id": "fixture-churn",
+    "clone_id": "ava-00",
+    "status": "done",
+    "verdict": "pass",
+    "max_safe_deployment_level": 1,
+    "model": null,
+    "sampling": {
+     "sampled": false,
+     "reason": "600 rows fits the live full-analysis lane; the full dataset is used so no information is discarded.",
+     "n_input_rows": 600,
+     "n_working_rows": 600,
+     "strategy": "none",
+     "stratify_by": null
+    },
+    "duration_ms": 103,
+    "cost_usd": 5.9e-05,
+    "steps": 6
+   },
+   {
+    "seq": 19,
+    "ts": "2026-10-18T01:09:10.586Z",
+    "type": "clone.step.completed",
+    "mission_id": "fixture-churn",
+    "clone_id": "ava-01",
+    "step_id": "ava-01/s01",
+    "step_no": 1,
+    "firefly": "data_scout",
+    "human_role": "Data analyst",
+    "output": "Profiled 7 columns x 600 rows; quality score 100/100 with 0 issues flagged.",
+    "duration_ms": 109,
+    "manual_minutes": 87.0,
+    "compute_cost_usd": 6.6e-05,
+    "model_cost_usd": 0.0,
+    "metadata": {
+     "quality_score": 100,
+     "n_issues": 0
+    },
+    "outcome": "ok"
+   },
+   {
+    "seq": 20,
+    "ts": "2026-10-18T01:09:10.587Z",
+    "type": "clone.step.started",
+    "mission_id": "fixture-churn",
+    "clone_id": "ava-01",
+    "step_id": "ava-01/s02",
+    "step_no": 2,
+    "firefly": "sampling_specialist",
+    "human_role": null
+   },
+   {
+    "seq": 21,
+    "ts": "2026-10-18T01:09:10.587Z",
+    "type": "clone.step.completed",
+    "mission_id": "fixture-churn",
+    "clone_id": "ava-01",
+    "step_id": "ava-01/s02",
+    "step_no": 2,
+    "firefly": "sampling_specialist",
+    "human_role": "Data scientist",
+    "output": "Working sample: 600 rows (none). 600 rows fits the live full-analysis lane; the full dataset is used so no information is discarded.",
+    "duration_ms": 0,
+    "manual_minutes": 30.0,
+    "compute_cost_usd": 0.0,
+    "model_cost_usd": 0.0,
+    "metadata": {
+     "sampled": false,
+     "strategy": "none"
+    },
+    "outcome": "ok"
+   },
+   {
+    "seq": 22,
+    "ts": "2026-10-18T01:09:10.587Z",
+    "type": "clone.step.started",
+    "mission_id": "fixture-churn",
+    "clone_id": "ava-01",
+    "step_id": "ava-01/s03",
+    "step_no": 3,
+    "firefly": "data_engineer",
+    "human_role": null
+   },
+   {
+    "seq": 23,
+    "ts": "2026-10-18T01:09:10.590Z",
+    "type": "clone.step.completed",
+    "mission_id": "fixture-churn",
+    "clone_id": "ava-01",
+    "step_id": "ava-01/s03",
+    "step_no": 3,
+    "firefly": "data_engineer",
+    "human_role": "Data engineer",
+    "output": "Applied 1 documented transformations; wrote transformed_dataset.parquet (600x7) + reproducible analysis.py / analysis.ipynb.",
+    "duration_ms": 3,
+    "manual_minutes": 146.0,
+    "compute_cost_usd": 2e-06,
+    "model_cost_usd": 0.0,
+    "metadata": {
+     "n_transformations": 1
+    },
+    "outcome": "ok"
+   },
+   {
+    "seq": 24,
+    "ts": "2026-10-18T01:09:10.590Z",
+    "type": "clone.step.started",
+    "mission_id": "fixture-churn",
+    "clone_id": "ava-01",
+    "step_id": "ava-01/s04",
+    "step_no": 4,
+    "firefly": "analysis_planner",
+    "human_role": null
+   },
+   {
+    "seq": 25,
+    "ts": "2026-10-18T01:09:10.590Z",
+    "type": "clone.step.completed",
+    "mission_id": "fixture-churn",
+    "clone_id": "ava-01",
+    "step_id": "ava-01/s04",
+    "step_no": 4,
+    "firefly": "analysis_planner",
+    "human_role": "Senior data scientist",
+    "output": "Planned task='exploratory_analysis' with 0 candidate(s); split='none'; 1 human approval gate(s).",
+    "duration_ms": 0,
+    "manual_minutes": 60.0,
+    "compute_cost_usd": 0.0,
+    "model_cost_usd": 0.0,
+    "metadata": {
+     "task": "exploratory_analysis",
+     "n_candidates": 0
+    },
+    "outcome": "ok"
+   },
+   {
+    "seq": 26,
+    "ts": "2026-10-18T01:09:10.590Z",
+    "type": "clone.step.started",
+    "mission_id": "fixture-churn",
+    "clone_id": "ava-01",
+    "step_id": "ava-01/s05",
+    "step_no": 5,
+    "firefly": "validator",
+    "human_role": null
+   },
+   {
+    "seq": 27,
+    "ts": "2026-10-18T01:09:10.590Z",
+    "type": "clone.step.completed",
+    "mission_id": "fixture-churn",
+    "clone_id": "ava-01",
+    "step_id": "ava-01/s05",
+    "step_no": 5,
+    "firefly": "validator",
+    "human_role": "Model-risk specialist",
+    "output": "Validation verdict='pass'; 1 checks; max safe deployment level 1.",
+    "duration_ms": 0,
+    "manual_minutes": 88.0,
+    "compute_cost_usd": 0.0,
+    "model_cost_usd": 0.0,
+    "metadata": {
+     "verdict": "pass",
+     "max_level": 1
+    },
+    "outcome": "ok"
+   },
+   {
+    "seq": 28,
+    "ts": "2026-10-18T01:09:10.590Z",
+    "type": "clone.step.started",
+    "mission_id": "fixture-churn",
+    "clone_id": "ava-01",
+    "step_id": "ava-01/s06",
+    "step_no": 6,
+    "firefly": "reporter",
+    "human_role": null
+   },
+   {
+    "seq": 29,
+    "ts": "2026-10-18T01:09:10.624Z",
+    "type": "clone.step.completed",
+    "mission_id": "fixture-churn",
+    "clone_id": "ava-01",
+    "step_id": "ava-01/s06",
+    "step_no": 6,
+    "firefly": "reporter",
+    "human_role": "Analyst / consultant",
+    "output": "Wrote executive & technical reports, assumptions, lineage, environment lock and README.",
+    "duration_ms": 33,
+    "manual_minutes": 120.0,
+    "compute_cost_usd": 2e-05,
+    "model_cost_usd": 0.0,
+    "metadata": {},
+    "outcome": "ok"
+   },
+   {
+    "seq": 30,
+    "ts": "2026-10-18T01:09:10.634Z",
+    "type": "clone.returned",
+    "mission_id": "fixture-churn",
+    "clone_id": "ava-01",
+    "status": "done",
+    "verdict": "pass",
+    "max_safe_deployment_level": 1,
+    "model": null,
+    "sampling": {
+     "sampled": false,
+     "reason": "600 rows fits the live full-analysis lane; the full dataset is used so no information is discarded.",
+     "n_input_rows": 600,
+     "n_working_rows": 600,
+     "strategy": "none",
+     "stratify_by": null
+    },
+    "duration_ms": 157,
+    "cost_usd": 8.8e-05,
+    "steps": 6
+   },
+   {
+    "seq": 31,
+    "ts": "2026-10-18T01:09:10.636Z",
+    "type": "swarm.merged",
+    "mission_id": "fixture-churn",
+    "rules": {
+     "profile": "exact sufficient statistics",
+     "verdict": "worst case",
+     "model": "best honest score"
+    },
+    "verdict": "pass",
+    "max_safe_deployment_level": 1,
+    "selected_model": null,
+    "contributions": [
+     {
+      "clone_id": "ava-00",
+      "rows": 600,
+      "verdict": "pass",
+      "selected": false,
+      "cost_usd": 5.9e-05
+     },
+     {
+      "clone_id": "ava-01",
+      "rows": 600,
+      "verdict": "pass",
+      "selected": false,
+      "cost_usd": 8.8e-05
+     }
+    ],
+    "n_rows": 1200,
+    "columns": [
+     "customer_id",
+     "tenure_months",
+     "monthly_charges",
+     "support_tickets",
+     "contract",
+     "region",
+     "churned"
+    ]
+   },
+   {
+    "seq": 32,
+    "ts": "2026-10-18T01:09:10.636Z",
+    "type": "swarm.finished",
+    "mission_id": "fixture-churn",
+    "status": "done",
+    "duration_ms": 212,
+    "economics": {
+     "mission_duration_seconds": 0.246,
+     "estimated_manual_effort_hours": 17.7,
+     "human_review_hours": 1.59,
+     "compute_cost_usd": 0.0,
+     "model_cost_usd": 0.0,
+     "mission_charge_usd": 0.0,
+     "total_mission_cost_usd": 0.0,
+     "human_review_cost_usd": 127.2,
+     "total_customer_cost_usd": 127.2,
+     "estimated_labor_value_usd": 1416.0,
+     "economic_multiplier": 11.1,
+     "loaded_hourly_rate_usd": 80.0,
+     "tier": "community"
+    }
+   }
+  ],
+  "persistence": "memory",
+  "persistence_note": "no Redis: this mission is lost when the server restarts"
+ },
+ "episodes": {
+  "mission_id": "fixture-churn",
+  "status": "done",
+  "episodes": [
+   {
+    "episode_id": "ava-00",
+    "mission_id": "fixture-churn",
+    "clone": {
+     "clone_id": "ava-00",
+     "name": "Ava-00",
+     "shard_id": 0
+    },
+    "context": {
+     "rows": 600,
+     "columns": [
+      "customer_id",
+      "tenure_months",
+      "monthly_charges",
+      "support_tickets",
+      "contract",
+      "region",
+      "churned"
+     ],
+     "goal": "what drives churn",
+     "kind": "analyze",
+     "target": null,
+     "metric": null
+    },
+    "steps": [
+     {
+      "t": 0,
+      "step_id": "ava-00/s01",
+      "action": {
+       "firefly": "data_scout",
+       "human_role": "Data analyst"
+      },
+      "observation": {
+       "output": "Profiled 7 columns x 600 rows; quality score 100/100 with 0 issues flagged.",
+       "metadata": {
+        "quality_score": 100,
+        "n_issues": 0
+       }
+      },
+      "cost": {
+       "duration_ms": 19,
+       "model_cost_usd": 0.0,
+       "compute_cost_usd": 1.1e-05,
+       "manual_minutes": 87.0
+      },
+      "outcome": "ok"
+     },
+     {
+      "t": 1,
+      "step_id": "ava-00/s02",
+      "action": {
+       "firefly": "sampling_specialist",
+       "human_role": "Data scientist"
+      },
+      "observation": {
+       "output": "Working sample: 600 rows (none). 600 rows fits the live full-analysis lane; the full dataset is used so no information is discarded.",
+       "metadata": {
+        "sampled": false,
+        "strategy": "none"
+       }
+      },
+      "cost": {
+       "duration_ms": 0,
+       "model_cost_usd": 0.0,
+       "compute_cost_usd": 0.0,
+       "manual_minutes": 30.0
+      },
+      "outcome": "ok"
+     },
+     {
+      "t": 2,
+      "step_id": "ava-00/s03",
+      "action": {
+       "firefly": "data_engineer",
+       "human_role": "Data engineer"
+      },
+      "observation": {
+       "output": "Applied 1 documented transformations; wrote transformed_dataset.parquet (600x7) + reproducible analysis.py / analysis.ipynb.",
+       "metadata": {
+        "n_transformations": 1
+       }
+      },
+      "cost": {
+       "duration_ms": 14,
+       "model_cost_usd": 0.0,
+       "compute_cost_usd": 8e-06,
+       "manual_minutes": 146.0
+      },
+      "outcome": "ok"
+     },
+     {
+      "t": 3,
+      "step_id": "ava-00/s04",
+      "action": {
+       "firefly": "analysis_planner",
+       "human_role": "Senior data scientist"
+      },
+      "observation": {
+       "output": "Planned task='exploratory_analysis' with 0 candidate(s); split='none'; 1 human approval gate(s).",
+       "metadata": {
+        "task": "exploratory_analysis",
+        "n_candidates": 0
+       }
+      },
+      "cost": {
+       "duration_ms": 1,
+       "model_cost_usd": 0.0,
+       "compute_cost_usd": 0.0,
+       "manual_minutes": 60.0
+      },
+      "outcome": "ok"
+     },
+     {
+      "t": 4,
+      "step_id": "ava-00/s05",
+      "action": {
+       "firefly": "validator",
+       "human_role": "Model-risk specialist"
+      },
+      "observation": {
+       "output": "Validation verdict='pass'; 1 checks; max safe deployment level 1.",
+       "metadata": {
+        "verdict": "pass",
+        "max_level": 1
+       }
+      },
+      "cost": {
+       "duration_ms": 0,
+       "model_cost_usd": 0.0,
+       "compute_cost_usd": 0.0,
+       "manual_minutes": 88.0
+      },
+      "outcome": "ok"
+     },
+     {
+      "t": 5,
+      "step_id": "ava-00/s06",
+      "action": {
+       "firefly": "reporter",
+       "human_role": "Analyst / consultant"
+      },
+      "observation": {
+       "output": "Wrote executive & technical reports, assumptions, lineage, environment lock and README.",
+       "metadata": {}
+      },
+      "cost": {
+       "duration_ms": 66,
+       "model_cost_usd": 0.0,
+       "compute_cost_usd": 4e-05,
+       "manual_minutes": 120.0
+      },
+      "outcome": "ok"
+     }
+    ],
+    "terminal": {
+     "status": "done",
+     "verdict": "pass",
+     "max_safe_deployment_level": 1,
+     "score": null,
+     "selected_by_merge": false,
+     "cost_usd": 5.9e-05
+    },
+    "reward": null
+   },
+   {
+    "episode_id": "ava-01",
+    "mission_id": "fixture-churn",
+    "clone": {
+     "clone_id": "ava-01",
+     "name": "Ava-01",
+     "shard_id": 1
+    },
+    "context": {
+     "rows": 600,
+     "columns": [
+      "customer_id",
+      "tenure_months",
+      "monthly_charges",
+      "support_tickets",
+      "contract",
+      "region",
+      "churned"
+     ],
+     "goal": "what drives churn",
+     "kind": "analyze",
+     "target": null,
+     "metric": null
+    },
+    "steps": [
+     {
+      "t": 0,
+      "step_id": "ava-01/s01",
+      "action": {
+       "firefly": "data_scout",
+       "human_role": "Data analyst"
+      },
+      "observation": {
+       "output": "Profiled 7 columns x 600 rows; quality score 100/100 with 0 issues flagged.",
+       "metadata": {
+        "quality_score": 100,
+        "n_issues": 0
+       }
+      },
+      "cost": {
+       "duration_ms": 109,
+       "model_cost_usd": 0.0,
+       "compute_cost_usd": 6.6e-05,
+       "manual_minutes": 87.0
+      },
+      "outcome": "ok"
+     },
+     {
+      "t": 1,
+      "step_id": "ava-01/s02",
+      "action": {
+       "firefly": "sampling_specialist",
+       "human_role": "Data scientist"
+      },
+      "observation": {
+       "output": "Working sample: 600 rows (none). 600 rows fits the live full-analysis lane; the full dataset is used so no information is discarded.",
+       "metadata": {
+        "sampled": false,
+        "strategy": "none"
+       }
+      },
+      "cost": {
+       "duration_ms": 0,
+       "model_cost_usd": 0.0,
+       "compute_cost_usd": 0.0,
+       "manual_minutes": 30.0
+      },
+      "outcome": "ok"
+     },
+     {
+      "t": 2,
+      "step_id": "ava-01/s03",
+      "action": {
+       "firefly": "data_engineer",
+       "human_role": "Data engineer"
+      },
+      "observation": {
+       "output": "Applied 1 documented transformations; wrote transformed_dataset.parquet (600x7) + reproducible analysis.py / analysis.ipynb.",
+       "metadata": {
+        "n_transformations": 1
+       }
+      },
+      "cost": {
+       "duration_ms": 3,
+       "model_cost_usd": 0.0,
+       "compute_cost_usd": 2e-06,
+       "manual_minutes": 146.0
+      },
+      "outcome": "ok"
+     },
+     {
+      "t": 3,
+      "step_id": "ava-01/s04",
+      "action": {
+       "firefly": "analysis_planner",
+       "human_role": "Senior data scientist"
+      },
+      "observation": {
+       "output": "Planned task='exploratory_analysis' with 0 candidate(s); split='none'; 1 human approval gate(s).",
+       "metadata": {
+        "task": "exploratory_analysis",
+        "n_candidates": 0
+       }
+      },
+      "cost": {
+       "duration_ms": 0,
+       "model_cost_usd": 0.0,
+       "compute_cost_usd": 0.0,
+       "manual_minutes": 60.0
+      },
+      "outcome": "ok"
+     },
+     {
+      "t": 4,
+      "step_id": "ava-01/s05",
+      "action": {
+       "firefly": "validator",
+       "human_role": "Model-risk specialist"
+      },
+      "observation": {
+       "output": "Validation verdict='pass'; 1 checks; max safe deployment level 1.",
+       "metadata": {
+        "verdict": "pass",
+        "max_level": 1
+       }
+      },
+      "cost": {
+       "duration_ms": 0,
+       "model_cost_usd": 0.0,
+       "compute_cost_usd": 0.0,
+       "manual_minutes": 88.0
+      },
+      "outcome": "ok"
+     },
+     {
+      "t": 5,
+      "step_id": "ava-01/s06",
+      "action": {
+       "firefly": "reporter",
+       "human_role": "Analyst / consultant"
+      },
+      "observation": {
+       "output": "Wrote executive & technical reports, assumptions, lineage, environment lock and README.",
+       "metadata": {}
+      },
+      "cost": {
+       "duration_ms": 33,
+       "model_cost_usd": 0.0,
+       "compute_cost_usd": 2e-05,
+       "manual_minutes": 120.0
+      },
+      "outcome": "ok"
+     }
+    ],
+    "terminal": {
+     "status": "done",
+     "verdict": "pass",
+     "max_safe_deployment_level": 1,
+     "score": null,
+     "selected_by_merge": false,
+     "cost_usd": 8.8e-05
+    },
+    "reward": null
+   }
+  ]
+ },
+ "start_response": {
+  "mission_id": "fixture-churn",
+  "status": "running",
+  "grant": {
+   "requested_clones": 3,
+   "clones": 2,
+   "requested_parallel": null,
+   "parallel": 2,
+   "limited": true,
+   "message": "Swarm limited to 2 clones on the free open-source edition: you asked for 3, so 2 will run.",
+   "limits": {
+    "edition": "oss",
+    "max_clones_per_mission": 2,
+    "max_parallel_clones": 2,
+    "execution": "local",
+    "cluster_fan_out": false,
+    "preview": true,
+    "label": "the free open-source edition",
+    "summary": "Swarm on the free open-source edition: up to 2 clones per mission, run locally."
+   }
+  },
+  "limits": {
+   "edition": "oss",
+   "max_clones_per_mission": 2,
+   "max_parallel_clones": 2,
+   "execution": "local",
+   "cluster_fan_out": false,
+   "preview": true,
+   "label": "the free open-source edition",
+   "summary": "Swarm on the free open-source edition: up to 2 clones per mission, run locally."
+  },
+  "source": {
+   "kind": "sample",
+   "sample": "churn"
+  },
+  "persistence": "memory"
+ }
+}

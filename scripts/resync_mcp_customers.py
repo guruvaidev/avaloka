@@ -36,6 +36,7 @@ _CONFIG_FIELDS = (
     "query_timeout",
     "created_at",
     "status",
+    "owner_user_id",
 )
 
 
@@ -44,9 +45,11 @@ def main() -> int:
         print(f"[resync] No customers file at '{CUSTOMERS_FILE}'. Nothing to do.")
         return 0
 
+    # The file is sealed (app/mcp_server/credentials.py): open it in process
+    # with DB_ENCRYPTION_KEY, which also signs each admin request below.
+    from app.mcp_server.credentials import credential_handle, load_registry, service_headers
+
     try:
-        # The registry's secrets are sealed under DB_ENCRYPTION_KEY; opened here.
-        from app.mcp_server.credentials import credential_handle, load_registry
         customers = load_registry(CUSTOMERS_FILE)
     except Exception as e:
         print(f"[resync] ERROR: could not read '{CUSTOMERS_FILE}': {type(e).__name__}")
@@ -84,7 +87,12 @@ def main() -> int:
             payload.setdefault("max_rows", 1000)
             payload.setdefault("query_timeout", 30)
             try:
-                resp = client.post(f"{MCP_SERVER_URL}/admin/customers", json=payload)
+                body = json.dumps(payload).encode("utf-8")
+                resp = client.post(
+                    f"{MCP_SERVER_URL}/admin/customers", content=body,
+                    headers={"Content-Type": "application/json",
+                             **service_headers("POST", "/admin/customers", body)},
+                )
                 if resp.status_code == 200:
                     print(f"  - {customer_id}: OK")
                     ok += 1

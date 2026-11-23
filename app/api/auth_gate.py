@@ -18,6 +18,14 @@ authenticated passes straight through, and FastAPI still answers a bad body 422.
 
 The handlers keep their own ``_resolve_user_id`` call; this is the outer gate,
 not a replacement for the per-route identity and ownership checks.
+
+Query parameters are validated the same way, so a GET with a required query
+field (``GET /catalog/resolve`` without ``ref``) answers an anonymous caller 422
+too. ``methods`` widens the gate to cover reads: the 1.7 API passes
+``GATED_METHODS`` and lists its public reads in ``exempt``. HEAD is gated with
+GET and matched against a GET exemption, so a HEAD of a public read is answered
+by routing exactly as before (FastAPI routes do not take HEAD: 405).
+OPTIONS is never gated: a CORS preflight carries no credentials.
 """
 
 from __future__ import annotations
@@ -30,15 +38,21 @@ from starlette.routing import compile_path
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+#: Every method a route can validate input on: the mutating ones plus reads.
+GATED_METHODS = MUTATING_METHODS | {"GET", "HEAD"}
 UNAUTH_DETAIL = "Missing or invalid auth token"
 
 
 class AuthBeforeBodyMiddleware:
-    """401 for an anonymous POST/PUT/PATCH/DELETE, before the body is touched.
+    """401 for an anonymous POST/PUT/PATCH/DELETE (or any of ``methods``), before
+    the body or query is touched.
 
     ``resolve_user_id`` must read only headers (it is given a ``Request`` with no
     receive channel). ``exempt`` is ``(METHOD, "/path/{template}")`` pairs that
     stay reachable without a token; keep it short and say why for each entry.
+    ``conditional_exempt`` pairs are reachable without a token only while
+    ``conditional_applies()`` is true; it is asked per request, so it reads the
+    deployment as it is now, not as it was at import.
     """
 
     def __init__(
@@ -47,18 +61,31 @@ class AuthBeforeBodyMiddleware:
         *,
         resolve_user_id: Callable[[Request], Optional[str]],
         exempt: Iterable[Tuple[str, str]] = (),
+        methods: Iterable[str] = MUTATING_METHODS,
+        conditional_exempt: Iterable[Tuple[str, str]] = (),
+        conditional_applies: Callable[[], bool] = lambda: False,
     ) -> None:
         self.app = app
         self._resolve_user_id = resolve_user_id
-        self._exempt: List[Tuple[str, Pattern[str]]] = [
-            (method.upper(), compile_path(path)[0]) for method, path in exempt
-        ]
+        self._methods = frozenset(m.upper() for m in methods) - {"OPTIONS"}
+        self._exempt = self._compile(exempt)
+        self._conditional = self._compile(conditional_exempt)
+        self._conditional_applies = conditional_applies
+
+    @staticmethod
+    def _compile(pairs: Iterable[Tuple[str, str]]) -> List[Tuple[str, Pattern[str]]]:
+        return [(method.upper(), compile_path(path)[0]) for method, path in pairs]
 
     def _is_exempt(self, method: str, path: str) -> bool:
-        return any(m == method and rx.match(path) for m, rx in self._exempt)
+        if method == "HEAD":
+            method = "GET"
+        if any(m == method and rx.match(path) for m, rx in self._exempt):
+            return True
+        return (any(m == method and rx.match(path) for m, rx in self._conditional)
+                and self._conditional_applies())
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http" or scope["method"] not in MUTATING_METHODS:
+        if scope["type"] != "http" or scope["method"] not in self._methods:
             await self.app(scope, receive, send)
             return
 

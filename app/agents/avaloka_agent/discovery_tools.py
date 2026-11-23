@@ -5,7 +5,9 @@ Reuses Avaloka's existing primitives so we don't add new heavy
 dependencies:
 - Schema/profile already produced by ``/api/upload`` and
   ``/api/register-existing-storage`` lives in the Redis session.
-- DB introspection is provided by ``app.mcp_server`` (already in the repo).
+- DB introspection goes through the connector contract: the MCP server's
+  ``/customers/{id}/planner-metadata`` route (``app.mcp_server.client``),
+  which carries tables and typed columns and no credential.
 
 Each function returns a JSON-serializable dict and never raises — on
 failure it returns ``{"error": "..."}``.
@@ -54,17 +56,19 @@ def discover_dataset(redis_context: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def discover_database(connection_id: Optional[str]) -> Dict[str, Any]:
-    """List tables in the connected database via the existing MCP server.
+def discover_database(connection_id: Optional[str], credential_handle: Any = None) -> Dict[str, Any]:
+    """List tables in the connected database through the connector contract.
 
-    Falls back gracefully when the MCP module is unavailable (some local
-    dev environments).
+    ``credential_handle`` is the DB session's sealed ``api_key_enc``; it is
+    opened here, in process, to authenticate as the customer. Without it the
+    route answers 401 and this reports that, rather than asking for a
+    credential the agent must never hold in the clear.
     """
     if not connection_id:
         return {"error": "missing connection_id", "source": "native"}
     try:
         # Lazy import: app.mcp_server may carry heavier transitive deps.
-        from app.mcp_server.client import list_tables as mcp_list_tables  # type: ignore
+        from app.mcp_server.client import api_key_from_handle, list_tables as mcp_list_tables
     except Exception as exc:
         logger.debug("avaloka_agent: MCP client unavailable: %s", exc)
         return {
@@ -72,10 +76,16 @@ def discover_database(connection_id: Optional[str]) -> Dict[str, Any]:
                      "connect endpoint to introspect tables.",
             "source": "native",
         }
+    api_key = api_key_from_handle(credential_handle)
+    if not api_key:
+        return {
+            "error": "no credential handle for this connection in the thread "
+                     "session; connect the database again to introspect tables.",
+            "source": "native",
+            "connection_id": connection_id,
+        }
     try:
-        tables = mcp_list_tables(connection_id)
-        if isinstance(tables, dict) and "tables" in tables:
-            tables = tables["tables"]
+        tables = mcp_list_tables(connection_id, api_key)
         return {
             "source": "native",
             "connection_id": connection_id,
@@ -99,6 +109,8 @@ def discover_object_store(uri: Optional[str], connection_id: Optional[str]) -> D
         "connection_id": connection_id,
         "objects": [],
     }
+    from app.core.thirdparty_optout import disable_thirdparty_telemetry
+    disable_thirdparty_telemetry()  # before daft: its import-time usage beacon
     try:
         import daft  # type: ignore
     except ImportError:
@@ -132,6 +144,6 @@ def discover(redis_context: Dict[str, Any], state: Dict[str, Any]) -> Dict[str, 
         return discover_object_store(cloud_uri, conn_id)
 
     if conn_id and not cloud_uri:
-        return discover_database(conn_id)
+        return discover_database(conn_id, redis_context.get("db_credential_handle"))
 
     return {"source": "native", "note": "no datasource bound to this thread"}

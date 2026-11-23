@@ -4,66 +4,242 @@ All notable changes to Avaloka are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.0.0] — first public release
-
-The first tagged release of this repository. It is built from the same source
-as the 1.6 development line and contains every change recorded below, under
-[Unreleased] and [1.6.0]; those headings keep the numbers they were written
-under. Builds of `main` published before this release carried no tag and
-reported their version as `1.6.0`.
-
-- **Security.** 1.0.0 includes the fix for the MCP server advisory in
-  [SECURITY.md](SECURITY.md): the onboarding and admin routes require the
-  customer's API key or the API's `MCP_SERVICE_TOKEN`. **Upgrading from a build
-  of `main` from before 2026-10-29:** set `MCP_SERVICE_TOKEN` to the same value
-  on the API and the MCP server, and rotate the database credentials stored in
-  the MCP server.
-- **Security: generated code no longer runs with the server's secrets.** The
-  model-written analysis script, the data-transfer sample preview and the
-  validator's trial run inherited the server's environment (provider keys,
-  database passwords, `DB_ENCRYPTION_KEY`, `MCP_SERVICE_TOKEN`, Supabase keys),
-  and the trial run executed inside the server process. All three now run in a
-  child process with an allowlisted environment and a private home directory;
-  the trial run also has a time limit (`AVALOKA_VALIDATION_TIMEOUT`) and, on
-  Linux, a memory limit (`AVALOKA_VALIDATION_MEMORY_MB`).
-- **Security: the `/execute` service is authenticated, cluster-internal and
-  sandboxed.** Earlier builds could deploy `app/infra/python_app` at run time
-  when a chat message mentioned deploying or a cloud: a service that ran
-  `exec()` on the request body with no authentication, behind a `LoadBalancer`
-  Service, with the namespace's default ServiceAccount token mounted. It is
-  removed. The replacement (`executeService` in the Helm chart, off by default)
-  requires `EXECUTE_SERVICE_TOKEN` on every request, is `ClusterIP` only with a
-  NetworkPolicy, has no ServiceAccount token, and runs each request in a
-  sandboxed child process. Provisioning now needs an explicit request and a
-  confirmation. See the advisory in [SECURITY.md](SECURITY.md): **if an
-  earlier build created the `infra-agent` Deployment, the `infra-agent-service`
-  Service or the `infra-agent-config` ConfigMap in your cluster, delete them**,
-  rotate what the namespace's default service account could reach, and review
-  the load balancer's logs.
-- **A connection saved under a different `DB_ENCRYPTION_KEY` is reported, not
-  lost.** After the key changed, such connections vanished from listings and
-  another user could register the same id over them. They are now listed to
-  their owner as needing re-registration, and nobody else can take their id.
-- **One version number.** `VERSION`, `pyproject.toml`, the Helm chart's
-  `version` and `appVersion`, `avaloka --version` and `GET /version` all read
-  1.0.0.
-- **Images.** The `v1.0.0` tag publishes the four images under
-  `ghcr.io/guruvaidev/` (`avaloka-api`, `avaloka-ui`, `avaloka-ray`,
-  `avaloka-functions`) tagged `1.0.0` and `1.0`
-  (`.github/workflows/images.yml`).
-- **What it does**, in the words of the [README](README.md): a team of
-  specialist agents that takes a dataset from raw rows to a served model and
-  checks its own work before it reports a result. Generated code is validated
-  before it runs, a trained model must beat a trivial baseline, and the numbers
-  in each answer are checked against the results that were computed. It runs
-  from a laptop CLI, fully offline, up to Ray/KubeRay on any Kubernetes
-  cluster through one Helm chart, with the model provider of your choice.
-- **Known issues** are listed under [Unreleased] below.
-
 ## [Unreleased]
 
-Made on the 1.6 line after 1.6.0. Everything listed here at the `v1.0.0` tag is in 1.0.0. Every entry below is a change
-that broke, or would have broken, a clean install or a first run.
+Changes land here first and move under a version heading when that version
+is cut.
+
+### Added
+- **Connector reads feed the catalog and the graph** (`app/connectors/registry.py`;
+  design part B §B.5, the catalog half of 15b). `record_read` turns a
+  connector's `ReadReceipt` into the owner's catalog registration (the
+  receipt's columns, row count -- a floor when the read was truncated -- and
+  source version, so a re-read of an unchanged source writes no version and
+  the analysis pins the version it read) and into a `LOADED_FROM` lineage edge
+  carrying the source-version and query digests, never the query text or a
+  credential. Connectors say where a dataset lives with `locator_for()`
+  (file name and format; backend, schema and table); `try_record_read` is the
+  never-raising shape for agent paths; `read_and_record` does both.
+- **Object stores on the connector contract** (`avaloka/connectors/objectstore.py`;
+  design part B, 15c). S3, GCS and Azure (and the local and in-memory
+  filesystems the tests use) are one `ObjectStoreConnector`: a bucket and an
+  optional prefix, read/schema/sample, no push-down, no data sockets beyond
+  the one host `endpoints()` names (a GCS service account's token exchange
+  also reaches Google's OAuth endpoint, and options that name no key leave the
+  backend's default credential lookup in charge). Options (keys, service account, SAS, endpoint)
+  arrive only as a sealed `Credentials` document; a signed URL or userinfo in
+  the store URL is refused as a credential. `source_version()` is the object's
+  ETag (size and mtime where there is none) and over a prefix the set of them.
+  The conformance suite now runs on an in-memory store, a local directory and
+  S3 against an in-process moto server, where the socket recorder sees a real
+  socket.
+- **Cloud keys are sealed, never plaintext** (D15.3). Migration
+  `20261116130000` drops the plaintext branch of `cloud_datasets`'
+  credentials CHECK (`NOT VALID`, so rows written earlier survive until
+  sealed), retires the anon-callable `encrypt_cloud_credentials` RPC, and the
+  backend seals: `POST /api/cloud-connections` is now the one place a key
+  enters the table (AES-GCM under `DB_ENCRYPTION_KEY`, in process), both UI
+  writers post there instead of inserting keys themselves, and rows written
+  before the migration are sealed at API start-up (`seal_plaintext_rows`,
+  also `python -m app.api.cloud_connections seal`). An opened row becomes one
+  `Credentials` document for the connector (`object_store_connector`).
+- **The connector contract, extended** (`avaloka/connectors`; design
+  `docs/design/1.7-DATA-PLATFORM.md` part B, 15a). Every connector declares
+  its `Capability` set (read, pushdown, write, schema, sample, stream) and a
+  method it did not declare refuses the call. `endpoints()` lists every
+  host:port it will open; `source_version()` is stable for an unchanged source
+  and moves when it changes; `read()` and `sample()` return bounded Arrow
+  results with a `ReadReceipt` (rows, bytes, `truncated`, what stopped it, the
+  sample method, a query digest and never the query text). A sample returns
+  min(n, rows): a Postgres `tablesample` that comes back short (block
+  sampling can miss every page of a small table) is re-drawn by `random`, and
+  the receipt names `random`. A push-down is
+  parsed with sqlglot in the connector's dialect and refused unless it is one
+  parameterised SELECT over one table made of the plan's node types
+  (`avaloka/connectors/sqlguard.py`). A local-file connector (CSV, Parquet)
+  joins the registry. The conformance suite
+  (`tests/avaloka/connector_conformance.py`) is parametrised from the
+  registry: sqlite and files natively, Postgres in the containers lane.
+  `read(query)` now returns a `ReadResult`; call `.to_pandas()` for the frame.
+- **The catalog on the command line, and `/datasets` over the catalog**
+  (16g). `avaloka catalog list|show|use|forget` works on a local SQLite
+  catalog under `~/.avaloka` (SQLAlchemy from the `sources` extra, imported
+  only when used) or, with `--server`/`--token` (env `AVALOKA_API_URL`,
+  `AVALOKA_API_TOKEN`), on a hosted catalog through `/catalog/datasets` over
+  plain urllib -- the CLI gains no dependency and still never imports the
+  application. `avaloka analyze` registers the file it reads (columns, a
+  content hash) and accepts `my.<name>`, `my.<name>@<version>` or
+  `analysis:<id>` in place of a path. `GET /datasets` now answers with the
+  session store's datasets plus the catalog's file and derived datasets the
+  sessions no longer hold; Redis-only datasets are kept. The catalog store
+  itself moved to `avaloka/catalog/store.py` (no `app` imports);
+  `app/catalog/store.py` wraps it with the lineage graph and keeps every name.
+- **The catalog in chat** (`app/catalog/chat.py`; design part C §C.6, 16f).
+  `find_datasets` searches the caller's own catalog (names, tags, terms, the
+  analyses that used a dataset) and answers with each dataset's `my.<name>`
+  handle and a code-written summary; `use_dataset` resolves `my.<name>`,
+  `my.<name>@<version>` or `analysis:<id>` to one (dataset, version) and binds
+  it to the turn exactly like a fresh upload (`active_dataset_id`,
+  `datasets_context`, `uploaded_csv_columns` from the catalog's schema, the
+  file from the session store), pinning the version a past analysis read when
+  asked for it. A dataset whose copy Avaloka no longer holds is named and not
+  bound. The planner advertises both tools, answers a bare "use my.<name>" or
+  "my datasets" without a model, and never lets generate_code answer either.
+- **The dataset catalog, personal** (`app/catalog`, `/catalog/datasets`;
+  design `docs/design/1.7-DATA-PLATFORM.md` part C). Every dataset an
+  analysis touches -- an upload, a table read through a connection, the
+  output an analysis produced -- is registered to its owner with its typed
+  columns, and a new version is written only when the schema fingerprint or
+  the source's own version marker changes. Each analysis pins the version it
+  used, so `my.<name>`, `my.<name>@3` and `analysis:<id>` resolve to one
+  `(dataset, version)` for the planner. `DELETE` removes versions, terms and
+  the lineage nodes, column digests and vault rows (`LineageStore.forget`),
+  leaves a nameless tombstone, lists derived datasets rather than deleting
+  them, and says which copies it did not reach. Locators carry names and ids
+  only; a key or value that looks like a credential is refused. Catalog
+  events carry kind, outcome and size buckets, never a name. Two capability
+  flags: `dataset_catalog` (open, every edition) and `shared_catalog`
+  (Enterprise; `POST .../share` answers 403 with the edition sentence
+  elsewhere). The hosted migration adds owner-only row-level security and a
+  trigger that refuses any visibility but `personal` outside Enterprise.
+- **The Analysis Recipe Library** (`avaloka/recipes`): `profile`, `describe`
+  and `trend` run as DuckDB SQL plus pandas statistics with no model in the
+  loop, and each emits a verified Outcome Report and a parameterised
+  notebook; golden and mutation tests under `tests/recipes` pin every figure.
+  DuckDB, scipy and statsmodels are the `avaloka[recipes]` extra.
+  - `compare_periods`, `segment`, `correlate`, `regress` and `anomalies`
+    join the library: two-window comparison with a bridge by dimension,
+    share and concentration by group, correlation with a within-group
+    (Simpson) check, OLS with HC3 errors and VIF, and robust-z anomalies on
+    the seasonal residual. Each ships goldens for its misleading-data cases
+    (incomplete latest period, high-cardinality dimension, Simpson's paradox,
+    leakage, collinearity, too many points flagged) and a mutation test.
+  - `cohort_retention` and `ab_test` complete the ten: the cohort × period
+    matrix with a size-weighted retention curve (an unfinished latest period
+    left out), and the two-proportion z / Welch t comparison of experiment
+    arms with intervals, power at the observed rows and the sample-ratio
+    check that refuses a mis-split experiment. `ab_test` is the one recipe
+    whose wording may say "effect", and only after that check passes; the
+    gate vocabulary gains `min_cohorts` and `power`.
+  - Every recipe's notebook now ends with an `evidence` cell that prints the
+    report's cited evidence leaves as JSON, and the parity test
+    (`tests/recipes/test_notebook_parity.py`) executes each reported golden's
+    notebook in a fresh kernel through `avaloka.recipes.notebook_exec` and
+    proves it reproduces the report's figures; nbclient, nbformat and
+    ipykernel are the `avaloka[recipes-test]` extra.
+  - **Outcome Report schema 1.1**: three optional fields a 1.0 reader
+    ignores — `data_checks[]` (the recipe's quality gates, each with its
+    verdict and its deciding number as a verified figure), `provenance.recipe`
+    and `provenance.engine` (duckdb, scipy, statsmodels, pandas versions). The
+    HTML and Markdown exports render them as an **Evidence** / "Source-data
+    checks" section and footer lines; a 1.0 document renders as before. Every
+    recipe report now carries them, and `build_report` raises on a headline,
+    bullet or method template over its slot's limit instead of cutting it.
+  - **Bounded execution** (`avaloka/recipes/budget.py`): every recipe run
+    has a `Budget` it cannot exceed — rows and bytes (the ONLINE lane's
+    100k rows / 50 MB; `AVALOKA_RECIPE_*` overrides), DuckDB `memory_limit`
+    and `threads`, and a wall clock. A larger source is analysed on a
+    deterministic reservoir sample and the report says so (`sampling`
+    caveat, `method.sample` with the real counts); past the sampled lane's
+    ceiling the run refuses `too_large` (new in `REASONS`); past its clock
+    it refuses `engine_timeout` — in plain words, never a traceback.
+    A sampled run is `qualified`, and the notebook it ships takes the same
+    sample (`SAMPLE_ROWS` / `SAMPLE_SEED` in its `parameters` cell, the
+    engine's own statement in its load cell), so it still reproduces the
+    report. `RunResult.budget_report` records what was spent; `load_and_run`
+    no longer reads the whole file into pandas. A `heavy` test proves a
+    5,000,000-row file ends `qualified sampling` within the budget.
+- **Intent parsing for Instant Analysis** (`avaloka.recipes.intent`): a
+  recognizer that checks a model's JSON against the closed recipe
+  vocabularies and never coerces, a deterministic heuristic parser with a
+  causal-question flag, and a generic binder that returns one Ask or a named
+  Refusal; `intent_model` retries a rejected reply once with the reason. 129
+  golden questions and the no-spend `instant_intent` benchmark track score it.
+- **The conversational probes now measure the product.** A new
+  `conversational_product` benchmark family drives the eleven probes through the
+  compiled agent graph and grades the reply a user would see. It replays a
+  committed recording (gpt-oss through OpenRouter, the router's defaults) by
+  default, so it needs no model and no network, and `--live` runs it on a real
+  model (local first, then Groq, never Anthropic). Where the application is not installed it reports SKIP. CI runs the
+  replay in the Python test step.
+- `/instant` ("Ask" in the rail): the Instant Analysis landing surface — drop a
+  CSV/XLSX/XLS or pick one of three sample datasets, see the upload's data
+  profile (rows, columns, per-column type / missing / distinct, quality
+  concerns from `GET /api/datasets/{id}/profile`), then ask one question. The
+  question submits to a typed placeholder in `ui/src/lib/api/instant.ts`
+  that answers "coming soon" until the recipe endpoint lands (PR-6).
+- `/instant/:runId`: the report page a question lands on. The run's verified
+  HTML export renders inside `<iframe sandbox="allow-scripts">` (one
+  renderer, sized by the export's own height message); an Evidence panel
+  lists each source-data check by label and status word with the report's
+  caveat sentence, and carries no number; a Limitations panel shows the
+  caveats, what did not verify and the method summary as the report wrote
+  them; downloads for the `.html` and `.ipynb` (and `.md` when present); a
+  question-back renders its options as chips that ask again; a refusal points
+  at Deep Investigation. Share is disabled until saved reports (PR-13) and the
+  paywall card reads its copy from one config object with no price (PR-8).
+### Changed
+
+- **The API authenticates a request before it validates it.** An anonymous
+  request used to be answered by body or query validation (422 naming the
+  missing fields) or by a router's own store and body checks (200, 400)
+  before the handler looked at the caller. A gate in front of routing
+  (`app/api/auth_gate.py`) now answers 401 first; a signed-in caller is
+  validated exactly as before. Public without a token: `/health`, `/version`,
+  `/api/capabilities`, `/analytics/config` and the local-auth sign-in routes.
+- **`AVALOKA_DEPLOYMENT` declares who operates an install**: `self_hosted`
+  (your own) or `avaloka_hosted` (the Avaloka-operated sites). It is read in
+  one place (`app/core/editions.py` `deployment_state()`) by billing and plan
+  caps, local auth, and the API docs gate. The Helm chart (`config.deployment`)
+  and the Avaloka services in `deploy/compose/docker-compose.scheduler.yml`
+  now default it to `self_hosted`; the quickstart already set it. **Upgrade
+  note:** an install that sets nothing is *undeclared*: every check keeps the
+  default it had before, and the server logs one warning at the first check.
+  On `avaloka_hosted`, `/openapi.json`, `/docs`, `/docs/oauth2-redirect`,
+  `/redoc` and `/debug/whoami` need a login; self-hosted and undeclared
+  installs keep them public. See docs/deployment.md.
+- **`conv_avaloka_behaviour_is_unmeasured` now passes only on a measurement**: a
+  record per probe, its own question sent, the graph walked to its end, a model
+  reached, no request without a recording. It used to pass once a factory with
+  the right name returned.
+
+### Fixed
+- **The conversational agent passes all eleven product probes on the recorded
+  model** (`openai/gpt-oss-120b` through OpenRouter; `tests/conversational/`,
+  replayed through the compiled graph). An ambiguous question about results in
+  hand is asked in code's words -- the planner's own measure check -- so no
+  candidate figure reaches the reply; the direct reply sees the last three
+  exchanges and keeps a verified figure when the user pushes another; a
+  correction to the method ("you excluded refunds") always re-plans, with the
+  original approach, the corrected one, the reason and the alternative written
+  from code-read facts (a model's phrasing is used only when it keeps to them);
+  new work asked with no dataset connected is stopped before the planner and
+  the reply says what data is needed, that a prior artifact it refers to ("the
+  cleaned dataset") does not exist yet, and the product's own time estimate;
+  a delegated turn's hand-off line reaches the chat; a wrong premise is called
+  wrong before the figures. Scorers: a digit inside a word is not a sense of
+  scale, a non-breaking-hyphen "re-run" is a re-plan, saying a segment is absent
+  is a refusal to invent, and the turn's every assistant message is graded.
+  `known_defects.py` lists no `conv_product_*` entry any more.
+
+## [2.0.0] — 2026-10-17
+
+The 1.7 development line, released publicly as **2.0**. The public repository
+and the internal branch now carry the same number: `VERSION`,
+`pyproject.toml`, the Helm chart, `avaloka --version` and `GET /version` all
+say `2.0.0`, and the OSS edition no longer reports a separate 1.0.x line.
+What 2.0 adds over 1.6 — the public swarm with per-clone telemetry, the agent
+trace API and UI, the planner graph drawn from data operations, the DAB agents
+and the benchmark harness — is itemised in
+[docs/releases/2.0.md](docs/releases/2.0.md).
+
+Image builds from this line publish `2.0.0` and `2.0` tags alongside the
+branch, `sha-*` and content tags; the version comes from `VERSION`, so the 1.6
+line keeps producing 1.6 tags.
+
+The entries below are the `develop-1.6` fixes since 1.6.0 that 2.0 carries.
+Every one is a change that broke, or would have broken, a clean install or a
+first run.
 
 ### Security
 
@@ -112,6 +288,42 @@ that broke, or would have broken, a clean install or a first run.
   unchanged: premium features are allowed, and an undeclared install logs one
   warning. See [Deployment type](docs/deployment.md#deployment-type)
   (`app/core/plan_gate.py`, `app/api/server.py`, `app/agents/planner.py`).
+
+- **The LangGraph server has its own image, `avaloka-langgraph`.** It is the API
+  image's build plus `langgraph-cli[inmem]` (`requirements-langgraph-server.txt`);
+  the API image no longer carries the CLI, whose langgraph-api 0.5.x capped
+  cryptography below 45 and held the API at 44.0.3 with four high advisories.
+  The API now resolves cryptography 50. The chart's langgraph pod derives the
+  image from `image.repository` (`avaloka-api` -> `avaloka-langgraph`, same
+  tag); **if you push images to your own registry, push `avaloka-langgraph`
+  too**, or set `langgraph.image.repository`. Running `langgraph dev` locally
+  now needs `pip install -r requirements-langgraph-server.txt`.
+- **Ray 2.56.0 and pyarrow 23.0.1, everywhere Ray is pinned.** The app client
+  (`ray[air,serve]==2.56.0`), the cluster image (`rayproject/ray:2.56.0-py311`),
+  the RayCluster/RayService/RayJob `rayVersion` fields, the MTA training and
+  inference images, the DTA runtime and the per-user clusters' default image
+  all name the same release; `tests/test_ray_version_alignment.py` walks the
+  tree so none can drift again. Ray Train stays on V1 (`RAY_TRAIN_V2_ENABLED=0`
+  in the images that run `ray_job.py`). `getdaft`, a shim for the `daft` the
+  app already pins, is no longer listed; `python-jose` leaves the MCP
+  requirements. mlflow 3.17.2, fsspec/s3fs/gcsfs 2026.6.0, urllib3 2.8.0,
+  dulwich 1.2.9, pytest 9.1.1; the UI moves to zod 4 and its lockfile carries
+  no known critical or high advisory.
+- **MLflow and Ray require authentication and are cluster-internal.** The
+  chart runs the tracking server as `mlflow server --app-name basic-auth`
+  (`mlflow.auth`, on by default; the API image installs `mlflow[auth]`), with
+  the admin credentials generated into the release Secret and handed to every
+  client by `envFrom`/`secretKeyRef`; its NetworkPolicy admits only the api,
+  langgraph, celery, celery-redbeat and Ray pods. Ray runs with
+  `RAY_AUTH_MODE=token` (`ray.auth`, on by default): one generated token in the
+  release Secret and in `<release>-ray-auth`, read by every Ray container, the
+  autoscalers and the RayJobs' own Secrets; the app's dashboard calls send it
+  (`app/infra/ray_auth.py`). **KubeRay operator 1.6.2 is required** (the first
+  that reads the token from a named Secret); `install_kuberay_operator()`
+  applies the CRDs server-side before upgrading it. The kind-only dashboard
+  NodePort stays opt-in (`RAY_DASHBOARD_EXPOSE_NODEPORT=1`) and is
+  token-checked. See [Ray and MLflow authentication](docs/deployment.md).
+
 - **The Celery worker has its own Kubernetes service account identity.** The
   chart can annotate it for cloud workload identity
   (`celery.serviceAccount.annotations`), and its Role may create and watch
@@ -151,13 +363,13 @@ that broke, or would have broken, a clean install or a first run.
   PII, null policy, local inference): pandas 3 reads text as its own `str`
   dtype and much of the code asks `dtype == object`.
   `tests/test_pandas_ceiling.py` keeps the cap in every file.
-- **A null-like word in a spreadsheet stays a category in the CLI**.
+- **A null-like word in a spreadsheet stays a category in the CLI** (#479).
   The CLI's Excel reader read `None`, `NA`, `N/A` as missing in every column;
-  it now follows the CSV rule, and that rule also recognises
+  it now follows the CSV rule from #474, and that rule also recognises
   pandas 3's `str` dtype (`avaloka/io/loader.py`,
   `file_handler/null_policy.py`).
 - **The CLI no longer answers a measure it could not find with a row count**
-  "Total revenue by region" over `gross_revenue` and `net_revenue`
+  (#475). "Total revenue by region" over `gross_revenue` and `net_revenue`
   counted rows per region and reported `status="answered"`; it now reports
   `limited` and names the candidate columns. Count goals and goals that name
   the column are answered as before (`avaloka/goal_analysis.py`).

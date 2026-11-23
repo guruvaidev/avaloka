@@ -1,0 +1,51 @@
+region,units_sold,revenue_usd,reported_on,channel,note
+west,651,5255.45,2024-01-01,retail,customer asked for a quote on the extended warranty and bulk pricing
+north,255,6159.27,2024-01-02,online,delivered late because the carrier rerouted the shipment via the depot
+north,727,4499.97,2024-01-03,online,"repeat order from the spring campaign, same configuration as before"
+,569,4113.14,2024-01-04,online,returned one unit with a cracked housing; replacement sent same day
+south,433,4097.34,2024-01-05,online,customer asked for a quote on the extended warranty and bulk pricing
+south,667,4128.55,2024-01-06,online,delivered late because the carrier rerouted the shipment via the depot
+north,623,3712.01,2024-01-07,online,"repeat order from the spring campaign, same configuration as before"
+south,80,,2024-01-08,online,returned one unit with a cracked housing; replacement sent same day
+east,214,6163.94,2024-01-09,retail,customer asked for a quote on the extended warranty and bulk pricing
+south,600,4466.02,2024-01-10,online,delivered late because the carrier rerouted the shipment via the depot
+west,370,5231.4,2024-01-11,online,"repeat order from the spring campaign, same configuration as before"
+west,296,3904.8,2024-01-12,online,returned one unit with a cracked housing; replacement sent same day
+east,495,5152.69,2024-01-13,retail,customer asked for a quote on the extended warranty and bulk pricing
+west,153,3433.3,2024-01-14,retail,delivered late because the carrier rerouted the shipment via the depot
+east,884,4371.12,2024-01-15,online,"repeat order from the spring campaign, same configuration as before"
+north,499,7029.09,2024-01-16,online,returned one unit with a cracked housing; replacement sent same day
+west,16,4475.33,2024-01-17,online,customer asked for a quote on the extended warranty and bulk pricing
+,421,6007.98,2024-01-18,online,delivered late because the carrier rerouted the shipment via the depot
+north,672,5409.55,2024-01-19,online,"repeat order from the spring campaign, same configuration as before"
+south,523,4862.31,2024-01-20,retail,returned one unit with a cracked housing; replacement sent same day
+north,463,4413.1,2024-01-21,online,customer asked for a quote on the extended warranty and bulk pricing
+west,581,6158.22,2024-01-22,retail,delivered late because the carrier rerouted the shipment via the depot
+east,32,4840.35,2024-01-23,retail,"repeat order from the spring campaign, same configuration as before"
+west,453,6374.68,2024-01-24,retail,returned one unit with a cracked housing; replacement sent same day
+south,368,4352.83,2024-01-25,online,customer asked for a quote on the extended warranty and bulk pricing
+east,815,5051.61,2024-01-26,online,delivered late because the carrier rerouted the shipment via the depot
+east,529,5418.95,2024-01-27,online,"repeat order from the spring campaign, same configuration as before"
+west,168,5335.84,2024-01-28,retail,returned one unit with a cracked housing; replacement sent same day
+north,769,3889.58,2024-01-29,online,customer asked for a quote on the extended warranty and bulk pricing
+east,267,4402.34,2024-01-30,retail,delivered late because the carrier rerouted the shipment via the depot
+east,896,4823.62,2024-01-31,online,"repeat order from the spring campaign, same configuration as before"
+west,327,4231.67,2024-02-01,retail,returned one unit with a cracked housing; replacement sent same day
+east,764,5609.59,2024-02-02,online,customer asked for a quote on the extended warranty and bulk pricing
+south,699,5529.22,2024-02-03,retail,delivered late because the carrier rerouted the shipment via the depot
+south,652,3238.62,2024-02-04,retail,"repeat order from the spring campaign, same configuration as before"
+south,590,3375.27,2024-02-05,retail,returned one unit with a cracked housing; replacement sent same day
+north,29,3846.59,2024-02-06,online,customer asked for a quote on the extended warranty and bulk pricing
+south,193,5105.53,2024-02-07,online,delivered late because the carrier rerouted the shipment via the depot
+north,787,6829.86,2024-02-08,online,"repeat order from the spring campaign, same configuration as before"
+north,672,4655.88,2024-02-09,retail,returned one unit with a cracked housing; replacement sent same day
+west,421,5225.59,2024-02-10,online,customer asked for a quote on the extended warranty and bulk pricing
+east,696,4043.2,2024-02-11,retail,delivered late because the carrier rerouted the shipment via the depot
+,594,4057.85,2024-02-12,retail,"repeat order from the spring campaign, same configuration as before"
+south,695,3238.49,2024-02-13,online,returned one unit with a cracked housing; replacement sent same day
+south,484,4974.49,2024-02-14,retail,customer asked for a quote on the extended warranty and bulk pricing
+east,79,5852.5,2024-02-15,retail,delivered late because the carrier rerouted the shipment via the depot
+west,373,4678.96,2024-02-16,online,"repeat order from the spring campaign, same configuration as before"
+north,198,6256.81,2024-02-17,online,returned one unit with a cracked housing; replacement sent same day
+south,777,5178.07,2024-02-18,retail,customer asked for a quote on the extended warranty and bulk pricing
+south,806,4967.23,2024-02-19,retail,delivered late because the carrier rerouted the shipment via the depot

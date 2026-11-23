@@ -219,6 +219,14 @@ def _wire_hermetic_inference(
     monkeypatch.setattr(ism, "INFERENCE_BACKEND", "rayserve")
     monkeypatch.setenv("MLFLOW_TRACKING_URI", "http://mlflow:5000")
 
+    # These legs depend on a plan: where the inference route checks one, a Free
+    # caller is refused before the gateway, so they pin a paid plan over the
+    # harness's HERMETIC_PLAN (Free). A route that checks no plan is unaffected.
+    import app.api.server as server
+    from app.core.plan_limits import PLAN_PROFESSIONAL
+
+    monkeypatch.setattr(server, "resolve_plan", lambda user_id: PLAN_PROFESSIONAL, raising=False)
+
 
 # ---------------------------------------------------------------------------
 # E7.03 -- serve honesty: a stub must never masquerade as a loaded model
@@ -313,7 +321,7 @@ def test_e7_03_api_rejects_an_unloaded_gateway_model(api, monkeypatch: pytest.Mo
 def test_e7_04_default_backend_is_modelserver(ism_fresh) -> None:
     """With INFERENCE_BACKEND unset the manager selects the model-server Deployment
     (app/serve/model_server.py): one Deployment serves every model and scales to zero.
-    Re-pinned for 1.6 from rayserve, which is now the opt-in INFERENCE_BACKEND=rayserve."""
+    Re-pinned for 1.7 from rayserve, which is now the opt-in INFERENCE_BACKEND=rayserve."""
     module = ism_fresh(None)
     assert module.INFERENCE_BACKEND == "modelserver"
 
@@ -586,7 +594,7 @@ def test_e7_06_pins_deleted_model_details_have_no_lifecycle_guard() -> None:
 def test_e7_07_pins_inference_serve_app_autoscales_to_zero() -> None:
     """The opt-in (INFERENCE_BACKEND=rayserve) Serve app uses Serve-native autoscaling:
     min 0 so an idle app holds no replica, and the 7200 s downscale delay is the same
-    two-hour idle rule the model-server reaper applies. Re-pinned for 1.6 from
+    two-hour idle rule the model-server reaper applies. Re-pinned for 1.7 from
     num_replicas: 1 with no autoscaling_config."""
     rayservice = _load_chart(RAYSERVICE_CHART)[0]
     assert rayservice["kind"] == "RayService"
@@ -610,7 +618,7 @@ def test_e7_07_pins_inference_serve_app_autoscales_to_zero() -> None:
 
 def test_e7_07_pins_inference_rayservice_scales_its_workers_from_zero() -> None:
     """The opt-in RayService runs the Ray autoscaler so worker pods follow the Serve
-    replicas: serve-workers start at 0, floor 0, cap 3. Re-pinned for 1.6 from a
+    replicas: serve-workers start at 0, floor 0, cap 3. Re-pinned for 1.7 from a
     fixed (1, 1, 3) group with no enableInTreeAutoscaling."""
     rayservice = _load_chart(RAYSERVICE_CHART)[0]
     cluster = rayservice["spec"]["rayClusterConfig"]
@@ -624,11 +632,14 @@ def test_e7_07_pins_inference_rayservice_scales_its_workers_from_zero() -> None:
 
 def test_e7_07_rayservice_receives_mlflow_and_object_store_environment() -> None:
     """The API and Ray pods must resolve the same runs:/ URI and S3 artifacts: both get
-    avaloka-config (MLflow and object-store settings) whole, and from avaloka-secrets
-    exactly the two object-store keys -- never the whole secret.
+    avaloka-config (MLflow and object-store settings) whole, and from the Secrets only
+    named keys -- never the whole secret: the two object-store keys and the MLflow
+    basic-auth pair from avaloka-secrets, and the Ray token from avaloka-ray-auth
+    (its own Secret, so the Ray pods, which run model-written code, see one key).
 
     Re-pinned for 1.6: this required envFrom avaloka-secrets until 30550b77
-    (hotfix/1.6-ray-job-secret) narrowed the Serve pods to named keys."""
+    (hotfix/1.6-ray-job-secret) narrowed the Serve pods to named keys; the MLflow
+    pair and the Ray token joined them with mlflow.auth / ray.auth."""
     rayservice = _load_chart(RAYSERVICE_CHART)[0]
     cluster = rayservice["spec"]["rayClusterConfig"]
     head = cluster["headGroupSpec"]["template"]["spec"]["containers"][0]
@@ -643,9 +654,16 @@ def test_e7_07_rayservice_receives_mlflow_and_object_store_environment() -> None
             for item in container.get("env", [])
             if "secretKeyRef" in item.get("valueFrom", {})
         }
-        assert sorted(from_secret) == ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"], from_secret
+        assert sorted(from_secret) == [
+            "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY",
+            "MLFLOW_TRACKING_PASSWORD", "MLFLOW_TRACKING_USERNAME", "RAY_AUTH_TOKEN",
+        ], from_secret
         for name, ref in from_secret.items():
-            assert (ref["name"], ref["key"]) == ("avaloka-secrets", name), ref
+            if name == "RAY_AUTH_TOKEN":
+                assert (ref["name"], ref["key"]) == ("avaloka-ray-auth", "auth_token"), ref
+                assert not ref.get("optional"), "no token, no start: the Ray token is never optional"
+            else:
+                assert (ref["name"], ref["key"]) == ("avaloka-secrets", name), ref
 
     timeout = {item["name"]: item["value"] for item in head["env"] if "value" in item}
     assert timeout["RAY_DASHBOARD_SUBPROCESS_MODULE_WAIT_READY_TIMEOUT"] == "180"

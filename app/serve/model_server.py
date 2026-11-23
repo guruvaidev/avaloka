@@ -181,6 +181,25 @@ def load_model(run_id: str, model_uri: str, tracking_uri: Optional[str] = None) 
     return CacheEntry(model=model, bytes=int(size * 1.2) + 1, flavor="onnx", model_uri=model_uri)
 
 
+def _signature_input_dtype(pyfunc: Any, default: str = "float32") -> str:
+    """The dtype the model's tensor signature declares for its input.
+
+    MLflow enforces a tensor signature's dtype exactly: the torch MLP is logged
+    as float32, a scikit-learn family as float64 (what it was fitted on), and a
+    request cast to the other one is refused. A model with no tensor signature
+    is not enforced, so it keeps the float32 this server always sent.
+    """
+    try:
+        schema = pyfunc.metadata.get_input_schema()
+        if schema is not None and schema.is_tensor_spec():
+            dtype = schema.numpy_types()[0]
+            if dtype is not None:
+                return str(dtype)
+    except Exception:  # noqa: BLE001 - an unreadable signature is no signature
+        logger.warning("[model_server] could not read the input signature", exc_info=True)
+    return default
+
+
 class _PyfuncModel:
     """Adapter giving an mlflow.pyfunc model the ``_Model.predict`` shape."""
 
@@ -190,12 +209,13 @@ class _PyfuncModel:
     def __init__(self, pyfunc: Any, model_uri: str) -> None:
         self._pyfunc = pyfunc
         self.model_uri = model_uri
+        self.input_dtype = _signature_input_dtype(pyfunc)
 
     def predict(self, features: Any) -> Dict[str, Any]:
         import numpy as np
 
         vec = _to_vector(features)
-        out = self._pyfunc.predict(np.asarray([vec], dtype="float32"))
+        out = self._pyfunc.predict(np.asarray([vec], dtype=self.input_dtype))
         arr = np.asarray(out)
         scores = arr.tolist()
         prediction = arr.reshape(-1)[0].item() if arr.size else None

@@ -294,3 +294,27 @@ def test_the_planner_logs_no_typed_password(monkeypatch, caplog):
     P.plan_etl_job(state)
     assert "rejected non-analysis prompt" in caplog.text, "the planner did not take the logged path"
     assert PW_BARE not in caplog.text, "the planner log carries the typed password"
+
+
+def test_a_stored_agent_trace_keeps_no_typed_password(monkeypatch):
+    """The per-turn trace kept in Redis: the question redacted, tokens gone, code as generated."""
+    from app.services import session_service
+    from app.trace import store
+    try:
+        from tests.server_harness import FakeCache
+    except ImportError:  # pragma: no cover
+        from server_harness import FakeCache
+
+    cache = FakeCache()
+    monkeypatch.setattr(session_service, "cache", cache, raising=False)
+    sealed, _ = typed_secrets.seal_typed_secrets(TYPED[2][1])
+    code = "conn = connect(password=os.environ['WAREHOUSE_PW'])"
+    turn = {"turn_id": "turn-1", "question": TYPED[0][1],
+            "steps": [{"inputs": {"question": sealed, "prompt": TYPED[3][1]}, "code": code}]}
+    _complete(store.append_turn("thread-trace", USER, turn))
+    stored = _redis_text(cache)
+    probes = [p for _, _, ps in TYPED for p in ps]
+    assert "thread:thread-trace:trace" in stored, "the trace was not stored"
+    assert not _places_with(probes, {"the stored trace": stored}), "the stored trace keeps a typed password"
+    assert TOKEN not in stored, "the stored trace keeps a sealed credential"
+    assert code in stored, "generated code in the trace was changed"

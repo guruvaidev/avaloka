@@ -57,6 +57,12 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: ["uvicorn", "app.mcp_server.multi_tenant_mcp_server:app"]
           args: ["--host", "0.0.0.0", "--port", "{{ .Values.mcp.port }}"]
+          # The registry seals every customer's connection string and api_key
+          # under DB_ENCRYPTION_KEY, the key the API's secret already carries;
+          # without it the server refuses to register (it never writes plaintext).
+          envFrom:
+            - secretRef:
+                name: {{ include "avaloka.secretName" . }}
           env:
             # customer_dbs forwards a registration to the MCP server's
             # /admin/customers. Both live in THIS process, so point it at self —
@@ -67,21 +73,11 @@ spec:
             # registered customers and /call_tool 401s with "No customer found".
             - name: CUSTOMERS_FILE
               value: "{{ .Values.mcp.persistence.mountPath }}/customers.json"
-            # Same value the API gets through envFrom. Without it the MCP server
-            # releases no password and refuses /admin/customers.
-            - name: MCP_SERVICE_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "avaloka.secretName" . }}
-                  key: MCP_SERVICE_TOKEN
-                  optional: true
-            # Customer credentials are sealed at rest and in transit under this
-            # key; the server refuses to start without it (app/core/encryption_key.py).
-            - name: DB_ENCRYPTION_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "avaloka.secretName" . }}
-                  key: DB_ENCRYPTION_KEY
+            # This pod reads no ConfigMap: third-party beacons and the IMDS
+            # credential probe off here as well (app/core/thirdparty_optout.py).
+            {{- include "avaloka.thirdPartyOptoutEnv" . | nindent 12 }}
+            - name: AWS_EC2_METADATA_DISABLED
+              value: {{ ternary "false" "true" (.Values.config.instanceMetadataCredentials | default false) | quote }}
           ports:
             - name: http
               containerPort: {{ .Values.mcp.port }}

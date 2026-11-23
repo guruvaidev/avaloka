@@ -238,14 +238,55 @@ def _goal_echo(out: Path) -> str:
     return ""
 
 
-def _quoted_candidates(text: str) -> list[str]:
-    """Tokens the text presents as a quoted name, deduplicated in order."""
+#: A word that labels the quoted name after it as a worksheet.
+_SHEET_LABEL = re.compile(r"\bsheets?\b", re.IGNORECASE)
+#: The end of the previous sentence: a full stop, '!' or '?' followed by
+#: whitespace, or a line break. A decimal point ("1.5") is not one.
+_SENTENCE_END = re.compile(r"[.!?](?=\s)|\n")
+
+
+def _workbook_sheet_names(out: Path) -> frozenset[str]:
+    """The sheet names of the workbook the mission read, from the loader's own
+    record (``data_quality.json`` -> ``dataset.structure.sheets``): the analysed
+    sheet and the ones left unread. Empty for a source that is not a workbook."""
+    document = _read_json_or_none(out / "data_quality.json") or {}
+    sheets = ((document.get("dataset") or {}).get("structure") or {}).get("sheets") or {}
+    names = [sheets.get("analysed")] + [o.get("name") for o in sheets.get("others") or []
+                                        if isinstance(o, dict)]
+    return frozenset(str(n) for n in names if n is not None)
+
+
+def _sheet_labelled(text: str, start: int) -> bool:
+    """Whether the quote opening at ``start`` sits in a clause that calls what
+    it quotes a sheet ("Analysed sheet 'Usage' only", "of sheet 'Year 2009'",
+    "2 other sheets not analysed ('Cover' with 4 rows, 'Legend' ...)")."""
+    window = text[max(0, start - 200):start]
+    ends = list(_SENTENCE_END.finditer(window))
+    clause = window[ends[-1].end():] if ends else window
+    return bool(_SHEET_LABEL.search(clause))
+
+
+def _quoted_candidates(text: str, sheet_names: frozenset[str] = frozenset()) -> list[str]:
+    """Tokens the text presents as a quoted name, deduplicated in order.
+
+    A quoted name is not a column claim when it is one of the graded
+    workbook's own sheet names *and* its clause labels it as a sheet. The
+    reports write sheets that way on purpose (``goal_analysis`` "of sheet
+    '{sheet}'", Data Scout "Analysed sheet '{sheet}' only", ``cli`` "the
+    sampled live read of sheet '{sheet}'"): a multi-word sheet name needs its
+    quotes to read. Both conditions are required, so a sheet name used
+    unlabelled ("'Usage' is strongly associated with ...") is still graded,
+    and so is a labelled name the workbook does not have.
+    """
     seen: dict[str, None] = {}
     for pattern in _QUOTED_TOKEN_PATTERNS:
         for match in pattern.finditer(text):
             token = match.group(1).strip()
-            if token:
-                seen.setdefault(token, None)
+            if not token:
+                continue
+            if token in sheet_names and _sheet_labelled(text, match.start()):
+                continue
+            seen.setdefault(token, None)
     return list(seen)
 
 
@@ -522,10 +563,12 @@ def score_narration_columns(out: Path, exp: Expectations,
 
     columns = {str(c) for c in frame.columns}
     goal = _goal_echo(out)
+    sheet_names = _workbook_sheet_names(out)
     violations: list[str] = []
     n_quoted = 0
     for name, text in sources:
-        for token in _quoted_candidates(text.replace(goal, " ") if goal else text):
+        for token in _quoted_candidates(text.replace(goal, " ") if goal else text,
+                                        sheet_names):
             if not _is_column_reference(token):
                 continue
             n_quoted += 1
@@ -596,11 +639,12 @@ def score_narration_against_ground_truth(out: Path, exp: Expectations) -> list[C
             weight=2.0)]
 
     goal = _goal_echo(out)
+    sheet_names = _workbook_sheet_names(out)
     violations: list[str] = []
     checked = 0
     for name, text in sources:
         body = text.replace(goal, " ") if goal else text
-        for token in _quoted_candidates(body):
+        for token in _quoted_candidates(body, sheet_names):
             if not _is_column_reference(token):
                 continue
             checked += 1
@@ -706,6 +750,15 @@ def _answer_texts(out: Path) -> list[tuple[str, str]]:
     return [(name, text.replace(goal, " ")) for name, text in _narration_sources(out)]
 
 
+#: Key-path words that name a declared statistic (``planted_answer["statistic"]``).
+_STATISTIC_NAMES: dict[str, frozenset[str]] = {
+    "sum": frozenset({"sum", "total"}),
+    "mean": frozenset({"mean", "average", "avg"}),
+    "max": frozenset({"max", "maximum"}),
+    "min": frozenset({"min", "minimum"}),
+}
+
+
 def score_expected_answer(out: Path, exp: Expectations) -> list[CheckResult]:
     """A planted figure must be reproduced, and attached to what it measures.
 
@@ -760,12 +813,26 @@ def score_expected_answer(out: Path, exp: Expectations) -> list[CheckResult]:
 
     checks: list[CheckResult] = []
     hits = [row for row in leaves if abs(row[2] - want) <= tol]
+    # A declared statistic ("sum") must be the figure's own: a matching number
+    # under another statistic is a coincidence, not the answer. On a workbook
+    # whose totals row is read as data, that row's value *equals* the true sum
+    # and becomes the column's max -- so without this the profile's
+    # ``columns[...].max`` passed the check on exactly the misread it grades.
+    statistic = str(exp.expected_answer.get("statistic") or "").lower()
+    if statistic:
+        names = _STATISTIC_NAMES.get(statistic, frozenset({statistic}))
+        hits = [row for row in hits
+                if names & set(re.split(r"[^a-z0-9]+", row[1].lower()))]
     if hits:
-        detail = (f"value {want!r} (+/-{tol!r}) measured at "
+        detail = (f"value {want!r} (+/-{tol!r})"
+                  + (f" as the {statistic!r} statistic" if statistic else "")
+                  + " measured at "
                   f"{[f'{n}:{p}={v!r}' for n, p, v, _ in hits[:5]]}")
     else:
         nearest = min(leaves, key=lambda row: abs(row[2] - want), default=None)
-        detail = (f"no measured figure within +/-{tol!r} of {want!r}; nearest of "
+        detail = (f"no measured figure within +/-{tol!r} of {want!r}"
+                  + (f" under a {statistic!r} key path" if statistic else "")
+                  + "; nearest of "
                   f"{len(leaves)} figures was "
                   + (f"{nearest[0]}:{nearest[1]}={nearest[2]!r}" if nearest
                      else "nothing -- the artifacts hold no numbers"))

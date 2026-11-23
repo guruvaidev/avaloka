@@ -223,8 +223,8 @@ def test_provider_pinning_is_in_the_request_body(clean_env, transport):
     assert transport.bodies, "no request was sent"
     body = transport.bodies[0]
     assert body["model"] == "openai/gpt-oss-120b"
-    # sort "price": owner ruling 2026-11-02 (the cheapest listed provider first).
-    assert body["provider"] == {"sort": "price", "only": GPTOSS_ONLY, "allow_fallbacks": False,
+    # sort "throughput": owner ruling 2026-11-04 (the fastest listed provider first).
+    assert body["provider"] == {"sort": "throughput", "only": GPTOSS_ONLY, "allow_fallbacks": False,
                                 "data_collection": "deny", "zdr": True}
 
 
@@ -246,6 +246,18 @@ def test_pinning_is_configurable(clean_env, transport):
     clean_env.setenv("AVALOKA_OPENROUTER_ONLY", "none")
     _build().invoke("hi")
     assert "only" not in transport.bodies[-1]["provider"]
+
+
+def test_price_sorting_stays_available_by_setting(clean_env, transport):
+    """The default is throughput; the cheapest-first order is one setting away."""
+    clean_env.setenv("OPENROUTER_API_KEY", "k")
+    clean_env.setenv("AVALOKA_OPENROUTER_SORT", "price")
+    _build().invoke("hi")
+    provider = transport.bodies[0]["provider"]
+    assert provider["sort"] == "price"
+    # changing the sort never loosens the pinning
+    assert provider["only"] == GPTOSS_ONLY
+    assert (provider["allow_fallbacks"], provider["data_collection"], provider["zdr"]) == (False, "deny", True)
 
 
 # --------------------------------------------------------------------------- #
@@ -503,7 +515,73 @@ def _record(out):
     return meta.get("avaloka_answered_by")
 
 
+def test_the_trace_records_which_tier_answered_as_the_ui_fixture_shows(clean_env, transport):
+    """2.x shows the swap on the agent trace: the failed call with its reason, then
+    the tier that answered with ``answered_by`` (ui/tests/fixtures/model-swap.json)."""
+    from app.trace import recorder
+
+    clean_env.setenv("OPENROUTER_API_KEY", "k")
+    clean_env.setenv("INFERENCE_OPENROUTER_MODEL_LARGE", "openai/gpt-4o")
+    transport.status_for[f"{OR}|openai/gpt-4o"] = (
+        404, "No allowed providers are available for the selected model.")
+    frame = getattr(recorder, "StepFrame", None)
+    assert frame is not None
+    calls = []
+
+    class _Frame:
+        def add_inference(self, record):
+            calls.append(record)
+
+    token = recorder._FRAME.set(_Frame())
+    try:
+        _record(_answer(_build()))
+    finally:
+        recorder._FRAME.reset(token)
+    expected = json.loads((UI_FIXTURES / "model-swap.json").read_text())["inference"]
+    keep = ("agent", "provider", "model", "outcome", "error_class", "status", "reason", "answered_by")
+    got = [{k: c.get(k) for k in keep if k in c} for c in calls]
+    want = [{k: c.get(k) for k in keep if k in c} for c in expected]
+    assert got[0] == want[0], got
+    assert got[-1] == want[-1], got
+
+
+def test_a_swap_becomes_one_plain_card_before_the_result():
+    from app.api import chat_voice
+
+    rec = json.loads((UI_FIXTURES / "model-swap.json").read_text())["inference"][1]
+    final = {"trace_turn_id": "t1", "agent_trace": [
+        {"turn_id": "t1", "node": "plan_etl", "inference": [rec]},
+        {"turn_id": "t0", "node": "plan_etl", "inference": [rec]},   # another turn: ignored
+    ]}
+    prompts = chat_voice.prompts_after_turn(final, question="what are the totals")
+    swap = [p for p in prompts if "did not answer" in p.get("message", "")]
+    assert len(swap) == 1, prompts
+    assert swap[0]["step"] == "verification"
+    assert swap[0]["message"] == ("openai/gpt-4o did not answer (no allowed zero-retention provider "
+                                  "serves openai/gpt-4o); openai/gpt-6-luna via openrouter answered instead.")
+    assert [seg["kind"] for seg in swap[0]["message_segments"]] == ["plain"]
+
+
+def test_no_swap_no_card():
+    from app.api import chat_voice
+
+    final = {"trace_turn_id": "t1", "agent_trace": [
+        {"turn_id": "t1", "node": "plan_etl",
+         "inference": [{"provider": "openrouter", "model": "openai/gpt-oss-120b", "outcome": "success"}]}]}
+    assert not [p for p in chat_voice.prompts_after_turn(final, question="hi")
+                if "did not answer" in p.get("message", "")]
+
+
+def test_each_fallback_tier_is_on_the_trace(clean_env):
+    clean_env.setenv("OPENROUTER_API_KEY", "k")
+    clean_env.setenv("GROQ_API_KEY", "g")
+    for tier in getattr(_build(), "fallbacks", []):
+        recorders = [h for h in (tier.inner.callbacks or []) if type(h).__name__ == "UsageRecorder"]
+        assert recorders and recorders[0].configured_model == "openai/gpt-oss-120b", tier.model
+
+
 def test_the_ui_fixture_for_a_zdr_swap_is_what_the_backend_records(clean_env, transport):
+    """1.6's record of the same swap (ui/tests/fixtures/answered-by.json)."""
     clean_env.setenv("OPENROUTER_API_KEY", "k")
     clean_env.setenv("INFERENCE_OPENROUTER_MODEL_LARGE", "openai/gpt-4o")
     transport.status_for[f"{OR}|openai/gpt-4o"] = (
@@ -525,6 +603,8 @@ def test_the_model_screen_fixture_is_what_the_backend_reports(clean_env):
     describe = getattr(inference, "describe_llm_setup", None)
     assert describe is not None, "no model screen data: app.core.inference.describe_llm_setup"
     assert describe() == json.loads((UI_FIXTURES / "llm-models.json").read_text())
+    server_src = (ROOT / "app/api/server.py").read_text()
+    assert '@app.get("/api/llm-models")' in server_src
 
 
 def test_the_record_is_carried_from_the_planner_to_the_chat_response():
@@ -538,7 +618,6 @@ def test_the_record_is_carried_from_the_planner_to_the_chat_response():
     assert 'state["answered_by"] = _answered_by(raw_response)' in planner_src
     server_src = (ROOT / "app/api/server.py").read_text()
     assert 'answered_by=final.get("answered_by")' in server_src
-    assert '@app.get("/api/llm-models")' in server_src
 
 
 # --------------------------------------------------------------------------- #

@@ -80,8 +80,9 @@ def test_histogram_bins_account_for_every_numeric_row():
     assert (meta["n"], meta["min"], meta["max"]) == (100, 0.0, 99.0)
     assert meta["median"] == 49.5
     assert "ranges from 0 to 99" in text
-    # None is missing; "n/a" is present but not a number, so it is not "missing".
-    assert "1 rows (1.0%) have no value" in text
+    # None is missing, and so is "n/a": a null-like word in a numeric column is a
+    # gap by the one null-word rule (file_handler/null_policy.py gap_cells).
+    assert "2 rows (2.0%) have no value" in text
 
 
 def test_histogram_of_a_constant_column_is_one_bar_not_a_division_by_zero():
@@ -166,7 +167,7 @@ def test_count_bar_orders_groups_and_reports_shares_of_the_present_rows():
         "total": 9.0,
     }
     assert "East (6 rows, 66.7%)" in text and "West (3 rows, 33.3%)" in text
-    assert "1 rows (10.0%) have no region and are left out of the chart" in text
+    assert "1 row (10.0%) has no region and is left out of the chart" in text
 
 
 def test_missing_labels_never_become_a_bar():
@@ -183,7 +184,8 @@ def test_sum_bar_adds_the_measure_per_group():
 def test_mean_bar_reports_highest_and_lowest_not_shares():
     points, _, text = va._ground_categories(_REGION_ROWS, "region", "sales", "mean", 15, False)
     assert points == [{"x": "West", "y": 40.0}, {"x": "East", "y": 10.0}]
-    assert "highest is West (40), lowest is East (10)" in text
+    # Averages over groups under 20 rows say how many rows they are over.
+    assert "highest is West (40, from 3 rows), lowest is East (10, from 6 rows)" in text
     assert "The top group is 4.0× the lowest." in text
     assert "%" not in text.split("Rows with no")[0]
 

@@ -97,6 +97,16 @@ def auth_headers(user_id: str, **kw: Any) -> Dict[str, str]:
     return {"Authorization": f"Bearer {mint_token(user_id, **kw)}"}
 
 
+# The identity every schema read uses. Nothing in the pack reads /openapi.json
+# without a token, so the sweep and the surface checks keep working wherever the
+# schema sits behind authentication.
+SCHEMA_READER = "e2-schema-reader"
+
+
+def schema_headers() -> Dict[str, str]:
+    return auth_headers(SCHEMA_READER)
+
+
 class ApiClient:
     """
     Thin uniform wrapper over TestClient / httpx so a test body reads the same
@@ -211,6 +221,9 @@ def _hermetic_transport(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     async def get_cloud_connection_fake(connection_id: str) -> Dict[str, Any]:
         return {}
 
+    def _resolve_plan_fake(user_id: Optional[str]) -> str:
+        return HERMETIC_PLAN
+
     def sample_data_from_source_fake(path, source_type, stratify_by=None, sample_size: float = 1.0):
         return {
             "schema": {"a": "int", "b": "int"},
@@ -220,12 +233,16 @@ def _hermetic_transport(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     MCP_CONNECTIONS.clear()
 
-    def _mcp_conn_select_fake(connection_id: str) -> Optional[Dict[str, Any]]:
-        # Stands in for the Supabase mcp_connections lookup. Without it every
-        # MCP route answered 500 "Connection lookup failed" (no Supabase env) and
-        # the ownership check behind it was never reached.
+    def _owned_row_fake(connection_id: str, user_id: str) -> Optional[Dict[str, Any]]:
+        # Stands in for the saved-connections lookup the MCP credential routes
+        # make on 1.7 (app.api.db_connections.owned_row: the caller's own row,
+        # else None, so another user's row and a missing one are the same 404).
+        # Without it every MCP route answered 500 "Connection lookup failed" (no
+        # store) and the ownership check behind it was never reached.
         row = MCP_CONNECTIONS.get(connection_id)
-        return dict(row) if row else None
+        return dict(row) if row and str(row.get("user_id")) == str(user_id) else None
+
+    monkeypatch.setattr(server._db_connections, "owned_row", _owned_row_fake)
 
     def _resolve_plan_fake(user_id: Optional[str]) -> str:
         return HERMETIC_PLAN
@@ -236,7 +253,6 @@ def _hermetic_transport(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         # and against the real one it deleted from the cache while the session
         # lived in the fake store -- a rolled-back upload looked half-kept.
         ("delete_session", si.delete_session_fake),
-        ("_mcp_conn_select", _mcp_conn_select_fake),
         ("resolve_plan", _resolve_plan_fake),
         # Would post upload profiles to a real Supabase project if real
         # credentials were loaded (e.g. a developer's .env); in CI none are set
@@ -261,6 +277,7 @@ def _hermetic_transport(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         ("GRAPH", si.FakeGraph()),
         ("GRAPH_READY", True),
         ("read_thread_msgs", si.read_thread_msgs_fake),
+        ("resolve_plan", _resolve_plan_fake),
     ]:
         monkeypatch.setattr(server, name, value, raising=False)
 
@@ -330,6 +347,19 @@ PATH_PARAM_SAMPLE = {
     "index": "0",
 }
 
+# Feature discovery answers an anonymous caller with the least-privileged plan's
+# limits by design (server._caller_edition). Kept apart from the set above so the
+# included-router inventory hunk stays identical to the trainfer branch's.
+PUBLIC_ROUTES |= {("GET", "/api/capabilities")}
+
+# On the hosted deployment /debug/whoami needs a login (server.AUTH_GATE_EXEMPT_UNLESS_HOSTED),
+# so it is swept like any other route. Declare the target with AVALOKA_DEPLOYMENT, as the
+# deployment itself does; hermetically that is this process's own value.
+from app.core.editions import normalize_deployment as _normalize_deployment  # noqa: E402
+
+if _normalize_deployment(os.getenv("AVALOKA_DEPLOYMENT")) == "avaloka_hosted":
+    PUBLIC_ROUTES -= {("GET", "/debug/whoami")}
+
 
 def _fill(path: str) -> str:
     out = path
@@ -350,7 +380,14 @@ def route_inventory() -> List[Tuple[str, str, str]]:
     if MODE == "deployed":
         import httpx
 
-        spec = httpx.get(f"{DEPLOYED_URL}/openapi.json", timeout=30).json()
+        resp = httpx.get(f"{DEPLOYED_URL}/openapi.json", headers=schema_headers(), timeout=30)
+        if resp.status_code != 200:
+            # An empty inventory would make the sweep pass vacuously; say why instead.
+            raise RuntimeError(
+                f"deployed /openapi.json answered {resp.status_code} to a signed request; "
+                "is SUPABASE_JWT_SECRET the cluster's secret?"
+            )
+        spec = resp.json()
         for path, ops in spec.get("paths", {}).items():
             methods = [m.upper() for m in ops if m.lower() in
                        {"get", "post", "put", "patch", "delete"}]

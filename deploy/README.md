@@ -138,7 +138,7 @@ applies the RayCluster, deploys avaloka, and deploys the Ray Serve app. When it
 finishes:
 
 - Avaloka UI: <http://localhost:8501>
-- Ray dashboard: <http://localhost:8265>
+- Ray dashboard: `kubectl port-forward svc/avaloka-raycluster-head-svc 8265:8265`, signed in with the token in the Secret `avaloka-ray-auth` (see docs/deployment.md, Ray and MLflow authentication)
 - Inference: `kubectl port-forward svc/avaloka-inference-serve-svc 8000:8000`
 
 Tear down with `make down PROVIDER=local`.
@@ -401,11 +401,11 @@ from `avaloka-secrets` (`secretKeyRef` on `deploy/helm/ray/raycluster.yaml` and
 `rayservice.yaml`): `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and, on the
 RayCluster head only, `AVALOKA_PII_KEY`. They run user code, so they never get
 the database, JWT, payment or model-provider keys. An analysis job's own
-connection keys, and a data transfer's database URLs and bucket keys, reach that
-job alone — a Secret owned by its RayJob in KubeRay mode (see
-`rbac.rayJobSecretsNamespace`, which also sets the transfers' `KUBE_NAMESPACE`),
-or the job's env in direct mode; neither the RayJob nor its ConfigMap holds one.
-The platform values the pods get:
+connection keys reach it per job — a Secret owned by its RayJob in KubeRay mode
+(see `rbac.rayJobSecretsNamespace`), or the job's env in direct mode. A data
+transfer's database URLs and bucket keys reach that job alone the same way, in
+the transfer namespace (`config.dtaJobNamespace`, the chart's `KUBE_NAMESPACE`);
+neither the RayJob nor its ConfigMap holds one. The platform values the pods get:
 
 | Variable | Value |
 |----------|-------|

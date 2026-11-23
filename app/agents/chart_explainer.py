@@ -18,6 +18,17 @@ MAX_VALUE_CHARS = 80          # long text categories (e.g. review bodies) get cl
 MAX_HISTORY_TURNS = 6
 
 FALLBACK_ANSWER = "Sorry, I couldn't work that out. Could you rephrase?"
+UNAVAILABLE_ANSWER = "Chart explanations are unavailable right now."
+
+
+def _answer(text: str, focus_ids: List[str], *, by_model: bool) -> Dict[str, Any]:
+    """The explain response: the model's answer as commentary (c-strict),
+    this module's own fallback lines plain. ``answer`` is the segments
+    rendered, so a reader without segments still shows the marking."""
+    from app.api import reply_segments as rs
+
+    segments = rs.commentary(text) if by_model else rs.plain(text)
+    return {"answer": rs.render(segments), "answer_segments": segments, "focus_chart_ids": focus_ids}
 
 
 def _clip(value: Any) -> Any:
@@ -58,7 +69,7 @@ def explain_charts(
     user_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     if viz_llm is None:
-        return {"answer": "Chart explanations are unavailable right now.", "focus_chart_ids": []}
+        return _answer(UNAVAILABLE_ANSWER, [], by_model=False)
 
     payload = {
         "dataset": dataset_name,
@@ -104,20 +115,22 @@ def explain_charts(
         start, end = text.find("{"), text.rfind("}")
         if start == -1 or end <= start:
             logger.warning("Chart explainer: no JSON object in reply; content=%r", text[:200])
-            return {"answer": FALLBACK_ANSWER, "focus_chart_ids": []}
+            return _answer(FALLBACK_ANSWER, [], by_model=False)
 
         data = json.loads(text[start:end + 1])
         if not isinstance(data, dict):
-            return {"answer": FALLBACK_ANSWER, "focus_chart_ids": []}
+            return _answer(FALLBACK_ANSWER, [], by_model=False)
 
-        answer = str(data.get("answer") or "").strip() or FALLBACK_ANSWER
+        answer = str(data.get("answer") or "").strip()
         raw_ids = data.get("focus_chart_ids")
         if not isinstance(raw_ids, list):
             raw_ids = []
         valid_ids = {str(c.get("id")) for c in charts if c.get("id") is not None}
         focus_ids = [str(i) for i in raw_ids if str(i) in valid_ids]
 
-        return {"answer": answer, "focus_chart_ids": focus_ids}
+        if not answer:
+            return _answer(FALLBACK_ANSWER, focus_ids, by_model=False)
+        return _answer(answer, focus_ids, by_model=True)
     except Exception as e:
         logger.warning("Chart explainer failed: %s", e)
-        return {"answer": FALLBACK_ANSWER, "focus_chart_ids": []}
+        return _answer(FALLBACK_ANSWER, [], by_model=False)

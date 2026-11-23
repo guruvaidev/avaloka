@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { getCachedAuthUser } from "@/lib/auth-user";
+import { connectionsApi } from "@/lib/api/connections";
 
 export type Provider =
   | "mysql"
@@ -169,18 +170,18 @@ export function useDataSources() {
           .select("*")
           .eq("user_id", uid)
           .order("created_at", { ascending: false }),
-        (supabase.from as any)("mcp_connections")
-          .select("id,connection_name,customer_name,database_type,host,port,database_name,status,created_at")
-          .eq("user_id", uid)
-          .order("created_at", { ascending: false }),
+        connectionsApi.list().then(
+          (rows) => ({ data: rows as McpConnectionRow[], error: null }),
+          (error) => ({ data: [] as McpConnectionRow[], error }),
+        ),
       ]);
       if (cloudRes.error) throw cloudRes.error;
       const cloud = ((cloudRes.data ?? []) as CloudDatasetRow[]).map(mapCloudDataset);
       if (dbRes.error) {
-        console.warn("[data-sources] mcp_connections fetch failed", dbRes.error);
+        console.warn("[data-sources] database connections fetch failed", dbRes.error);
         return cloud;
       }
-      const dbs = ((dbRes.data ?? []) as McpConnectionRow[]).map(mapMcpConnection);
+      const dbs = (dbRes.data ?? []).map(mapMcpConnection);
       return [...cloud, ...dbs].sort(
         (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
       );
@@ -267,11 +268,12 @@ export function useDataSourceMutations() {
       type?: ConnectionType;
     }) => {
       if (type === "database") {
-        const row: Record<string, unknown> = {};
-        if (patch.name) row.connection_name = patch.name;
-        if (patch.status) row.status = patch.status === "connected" ? "active" : "inactive";
-        const { error } = await (supabase.from as any)("mcp_connections").update(row).eq("id", id);
-        if (error) throw error;
+        await connectionsApi.update(id, {
+          ...(patch.name ? { connection_name: patch.name } : {}),
+          ...(patch.status
+            ? { status: patch.status === "connected" ? ("active" as const) : ("inactive" as const) }
+            : {}),
+        });
         return;
       }
       const row: Record<string, unknown> = {};
@@ -305,8 +307,7 @@ export function useDataSourceMutations() {
       const id = typeof input === "string" ? input : input.id;
       const type = typeof input === "string" ? "storage" : (input.type ?? "storage");
       if (type === "database") {
-        const { error } = await (supabase.from as any)("mcp_connections").delete().eq("id", id);
-        if (error) throw error;
+        await connectionsApi.remove(id);
         return;
       }
       const { error } = await supabase.from("cloud_datasets").delete().eq("id", id);

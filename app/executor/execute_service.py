@@ -16,9 +16,10 @@ changed is everything around them:
   compared in constant time. A missing or wrong token gets 401 before a byte
   of the body is read. The service refuses to start without a token.
 * **Process.** The code runs in a child (``_execute_runner.py``, ``python -I``)
-  with ``app.executor.env.scrubbed_env`` (#662's allowlist), a private
+  with ``app.executor.env.scrubbed_env`` (#575's allowlist), a private
   per-request workspace as ``cwd``/``HOME``/``TMPDIR`` that is deleted
-  afterwards, a time limit and an address-space limit, in its own session so a
+  afterwards, a time limit and an address-space limit (on top of the pod's
+  memory limit), in its own session so a
   timeout kills everything it started. This server marks itself non-dumpable
   on Linux, so the child (same uid, no capabilities) cannot read this
   process's ``/proc/<pid>/environ`` or memory.

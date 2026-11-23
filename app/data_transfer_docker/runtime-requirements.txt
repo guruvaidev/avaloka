@@ -6,9 +6,10 @@
 # local D2C overwrites. Pin the real `daft` package to the family the app env runs
 # (requirements.txt: daft>=0.7.1,<0.8; the GKE cluster images bake 0.7.14/0.7.19).
 daft[ray]>=0.7.6,<0.8
-# Match the app env (requirements.txt pins pyarrow==16.1.0). The ray 2.53 base no
-# longer has the pa.PyExtensionType removal problem that forced the old <16 pin.
-pyarrow==16.1.0
+# Match the app env (requirements.txt pins pyarrow==23.0.1, the first release past
+# GHSA-rgxp-2hwp-jwgg). The pa.PyExtensionType removal that forced the old <16 pin
+# is long gone from Ray.
+pyarrow==23.0.1
 
 # Data Handling & Transformation
 pandas
@@ -24,10 +25,7 @@ psycopg2-binary  # Postgres driver
 cryptography>=43.0.0   # required by pymysql auth plugins
 pyOpenSSL>=24.2.0
 sqlglot        # SQL parsing/translation
-connectorx     # daft.read_sql() backend for DB sources. Baking it into the image
-               # is what lets the GKE runner drop runtime_env.pip entirely (see
-               # DTA_RAY_USE_IMAGE_ENV in app/infra/ray_job_runner.py) so jobs
-               # start with no per-job pip install.
+connectorx     # daft.read_sql() backend for DB sources, baked into the image.
 
 # Docker SDK (used in docker_runner.py)
 docker

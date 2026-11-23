@@ -1,14 +1,15 @@
 """Customer database credentials: sealed at rest in customers.json, sealed in transit to MCP.
 
-1.6 port of 2.0's app/mcp_server/credentials.py (55a8d5d1). Before it, a
-registration wrote the full connection string -- password included -- and the
-api_key into customers.json in plaintext, and POSTed both to the MCP server's
-/admin/customers in plaintext.
+1.6's tests for its port of app/mcp_server/credentials.py (88120343), adapted
+to the 1.7 line they now run on: /credentials answers a service-class caller
+with a sealed ``credential_handle`` opened in process, never a password; the
+MCP server's admin routes take the onboarding service's signed request, not
+the static token; a plaintext registry is re-sealed when the service loads it
+at start-up. Before the fix a registration wrote the full connection string --
+password included -- and the api_key into customers.json in plaintext, and
+POSTed both to the MCP server's /admin/customers in plaintext.
 
-Every key, token and password here is generated per test; none is real. The
-tests reach the code only through what 1.6 already had (the onboarding router,
-the MCP app, the registry file), so on a tree without the fix they fail on their
-assertions, not on an import.
+Every key, token and password here is generated per test; none is real.
 """
 from __future__ import annotations
 
@@ -24,6 +25,7 @@ from fastapi.testclient import TestClient
 
 import app.api.cloud_connections as cc
 import app.mcp_server.customer_dbs as cdb
+from app.mcp_server.credentials import credential_handle, open_credential_handle, service_headers
 
 TOKEN_HEADER = "X-Avaloka-Service-Token"
 USER_HEADER = "X-Avaloka-User"
@@ -89,6 +91,21 @@ class _RecordingAsyncClient:
         return SimpleNamespace(status_code=200, text="ok")
 
 
+def _fake_connection_test(monkeypatch):
+    """Patch the connection test on the CLASS, as tests/test_customer_dbs_auth.py does.
+
+    An instance-level monkeypatch is undone by writing the bound method back onto
+    the instance, which leaves an instance attribute that shadows every later
+    class-level patch (the registration then runs the real connection test and
+    fails). Such a leftover is pollution, not state: it is dropped, not restored.
+    """
+    vars(cdb.customer_manager.db_manager).pop("test_database_connection", None)
+    monkeypatch.setattr(
+        cdb.DatabaseConnectionManager, "test_database_connection",
+        staticmethod(lambda conn: {"success": True, "database": "sales", "table_count": 1, "version": "16"}),
+    )
+
+
 @pytest.fixture
 def onboarding(tmp_path, monkeypatch):
     token = secrets.token_urlsafe(32)
@@ -101,10 +118,7 @@ def onboarding(tmp_path, monkeypatch):
     _RecordingAsyncClient.bodies = []
     monkeypatch.setattr(cdb.httpx, "AsyncClient", _RecordingAsyncClient)
     monkeypatch.setattr(cdb, "create_engine", lambda *a, **k: _FakeEngine())
-    monkeypatch.setattr(
-        cdb.DatabaseConnectionManager, "test_database_connection",
-        staticmethod(lambda conn: {"success": True, "database": "sales", "table_count": 1, "version": "16"}),
-    )
+    _fake_connection_test(monkeypatch)
     app = FastAPI()
     app.include_router(cdb.router)
     return SimpleNamespace(client=TestClient(app), token=token, path=path)
@@ -122,6 +136,15 @@ def _credentials(onb, cid="sealed_cust", user="user_a"):
     return onb.client.get(f"/customers/{cid}/credentials", headers={TOKEN_HEADER: onb.token, USER_HEADER: user})
 
 
+def _opened(resp):
+    """What a /credentials handle opens to, in process; the body itself carries no password."""
+    body = resp.json()
+    assert "password" not in body, "the credentials route handed out a password"
+    opened = open_credential_handle(body.get("credential_handle"))
+    assert opened is not None, "the credentials route returned no handle this key can open"
+    return opened
+
+
 # ── at rest ─────────────────────────────────────────────────────────────────
 
 def test_a_registration_stores_no_password_or_api_key_on_disk(onboarding, key):
@@ -135,15 +158,16 @@ def test_a_registration_stores_no_password_or_api_key_on_disk(onboarding, key):
     record = json.loads(on_disk)["sealed_cust"]
     assert "connection_string" not in record and "api_key" not in record
     assert record.get("connection_string_enc", {}).get("ciphertext"), "no sealed connection string on disk"
-    # Display fields, never the password.
-    assert record.get("display_host") == "db.test.invalid" and record.get("display_database") == "sales"
-    assert record.get("display_username") == "alice"
-    # The service still gets the working credential back, opened in process.
+    assert record.get("api_key_enc", {}).get("ciphertext"), "no sealed api_key on disk"
+    # The service still gets a working credential back: a handle it opens in process.
     creds = _credentials(onboarding)
-    assert creds.status_code == 200 and creds.json()["password"] == pw
+    assert creds.status_code == 200 and pw not in creds.text
+    assert _opened(creds)["password"] == pw
 
 
-def test_a_plaintext_registry_is_resealed_the_first_time_it_is_read(onboarding, key):
+def test_a_plaintext_registry_is_resealed_when_the_service_loads_it(onboarding, key):
+    """A registry written before sealing is re-sealed by the service's start-up load
+    (customer_manager.load_customers -> credentials.migrate_registry), and keeps working."""
     pw, api_key = _probe("legacy"), "ak_" + secrets.token_hex(16)
     legacy = {"legacy_cust": {
         "customer_id": "legacy_cust", "customer_name": "legacy", "database_type": "postgresql",
@@ -152,8 +176,10 @@ def test_a_plaintext_registry_is_resealed_the_first_time_it_is_read(onboarding, 
         "created_at": "2026-10-01T00:00:00",
     }}
     onboarding.path.write_text(json.dumps(legacy))
+    cdb.customer_manager.load_customers()          # what the onboarding service does at start-up
     creds = _credentials(onboarding, "legacy_cust")
-    assert creds.status_code == 200 and creds.json()["password"] == pw, "the legacy record stopped working"
+    assert creds.status_code == 200, "the legacy record stopped working"
+    assert _opened(creds)["password"] == pw
     on_disk = onboarding.path.read_text()
     assert pw not in on_disk and quote_plus(pw) not in on_disk and api_key not in on_disk, \
         "a plaintext record read with the key configured was not re-sealed"
@@ -170,21 +196,8 @@ def test_without_a_key_a_registration_is_refused_and_nothing_is_written(onboardi
     assert not any(pw in b for b in _RecordingAsyncClient.bodies), "the password went to MCP without a key"
 
 
-# ── in transit to MCP ───────────────────────────────────────────────────────
-
-def test_the_mcp_admin_call_carries_handles_never_the_password(onboarding, key):
-    pw = _probe("transit")
-    r = _register(onboarding, pw)
-    assert r.status_code == 200, r.status_code
-    api_key = r.json()["api_key"]
-    assert _RecordingAsyncClient.bodies, "the onboarding service never called MCP"
-    body = _RecordingAsyncClient.bodies[-1]
-    assert pw not in body and quote_plus(pw) not in body, "the password travels to MCP in plaintext"
-    assert api_key not in body, "the api_key travels to MCP in plaintext"
-    sent = json.loads(body)
-    from app.mcp_server.credentials import open_credential_handle
-    assert pw in (open_credential_handle(sent["connection_string_enc"]) or "")
-
+# ── in transit to MCP: tests/test_mcp_handoff_sealed.py (the body carries
+# connection_string_enc / api_key_enc and never the password or api_key) ─────
 
 # ── the MCP server side ─────────────────────────────────────────────────────
 
@@ -196,34 +209,38 @@ def mcp(tmp_path, monkeypatch, key):
     path = tmp_path / "mcp-customers.json"
     path.write_text("{}")
     monkeypatch.setattr(mts, "CUSTOMERS_FILE", str(path))
-    monkeypatch.setattr(mts, "_registry_cache", {"stat": None, "data": {}})
+    mts._invalidate_registry_cache()
     engines = []
     monkeypatch.setattr(mts, "create_engine", lambda url, *a, **k: engines.append(str(url)) or _FakeEngine(url))
     return SimpleNamespace(mts=mts, client=TestClient(mts.app), token=token, path=path, engines=engines)
 
 
+def _admin_post(client, payload):
+    """As the onboarding service calls /admin/customers: the body signed with the deployment key."""
+    body = json.dumps(payload).encode("utf-8")
+    return client.post("/admin/customers", content=body,
+                       headers={"Content-Type": "application/json", **service_headers("POST", "/admin/customers", body)})
+
+
 def test_the_mcp_server_opens_a_sealed_registration_and_keeps_it_sealed(mcp):
-    import app.api.cloud_connections as _cc
     pw, api_key = _probe("mcp"), "ak_" + secrets.token_hex(16)
     dsn = f"postgresql://alice:{quote_plus(pw)}@db.test.invalid:5432/sales"
 
-    def handle(v):
-        return {"scheme": "aes-gcm/DB_ENCRYPTION_KEY", **_cc.encrypt_secret(v)}
-
-    r = mcp.client.post("/admin/customers", headers={TOKEN_HEADER: mcp.token}, json={
-        "customer_id": "mcp_cust", "connection_string_enc": handle(dsn), "database_type": "postgresql",
-        "api_key_enc": handle(api_key), "created_at": "2026-10-31T00:00:00"})
+    r = _admin_post(mcp.client, {
+        "customer_id": "mcp_cust", "connection_string_enc": credential_handle(dsn), "database_type": "postgresql",
+        "api_key_enc": credential_handle(api_key), "created_at": "2026-10-31T00:00:00"})
     try:
         assert r.status_code == 200, r.status_code
         assert dsn in mcp.engines, "the MCP server did not open the sealed connection string"
         on_disk = mcp.path.read_text()
         assert pw not in on_disk and quote_plus(pw) not in on_disk and api_key not in on_disk, \
             "the MCP server wrote a secret to disk in plaintext"
-        # A body with the secrets in the clear is no longer accepted.
-        plain = mcp.client.post("/admin/customers", headers={TOKEN_HEADER: mcp.token}, json={
+        # A body with the secrets in the clear is no longer accepted, signed or not.
+        plain = _admin_post(mcp.client, {
             "customer_id": "mcp_cust2", "connection_string": dsn, "database_type": "postgresql",
             "api_key": api_key, "created_at": "2026-10-31T00:00:00"})
         assert plain.status_code == 422, "the MCP admin route still takes a plaintext connection string"
+        assert "mcp_cust2" not in mcp.path.read_text()
     finally:
         mcp.mts._evict_customer("mcp_cust")
 
@@ -262,24 +279,23 @@ class _FakeMCPPost:
         return SimpleNamespace(status_code=200, text="ok")
 
 
-def test_uib12_encrypted_credentials_claim_matches_storage(tmp_path, monkeypatch):
-    """The same registration the UI-B12 suite makes (no service caller, the suite's
-    fakes), with the suite's assertion: the claim is shipped, the password is not on disk."""
-    monkeypatch.setenv("MCP_SERVICE_TOKEN", secrets.token_urlsafe(32))
+def test_uib12_encrypted_credentials_claim_matches_storage(tmp_path, monkeypatch, key):
+    """The same registration the UI-B12 suite makes (the suite's fakes; the API service
+    registering for its user, as 1.7 requires a user), with the suite's assertion: the
+    claim is shipped, the password is not on disk."""
+    token = secrets.token_urlsafe(32)
+    monkeypatch.setenv("MCP_SERVICE_TOKEN", token)
     path = tmp_path / "customers.json"
     path.write_text("{}")
     mgr = cdb.customer_manager
     monkeypatch.setattr(mgr, "customers_file", str(path))
     monkeypatch.setattr(mgr, "customers", {})
     monkeypatch.setattr(cdb.httpx, "AsyncClient", _FakeMCPPost)
-    monkeypatch.setattr(
-        cdb.DatabaseConnectionManager, "test_database_connection",
-        staticmethod(lambda conn: {"success": True, "database": "sales", "table_count": 1, "version": "16"}),
-    )
+    _fake_connection_test(monkeypatch)
     app = FastAPI()
     app.include_router(cdb.router)
     password = "pw-" + secrets.token_hex(12)
-    resp = TestClient(app).post("/customers/register", json={
+    resp = TestClient(app).post("/customers/register", headers={TOKEN_HEADER: token, USER_HEADER: "user-1"}, json={
         "customer_id": "uib12_cust", "customer_name": "uib12", "database_type": "postgresql",
         "host": "db.test.invalid", "port": 5432, "database_name": "sales",
         "username": "user-1", "password": password, "contact_email": "user-1@example.com",

@@ -512,6 +512,13 @@ def on_training_finished(final_state: Dict[str, Any]) -> Dict[str, Any]:
     if registration is not None:
         final_state["ml_registration"] = registration
 
+    # 1b. cross-validation (1.7/1.8): k-fold on the training split, confusion matrix per fold
+    try:
+        final_state["ml_cross_validation"] = run_cross_validation(str(user_id), run_id, final_state)
+    except Exception as exc:  # noqa: BLE001 - CV never fails the training it describes
+        logger.error("[on_training_finished] cross-validation failed for %s: %s", run_id, exc, exc_info=True)
+        final_state["ml_cross_validation"] = {"status": "failed", "reason": _error_line(exc)}
+
     # 2. endpoint, ready-on-demand (no warm pod)
     try:
         job = enqueue_deploy_endpoint(str(user_id), run_id, session_id=session_id, warm=False, dispatch=False)
@@ -579,3 +586,80 @@ def run_scheduled_service_action(state: Dict[str, Any], schedule_data: Dict[str,
     state["stop_inference_service_scheduled"] = False
     state["task_schedule"] = None
     return state
+
+
+# --------------------------------------------------------------------------- #
+# Cross-validation (1.7/1.8)
+# --------------------------------------------------------------------------- #
+
+def run_cross_validation(user_id: str, run_id: str, final_state: Dict[str, Any], *, store: Any = None,
+                         cv_module: Any = None, mlflow_log: Any = None) -> Dict[str, Any]:
+    """k-fold the run's recipe on its training split, store the per-fold and summed
+    confusion matrices (regression: fold metrics, no matrix) in ml_cross_validation
+    and on the MLflow run. Returns the row's dict.
+
+    Runs where training ran: a local training is cross-validated in this worker; a
+    run trained on the shared Ray cluster is recorded as skipped (its dataset did not
+    fit the worker) -- the RayJob variant is the owed follow-up (TI-39).
+    """
+    from app.core.ml_store import MLCrossValidation
+    from app.agents.mta_v2 import cross_validation as default_cv
+
+    cv = cv_module or default_cv
+    store = store or get_ml_store()
+    plan = final_state.get("training_plan") or {}
+    result = final_state.get("training_result") or {}
+    row = MLCrossValidation(mlflow_run_id=run_id, user_id=str(user_id), status="running")
+    store.upsert_cross_validation(row)
+    backend = plan.get("execution_backend") or ("ray" if result.get("ray_job_name") or result.get("ray_job_id") else "local")
+    if not plan.get("data_config"):
+        row.status, row.reason = "skipped", "no training plan with a data_config was available to cross-validate"
+        store.upsert_cross_validation(row); return _cv_dict(row)
+    if backend == "ray":
+        row.status, row.reason = "skipped", "trained on the shared Ray cluster; cross-validation as a RayJob is a follow-up"
+        store.upsert_cross_validation(row); return _cv_dict(row)
+    k = int((plan.get("cross_validation") or {}).get("k") or result.get("cv_folds") or cv.DEFAULT_K)
+    report = cv.cross_validate_plan(plan, k=k)
+    row.status = report["status"]; row.k = report.get("k"); row.splitter = report.get("splitter"); row.reason = report.get("reason")
+    row.aggregate = report.get("aggregate"); row.folds = [{kk: v for kk, v in f.items() if kk != "val_index"} for f in (report.get("folds") or [])]
+    store.upsert_cross_validation(row)
+    if report["status"] == "succeeded":
+        _log_cv_to_mlflow(run_id, report, cv, mlflow_log)
+    try:
+        from app.core import ml_telemetry
+        ml_telemetry.emit("cross_validation.finished", run_id=run_id, status=report["status"], k=report.get("k"),
+                          n_rows=report.get("n_rows"), duration_s=report.get("duration_s"), task_type=report.get("task"))
+    except Exception:  # noqa: BLE001
+        pass
+    return _cv_dict(row)
+
+
+def _cv_dict(row: Any) -> Dict[str, Any]:
+    return {"status": row.status, "k": row.k, "splitter": row.splitter, "reason": row.reason,
+            "aggregate": row.aggregate, "folds": row.folds}
+
+
+def _log_cv_to_mlflow(run_id: str, report: Dict[str, Any], cv: Any, mlflow_log: Any = None) -> None:
+    """Per-fold + aggregate JSON artifacts and cv_* run metrics; best-effort."""
+    try:
+        import json
+        import tempfile
+        from pathlib import Path
+
+        if mlflow_log is not None:
+            mlflow_log(run_id, cv.fold_artifacts(report), cv.run_metrics(report)); return
+        import mlflow
+        from mlflow.tracking import MlflowClient
+        from app.agents.mta_v2.tracking import resolve_tracking_uri
+
+        mlflow.set_tracking_uri(resolve_tracking_uri(None))
+        client = MlflowClient()
+        for key, value in cv.run_metrics(report).items():
+            client.log_metric(run_id, key, value)
+        with tempfile.TemporaryDirectory() as tmp:
+            for path, payload in cv.fold_artifacts(report).items():
+                local = Path(tmp) / Path(path).name
+                local.write_text(json.dumps(payload, indent=2))
+                client.log_artifact(run_id, str(local), artifact_path=str(Path(path).parent))
+    except Exception:  # noqa: BLE001
+        logger.warning("[cross_validation] MLflow logging skipped for %s", run_id, exc_info=True)

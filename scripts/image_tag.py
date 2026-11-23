@@ -32,6 +32,8 @@ REPO = Path(__file__).resolve().parent.parent
 #: appear to need a full rebuild and the tag becomes useless.
 DEPENDENCY_INPUTS: dict[str, list[str]] = {
     "api": ["requirements.txt", "deploy/docker/Dockerfile.api"],
+    "langgraph": ["requirements.txt", "requirements-langgraph-server.txt",
+                  "deploy/docker/Dockerfile.api"],
     "ray": ["requirements.txt", "deploy/docker/Dockerfile.ray"],
     "ui": ["ui/package-lock.json", "ui/package.json", "ui/Dockerfile"],
     "functions": ["deploy/docker/Dockerfile.functions"],
@@ -40,6 +42,7 @@ DEPENDENCY_INPUTS: dict[str, list[str]] = {
 #: Added on top of the dependency inputs for a full source tag.
 SOURCE_INPUTS: dict[str, list[str]] = {
     "api": ["app", "avaloka", "file_handler"],
+    "langgraph": ["app", "avaloka", "file_handler", "langgraph.json"],
     "ray": ["app", "avaloka"],
     "ui": ["ui/src", "ui/public"],
     "functions": ["deploy/docker/functions-main"],

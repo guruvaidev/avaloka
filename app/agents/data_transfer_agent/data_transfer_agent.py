@@ -17,7 +17,10 @@ import urllib.parse
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-import daft
+from app.core.thirdparty_optout import disable_thirdparty_telemetry
+
+disable_thirdparty_telemetry()  # before daft: its import-time usage beacon
+import daft  # noqa: E402
 
 from app.agents.data_transfer_agent.dta_state import (
     DaftCodingAgentState as CodingAgentState,
@@ -459,6 +462,11 @@ def _dtype_category(dtype: str) -> str:
     d = str(dtype).strip().lower()
     if d in ("", "unknown"):
         return "unknown"
+    # "Decimal[precision: 38, scale: 10]" is a number, not a complex type: it
+    # has to be matched before the "[" check below, which used to send it to
+    # "other" and so to TEXT (a numeric source column created as text).
+    if d.startswith("decimal"):
+        return "numeric"
     # Complex types (List[...], Struct, Map, …) → "other"; checked first because
     # "int" would otherwise match inside "List[Int64]".
     if "[" in d or any(t in d for t in ("list", "struct", "map", "tensor", "embedding", "fixedsize")):
@@ -482,7 +490,11 @@ def _sql_type_for_daft_dtype(dtype: str, db_type: str) -> str:
     is_pg = db_type in ("postgresql", "postgres")
     cat = _dtype_category(dtype)
     if cat == "numeric":
-        if any(t in d for t in ("float", "double", "decimal", "real")):
+        if d.startswith("decimal"):
+            # Exact, and unbounded: the precision Daft reports for a sample is
+            # inferred from the sampled values, too narrow for the full table.
+            return "NUMERIC" if is_pg else "DECIMAL(65,30)"
+        if any(t in d for t in ("float", "double", "real")):
             return "DOUBLE PRECISION" if is_pg else "DOUBLE"
         return "BIGINT"
     if cat == "boolean":
@@ -506,24 +518,85 @@ def _quote_sql_ident(ident: str, db_type: str) -> str:
     return f'"{ident}"' if db_type in ("postgresql", "postgres") else f"`{ident}`"
 
 
-def _daft_schema_to_sql_ddl(table: str, schema: Dict[str, str], db_type: str) -> str:
-    """Build a CREATE TABLE from a transformed-output ``{column: daft_dtype}`` schema."""
+def _daft_schema_to_sql_ddl(table: str, schema: Dict[str, str], db_type: str,
+                            column_types: Optional[Dict[str, str]] = None) -> str:
+    """Build a CREATE TABLE from a transformed-output ``{column: daft_dtype}`` schema.
+
+    ``column_types`` (``{column: SQL type}``) overrides the Daft-derived type
+    for the columns it names: the source's own types, for columns that pass
+    through the transform unchanged in kind (see ``_passthrough_source_types``).
+    """
     if not schema:
         raise ValueError("cannot create a table from an empty schema")
+    column_types = column_types or {}
     cols = ", ".join(
-        f"{_quote_sql_ident(c, db_type)} {_sql_type_for_daft_dtype(t, db_type)}"
+        f"{_quote_sql_ident(c, db_type)} {column_types.get(c) or _sql_type_for_daft_dtype(t, db_type)}"
         for c, t in schema.items()
     )
-    return f"CREATE TABLE {_quote_sql_ident(table, db_type)} ({cols})"
+    table_sql = ".".join(_quote_sql_ident(p, db_type) for p in str(table).split(".", 1))
+    return f"CREATE TABLE {table_sql} ({cols})"
+
+
+def _passthrough_source_types(final_state: Dict[str, Any], gen_schema: Dict[str, str],
+                              dest_type: str) -> Dict[str, Any]:
+    """``{column: SQLAlchemy type}`` from the SOURCE table, for output columns it still describes.
+
+    The transformed schema comes from running the generated code on a sample
+    round-tripped through pandas and Parquet, and loses the source's types on
+    the way (a ``numeric`` column came back ``Decimal[precision: 12, scale: 10]``
+    and was created as ``text``). A column the transform kept, by name and kind,
+    gets the source column's own type. Only between two databases of the same
+    kind, and best-effort: anything unreadable falls back to the Daft mapping.
+    """
+    source_type = (final_state.get("source_type") or "").lower()
+    conn_str = final_state.get("source_connection_string") or ""
+    table = final_state.get("source_table") or ""
+    if source_type not in _DB_TYPES or source_type != (dest_type or "").lower() or not (conn_str and table):
+        return {}
+    try:
+        from sqlalchemy import create_engine, inspect
+        engine = create_engine(conn_str, connect_args=final_state.get("source_connect_args") or {})
+        try:
+            schema, _, name = str(table).rpartition(".")
+            reflected = {c["name"].lower(): c["type"]
+                         for c in inspect(engine).get_columns(name, schema=schema or None)}
+        finally:
+            engine.dispose()
+    except Exception as exc:
+        logger.warning("[%s] Could not read the source column types (%s); using the transformed schema's.",
+                       _ts(), type(exc).__name__)
+        return {}
+    source_kinds = {_norm_col(c): _dtype_category(t)
+                    for c, t in parse_schema(final_state.get("source_schema") or {}).items()}
+    out: Dict[str, Any] = {}
+    for col, gen_dtype in gen_schema.items():
+        src_type = reflected.get(str(col).lower())
+        if src_type is None:
+            continue
+        if source_kinds.get(_norm_col(col)) not in (None, _dtype_category(gen_dtype)):
+            continue  # the transform changed what this column holds
+        out[col] = src_type
+    return out
 
 
 def _create_destination_table(conn_str: str, table: str, schema: Dict[str, str],
-                              db_type: str, connect_args: Optional[dict] = None) -> str:
-    """Create the destination table from the transformed schema. Returns the executed DDL."""
+                              db_type: str, connect_args: Optional[dict] = None,
+                              source_types: Optional[Dict[str, Any]] = None) -> str:
+    """Create the destination table from the transformed schema. Returns the executed DDL.
+
+    ``source_types`` (``{column: SQLAlchemy type}``) are compiled for the
+    destination's dialect and used in place of the Daft-derived types.
+    """
     from sqlalchemy import create_engine
-    ddl = _daft_schema_to_sql_ddl(table, schema, db_type)
     engine = create_engine(conn_str, connect_args=connect_args or {})
     try:
+        column_types = {}
+        for col, typ in (source_types or {}).items():
+            try:
+                column_types[col] = typ.compile(dialect=engine.dialect)
+            except Exception:
+                continue
+        ddl = _daft_schema_to_sql_ddl(table, schema, db_type, column_types)
         with engine.begin() as conn:
             conn.exec_driver_sql(ddl)
     finally:
@@ -634,6 +707,14 @@ def reset_error_flags(coder_def: dict) -> None:
     logger.debug("[%s] Error flags reset.", _ts())
 
 
+def _plain_reason(detail, fallback: str = "the transformation code stopped with an error") -> str:
+    """One line a user may be shown about a failure: a code-written message as it
+    is, a raw exception line (``KeyError: 'col'``) replaced by *fallback*. The
+    full detail is logged where it is caught."""
+    from app.core.user_errors import plain_or
+    return plain_or(_brief_error(detail), fallback)
+
+
 def _brief_error(detail, limit: int = 220) -> str:
     """One customer-readable line from an arbitrary error/traceback.
 
@@ -687,6 +768,11 @@ def daft_code_generation_pipeline(state: ETLState) -> ETLState:
     """
     start = _ts()
     logger.info("[%s] >>>>>> Code generation pipeline START.", start)
+    # This pipeline IS the transfer path (the planner reaches it through
+    # _handle_initiate_transfer, which asks first). The shared static validator
+    # rejects database connections and writes everywhere else, so it is told
+    # explicitly that this code is the transfer's own.
+    state["coder_definition"]["dta_transfer_codegen"] = True
 
     # ── 1. Sanitise prompt ─────
     log_step("1 / Sanitise prompt")
@@ -1938,7 +2024,7 @@ def data_transfer_pipeline(
             logger.error("[%s] Code generation failed. Feedback: %s", _ts(), feedback)
             final_state["error_message"] = (
                 "The transformation could not be generated for this request.\n"
-                f"Reason: {_brief_error(feedback)}\n\n"
+                f"Reason: {_plain_reason(feedback)}\n\n"
                 "Please rephrase the request or try again — the technical details "
                 "have been recorded in the logs."
             )
@@ -1971,6 +2057,7 @@ def data_transfer_pipeline(
                         gen_schema,
                         dest_type,
                         connect_args=final_state.get("destination_connect_args") or {},
+                        source_types=_passthrough_source_types(final_state, gen_schema, dest_type),
                     )
                     final_state["destination_schema_compatible"] = True
                     final_state["created_destination_table"] = {
@@ -1989,7 +2076,7 @@ def data_transfer_pipeline(
                     final_state["error_message"] = (
                         f"Could not create the destination table `{dest_table_name}`.\n\n"
                         f"* **Generated Columns:** `{gen_cols}`\n\n"
-                        f"Reason: {_brief_error(exc)}"
+                        f"Reason: {_plain_reason(exc, 'the destination database refused the new table')}"
                     )
             elif dest_type in _DB_TYPES and dest_table_name:
                 logger.error(

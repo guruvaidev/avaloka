@@ -56,6 +56,9 @@ export interface Prediction { value: string | number | boolean | null; probabili
 /** 202 from the API: the deploy runs in the worker; poll the endpoint. ("running" is the pre-2026-11 shape.) */
 export interface ConfigureResponse { status: "deploying" | "running"; job_id?: string; endpoint?: EndpointState; inference_service_details?: Record<string, unknown> }
 export interface StopResponse { status: "stopping" | "stopped"; job_id?: string; endpoint?: EndpointState }
+export interface CvFold { fold: number; labels?: string[]; matrix?: number[][]; normalized?: number[][]; n?: number; accuracy?: number; f1_macro?: number; rmse?: number; mae?: number; r2?: number }
+export interface CvAggregate { labels?: string[]; matrix?: number[][]; normalized?: number[][]; n?: number; k?: number; accuracy_mean?: number; accuracy_std?: number; f1_macro_mean?: number; f1_macro_std?: number; rmse_mean?: number; mae_mean?: number; r2_mean?: number }
+export interface CrossValidation { run_id: string; status: "queued" | "running" | "succeeded" | "skipped" | "failed"; k: number | null; splitter: string | null; reason: string | null; aggregate: CvAggregate | null; folds: CvFold[] }
 export interface MlJob { id: string; kind: string; status: "queued" | "running" | "succeeded" | "failed" | "cancelled"; terminal: boolean; run_id?: string | null; error?: string | null }
 export class InferenceApiError extends Error {
   constructor(public status: number, public detail: unknown, public call?: string) { super("Inference request failed"); }
@@ -295,7 +298,7 @@ export const shortRunId = (runId?: string) => (runId ? runId.slice(0, 8) : "—"
 
 /* ------------------------------------------------------------------ transport */
 const runIdSchema = z.string().trim().min(1).max(512);
-const rowSchema = z.record(z.union([z.string().max(10000), z.number().finite(), z.boolean(), z.null()]));
+const rowSchema = z.record(z.string(), z.union([z.string().max(10000), z.number().finite(), z.boolean(), z.null()]));
 const bodySchema = z.union([rowSchema, z.array(rowSchema).min(1).max(10000)]);
 async function request<T>(path: string, method = "GET", body?: unknown): Promise<T> {
   const token = await getAccessToken();
@@ -331,6 +334,7 @@ export const inferenceApi = {
   getModel: (runId: string) => request<unknown>(modelPath(runId)),
   getEndpoint: (runId: string) => request<EndpointState>(`${modelPath(runId)}/endpoint`),
   getJob: (jobId: string) => request<MlJob>(`/api/ml-jobs/${encodeURIComponent(runIdSchema.parse(jobId))}`),
+  getCrossValidation: (runId: string) => request<CrossValidation>(`${modelPath(runId)}/cross-validation`),
   predict: (runId: string, rows: InputRow | InputRow[]) => request<{ result?: unknown }>(`${modelPath(runId)}/predict`, "POST", bodySchema.parse(rows)),
   /** Asks for the deploy (202) and resolves only when the endpoint is ready. A pre-2026-11 server answers 200 "running" and resolves at once. */
   startService: async (runId: string, poll: PollOptions = {}): Promise<ConfigureResponse> => {
@@ -344,4 +348,10 @@ export const inferenceApi = {
 };
 const queryDefaults = { retry: 1, staleTime: 60_000, refetchOnWindowFocus: false, throwOnError: false } as const;
 export const modelsQuery = () => queryOptions({ queryKey: ["inference", "models"], queryFn: async () => normalizeModels(await inferenceApi.listModels()), ...queryDefaults });
+/** 404 (no CV recorded yet) is not an error for the panel: it renders nothing. */
+export const crossValidationQuery = (runId: string) => queryOptions({
+  queryKey: ["inference", "cv", runId],
+  queryFn: async () => { try { return await inferenceApi.getCrossValidation(runId); } catch (e) { if (e instanceof InferenceApiError && e.status === 404) return null; throw e; } },
+  enabled: Boolean(runId), ...queryDefaults,
+});
 export const modelQuery = (runId: string) => queryOptions({ queryKey: ["inference", "model", runId], queryFn: async () => normalizeModelDetails(await inferenceApi.getModel(runId)), enabled: Boolean(runId), ...queryDefaults });

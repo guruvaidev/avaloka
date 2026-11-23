@@ -89,9 +89,16 @@ def test_t2_health_endpoint(deployed):
 
 # --------------------------------------------------------------------------- T2.7
 def test_t2_docs_and_openapi_prove_real_api(deployed):
+    import jwt
+    secret = os.getenv("SUPABASE_JWT_SECRET", "")
+    if not secret:
+        pytest.skip("SUPABASE_JWT_SECRET unset — cannot mint a token to read the schema")
+    # Signed, as in T2.8: no test depends on reading the docs or schema without a token.
+    token = jwt.encode({"sub": "user-1", "iat": int(time.time())}, secret, algorithm="HS256")
+    signed = {"Authorization": f"Bearer {token}"}
     with port_forward("svc/avaloka", 9000) as lp:
-        docs = requests.get(f"http://127.0.0.1:{lp}/docs", timeout=10)
-        spec = requests.get(f"http://127.0.0.1:{lp}/openapi.json", timeout=10)
+        docs = requests.get(f"http://127.0.0.1:{lp}/docs", headers=signed, timeout=10)
+        spec = requests.get(f"http://127.0.0.1:{lp}/openapi.json", headers=signed, timeout=10)
     assert docs.status_code == 200
     paths = spec.json().get("paths", {})
     # The real FastAPI app exposes ~32 paths / ~36 routes incl. /health, /api/upload,

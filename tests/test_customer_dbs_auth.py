@@ -1,20 +1,28 @@
-"""Security hotfix: the onboarding /customers routes need an identity.
+"""Security hotfix (#564, #618): the onboarding /customers routes need an identity.
 
 Before this fix every route in app/mcp_server/customer_dbs.py was open, and
 GET /customers/{id}/credentials handed anyone the plaintext database password.
-These tests pin the fix:
+These tests pin the fix, as merged with integration/2.0's credential work:
 
   * no identity                -> 401 on every route;
   * someone else's customer    -> 404 (not 403, so ids do not leak);
   * GET /customers             -> the caller's own customers, no secrets;
-  * /credentials               -> a password ONLY for the API service holding
-                                  MCP_SERVICE_TOKEN, and never when it is unset;
-  * /admin/customers           -> service-only, since it overwrites api_keys;
+  * /credentials               -> never a password, to anyone: a handle sealed
+                                  under DB_ENCRYPTION_KEY (2.0), which the
+                                  service-token identity (MCP_SERVICE_TOKEN)
+                                  also gets, and never when it is unset;
+  * /admin/*                   -> the onboarding service's signed MAC only; the
+                                  static service token is refused there;
   * the planner's DTA auto-fetch still gets the password, end to end, by
-    sending the token and the user it acts for.
+    opening the handle in process -- as the customer, or with the token and
+    the user it acts for.
+
+Merged with 2.0: registration needs a user (an anonymous one is 401), and a
+customer's api_key reaches that one customer, not its owner's others.
 
 Every key, token and password here is generated per test. None is real.
 """
+import hashlib
 import json
 import secrets
 import sys
@@ -27,6 +35,12 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import app.mcp_server.customer_dbs as cdb
+from app.mcp_server.credentials import load_registry, open_credential_handle, service_headers
+
+try:  # tests/ as a package, or tests/ on sys.path (pytest rootdir insertion)
+    from tests.dta_confirm import run_confirmed
+except ImportError:
+    from dta_confirm import run_confirmed
 
 TOKEN_HEADER = "X-Avaloka-Service-Token"
 USER_HEADER = "X-Avaloka-User"
@@ -79,7 +93,16 @@ class _FakeEngine:
 
 
 @pytest.fixture
-def reg(tmp_path, monkeypatch):
+def sealing_key(monkeypatch):
+    """The registry is sealed at rest under DB_ENCRYPTION_KEY (2.0); a throwaway here."""
+    import app.api.cloud_connections as cc
+    key = secrets.token_hex(16)
+    monkeypatch.setattr(cc, "DB_ENCRYPTION_KEY", key, raising=False)
+    monkeypatch.setattr(cc, "_AESGCM_KEY", hashlib.sha256(key.encode()).digest(), raising=False)
+
+
+@pytest.fixture
+def reg(tmp_path, monkeypatch, sealing_key):
     token = secrets.token_urlsafe(32)
     monkeypatch.setenv("MCP_SERVICE_TOKEN", token)
 
@@ -113,9 +136,17 @@ def _service(token, user):
 
 
 def _on_disk(reg):
-    """The registry as the servers read it: secrets are sealed on disk, opened here (2.0's helper)."""
-    from app.mcp_server.credentials import load_registry
-    return load_registry(str(reg.path), migrate=False)
+    """The registry as the servers read it: secrets are sealed on disk, opened here."""
+    return load_registry(str(reg.path))
+
+
+def _opened(r):
+    """The connection a /credentials response's handle opens to; the body itself has no password."""
+    body = r.json()
+    assert "password" not in body
+    opened = open_credential_handle(body.get("credential_handle"))
+    assert opened is not None, body
+    return opened
 
 
 ROUTES = [
@@ -162,8 +193,11 @@ def test_cross_user_is_404(reg, method, path, who):
         "legacy_key": _bearer(reg.keys["cust_legacy"]),
     }[who]
     r = reg.client.request(method, path, headers=headers)
-    assert r.status_code == 404
-    assert r.json()["detail"] == "Customer not found"
+    if path.endswith("/credentials") and who != "b_service":
+        assert r.status_code == 403            # an api_key is refused before any lookup
+    else:
+        assert r.status_code == 404
+        assert r.json()["detail"] == "Customer not found"
     assert reg.pws["cust_a"] not in r.text
     assert _on_disk(reg)["cust_a"]["status"] == "active"
 
@@ -177,16 +211,21 @@ def test_unknown_and_foreign_ids_are_indistinguishable(reg):
 
 def test_owner_can_use_its_own_routes(reg):
     h = _bearer(reg.keys["cust_a"])
-    assert reg.client.get("/customers/cust_a2/status", headers=h).status_code == 200
+    assert reg.client.get("/customers/cust_a/status", headers=h).status_code == 200
     assert reg.client.post("/customers/cust_a/test-connection", headers=h).status_code == 200
-    assert reg.client.delete("/customers/cust_a2", headers=h).status_code == 200
+    # An api_key reaches its own customer only (2.0), not the owner's other ones;
+    # the owner reaches those as itself, through the service.
+    assert reg.client.get("/customers/cust_a2/status", headers=h).status_code == 404
+    a = _service(reg.token, "user_a")
+    assert reg.client.get("/customers/cust_a2/status", headers=a).status_code == 200
+    assert reg.client.delete("/customers/cust_a2", headers=a).status_code == 200
     assert _on_disk(reg)["cust_a2"]["status"] == "inactive"
 
 
 # ---- GET /customers: own only, never secrets --------------------------------
 
 @pytest.mark.parametrize("who,expected", [
-    ("a_key", {"cust_a", "cust_a2"}),
+    ("a_key", {"cust_a"}),                 # an api_key lists its own customer (2.0)
     ("a_service", {"cust_a", "cust_a2"}),
     ("b_service", {"cust_b"}),
     ("legacy_key", {"cust_legacy"}),
@@ -213,24 +252,25 @@ def test_list_is_owner_scoped_and_secret_free(reg, who, expected):
         assert reg.records[cid]["connection_string"] not in r.text
 
 
-# ---- /credentials: password only for the service ----------------------------
+# ---- /credentials: never a password; a sealed handle -------------------------
 
-def test_service_with_token_gets_the_password_for_its_users_customer(reg):
+def test_service_with_token_gets_the_handle_for_its_users_customer(reg):
     r = reg.client.get("/customers/cust_a/credentials", headers=_service(reg.token, "user_a"))
     assert r.status_code == 200
-    assert r.json()["password"] == reg.pws["cust_a"]
+    assert reg.pws["cust_a"] not in r.text
+    assert _opened(r)["password"] == reg.pws["cust_a"]
     assert r.json()["table"] == "orders"
 
 
-@pytest.mark.parametrize("headers_for", [
-    lambda reg: _bearer(reg.keys["cust_a"]),                                   # owner, no token
-    lambda reg: {**_bearer(reg.keys["cust_a"]), TOKEN_HEADER: "wrong-" + reg.token},
-    lambda reg: {TOKEN_HEADER: "wrong-" + reg.token, USER_HEADER: "user_a"},
-    lambda reg: {TOKEN_HEADER: reg.token[:-1], USER_HEADER: "user_a"},
+@pytest.mark.parametrize("headers_for,status", [
+    (lambda reg: _bearer(reg.keys["cust_a"]), 403),                            # owner's own key: 403
+    (lambda reg: {**_bearer(reg.keys["cust_a"]), TOKEN_HEADER: "wrong-" + reg.token}, 403),
+    (lambda reg: {TOKEN_HEADER: "wrong-" + reg.token, USER_HEADER: "user_a"}, 401),
+    (lambda reg: {TOKEN_HEADER: reg.token[:-1], USER_HEADER: "user_a"}, 401),
 ])
-def test_credentials_without_the_service_token_carry_no_password(reg, headers_for):
+def test_credentials_without_the_service_token_carry_no_password(reg, headers_for, status):
     r = reg.client.get("/customers/cust_a/credentials", headers=headers_for(reg))
-    assert r.status_code in (401, 403)
+    assert r.status_code == status
     assert "password" not in r.json()
     assert reg.pws["cust_a"] not in r.text
 
@@ -242,16 +282,18 @@ def test_credentials_fail_closed_when_token_is_not_configured(reg, monkeypatch, 
         monkeypatch.delenv("MCP_SERVICE_TOKEN", raising=False)
     else:
         monkeypatch.setenv("MCP_SERVICE_TOKEN", "")
-    for headers in (
-        {TOKEN_HEADER: presented, USER_HEADER: "user_a"},
-        {**_bearer(reg.keys["cust_a"]), TOKEN_HEADER: presented, USER_HEADER: "user_a"},
-    ):
-        r = reg.client.get("/customers/cust_a/credentials", headers=headers)
-        assert r.status_code in (401, 403)
-        assert reg.pws["cust_a"] not in r.text
+    r = reg.client.get("/customers/cust_a/credentials", headers={TOKEN_HEADER: presented, USER_HEADER: "user_a"})
+    assert r.status_code == 401
+    assert reg.pws["cust_a"] not in r.text
+    # With the owner's key as well, the caller is that customer, not the service: 403.
+    for cid in ("cust_a", "cust_legacy"):
+        r = reg.client.get(f"/customers/{cid}/credentials",
+                           headers={**_bearer(reg.keys["cust_a"]), TOKEN_HEADER: presented, USER_HEADER: "user_a"})
+        assert r.status_code == 403
+        assert "password" not in r.json() and reg.pws[cid] not in r.text
 
 
-# ---- register: open, but it can only create ---------------------------------
+# ---- register: a user is required (2.0), and it can only create -------------
 
 class _FakeAsyncClient:
     calls = []
@@ -265,8 +307,8 @@ class _FakeAsyncClient:
     async def __aexit__(self, *a):
         return False
 
-    async def post(self, url, json=None, headers=None, **k):
-        _FakeAsyncClient.calls.append({"url": url, "json": json, "headers": headers or {}})
+    async def post(self, url, json=None, headers=None, content=None, **k):
+        _FakeAsyncClient.calls.append({"url": url, "json": json, "content": content, "headers": headers or {}})
         return SimpleNamespace(status_code=200, text="ok")
 
 
@@ -294,25 +336,32 @@ def test_register_never_overwrites_an_existing_customer(registering):
     reg = registering
     # Only on disk (e.g. registered through the MCP server's process), not in memory.
     cdb.customer_manager.customers.pop("cust_b")
-    r = reg.client.post("/customers/register", json=_registration("cust_b"))
+    r = reg.client.post("/customers/register", json=_registration("cust_b"), headers=_service(reg.token, "user_a"))
     assert r.status_code == 409
     assert _FakeAsyncClient.calls == []
     assert _on_disk(reg)["cust_b"]["api_key"] == reg.keys["cust_b"]
     assert _on_disk(reg)["cust_b"]["connection_string"] == reg.records["cust_b"]["connection_string"]
 
 
-def test_anonymous_register_creates_an_unbound_customer_only_its_key_reaches(registering):
+# Retired in the merge with integration/2.0: test_anonymous_register_creates_an_
+# unbound_customer_only_its_key_reaches. Registration now needs a user, so an
+# anonymous one is refused and nothing new is ever unbound; the test below pins that.
+
+def test_anonymous_register_is_401_and_creates_nothing(registering):
     reg = registering
     r = reg.client.post("/customers/register", json=_registration("cust_new"))
-    assert r.status_code == 200
-    new_key = r.json()["api_key"]
-    assert "owner_user_id" not in _on_disk(reg)["cust_new"]
-    # The internal /admin/customers call carries the service token.
-    assert _FakeAsyncClient.calls[0]["headers"].get(TOKEN_HEADER) == reg.token
+    assert r.status_code == 401
+    assert _FakeAsyncClient.calls == []
+    assert "cust_new" not in _on_disk(reg)
 
-    listed = reg.client.get("/customers", headers=_bearer(new_key)).json()["customers"]
-    assert [c["customer_id"] for c in listed] == ["cust_new"]
-    assert reg.client.get("/customers/cust_a/status", headers=_bearer(new_key)).status_code == 404
+
+def test_register_signs_the_admin_call_and_never_sends_the_static_token(registering):
+    reg = registering
+    r = reg.client.post("/customers/register", json=_registration("cust_new"), headers=_service(reg.token, "user_a"))
+    assert r.status_code == 200, r.text
+    sent = _FakeAsyncClient.calls[0]["headers"]
+    assert sent.get("Authorization", "").startswith("Bearer avs1.")
+    assert TOKEN_HEADER not in sent and reg.token not in json.dumps(sent)
 
 
 def test_service_register_binds_the_customer_to_the_named_user(registering):
@@ -332,7 +381,7 @@ def test_service_binds_an_unbound_customer_with_its_own_key(reg):
     assert reg.client.post("/customers/cust_legacy/owner", headers=h).status_code == 200
     assert _on_disk(reg)["cust_legacy"]["owner_user_id"] == "user_c"
     r = reg.client.get("/customers/cust_legacy/credentials", headers=_service(reg.token, "user_c"))
-    assert r.json()["password"] == reg.pws["cust_legacy"]
+    assert _opened(r)["password"] == reg.pws["cust_legacy"]
 
 
 @pytest.mark.parametrize("cid,user,key_of", [
@@ -353,22 +402,56 @@ def test_bind_needs_the_service_token(reg):
     assert "owner_user_id" not in _on_disk(reg)["cust_legacy"]
 
 
-# ---- /admin/customers on the MCP server -------------------------------------
+# ---- /admin/* on the MCP server: the signed service MAC only ----------------
 
-def test_admin_customers_refuses_without_the_service_token(reg, monkeypatch):
+def _signed(path, body=b"", method="POST"):
+    return {"Content-Type": "application/json", **service_headers(method, path, body)}
+
+
+def _seal_admin_body(payload):
+    """The admin body as the onboarding service sends it: connection_string and
+    api_key as sealed handles (connection_string_enc, api_key_enc). Without a key
+    nothing can be sealed and the body is left as is (the signed route refuses it)."""
+    from app.mcp_server.credentials import CredentialKeyMissing, credential_handle
+    out = dict(payload)
+    try:
+        for field in ("connection_string", "api_key"):
+            if field in out:
+                value = out.pop(field)
+                # One handle per value, so a body built twice (once to send, once
+                # to sign) is the same bytes.
+                import app.api.cloud_connections as _cc
+                cache_key = (_cc.DB_ENCRYPTION_KEY, value)
+                if cache_key not in _SEALED_CACHE:
+                    _SEALED_CACHE[cache_key] = credential_handle(value)
+                out[field + "_enc"] = _SEALED_CACHE[cache_key]
+    except CredentialKeyMissing:
+        return dict(payload)
+    return out
+
+
+_SEALED_CACHE = {}
+
+
+def _admin_post(client, payload):
+    body = json.dumps(_seal_admin_body(payload)).encode("utf-8")
+    return client.post("/admin/customers", content=body, headers=_signed("/admin/customers", body))
+
+
+def test_admin_customers_refuses_without_the_service_credential(reg, monkeypatch):
     import app.mcp_server.multi_tenant_mcp_server as mts
 
     monkeypatch.setattr(mts, "CUSTOMERS_FILE", str(reg.path))
     client = TestClient(mts.app)
-    from app.mcp_server.credentials import credential_handle
-    takeover = {  # the secrets travel sealed (app/mcp_server/credentials.py)
+    takeover = {
         "customer_id": "cust_a",
-        "connection_string_enc": credential_handle("sqlite:///" + str(reg.path.parent / "attacker.db")),
+        "connection_string": "sqlite:///" + str(reg.path.parent / "attacker.db"),
         "database_type": "sqlite",
         "created_at": "2026-10-18T00:00:00",
-        "api_key_enc": credential_handle("ak_" + secrets.token_hex(16)),
+        "api_key": "ak_" + secrets.token_hex(16),
     }
-    for headers in ({}, {TOKEN_HEADER: "wrong-" + reg.token}):
+    # The correct static token included: /admin takes only the signed MAC.
+    for headers in ({}, {TOKEN_HEADER: "wrong-" + reg.token}, {TOKEN_HEADER: reg.token}):
         r = client.post("/admin/customers", json=takeover, headers=headers)
         assert r.status_code == 401
     assert _on_disk(reg)["cust_a"]["api_key"] == reg.keys["cust_a"]
@@ -395,14 +478,12 @@ def mcp(reg, monkeypatch):
 
 
 def _admin_payload(reg, cid, api_key):
-    """What the onboarding service sends: the secrets as sealed handles (app/mcp_server/credentials.py)."""
-    from app.mcp_server.credentials import credential_handle
     return {
         "customer_id": cid,
-        "connection_string_enc": credential_handle("sqlite:///" + str(reg.path.parent / f"{cid}.db")),
+        "connection_string": "sqlite:///" + str(reg.path.parent / f"{cid}.db"),
         "database_type": "sqlite",
         "created_at": "2026-10-18T00:00:00",
-        "api_key_enc": credential_handle(api_key),
+        "api_key": api_key,
     }
 
 
@@ -420,25 +501,46 @@ def test_admin_customers_unauthenticated_is_401_and_dials_nothing(mcp, monkeypat
     assert "cust_new" not in _on_disk(mcp.reg)
 
 
+@pytest.mark.parametrize("method,path,body", [
+    ("POST", "/admin/customers", None),
+    ("DELETE", "/admin/customers/cust_a", b""),
+    ("POST", "/connect", None),
+    ("GET", "/connections", b""),
+])
+def test_admin_routes_refuse_the_static_service_token(mcp, method, path, body):
+    """Decision 4 of the 1.7/2.0 merge: the static token is a /customers identity, never an admin one."""
+    mcp.mts.CUSTOMER_API_KEYS["cust_a"] = mcp.mts.CustomerAPI(
+        customer_id="cust_a", api_key=mcp.reg.keys["cust_a"], created_at="2026-10-18T00:00:00")
+    payload = {"POST": {"/admin/customers": _admin_payload(mcp.reg, "cust_new", "ak_" + secrets.token_hex(16)),
+                        "/connect": _connect_payload(mcp.reg, "conn_x")}}.get(method, {}).get(path)
+    headers = {TOKEN_HEADER: mcp.reg.token, USER_HEADER: "user_a"}
+    r = mcp.client.request(method, path, headers=headers, json=payload)
+    assert r.status_code == 401, r.text
+    assert mcp.dialed == []
+    assert "cust_new" not in _on_disk(mcp.reg) and "conn_x" not in mcp.mts.CUSTOMER_API_KEYS
+    assert mcp.mts.CUSTOMER_API_KEYS["cust_a"].api_key == mcp.reg.keys["cust_a"]
+
+
 def test_admin_customers_legitimate_onboarding_call_registers(mcp):
     key = "ak_" + secrets.token_hex(16)
-    r = mcp.client.post("/admin/customers", headers={TOKEN_HEADER: mcp.reg.token},
-                        json=_admin_payload(mcp.reg, "cust_new", key))
+    r = _admin_post(mcp.client, _admin_payload(mcp.reg, "cust_new", key))
     assert r.status_code == 200, r.text
     assert _on_disk(mcp.reg)["cust_new"]["api_key"] == key
     assert mcp.mts.CUSTOMER_API_KEYS["cust_new"].api_key == key
 
 
 def test_admin_customers_resync_with_the_same_key_is_allowed(mcp):
-    payload = _admin_payload(mcp.reg, "cust_a", mcp.reg.keys["cust_a"])
-    r = mcp.client.post("/admin/customers", headers={TOKEN_HEADER: mcp.reg.token}, json=payload)
+    # 2.0: a re-push of an owned customer names its owner (resync sends the record's).
+    payload = {**_admin_payload(mcp.reg, "cust_a", mcp.reg.keys["cust_a"]), "owner_user_id": "user_a"}
+    r = _admin_post(mcp.client, payload)
     assert r.status_code == 200, r.text
+    legacy = _admin_post(mcp.client, _admin_payload(mcp.reg, "cust_legacy", mcp.reg.keys["cust_legacy"]))
+    assert legacy.status_code == 200, legacy.text
 
 
 def test_admin_customers_refuses_an_overwrite_even_with_the_token(mcp):
     attacker_key = "ak_" + secrets.token_hex(16)
-    r = mcp.client.post("/admin/customers", headers={TOKEN_HEADER: mcp.reg.token},
-                        json=_admin_payload(mcp.reg, "cust_a", attacker_key))
+    r = _admin_post(mcp.client, _admin_payload(mcp.reg, "cust_a", attacker_key))
     assert r.status_code == 409
     assert mcp.dialed == []                       # refused before any connection attempt
     assert _on_disk(mcp.reg)["cust_a"]["api_key"] == mcp.reg.keys["cust_a"]
@@ -451,7 +553,7 @@ def _connect_payload(reg, name):
             "database_name": str(reg.path.parent / f"{name}.db")}
 
 
-def test_connect_and_connections_need_the_service_token(mcp):
+def test_connect_and_connections_need_the_service_credential(mcp):
     r = mcp.client.post("/connect", json=_connect_payload(mcp.reg, "conn_x"))
     assert r.status_code == 401
     assert mcp.client.get("/connections").status_code == 401
@@ -460,11 +562,11 @@ def test_connect_and_connections_need_the_service_token(mcp):
 
 
 def test_connect_and_connections_work_for_the_service(mcp):
-    r = mcp.client.post("/connect", headers={TOKEN_HEADER: mcp.reg.token},
-                        json=_connect_payload(mcp.reg, "conn_x"))
+    body = json.dumps(_connect_payload(mcp.reg, "conn_x")).encode("utf-8")
+    r = mcp.client.post("/connect", content=body, headers=_signed("/connect", body))
     assert r.status_code == 200, r.text
     assert r.json()["api_key"] == mcp.mts.CUSTOMER_API_KEYS["conn_x"].api_key
-    listed = mcp.client.get("/connections", headers={TOKEN_HEADER: mcp.reg.token})
+    listed = mcp.client.get("/connections", headers=_signed("/connections", b"", "GET"))
     assert listed.status_code == 200
     assert [c["customer_id"] for c in listed.json()["connections"]] == ["conn_x"]
 
@@ -484,8 +586,8 @@ def test_connect_and_connections_fail_closed_without_a_configured_token(mcp, mon
 def test_connect_refuses_to_replace_an_existing_customer(mcp):
     mcp.mts.CUSTOMER_API_KEYS["cust_a"] = mcp.mts.CustomerAPI(
         customer_id="cust_a", api_key=mcp.reg.keys["cust_a"], created_at="2026-10-18T00:00:00")
-    r = mcp.client.post("/connect", headers={TOKEN_HEADER: mcp.reg.token},
-                        json=_connect_payload(mcp.reg, "cust_a"))
+    body = json.dumps(_connect_payload(mcp.reg, "cust_a")).encode("utf-8")
+    r = mcp.client.post("/connect", content=body, headers=_signed("/connect", body))
     assert r.status_code == 409
     assert mcp.dialed == []
     assert mcp.mts.CUSTOMER_API_KEYS["cust_a"].api_key == mcp.reg.keys["cust_a"]
@@ -513,6 +615,13 @@ def planner_against_onboarding(reg, monkeypatch):
             return reg.client.get(url[len(base):], headers=headers or {})
 
     monkeypatch.setattr(planner_mod.requests, "Session", _RoutedSession)
+    monkeypatch.setattr(planner_mod, "_list_dest_tables", lambda creds, db_type: None)
+    monkeypatch.setattr(planner_mod, "_list_source_tables", lambda *a, **k: ["orders"], raising=False)
+    # The Ray path, where the (stubbed) pipeline is handed both ends' credentials.
+    monkeypatch.setenv("RAY_DASHBOARD_URL", "http://127.0.0.1:8265")
+    monkeypatch.setenv("EXECUTION_ENV", "gke")
+    monkeypatch.setenv("DTA_GKE_REACHES_PRIVATE", "1")
+    monkeypatch.setattr(planner_mod, "_resolve_cloud_conn_by_name", lambda *a, **k: None)
 
     captured = {}
 
@@ -526,31 +635,27 @@ def planner_against_onboarding(reg, monkeypatch):
     return SimpleNamespace(planner=planner_mod, captured=captured, seen=seen, reg=reg)
 
 
+# Each user's own second database is the destination. (A chat-registry entry
+# holding a password, which the 1.7 version used, is scrubbed and never used in 2.0.)
+_OWN_DESTINATION = {"user_a": "cust_a2", "user_b": "cust_b"}
+
+
 def _transfer(p, user_id, source="cust_a"):
-    state = {
-        "user_id": user_id,
-        "dta_database_registry": {
-            "Warehouse": {"db_type": "mysql", "host": "h", "port": 3306, "database": "d",
-                          "user": "u", "password": "p", "table": "t"},
-        },
-    }
-    msg = p.planner._handle_initiate_transfer(
-        state,
-        p.planner.InitiateTransferParams(
-            source_alias=source, destination_alias="Warehouse",
-            user_prompt=f"transfer from {source} to Warehouse", write_mode="append",
-            dest_table="orders_copy",
-        ),
-    )
-    return state, msg
+    return _transfer_between(p, user_id, source, _OWN_DESTINATION[user_id])
 
 
-def test_planner_autofetch_gets_the_password_with_the_token(planner_against_onboarding):
+def test_planner_autofetch_gets_the_owners_password_through_its_assertion(planner_against_onboarding):
+    """An owned source resolves as the signed-in user (1.7 merge, decision 1): no token, no api_key."""
+    from app.mcp_server.credentials import verify_user_assertion
+
     p = planner_against_onboarding
     state, _msg = _transfer(p, "user_a")
     assert state["dta_database_registry"]["cust_a"]["db_type"] == "postgresql"
+    assert "password" not in state["dta_database_registry"]["cust_a"]
     assert p.captured["source_credentials"]["password"] == p.reg.pws["cust_a"]
-    assert all(h.get(TOKEN_HEADER) == p.reg.token and h.get(USER_HEADER) == "user_a" for h in p.seen)
+    assert p.seen and not [h for h in p.seen if h.get(TOKEN_HEADER)]
+    assert all(verify_user_assertion(h.get("Authorization", "")[len("Bearer "):]) == "user_a" for h in p.seen)
+    assert not any(k in json.dumps(p.seen) for k in p.reg.keys.values())
 
 
 def test_planner_cannot_fetch_another_users_customer(planner_against_onboarding):
@@ -561,12 +666,12 @@ def test_planner_cannot_fetch_another_users_customer(planner_against_onboarding)
     assert p.captured == {}
 
 
-def test_planner_without_the_token_gets_no_password(planner_against_onboarding, monkeypatch):
+def test_planner_without_the_token_cannot_reach_an_unbound_customer(planner_against_onboarding, monkeypatch):
     p = planner_against_onboarding
     monkeypatch.delenv("MCP_SERVICE_TOKEN", raising=False)
-    state, msg = _transfer(p, "user_a")
+    state, msg = _transfer(p, "user_a", source="cust_legacy")
     assert "not registered" in msg or "not found" in msg
-    assert "cust_a" not in state["dta_database_registry"]
+    assert "cust_legacy" not in state["dta_database_registry"]
     assert p.captured == {}
     assert all(TOKEN_HEADER not in h for h in p.seen)
 
@@ -605,8 +710,9 @@ class _RoutedAsyncClient:
     async def __aexit__(self, *a):
         return False
 
-    async def post(self, url, json=None, headers=None, **k):
-        return self.mcp_client.post(url[len(self.base):], json=json, headers=headers or {})
+    async def post(self, url, json=None, headers=None, content=None, **k):
+        # customer_dbs signs the exact body it sends (2.0), so forward it as is.
+        return self.mcp_client.post(url[len(self.base):], json=json, content=content, headers=headers or {})
 
     async def delete(self, url, headers=None, **k):
         return self.mcp_client.delete(url[len(self.base):], headers=headers or {})
@@ -626,12 +732,14 @@ def chain(mcp, monkeypatch):
 
 
 def _register_sqlite(chain, cid, headers=None):
+    """Registers as user_a unless told otherwise: registration needs a user (2.0)."""
+    headers = _service(chain.reg.token, "user_a") if headers is None else headers
     body = {
         "customer_id": cid, "customer_name": cid, "database_type": "sqlite",
         "database_name": str(chain.reg.path.parent / f"{cid}.db"),
         "contact_email": f"{cid}@example.test",
     }
-    return chain.reg.client.post("/customers/register", json=body, headers=headers or {})
+    return chain.reg.client.post("/customers/register", json=body, headers=headers)
 
 
 def _call_tool(chain, key):
@@ -652,9 +760,9 @@ def test_deleted_key_is_401_on_call_tool_and_evicted(chain):
 
 def test_per_call_check_blocks_the_key_when_eviction_is_skipped(chain, monkeypatch):
     async def _no_eviction(customer_id):
-        return None
+        return False
 
-    monkeypatch.setattr(cdb, "_evict_from_mcp", _no_eviction)
+    monkeypatch.setattr(cdb.customer_manager, "evict_from_mcp", _no_eviction)
     key = _register_sqlite(chain, "cust_z").json()["api_key"]
     assert chain.reg.client.delete("/customers/cust_z", headers=_bearer(key)).status_code == 200
     assert chain.mts.CUSTOMER_API_KEYS["cust_z"].api_key == key     # still in memory
@@ -674,23 +782,32 @@ def test_reregistering_issues_a_new_key_and_the_old_key_stays_dead(chain):
     assert _call_tool(chain, old).status_code == 401
     assert chain.reg.client.get("/customers", headers=_bearer(old)).status_code == 401
     listed = chain.reg.client.get("/customers", headers=_bearer(new)).json()["customers"]
+    assert {c["customer_id"] for c in listed} == {"cust_z"}          # an api_key lists its own (2.0)
+    listed = chain.reg.client.get("/customers", headers=a).json()["customers"]
     assert {c["customer_id"] for c in listed} == {"cust_a", "cust_a2", "cust_z"}      # user_a's group
 
 
 def _registered_then_deleted(chain, headers):
     r = _register_sqlite(chain, "cust_z", headers=headers)
     assert r.status_code == 200, r.text
-    delete_as = headers or _bearer(r.json()["api_key"])
-    assert chain.reg.client.delete("/customers/cust_z", headers=delete_as).status_code == 200
+    assert chain.reg.client.delete("/customers/cust_z", headers=headers).status_code == 200
+
+
+def _legacy_deleted(chain):
+    """Nothing registers unbound any more (a user is required), so the unbound id is the fixture's."""
+    old = chain.reg.keys["cust_legacy"]
+    assert chain.reg.client.delete("/customers/cust_legacy", headers=_bearer(old)).status_code == 200
+    return old
 
 
 def test_reregistering_a_deleted_unbound_id_is_409_retired(chain):
-    _registered_then_deleted(chain, None)
-    for headers in (None, _service(chain.reg.token, "user_a")):
-        r = _register_sqlite(chain, "cust_z", headers=headers)
+    _legacy_deleted(chain)
+    for user in ("user_a", "user_b"):
+        r = _register_sqlite(chain, "cust_legacy", headers=_service(chain.reg.token, user))
         assert r.status_code == 409
         assert "was deleted; choose a new id" in r.json()["detail"]
-    assert _on_disk(chain.reg)["cust_z"]["status"] == "inactive"
+    assert _register_sqlite(chain, "cust_legacy", headers={}).status_code == 401
+    assert _on_disk(chain.reg)["cust_legacy"]["status"] == "inactive"
 
 
 def test_the_owner_can_reregister_their_own_deleted_bound_id(chain):
@@ -701,21 +818,22 @@ def test_the_owner_can_reregister_their_own_deleted_bound_id(chain):
     assert _on_disk(chain.reg)["cust_z"]["owner_user_id"] == "user_a"
 
 
-@pytest.mark.parametrize("who", ["anonymous", "user_b"])
-def test_nobody_else_can_reregister_a_deleted_bound_id(chain, who):
+@pytest.mark.parametrize("who,status", [("anonymous", 401), ("user_b", 409)])
+def test_nobody_else_can_reregister_a_deleted_bound_id(chain, who, status):
     _registered_then_deleted(chain, _service(chain.reg.token, "user_a"))
-    headers = None if who == "anonymous" else _service(chain.reg.token, "user_b")
-    assert _register_sqlite(chain, "cust_z", headers=headers).status_code == 409
+    headers = {} if who == "anonymous" else _service(chain.reg.token, "user_b")
+    assert _register_sqlite(chain, "cust_z", headers=headers).status_code == status
     assert _on_disk(chain.reg)["cust_z"]["status"] == "inactive"
     assert _on_disk(chain.reg)["cust_z"]["owner_user_id"] == "user_a"
 
 
-def test_admin_customers_refuses_a_retired_unbound_id_even_with_the_token(chain):
-    _registered_then_deleted(chain, None)
-    r = chain.client.post("/admin/customers", headers={TOKEN_HEADER: chain.reg.token},
-                          json=_admin_payload(chain.reg, "cust_z", "ak_" + secrets.token_hex(16)))
-    assert r.status_code == 409
-    assert _on_disk(chain.reg)["cust_z"]["status"] == "inactive"
+def test_admin_customers_refuses_a_retired_unbound_id_even_signed(chain):
+    old = _legacy_deleted(chain)
+    for key in ("ak_" + secrets.token_hex(16), old):           # a new key, or its own old one
+        r = _admin_post(chain.client, _admin_payload(chain.reg, "cust_legacy", key))
+        assert r.status_code == 409
+    assert chain.dialed == []
+    assert _on_disk(chain.reg)["cust_legacy"]["status"] == "inactive"
 
 
 def test_bind_refuses_a_deleted_customer_even_with_its_old_key(reg):
@@ -729,6 +847,7 @@ def test_bind_refuses_a_deleted_customer_even_with_its_old_key(reg):
 def test_an_active_id_is_still_never_replaced(chain):
     assert _register_sqlite(chain, "cust_z").status_code == 200
     assert _register_sqlite(chain, "cust_z").status_code == 409
+    assert _register_sqlite(chain, "cust_z", headers=_service(chain.reg.token, "user_b")).status_code == 409
 
 
 def test_reload_drops_customers_that_are_no_longer_active(mcp):
@@ -747,9 +866,10 @@ def test_evict_route_is_service_only(mcp):
     mcp.mts.CUSTOMER_API_KEYS["cust_a"] = mcp.mts.CustomerAPI(
         customer_id="cust_a", api_key=mcp.reg.keys["cust_a"], created_at="2026-10-18T00:00:00")
     assert mcp.client.delete("/admin/customers/cust_a").status_code == 401
+    assert mcp.client.delete("/admin/customers/cust_a", headers={TOKEN_HEADER: mcp.reg.token}).status_code == 401
     assert "cust_a" in mcp.mts.CUSTOMER_API_KEYS
-    r = mcp.client.delete("/admin/customers/cust_a", headers={TOKEN_HEADER: mcp.reg.token})
-    assert r.status_code == 200 and r.json()["evicted"] is True
+    r = mcp.client.delete("/admin/customers/cust_a", headers=_signed("/admin/customers/cust_a", b"", "DELETE"))
+    assert r.status_code == 200 and r.json()["was_loaded"] is True
     assert "cust_a" not in mcp.mts.CUSTOMER_API_KEYS
 
 
@@ -763,10 +883,12 @@ def test_delete_from_a_separate_onboarding_process_calls_the_evict_route(reg, mo
             return SimpleNamespace(status_code=200)
 
     monkeypatch.setattr(cdb.httpx, "AsyncClient", _Recorder)
-    assert reg.client.delete("/customers/cust_a2", headers=_bearer(reg.keys["cust_a"])).status_code == 200
+    assert reg.client.delete("/customers/cust_a2", headers=_bearer(reg.keys["cust_a2"])).status_code == 200
     assert len(calls) == 1
     assert calls[0]["url"] == f"{cdb.customer_manager.mcp_server_url}/admin/customers/cust_a2"
-    assert calls[0]["headers"].get(TOKEN_HEADER) == reg.token
+    # Signed like every admin call; the static token is never sent there.
+    assert calls[0]["headers"].get("Authorization", "").startswith("Bearer avs1.")
+    assert TOKEN_HEADER not in calls[0]["headers"]
 
 
 # ---- option (i): a customer bound to nobody is reachable through the service --
@@ -789,9 +911,30 @@ UNBOUND_ROUTES = [
 def test_service_reaches_an_unbound_customer_for_any_signed_in_user(reg, method, path, user):
     r = reg.client.request(method, path, headers=_service(reg.token, user))
     assert r.status_code == 200, r.text
+    assert reg.pws["cust_legacy"] not in r.text
     if path.endswith("/credentials"):
-        assert r.json()["password"] == reg.pws["cust_legacy"]
+        assert _opened(r)["password"] == reg.pws["cust_legacy"]
         assert r.json()["database_type"] == "postgresql"
+
+
+@pytest.mark.parametrize("method,path", UNBOUND_ROUTES)
+def test_the_unbound_exception_is_the_service_tokens_alone(reg, method, path):
+    """Decision 3 of the 1.7/2.0 merge: the #618 exception's exact scope.
+
+    The service token reaches an unbound customer; a signed user assertion for
+    the same user does not (2.0: unowned is nobody's), and neither does another
+    customer's api_key.
+    """
+    from app.mcp_server.client import user_headers
+
+    assert reg.client.request(method, path, headers=_service(reg.token, "user_a")).status_code == 200
+    assertion = user_headers("user_a")
+    assert assertion, "no assertion: the sealing key is missing in the fixture"
+    r = reg.client.request(method, path, headers=assertion)
+    assert r.status_code == 404 and r.json()["detail"] == "Customer not found"
+    r = reg.client.request(method, path, headers=_bearer(reg.keys["cust_a"]))
+    assert r.status_code == (403 if path.endswith("/credentials") else 404)
+    assert reg.pws["cust_legacy"] not in r.text
 
 
 @pytest.mark.parametrize("method,path", UNBOUND_ROUTES)
@@ -799,7 +942,8 @@ def test_service_reaches_an_unbound_customer_for_any_signed_in_user(reg, method,
 def test_an_unbound_customer_stays_closed_to_other_customers_keys(reg, method, path, who):
     key = {"a_key": reg.keys["cust_a"], "b_key": reg.keys["cust_b"]}[who]
     r = reg.client.request(method, path, headers=_bearer(key))
-    assert r.status_code == 404
+    # /credentials refuses every api_key before any lookup (403); the rest 404.
+    assert r.status_code == (403 if path.endswith("/credentials") else 404)
     assert reg.pws["cust_legacy"] not in r.text
 
 
@@ -833,16 +977,17 @@ def test_binding_closes_an_unbound_customer_to_everyone_else(reg):
     assert r.status_code == 404
     assert reg.pws["cust_legacy"] not in r.text
     r = reg.client.get("/customers/cust_legacy/credentials", headers=_service(reg.token, "user_a"))
-    assert r.json()["password"] == reg.pws["cust_legacy"]
+    assert _opened(r)["password"] == reg.pws["cust_legacy"]
 
 
 def _transfer_between(p, user_id, source, destination):
-    state = {"user_id": user_id, "dta_database_registry": {}}
-    msg = p.planner._handle_initiate_transfer(
+    """A transfer as the chat runs it, the user answering "yes" to its confirmation."""
+    state = {"user_id": user_id, "dta_database_registry": {}, "messages": []}
+    msg = run_confirmed(
         state,
         p.planner.InitiateTransferParams(
-            source_alias=source, destination_alias=destination,
-            user_prompt=f"transfer from {source} to {destination}", write_mode="append",
+            source_alias=source, destination_alias=destination, source_table="orders",
+            user_prompt=f"transfer orders from {source} to {destination}", write_mode="append",
             dest_table="orders_copy", create_if_missing=True,
         ),
     )
@@ -851,8 +996,10 @@ def _transfer_between(p, user_id, source, destination):
 
 @pytest.mark.parametrize("user", ["user_a", "user_b"])
 def test_planner_transfers_from_an_unbound_customer_for_any_user(planner_against_onboarding, user):
+    """3a: the user's assertion is 404 on a legacy unbound source, and the service token reaches it."""
     p = planner_against_onboarding
     state, _msg = _transfer(p, user, source="cust_legacy")
+    assert [h for h in p.seen if h.get(TOKEN_HEADER) == p.reg.token and h.get(USER_HEADER) == user]
     entry = state["dta_database_registry"]["cust_legacy"]
     # Typed from /credentials: /customers does not list a customer bound to nobody.
     assert entry["db_type"] == "postgresql"
@@ -863,7 +1010,6 @@ def test_planner_transfers_from_an_unbound_customer_for_any_user(planner_against
 @pytest.mark.parametrize("source", ["cust_a", "cust_legacy"])
 def test_planner_transfers_into_an_unbound_destination(planner_against_onboarding, monkeypatch, source):
     p = planner_against_onboarding
-    monkeypatch.setattr(p.planner, "_list_dest_tables", lambda creds, db_type: None)
     state, _msg = _transfer_between(p, "user_a", source, "cust_legacy")
     assert state["dta_database_registry"]["cust_legacy"]["db_type"] == "postgresql"
     assert p.captured["destination_type"] == "postgresql"

@@ -1,4 +1,4 @@
-"""Cloud storage keys are sealed, never plaintext (hotfix/1.6-cloud-keys-sealed).
+"""Object-store credentials are sealed, never plaintext (D15.3, 15c), app side.
 
 - seal_row turns a plaintext pair into the ciphertext/iv columns and refuses
   to write unsealed when no key is configured;
@@ -7,20 +7,15 @@
   project id left blank), the old RPC's raw text in *_ciphertext with no IV --
   leaves a row with no secret anywhere to its owner, and has a dry run; the
   CLI defaults to that dry run and prints each shape's count, never a value;
+- an opened row becomes one Credentials document for ObjectStoreConnector,
+  per provider, and the connector's sinks never show it;
 - POST /api/cloud-connections seals in process and writes no plaintext column;
   without a key it is 503, not a plaintext insert;
-- every reader works on a sealed-only row once get_cloud_connection has opened
-  it in memory, and refuses the row unopened: get_cloud_connection itself, the
-  Ray job submitter, the Kubernetes secret builder, the planner;
-- the migration (both trees, identical to the 1.7 line's copy on
-  feat/2.x-object-stores) drops the plaintext
-  branch, is NOT VALID, retires the anon-callable RPC, and is in
-  MERGED_MIGRATIONS; the server wires the route and the start-up sealer; the
-  UI no longer inserts keys itself.
+- the migration (both trees) drops the plaintext branch, is NOT VALID, retires
+  the anon-callable RPC, and is in MERGED_MIGRATIONS.
 
 Bites: let seal_row pass plaintext through; keep the old CHECK; insert the
-body as it arrived; print a value from the CLI; skip decryption in
-get_cloud_connection.
+body as it arrived.
 """
 
 from __future__ import annotations
@@ -38,12 +33,12 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api import cloud_connections as cc
+from avaloka.connectors import Credentials
+from avaloka.connectors.objectstore import ObjectStoreConnector
 
 ROOT = Path(__file__).resolve().parents[1]
 NAME = "20261116130000_cloud_datasets_sealed_keys.sql"
 SECRET = "wJalrXUtnFEMI/K7MDENG/bPxRfiCY" + "EXAMPLEKEY"
-ACCESS = "AKIAEXAMPLE" + "FAKE"
-SA_JSON = json.dumps({"type": "service_account", "project_id": "proj", "private_key": "PK-" + "material"})
 
 
 @pytest.fixture
@@ -70,7 +65,6 @@ class FakeTable:
         self._op: Any = None
         self._filters: List[tuple] = []
         self._payload: Any = None
-        self._negate = False
         self._single = False
 
     def select(self, *_a, **_k):
@@ -83,7 +77,7 @@ class FakeTable:
         return self
 
     def is_(self, col, val):
-        self._filters.append(("is_not" if self._negate else "is", col, val))
+        self._filters.append(("is_not" if getattr(self, "_negate", False) else "is", col, val))
         self._negate = False
         return self
 
@@ -117,12 +111,12 @@ class FakeTable:
         rows = self.store.rows.setdefault(self.name, [])
         if self._op == "select":
             found = [dict(r) for r in rows if self._match(r)]
-            return types.SimpleNamespace(data=(found[0] if found else None) if self._single else found)
+            return type("R", (), {"data": (found[0] if found else None) if self._single else found})()
         if self._op == "insert":
             row = {"id": f"row-{len(rows) + 1}", **self._payload}
             self.store.check(row)
             rows.append(row)
-            return types.SimpleNamespace(data=[dict(row)])
+            return type("R", (), {"data": [dict(row)]})()
         if self._op == "update":
             out = []
             for r in rows:
@@ -130,7 +124,7 @@ class FakeTable:
                     r.update(self._payload)
                     self.store.check(r)
                     out.append(dict(r))
-            return types.SimpleNamespace(data=out)
+            return type("R", (), {"data": out})()
         raise AssertionError(self._op)
 
 
@@ -155,6 +149,33 @@ class FakeClient:
             raise RuntimeError('new row for relation "cloud_datasets" violates check constraint "check_credentials_sealed"')
 
 
+# --------------------------------------------------------------------------- #
+# seal_row and the sealer
+# --------------------------------------------------------------------------- #
+
+def test_seal_row_writes_the_sealed_columns_and_nothing_plaintext(keyed):
+    row = cc.seal_row({"user_id": "u", "provider": "aws", "access_key": "AKIAEXAMPLE", "secret_key": SECRET})
+    assert row["access_key"] is None and row["secret_key"] is None
+    assert row["access_key_ciphertext"] and row["access_key_iv"] and row["secret_key_ciphertext"] and row["secret_key_iv"]
+    text = json.dumps(row)
+    assert "AKIAEXAMPLE" not in text and SECRET not in text
+    assert cc.decrypt_secret({"ciphertext": row["secret_key_ciphertext"], "iv": row["secret_key_iv"]}) == SECRET
+    already = {"access_key_ciphertext": "c", "access_key_iv": "i", "secret_key_ciphertext": "c2", "secret_key_iv": "i2"}
+    assert cc.seal_row(dict(already)) == already
+    with pytest.raises(ValueError, match="both halves"):
+        cc.seal_row({"access_key": "AKIA", "secret_key": ""})
+
+
+def test_seal_row_refuses_to_write_unsealed_without_a_key(unkeyed):
+    """Bite: fall back to plaintext when the key is missing."""
+    with pytest.raises(RuntimeError, match="DB_ENCRYPTION_KEY"):
+        cc.seal_row({"access_key": "AKIA", "secret_key": SECRET})
+
+
+ACCESS = "AKIAEXAMPLE" + "FAKE"
+SA_JSON = json.dumps({"type": "service_account", "project_id": "proj", "private_key": "PK-" + "material"})
+
+
 def _sealed_row(provider="aws", access=ACCESS, secret=SECRET, **extra) -> Dict[str, Any]:
     a, s = cc.encrypt_secret(access), cc.encrypt_secret(secret)
     row = {"id": "conn-1", "user_id": "u", "name": "prod", "provider": provider, "region": "eu-west-1",
@@ -163,29 +184,6 @@ def _sealed_row(provider="aws", access=ACCESS, secret=SECRET, **extra) -> Dict[s
            "secret_key_ciphertext": s["ciphertext"], "secret_key_iv": s["iv"]}
     row.update(extra)
     return row
-
-
-# --------------------------------------------------------------------------- #
-# seal_row, the sealer, the CLI
-# --------------------------------------------------------------------------- #
-
-def test_seal_row_writes_the_sealed_columns_and_nothing_plaintext(keyed):
-    row = cc.seal_row({"user_id": "u", "provider": "aws", "access_key": ACCESS, "secret_key": SECRET})
-    assert row["access_key"] is None and row["secret_key"] is None
-    assert row["access_key_ciphertext"] and row["access_key_iv"] and row["secret_key_ciphertext"] and row["secret_key_iv"]
-    text = json.dumps(row)
-    assert ACCESS not in text and SECRET not in text
-    assert cc.decrypt_secret({"ciphertext": row["secret_key_ciphertext"], "iv": row["secret_key_iv"]}) == SECRET
-    already = {"access_key_ciphertext": "c", "access_key_iv": "i", "secret_key_ciphertext": "c2", "secret_key_iv": "i2"}
-    assert cc.seal_row(dict(already)) == already
-    with pytest.raises(ValueError, match="both halves"):
-        cc.seal_row({"access_key": ACCESS, "secret_key": ""})
-
-
-def test_seal_row_refuses_to_write_unsealed_without_a_key(unkeyed):
-    """Bite: fall back to plaintext when the key is missing."""
-    with pytest.raises(RuntimeError, match="DB_ENCRYPTION_KEY"):
-        cc.seal_row({"access_key": ACCESS, "secret_key": SECRET})
 
 
 def _opens(row, half):
@@ -263,12 +261,6 @@ def test_a_half_sealed_row_keeps_its_sealed_half_and_seals_the_other(keyed):
     assert _opens(row, "access_key") == "AKIA-m"
 
 
-def test_the_sealer_refuses_without_a_key(unkeyed):
-    with pytest.raises(RuntimeError, match="DB_ENCRYPTION_KEY"):
-        cc.seal_plaintext_rows(FakeClient(rows=[{"id": "a", "access_key": "x", "secret_key": "y"}]))
-    assert cc.seal_at_startup() is None
-
-
 def test_the_cli_defaults_to_a_dry_run_and_prints_counts_only(keyed):
     """Bite: print a row or a key; seal without --apply."""
     client = FakeClient(rows=[{"id": "a", "provider": "aws", "access_key": ACCESS, "secret_key": SECRET},
@@ -310,6 +302,58 @@ def test_the_cli_without_a_key_says_so_and_touches_nothing(unkeyed):
     assert cc.seal_cli(["seal", "--apply"], client_factory=lambda: client, out=out) == 1
     assert "DB_ENCRYPTION_KEY" in out.getvalue() and SECRET not in out.getvalue()
     assert client.rows["cloud_datasets"][0]["access_key"] == ACCESS
+
+
+
+def test_the_sealer_refuses_without_a_key(unkeyed):
+    with pytest.raises(RuntimeError, match="DB_ENCRYPTION_KEY"):
+        cc.seal_plaintext_rows(FakeClient(rows=[{"id": "a", "access_key": "x", "secret_key": "y"}]))
+    assert cc.seal_at_startup() is None
+
+
+# --------------------------------------------------------------------------- #
+# An opened row -> Credentials -> ObjectStoreConnector
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.parametrize("row, url, expected_options, host", [
+    ({"provider": "aws", "access_key": "AKIAEXAMPLE", "secret_key": SECRET, "region": "eu-west-1",
+      "bucket_name": "acme-raw/exports"}, "s3://acme-raw/exports",
+     {"provider": "s3", "access_key": "AKIAEXAMPLE", "secret_key": SECRET, "region": "eu-west-1"},
+     "s3.eu-west-1.amazonaws.com"),
+    ({"provider": "aws_s3", "access_key": "k", "secret_key": "s", "endpoint_url": "https://seaweed.svc:8333",
+      "bucket_name": "b"}, "s3://b", {"provider": "s3", "access_key": "k", "secret_key": "s",
+                                      "endpoint_url": "https://seaweed.svc:8333"}, "seaweed.svc"),
+    ({"provider": "gcp", "access_key": "my-project", "secret_key": '{"type": "service_account", "private_key": "PK"}',
+      "bucket_name": "acme-lake/zone"}, "gs://acme-lake/zone",
+     {"provider": "gcs", "service_account_json": '{"type": "service_account", "private_key": "PK"}', "project": "my-project"},
+     "storage.googleapis.com"),
+    ({"provider": "azure", "access_key": "acct", "secret_key": "?sv=2024&sig=SIG", "bucket_name": "container/p"},
+     "az://container/p", {"provider": "azure", "account_name": "acct", "sas_token": "?sv=2024&sig=SIG"},
+     "acct.blob.core.windows.net"),
+])
+def test_an_opened_row_becomes_sealed_options_and_a_connector(row, url, expected_options, host):
+    assert cc.storage_options_from_row(row) == expected_options
+    creds = cc.object_store_credentials(row)
+    assert isinstance(creds, Credentials) and json.loads(creds.reveal()) == expected_options
+    assert cc.object_store_url(row) == url
+    c = cc.object_store_connector(row)
+    assert isinstance(c, ObjectStoreConnector) and c.describe() == url
+    assert c.endpoints()[0].host == host
+    sinks = json.dumps([repr(c), c.describe(), [e.as_dict() for e in c.endpoints()], repr(c.credentials)])
+    for secret in (SECRET, "PK", "sig=SIG", "AKIAEXAMPLE"):
+        assert secret not in sinks
+
+
+def test_storage_uri_overrides_the_rows_bucket_but_not_its_provider():
+    row = {"provider": "aws", "access_key": "k", "secret_key": "s", "bucket_name": "default"}
+    assert cc.object_store_url(row, "s3://other/prefix/") == "s3://other/prefix"
+    assert cc.object_store_url(row, "s3://other") == "s3://other"
+    with pytest.raises(ValueError, match="provider"):
+        cc.storage_options_from_row({"provider": "ftp", "access_key": "k", "secret_key": "s"})
+    with pytest.raises(ValueError, match="key pair"):
+        cc.storage_options_from_row({"provider": "aws", "access_key": "k"})
+    with pytest.raises(ValueError, match="bucket"):
+        cc.object_store_url({"provider": "aws"})
 
 
 # --------------------------------------------------------------------------- #
@@ -406,11 +450,11 @@ def _client(monkeypatch, fake: FakeClient):
 
 
 BODY = {"name": "Prod bucket", "provider": "aws", "bucket_name": "acme-raw", "region": "us-east-1",
-        "access_key": ACCESS, "secret_key": SECRET}
+        "access_key": "AKIAEXAMPLE", "secret_key": SECRET}
 
 
 def test_the_route_seals_before_the_insert_and_stores_no_plaintext(keyed, monkeypatch):
-    fake = FakeClient()
+    fake = FakeClient(enforce=True)
     client = _client(monkeypatch, fake)
     assert client.post("/api/cloud-connections", json=BODY).status_code == 401
     r = client.post("/api/cloud-connections", json=BODY, headers={"authorization": "tok-a"})
@@ -419,7 +463,7 @@ def test_the_route_seals_before_the_insert_and_stores_no_plaintext(keyed, monkey
     (row,) = fake.rows["cloud_datasets"]
     assert row["user_id"] == "user-a" and "access_key" not in row and "secret_key" not in row
     assert cc.decrypt_secret({"ciphertext": row["secret_key_ciphertext"], "iv": row["secret_key_iv"]}) == SECRET
-    assert SECRET not in json.dumps(row) and ACCESS not in json.dumps(row)
+    assert SECRET not in json.dumps(row) and "AKIAEXAMPLE" not in json.dumps(row)
 
 
 def test_the_route_is_503_not_a_plaintext_insert_without_a_key(unkeyed, monkeypatch):
@@ -431,27 +475,27 @@ def test_the_route_is_503_not_a_plaintext_insert_without_a_key(unkeyed, monkeypa
     assert fake.rows["cloud_datasets"] == []
 
 
+PRIVATE_KEY = "pk_sentinel-not-base64"
+
+
 def test_the_route_validates_providers_and_gcp_keys(keyed, monkeypatch):
-    fake = FakeClient()
+    fake = FakeClient(enforce=True)
     client = _client(monkeypatch, fake)
     h = {"authorization": "tok-a"}
     assert client.post("/api/cloud-connections", json={**BODY, "provider": "ftp"}, headers=h).status_code == 400
     assert client.post("/api/cloud-connections", json={**BODY, "access_key": ""}, headers=h).status_code == 400
     gcp = {"name": "GCP", "provider": "gcp", "bucket_name": "lake", "project_id": "proj", "secret_key": "not json"}
     assert client.post("/api/cloud-connections", json=gcp, headers=h).status_code == 400
-    gcp["secret_key"] = SA_JSON
+    # "_" and "-" are outside the base64 alphabet, so ciphertext cannot contain the key by chance
+    gcp["secret_key"] = json.dumps({"type": "service_account", "private_key": PRIVATE_KEY})
     r = client.post("/api/cloud-connections", json=gcp, headers=h)
     assert r.status_code == 201 and r.json()["provider"] == "gcp"
     row = fake.rows["cloud_datasets"][-1]
     assert cc.decrypt_secret({"ciphertext": row["access_key_ciphertext"], "iv": row["access_key_iv"]}) == "proj"
     sa = json.loads(cc.decrypt_secret({"ciphertext": row["secret_key_ciphertext"], "iv": row["secret_key_iv"]}))
-    assert sa["project_id"] == "proj" and "PK-" in sa["private_key"]
-    assert "PK-" not in json.dumps(row)
+    assert sa["project_id"] == "proj" and sa["private_key"] == PRIVATE_KEY
+    assert PRIVATE_KEY not in json.dumps(row)
 
-
-# --------------------------------------------------------------------------- #
-# Wiring, UI and the migration text (the Postgres run is test_cloud_datasets_sealed_check_pg.py)
-# --------------------------------------------------------------------------- #
 
 def test_the_server_wires_the_route_and_seals_at_startup():
     text = (ROOT / "app" / "api" / "server.py").read_text(encoding="utf-8")
@@ -465,14 +509,20 @@ def test_the_ui_no_longer_writes_keys_to_the_table_itself():
     """Both UI writers post to the backend. Bite: restore the direct insert."""
     for rel in ("ui/src/lib/api/backendApi.ts", "ui/src/lib/gcp-connection.ts"):
         text = (ROOT / rel).read_text(encoding="utf-8")
-        assert not re.search(r'\.from\("cloud_datasets"\)\s*\.insert\(', text), f"{rel} still inserts into cloud_datasets"
-        for block in re.findall(r'\.from\("cloud_datasets"\)(.*?)\.(?:select|eq)\(', text, re.DOTALL):
-            assert "secret_key" not in block and "access_key" not in block, rel
+        inserts = [m.start() for m in re.finditer(r'\.from\("cloud_datasets"\)\s*\.insert\(', text)]
+        assert not inserts, f"{rel} still inserts into cloud_datasets directly"
+        for block in re.findall(r'\.from\("cloud_datasets"\)(.*?)\.select\(|\.from\("cloud_datasets"\)(.*?)\.eq\(', text, re.DOTALL):
+            joined = "".join(block)
+            assert "secret_key" not in joined and "access_key" not in joined, rel
     api = (ROOT / "ui/src/lib/api/backendApi.ts").read_text(encoding="utf-8")
     assert 'proxyFetch(`/api/cloud-connections`' in api
 
 
-def test_the_migration_is_byte_identical_in_both_trees_and_drops_the_plaintext_branch():
+# --------------------------------------------------------------------------- #
+# The migration, as text (the Postgres run is tests/test_cloud_datasets_sealed_check_pg.py)
+# --------------------------------------------------------------------------- #
+
+def test_the_migration_drops_the_plaintext_branch_and_is_in_both_trees():
     ui = ROOT / "ui" / "supabase" / "migrations" / NAME
     chart = ROOT / "deploy" / "helm" / "avaloka" / "files" / "supabase-migrations" / NAME
     assert ui.is_file() and chart.is_file() and ui.read_bytes() == chart.read_bytes()
@@ -491,9 +541,10 @@ def test_the_migration_is_byte_identical_in_both_trees_and_drops_the_plaintext_b
     assert "access_key IS NOT NULL" not in check and " OR " not in check, "no plaintext branch"
     assert "RAISE EXCEPTION" in sql.split("encrypt_cloud_credentials", 1)[1]
     assert re.search(r"REVOKE ALL ON FUNCTION public\.encrypt_cloud_credentials.*FROM PUBLIC, anon", sql)
-    from tests.test_migration_versions_unique import MERGED_MIGRATIONS
+    from tests.contract.test_migration_versions import MERGED_MIGRATIONS
     # Listed in merge order, and nothing merged after it sorts before it. (It was
-    # pinned as the newest entry, which every later 1.6 migration made untrue.)
-    assert NAME in MERGED_MIGRATIONS
-    later = MERGED_MIGRATIONS[MERGED_MIGRATIONS.index(NAME) + 1:]
-    assert all(n > NAME for n in later), f"merged after {NAME} but sorts before it: {[n for n in later if n <= NAME]}"
+    # pinned as the newest entry, which every later migration made untrue.)
+    stem = NAME[:-4]
+    assert stem in MERGED_MIGRATIONS
+    later = MERGED_MIGRATIONS[MERGED_MIGRATIONS.index(stem) + 1:]
+    assert all(n > stem for n in later), f"merged after {stem} but sorts before it: {[n for n in later if n <= stem]}"

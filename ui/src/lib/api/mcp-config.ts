@@ -1,7 +1,7 @@
 /**
  * MCP service base URLs — SEPARATE services from BACKEND_API_BASE.
  *  - MCP_API_BASE : onboarding/registration service (local port 8081)
- *  - MCP_TOOL_BASE: MCP tool server, /call_tool     (local port 8082)
+ *  - MCP_TOOL_BASE: MCP tool server, /call_tool     (local port 8080, MCP_SERVER_PORT)
  * Each has its own tunnel; they are NOT the backend tunnel.
  * Change these ONE place when the tunnel URLs rotate.
  */
@@ -21,4 +21,4 @@ export const MCP_API_BASE =
 
 export const MCP_TOOL_BASE =
   runtimeEnv.MCP_TOOL_BASE?.replace(/\/$/, "") ||
-  "http://127.0.0.1:8082";
+  "http://127.0.0.1:8080";

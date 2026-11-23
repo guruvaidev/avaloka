@@ -1231,7 +1231,9 @@ class TestExecuteLlmDisabled:
         result = agent.execute(state)
         last_msg = result["messages"][-1]
         assert isinstance(last_msg, AIMessage)
-        assert "unavailable" in last_msg.content.lower() or "sorry" in last_msg.content.lower()
+        assert "isn't available" in last_msg.content.lower()
+        assert not last_msg.content.startswith("Sorry")
+        assert result["agent_errors"][-1]["error_class"] == "AgentUnavailable"
 
     def test_training_flags_cleared_when_llm_is_none(self):
         from app.agents.mta_v2.agent import ModelTrainingAgent
@@ -1262,7 +1264,9 @@ class TestExecuteNoToolCalls:
 
         last_msg = result["messages"][-1]
         assert isinstance(last_msg, AIMessage)
-        assert "sorry" in last_msg.content.lower()
+        assert not last_msg.content.startswith("Sorry")
+        assert "target column" in last_msg.content.lower()
+        assert result["agent_errors"][-1]["error_class"] == "NoToolCallsError"
 
 
 # ---------------------------------------------------------------------------
@@ -1329,10 +1333,16 @@ class TestExecuteToolRouting:
     def test_routes_execute_inference(self):
         self._run_with_tool("execute_inference")
 
-    def test_unknown_tool_skipped(self, caplog):
-        """Unknown tool names are skipped, not failed; state is returned with flags cleared."""
+    def test_only_unknown_tools_is_a_failed_turn(self, monkeypatch, caplog):
+        """A reply naming only tools the agent does not have is not an answer.
+
+        It used to be skipped: no reply added, the step "ok" -- a silent turn.
+        Now it is retried like a reply with no tool call and, when every
+        attempt is unusable, ends as a failed step in plain words.
+        """
         from app.agents.mta_v2.agent import ModelTrainingAgent
 
+        monkeypatch.setenv("AVALOKA_DISABLE_MODEL_FALLBACK", "1")
         mock_llm = MagicMock()
         mock_response = MagicMock()
         mock_response.tool_calls = [{"name": "nonexistent_tool"}]
@@ -1340,24 +1350,42 @@ class TestExecuteToolRouting:
 
         agent = ModelTrainingAgent()
         state = _make_state()
-        # execute() appends to the caller's list in place, so compare against
-        # a snapshot, not against state["messages"].
         messages_before = list(state["messages"])
 
         with patch("app.agents.mta_v2.agent.llm", mock_llm), \
              caplog.at_level("WARNING", logger="app.agents.mta_v2.agent"):
             result = agent.execute(state)
 
-        # execute() catches everything, so "did not raise" proves nothing: a
-        # failed turn also returns a dict, with an apology appended. Skipped
-        # means no reply was added and the skip was logged as a warning.
-        assert result["messages"] == messages_before
-        assert [
-            record.levelname for record in caplog.records
-            if "nonexistent_tool" in record.getMessage()
-        ] == ["WARNING"]
+        assert mock_llm.invoke.call_count == 2, "portable call, then the forced retry"
+        assert len(result["messages"]) == len(messages_before) + 1
+        last_msg = result["messages"][-1]
+        assert isinstance(last_msg, AIMessage)
+        assert "nonexistent_tool" not in last_msg.content
+        assert "target column" in last_msg.content.lower()
+        assert result["agent_errors"][-1]["error_class"] == "NoToolCallsError"
+        # The invented name stays out of the error the chat response returns.
+        assert "nonexistent_tool" not in result["agent_errors"][-1]["error"]
         assert result["enable_training"] is False
         assert result["skip_to_training"] is False
+
+    def test_a_known_tool_beside_an_unknown_one_still_runs(self):
+        """Mixed replies are usable: the unknown name is skipped, the known one runs."""
+        from app.agents.mta_v2.agent import ModelTrainingAgent
+
+        mock_llm = MagicMock()
+        mock_response = MagicMock()
+        mock_response.tool_calls = [{"name": "nonexistent_tool"}, {"name": "review_code_repo"}]
+        mock_llm.invoke.return_value = mock_response
+
+        agent = ModelTrainingAgent()
+        state = _make_state()
+        with patch("app.agents.mta_v2.agent.llm", mock_llm), \
+             patch.object(agent, "_review_code_repo", side_effect=lambda st: st) as review:
+            result = agent.execute(state)
+
+        assert mock_llm.invoke.call_count == 1
+        review.assert_called_once()
+        assert not result.get("agent_errors")
 
     def test_training_scheduled_bypasses_llm(self):
         """When training_scheduled=True execute() should call _execute_training directly."""

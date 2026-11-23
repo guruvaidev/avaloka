@@ -38,9 +38,15 @@ def _summarize_session(blob: Dict[str, Any]) -> Dict[str, Any]:
         "selected_sample_name": blob.get("selected_sample_name"),
         "available_samples": blob.get("available_samples"),
         "profiling_summary": _trim(blob.get("profiling_result")),
+        "complex_summary": _trim(blob.get("complex_structure")),
         "connection_event": blob.get("connection_event"),
         "last_infra_platform": blob.get("last_infra_platform"),
         "thread_id": blob.get("thread_id"),
+        # The DB session's api_key, still sealed (ciphertext under
+        # DB_ENCRYPTION_KEY). discovery_tools opens it in process to speak to
+        # the MCP server as the customer; the agent strips it before the
+        # context reaches state or a prompt.
+        "db_credential_handle": blob.get("api_key_enc") if blob.get("type") == "database" else None,
     }
 
 
@@ -116,6 +122,8 @@ def render_for_prompt(ctx: Dict[str, Any]) -> str:
         lines.append(f"selected_sample: {ctx['selected_sample_name']}")
     if ctx.get("available_samples"):
         lines.append(f"available_samples: {ctx['available_samples']}")
+    if ctx.get("complex_summary"):
+        lines.append(f"complex_data: {_trim(ctx['complex_summary'], 400)}")
     if ctx.get("profiling_summary"):
         lines.append(f"profile: {_trim(ctx['profiling_summary'], 400)}")
     if ctx.get("connection_event"):

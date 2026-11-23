@@ -80,9 +80,14 @@ class ChromaClientImpl:
             else:
                 self.client = chromadb.PersistentClient(path=self.storage_path)
                 
+            # chroma's default embedding function, but from the model baked
+            # into the image: left implicit, chroma fetched it from
+            # chroma-onnx-models.s3.amazonaws.com on the first query.
+            from app.core.offline import chroma_default_ef  # noqa: PLC0415
             self.collection = self.client.get_or_create_collection(
                 name=self._collection_name,
                 metadata={"description": "User-specific ETL style and logic configuration mapping"},
+                embedding_function=chroma_default_ef(),
             )
             self.use_mock = False
             logger.info(f"ChromaClientImpl connected — collection='{self._collection_name}'.")

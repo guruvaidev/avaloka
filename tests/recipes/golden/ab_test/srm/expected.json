@@ -1,0 +1,15 @@
+{
+  "recipe": "ab_test",
+  "version_major": 1,
+  "verdict": "refuse",
+  "reason": "sample_ratio_mismatch",
+  "figures": [],
+  "caveats": [],
+  "must_not_say": [
+    "causes",
+    "proves",
+    "guarantees",
+    "will"
+  ],
+  "note": "scipy chisquare on arm counts 112/48 against an equal split: p about 4e-7, below 0.001, so the recipe refuses sample_ratio_mismatch and nothing is reported (the counts are chosen so a threshold of 1e-9 would pass)."
+}

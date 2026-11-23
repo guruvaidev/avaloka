@@ -9,8 +9,10 @@ from pathlib import Path
 import pandas as pd
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import AIMessage, HumanMessage
+from app.api import reply_segments as _rs
 
 from app.graph.etl_state import ETLState
+from app.trace.recorder import traced_node, traced_router
 from app.core.analysis_limits import byte_routing_enabled
 
 from app.agents.coder import coder_node, coder_llm
@@ -34,7 +36,10 @@ from app.agents.visualization_agent import visualization_agent_node
 from app.agents.scheduler import task_scheduler_node
 from app.agents.avaloka_agent import avaloka_agent_node, route_avaloka
 from app.agents.claim_verifier import claim_verifier_node
+from app.agents.analysis_outcome import record_failed_step
+from app.agents.replan import replan_node, route_after_replan, should_replan
 from app.agents.result_narrator import result_narrator_node
+from app.agents.drivers_route import drivers_route_node, route_after_drivers
 
 logger = logging.getLogger(__name__)
 
@@ -205,6 +210,10 @@ def _latest_user_index(messages: list) -> int | None:
 # ---------------------------------------------------------------------------
 
 def route_planner_output(state: ETLState):
+    # ── The user answered the replan loop's question (app/agents/replan_choice.py):
+    #    the code that failed runs again, and the replan loop applies the answer.
+    if state.get("replan_resume"):
+        return "execute_locally"
     # ── Scheduler: training task type must be checked first (develop-1.2) 
     if state.get("skip_to_training", False):
         return "train_models"
@@ -457,9 +466,70 @@ def route_after_execution(state: ETLState):
     return "end"
 
 
+def route_after_local_execution(state: ETLState):
+    """``route_after_execution`` for the local (and executor) run, with the replan loop.
+
+    A failed run goes to ``replan`` (app/agents/replan.py), which repairs the
+    data or the code and runs again, or ends the turn in plain words. Ray and
+    Kubernetes runs keep ``route_after_execution``: they are not covered yet.
+    """
+    if should_replan(state):
+        return "replan"
+    return route_after_execution(state)
+
+
 # ---------------------------------------------------------------------------
 # Coding subgraph
 # ---------------------------------------------------------------------------
+
+#: Sample-run outcomes that are not the code crashing (the same list as
+#: app.agents.validator.run_code_validation's): nothing ran, or it ran and
+#: returned no rows. Repeated here so this module imports nothing new from
+#: the validator.
+_SAMPLE_NOT_A_CRASH = frozenset({
+    "Execution returned an empty DataFrame.",
+    "Sample data unavailable for execution",
+    "Sample data unavailable for execution.",
+    "Validation failed.",
+})
+
+
+def _sample_crash(state) -> str | None:
+    """The sample run's error when main(df) itself raised, else None."""
+    if state.get("syntax_error") or state.get("static_semantic_error"):
+        return None
+    err = str(state.get("execution_error") or "").strip()
+    if not err or err in _SAMPLE_NOT_A_CRASH:
+        return None
+    return err
+
+
+def logical_review_with_sample_crash_gate(state: CodingAgentState) -> dict:
+    """The logical reviewer, plus a deterministic check that the sample run did not crash.
+
+    A crash on the sample used to send the code back only when the LLM reviewer
+    read the crash and said so. With no reviewer configured it approved, and
+    code that had already raised on the sample went on to the full run. A crash
+    is a fact, not a judgement: it refines on the same budget as the other
+    validators. When the budget runs out the code still goes forward (a crash
+    on a tiny sample can be an artefact of the sample), and a failure on the
+    full run is then the replan loop's to diagnose.
+    """
+    out = logical_semantic_validator_node(state)
+    if not isinstance(out, dict):
+        return out
+    crash = _sample_crash(state)
+    if not crash or out.get("logical_semantic_error"):
+        return {**out, "sample_crash_error": False}
+    return {
+        **out,
+        "sample_crash_error": True,
+        "code_validation_feedback": (
+            f"main(df) raised an error when run on the sample data: {crash[:500]}. "
+            "Fix the code so it runs on this data."
+        ),
+    }
+
 
 def check_validation_status(state: CodingAgentState) -> str:
     """Routes back to coder if validation fails, otherwise ends."""
@@ -467,6 +537,7 @@ def check_validation_status(state: CodingAgentState) -> str:
         state.get("syntax_error")
         or state.get("static_semantic_error")
         or state.get("logical_semantic_error")
+        or state.get("sample_crash_error")
         # A contract violation is a deterministic, self-stated failure: the
         # result does not satisfy the acceptance criteria the blueprint itself
         # published for this task. It retries on the same budget as the rest.
@@ -496,12 +567,12 @@ def build_coding_graph(checkpointer=None):
     effective_checkpointer = checkpointer
 
     workflow = StateGraph(CodingAgentState)
-    workflow.add_node("coder", coder_node)
-    workflow.add_node("validator_syntax", syntactic_validator_node)
-    workflow.add_node("validator_static", static_semantic_validator_node)
-    workflow.add_node("execute_code", execute_code_node)
-    workflow.add_node("validator_contract", contract_validator_node)
-    workflow.add_node("validator_logical", logical_semantic_validator_node)
+    workflow.add_node("coder", traced_node("coder", coder_node, nested=True))
+    workflow.add_node("validator_syntax", traced_node("validator_syntax", syntactic_validator_node, nested=True))
+    workflow.add_node("validator_static", traced_node("validator_static", static_semantic_validator_node, nested=True))
+    workflow.add_node("execute_code", traced_node("execute_code", execute_code_node, nested=True))
+    workflow.add_node("validator_contract", traced_node("validator_contract", contract_validator_node, nested=True))
+    workflow.add_node("validator_logical", traced_node("validator_logical", logical_review_with_sample_crash_gate, nested=True))
 
     workflow.set_entry_point("coder")
     workflow.add_edge("coder", "validator_syntax")
@@ -515,7 +586,11 @@ def build_coding_graph(checkpointer=None):
 
     workflow.add_conditional_edges(
         "validator_logical",
-        check_validation_status,
+        traced_router(
+            "check_validation_status", check_validation_status,
+            signals=("syntax_error", "static_semantic_error", "contract_error",
+                     "logical_semantic_error", "sample_crash_error", "retry_count"),
+        ),
         {"refine": "coder", "end": END},
     )
     if effective_checkpointer is not None:
@@ -663,7 +738,7 @@ def execute_structured_actions_node(state: ETLState) -> dict:
     if source is None:
         message = "The selected dataset is no longer available for this analysis. Please upload it again."
         return {
-            "messages": list(state.get("messages", [])) + [AIMessage(content=message)],
+            "messages": list(state.get("messages", [])) + [_rs.plain_message(content=message)],
             "execution_result": {"status": "failed", "message": message},
             "multi_action_status": "incomplete",
             "multi_action_missing": [{"id": action.id, "label": action.label, "reason": message} for action in plan.actions],
@@ -676,7 +751,7 @@ def execute_structured_actions_node(state: ETLState) -> dict:
         logger.exception("Structured action execution failed")
         message = "I couldn't read the selected dataset for this analysis. Please check its format and try again."
         return {
-            "messages": list(state.get("messages", [])) + [AIMessage(content=message)],
+            "messages": list(state.get("messages", [])) + [_rs.plain_message(content=message)],
             "execution_result": {"status": "failed", "message": message},
             "multi_action_status": "incomplete",
             "multi_action_missing": [{"id": action.id, "label": action.label, "reason": message} for action in plan.actions],
@@ -692,7 +767,11 @@ def execute_structured_actions_node(state: ETLState) -> dict:
             + "Please check the source values and column types; data cleansing or clarification may be needed."
         )
     else:
-        message = "All requested metrics are complete. The results are in the tables below."
+        # What code checked: every metric in the plan was calculated. Whether
+        # the plan covers the whole request was the model reviewer's call
+        # (multi_action.plan_metric_actions), so it is not claimed here.
+        message = (f"All {len(plan.actions)} metrics in the plan were calculated. "
+                   "The results are in the tables below.")
     if result.notes:
         message += " Data preparation: " + " ".join(result.notes)
     first_rows = result.tables[0]["rows"] if result.tables else None
@@ -706,8 +785,13 @@ def execute_structured_actions_node(state: ETLState) -> dict:
             "size": len(csv_bytes),
         }
     return {
-        "messages": list(state.get("messages", [])) + [AIMessage(content=message)],
-        "execution_result": {"status": "success" if result.tables else "failed", "message": message},
+        "messages": list(state.get("messages", [])) + [_rs.plain_message(content=message)],
+        # Some tables and some missing metrics is a partial run, not a success:
+        # the claim verifier and the chat voice read "success" as the whole answer.
+        "execution_result": {
+            "status": ("partial" if result.missing else "success") if result.tables else "failed",
+            "message": message,
+        },
         "execution_error": None if result.tables else message,
         "fresh_output_produced": bool(result.tables),
         "output_location": None,
@@ -740,7 +824,7 @@ def coding_subgraph_node(state: ETLState) -> dict:
         logger.info("coding_subgraph_node: asking clarification before code generation: %s", user_prompt[:120])
         messages = list(state.get("messages", []))
         if not any(getattr(msg, "content", None) == clarification for msg in messages):
-            messages.append(AIMessage(content=clarification))
+            messages.append(_rs.plain_message(content=clarification))
         return {
             "messages": messages,
             "ready_to_code": False,
@@ -752,13 +836,19 @@ def coding_subgraph_node(state: ETLState) -> dict:
             "pending_clarification": clarification_details.get("pending_clarification"),
         }
 
-    if _structured_source(state) is not None:
+    # A code fix from the replan loop: the coder starts from the code that
+    # failed and the error, not from a blank page, and gets one pass (the
+    # subgraph's budget ends at retry_count 3). The structured-action path
+    # was already passed over for this turn.
+    replan_feedback = state.get("replan_feedback")
+
+    if not replan_feedback and _structured_source(state) is not None:
         analysis_prompt = user_prompt.split("\n[Analysis context]", 1)[0]
         action_plan = plan_metric_actions(analysis_prompt, state.get("schema") or {}, planner_llm or coder_llm)
         if action_plan is not None and action_plan.mode == "clarify":
             clarification = action_plan.clarification or "Which dataset field should I use?"
             return {
-                "messages": list(state.get("messages", [])) + [AIMessage(content=clarification)],
+                "messages": list(state.get("messages", [])) + [_rs.plain_message(content=clarification)],
                 "ready_to_code": False, "ready_to_summarize": False,
                 "coder_definition": {}, "generated_code": "", "execution_error": clarification,
                 "structured_action_plan": None,
@@ -802,6 +892,7 @@ def coding_subgraph_node(state: ETLState) -> dict:
         "output_location": state.get("output_location", ""),
         "schema": state.get("schema", {}),
         "input_data_type": state.get("input_data_type", ""),
+        "complex_structure": state.get("complex_structure"),
         "sample_data": sample_data,
         "requirements": requirements,
         "messages": state.get("messages", []),
@@ -818,6 +909,10 @@ def coding_subgraph_node(state: ETLState) -> dict:
         "memory_hints": state.get("memory_hints"),
         "session_logic_signature": state.get("session_logic_signature"),
     }
+    if replan_feedback:
+        initial_coding_state["code_validation_feedback"] = replan_feedback
+        initial_coding_state["generated_code"] = (state.get("coder_definition") or {}).get("code") or ""
+        initial_coding_state["retry_count"] = 2
 
     if coding_graph is None:
         coding_graph = build_coding_graph()
@@ -834,7 +929,7 @@ def coding_subgraph_node(state: ETLState) -> dict:
         logger.info("coding_subgraph_node: coder blocked the request: %s", blocked_reason[:120])
         messages = list(state.get("messages", []))
         if not any(getattr(msg, "content", None) == blocked_reason for msg in messages):
-            messages.append(AIMessage(content=blocked_reason))
+            messages.append(_rs.plain_message(content=blocked_reason))
         return {
             "messages": messages,
             "coder_definition": {},
@@ -856,7 +951,7 @@ def coding_subgraph_node(state: ETLState) -> dict:
         logger.warning("coding_subgraph_node: %s", refusal)
         messages = list(state.get("messages", []))
         if not any(getattr(msg, "content", None) == refusal for msg in messages):
-            messages.append(AIMessage(content=refusal))
+            messages.append(_rs.plain_message(content=refusal))
         return {
             "messages": messages,
             "coder_definition": {},
@@ -869,6 +964,7 @@ def coding_subgraph_node(state: ETLState) -> dict:
         }
 
     updates = {
+        "replan_feedback": None,
         "coder_definition": {"code": generated_code},
         "coder_raw_response": coder_message_text,
         "generated_code": generated_code,
@@ -936,7 +1032,7 @@ def coding_subgraph_node(state: ETLState) -> dict:
                 "coding_subgraph_node: defer_required without cloud path — refusing inline execution"
             )
             return {
-                "messages": list(state.get("messages", [])) + [AIMessage(content=refusal)],
+                "messages": list(state.get("messages", [])) + [_rs.plain_message(content=refusal)],
                 "coder_definition": {},
                 "generated_code": "",
                 "execution_error": refusal,
@@ -1068,6 +1164,15 @@ def memory_injection_node(state: ETLState) -> dict:
 # build_graph — combined node set: Ray + MTA + scheduler + infra
 # ---------------------------------------------------------------------------
 
+# The state each router reads, recorded with the route it chose (app/trace).
+_PLANNER_SIGNALS = (
+    "ready_to_code", "ready_to_summarize", "skip_to_training", "enable_training",
+    "execution_mode", "analysis_fidelity", "analysis_defer_required", "task_operation",
+    "replan_resume",
+)
+_CODE_SIGNALS = ("execution_mode", "enable_training", "ready_to_train", "coder_blocked_reason")
+
+
 def build_graph(checkpointer=None):
     global coding_graph, coder_node_is_mock, mocked_coder_node, _graph_checkpointer
     _graph_checkpointer = checkpointer
@@ -1079,21 +1184,27 @@ def build_graph(checkpointer=None):
     graph_builder = StateGraph(ETLState)
 
     # ── Core nodes ──────────────────────────────────────────────────────────
-    graph_builder.add_node("memory_injection", memory_injection_node)
-    graph_builder.add_node("avaloka_agent", avaloka_agent_node)
-    graph_builder.add_node("plan_etl", plan_etl_job)
-    graph_builder.add_node("summarize_etl", summarize_etl_job)
-    graph_builder.add_node("generate_planner_graph", planner_graph_agent_node)
-    graph_builder.add_node("code_etl", coding_subgraph_node)
-    graph_builder.add_node("execute_actions", execute_structured_actions_node)
-    graph_builder.add_node("provision_infra", infra_agent_node)
-    graph_builder.add_node("schedule_task", task_scheduler_node)
-    graph_builder.add_node("execute_on_ray", execution_agent_node_ray)
-    graph_builder.add_node("execute_locally", execution_agent_node_local)
-    graph_builder.add_node("execute_on_k8s", execution_agent_node)
-    graph_builder.add_node("visualize", visualization_agent_node)
-    graph_builder.add_node("narrate_result", result_narrator_node)
-    graph_builder.add_node("verify_claims", claim_verifier_node)
+    # The first node: "what predicts X" is answered from the shared driver
+    # ranking (app/agents/drivers_route.py) before memory, the conversational
+    # agent, the planner or the coder run, for every caller of this graph
+    # (langgraph_app, the web chat, Streamlit). It starts the turn's trace.
+    graph_builder.add_node("drivers_route", traced_node("drivers_route", drivers_route_node, entry=True))
+    graph_builder.add_node("memory_injection", traced_node("memory_injection", memory_injection_node))
+    graph_builder.add_node("avaloka_agent", traced_node("avaloka_agent", avaloka_agent_node))
+    graph_builder.add_node("plan_etl", traced_node("plan_etl", plan_etl_job))
+    graph_builder.add_node("summarize_etl", traced_node("summarize_etl", summarize_etl_job))
+    graph_builder.add_node("generate_planner_graph", traced_node("generate_planner_graph", planner_graph_agent_node))
+    graph_builder.add_node("code_etl", traced_node("code_etl", coding_subgraph_node))
+    graph_builder.add_node("execute_actions", traced_node("execute_actions", record_failed_step("execute_actions", execute_structured_actions_node)))
+    graph_builder.add_node("provision_infra", traced_node("provision_infra", infra_agent_node))
+    graph_builder.add_node("schedule_task", traced_node("schedule_task", task_scheduler_node))
+    graph_builder.add_node("execute_on_ray", traced_node("execute_on_ray", record_failed_step("execute_on_ray", execution_agent_node_ray)))
+    graph_builder.add_node("execute_locally", traced_node("execute_locally", record_failed_step("execute_locally", execution_agent_node_local)))
+    graph_builder.add_node("execute_on_k8s", traced_node("execute_on_k8s", record_failed_step("execute_on_k8s", execution_agent_node)))
+    graph_builder.add_node("visualize", traced_node("visualize", visualization_agent_node))
+    graph_builder.add_node("narrate_result", traced_node("narrate_result", result_narrator_node))
+    graph_builder.add_node("verify_claims", traced_node("verify_claims", claim_verifier_node))
+    graph_builder.add_node("replan", traced_node("replan", replan_node))
 
     # ── Optional MTA node ───────────────────────────────────────────────────
     try:
@@ -1102,21 +1213,29 @@ def build_graph(checkpointer=None):
         def debug_model_training_agent_node(state: ETLState):
             return model_training_agent_node(state)
 
-        graph_builder.add_node("train_models", debug_model_training_agent_node)
+        graph_builder.add_node("train_models", traced_node("train_models", debug_model_training_agent_node))
     except ImportError:
         pass
 
     # Profiling node: registered for future graph routing; currently called in-process by server.py
     try:
         from app.agents.profiling_agent import profiling_agent_node
-        graph_builder.add_node("profile_data", profiling_agent_node)
+        graph_builder.add_node("profile_data", traced_node("profile_data", profiling_agent_node))
     except ImportError:
         pass  # profiling agent not available, skip
-    graph_builder.set_entry_point("memory_injection")
+    graph_builder.set_entry_point("drivers_route")
+    # An answered drivers question ends the turn: no narrator or verifier
+    # rewrites a figure the ranking produced.
+    graph_builder.add_conditional_edges(
+        "drivers_route",
+        traced_router("route_after_drivers", route_after_drivers, signals=("drivers_answered",)),
+        {"answered": END, "continue": "memory_injection"},
+    )
     graph_builder.add_edge("memory_injection", "avaloka_agent")
     graph_builder.add_conditional_edges(
         "avaloka_agent",
-        route_avaloka,
+        traced_router("route_avaloka", route_avaloka,
+                      signals=("avaloka_intent", "delegate_to_planner")),
         {"delegate_to_planner": "plan_etl", "end": "verify_claims"},
     )
 
@@ -1138,7 +1257,11 @@ def build_graph(checkpointer=None):
         route_planner_map["train_models"] = "train_models"
     except ImportError:
         pass
-    graph_builder.add_conditional_edges("plan_etl", route_planner_output, route_planner_map)
+    graph_builder.add_conditional_edges(
+        "plan_etl",
+        traced_router("route_planner_output", route_planner_output, signals=_PLANNER_SIGNALS),
+        route_planner_map,
+    )
 
     # ── summarize_etl → conditional routing ────────────────────────────────
     route_after_summary_map = {"generate_graph": "generate_planner_graph"}
@@ -1148,12 +1271,12 @@ def build_graph(checkpointer=None):
     except ImportError:
         pass
     graph_builder.add_conditional_edges(
-        "summarize_etl", route_after_summary, route_after_summary_map
+        "summarize_etl", traced_router("route_after_summary", route_after_summary), route_after_summary_map
     )
 
     # ── generate_planner_graph → code_etl ──────────────────────────────────
     graph_builder.add_conditional_edges(
-        "generate_planner_graph", route_after_graph, {"code_etl": "code_etl"}
+        "generate_planner_graph", traced_router("route_after_graph", route_after_graph), {"code_etl": "code_etl"}
     )
 
     # ── provision_infra loops back to plan_etl ─────────────────────────────
@@ -1173,7 +1296,11 @@ def build_graph(checkpointer=None):
         route_after_code_map["train_models"] = "train_models"
     except ImportError:
         pass
-    graph_builder.add_conditional_edges("code_etl", route_after_code, route_after_code_map)
+    graph_builder.add_conditional_edges(
+        "code_etl",
+        traced_router("route_after_code", route_after_code, signals=_CODE_SIGNALS),
+        route_after_code_map,
+    )
     graph_builder.add_edge("execute_actions", "verify_claims")
 
     # ── train_models → conditional routing ─────────────────────────────────
@@ -1188,18 +1315,34 @@ def build_graph(checkpointer=None):
             "end":             "verify_claims",
         }
         graph_builder.add_conditional_edges(
-            "train_models", route_after_training, route_after_training_map
+            "train_models", traced_router("route_after_training", route_after_training), route_after_training_map
         )
     except ImportError:
         pass
 
     # ── execution nodes → visualize / end ──────────────────────────────────
-    for exec_node in ("execute_on_k8s", "execute_locally", "execute_on_ray"):
+    # Ray and Kubernetes runs are not routed through replan yet (v1 scope).
+    for exec_node in ("execute_on_k8s", "execute_on_ray"):
         graph_builder.add_conditional_edges(
             exec_node,
-            route_after_execution,
+            traced_router("route_after_execution", route_after_execution,
+                          signals=("execution_error",)),
             {"visualize": "visualize", "end": "verify_claims"},
         )
+    # A failed local run is diagnosed and retried (app/agents/replan.py): a
+    # data step runs the same code again on a repaired copy of the input, a
+    # code fix goes back through the coder and its validators.
+    graph_builder.add_conditional_edges(
+        "execute_locally",
+        traced_router("route_after_local_execution", route_after_local_execution,
+                      signals=("execution_error", "replan_final")),
+        {"visualize": "visualize", "replan": "replan", "end": "verify_claims"},
+    )
+    graph_builder.add_conditional_edges(
+        "replan",
+        traced_router("route_after_replan", route_after_replan, signals=("replan_final",)),
+        {"execute_locally": "execute_locally", "code_etl": "code_etl", "end": "verify_claims"},
+    )
 
     # ── terminal edges ─────────────────────────────────────────────────────
     # graph_builder.add_edge("visualize", "verify_claims")

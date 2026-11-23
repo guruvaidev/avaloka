@@ -1,0 +1,241 @@
+[
+ {
+  "question": "How do signup cohorts retain over time?",
+  "columns": {
+   "signup_date": "time",
+   "user_id": "id",
+   "plan": "dimension",
+   "mrr": "measure",
+   "churned": "measure",
+   "sessions": "measure",
+   "country": "dimension"
+  },
+  "expected": {
+   "recipe": "cohort_retention",
+   "params": {
+    "id": "user_id",
+    "time": "signup_date"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Customer retention by month",
+  "columns": {
+   "order_date": "time",
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "units": "measure",
+   "customer_id": "id",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "cohort_retention",
+   "params": {
+    "id": "customer_id",
+    "time": "order_date"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "What share of users come back after their first month?",
+  "columns": {
+   "signup_date": "time",
+   "user_id": "id",
+   "plan": "dimension",
+   "mrr": "measure",
+   "churned": "measure",
+   "sessions": "measure",
+   "country": "dimension"
+  },
+  "expected": {
+   "recipe": "cohort_retention",
+   "params": {
+    "id": "user_id",
+    "time": "signup_date"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "cohort analysis of customers",
+  "columns": {
+   "order_date": "time",
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "units": "measure",
+   "customer_id": "id",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "cohort_retention",
+   "params": {
+    "id": "customer_id",
+    "time": "order_date"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Are we retaining users?",
+  "columns": {
+   "signup_date": "time",
+   "user_id": "id",
+   "plan": "dimension",
+   "mrr": "measure",
+   "churned": "measure",
+   "sessions": "measure",
+   "country": "dimension"
+  },
+  "expected": {
+   "recipe": "cohort_retention",
+   "params": {
+    "id": "user_id",
+    "time": "signup_date"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Retention curve by cohort",
+  "columns": {
+   "signup_date": "time",
+   "user_id": "id",
+   "plan": "dimension",
+   "mrr": "measure",
+   "churned": "measure",
+   "sessions": "measure",
+   "country": "dimension"
+  },
+  "expected": {
+   "recipe": "cohort_retention",
+   "params": {
+    "id": "user_id",
+    "time": "signup_date"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "How many customers are still active twelve months on?",
+  "columns": {
+   "order_date": "time",
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "units": "measure",
+   "customer_id": "id",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "cohort_retention",
+   "params": {
+    "id": "customer_id",
+    "time": "order_date"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Do customers keep buying after their first order?",
+  "columns": {
+   "order_date": "time",
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "units": "measure",
+   "customer_id": "id",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "cohort_retention",
+   "params": {
+    "id": "customer_id",
+    "time": "order_date"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Vintage analysis of employees by hire_date",
+  "columns": {
+   "employee_id": "id",
+   "salary": "measure",
+   "age": "measure",
+   "department": "dimension",
+   "hire_date": "time",
+   "tenure_years": "measure"
+  },
+  "expected": {
+   "recipe": "cohort_retention",
+   "params": {
+    "id": "employee_id",
+    "time": "hire_date"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "repeat customers over time",
+  "columns": {
+   "order_date": "time",
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "units": "measure",
+   "customer_id": "id",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "cohort_retention",
+   "params": {
+    "id": "customer_id",
+    "time": "order_date"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Retention of the users who signed up in 2024",
+  "columns": {
+   "signup_date": "time",
+   "user_id": "id",
+   "plan": "dimension",
+   "mrr": "measure",
+   "churned": "measure",
+   "sessions": "measure",
+   "country": "dimension"
+  },
+  "expected": {
+   "recipe": "cohort_retention",
+   "params": {
+    "id": "user_id",
+    "time": "signup_date"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Which plan has the best retention?",
+  "columns": {
+   "signup_date": "time",
+   "user_id": "id",
+   "plan": "dimension",
+   "mrr": "measure",
+   "churned": "measure",
+   "sessions": "measure",
+   "country": "dimension"
+  },
+  "expected": {
+   "recipe": "cohort_retention",
+   "params": {
+    "id": "user_id",
+    "time": "signup_date"
+   },
+   "flags": []
+  }
+ }
+]

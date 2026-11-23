@@ -2,8 +2,11 @@
 langchain>=0.3.27,<0.4
 langchain-groq>=0.3.8,<0.4
 langgraph>=0.6.7,<0.7
-langgraph-cli>=0.4.2,<0.5 ; python_version < "3.11"
-langgraph-cli[inmem]>=0.4.2,<0.5 ; python_version >= "3.11"
+# langgraph-cli is NOT here: it is in requirements-langgraph-server.txt, which only
+# the LangGraph server's image installs. Its [inmem] extra brings langgraph-api
+# 0.5.x, which caps cryptography <45, and this file is what the API process runs
+# on. Keeping it out lets the API resolve cryptography 50 (mlflow 3.17.2 allows
+# it). The API itself only talks HTTP to that server (app/api/config.py).
 
 # Data Processing and Analysis
 pandas>=2.0.0,<3
@@ -38,6 +41,11 @@ kubernetes
 graphviz>=0.20.1
 fastapi~=0.116
 uvicorn[standard]~=0.35
+# uvicorn[standard] pulls uvloop in unpinned: the image resolved 0.23.0, CI's
+# deps image 0.22.1. The API no longer runs on it (--loop asyncio, see
+# deploy/docker/Dockerfile.api: 0.23.0 segfaulted the API); other uvicorn
+# services still pick it up, so hold it at the version the gate runs.
+uvloop==0.22.1
 python-multipart~=0.0.20
 httpx>=0.27
 pydantic>=2.7
@@ -63,7 +71,7 @@ deltalake>=0.17.2        # used by Delta connector (DeltaTable)
 pyiceberg>=0.5.1         # used by Iceberg connector
 
 # --- UI / app ---
-pyarrow==16.1.0
+pyarrow==23.0.1
 kaggle
 
 
@@ -72,7 +80,7 @@ python-dotenv>=1.0.0
 pyyaml>=6.0
 
 # Testing Framework
-pytest>=8.4.1
+pytest==9.1.1
 pytest-cov>=4.1.0
 
 # Utilities
@@ -86,8 +94,17 @@ tabulate>=0.9.0
 torch>=2.0.0
 torchvision>=0.15.0
 scikit-learn>=1.3.0
-mlflow==3.14.0
-# ray[ml] is not a real extra. pip warns "ray 2.49.2 does not provide the extra
+# [auth]: the chart's tracking server runs from this image as
+# `mlflow server --app-name basic-auth`, which imports Flask-WTF for CSRF and
+# refuses to start without it (mlflow.auth in deploy/helm/avaloka/values.yaml).
+mlflow[auth]==3.17.2
+# mlflow.sklearn saves through skops and audits the file before logging it.
+# Unlisted, skops floated: 0.16.0 in a fresh image, 0.15.0 in CI. 0.16 rejects
+# the tree types HistGradientBoosting and RandomForest need, so training failed
+# only where users run it. The trust list lives in app/agents/mta_v2/estimators.py
+# (SKOPS_TRUSTED_TYPES); pinned to the stricter audit so the gate sees it.
+skops==0.16.0
+# ray[ml] is not a real extra. pip warned "ray 2.49.2 does not provide the extra
 # 'ml'" and installs base Ray without any of the ML dependencies -- so Ray Data,
 # Train and Serve were never actually pulled in. It went unnoticed because the
 # pin named 2.53.0, a release that does not exist, so the install failed before
@@ -96,10 +113,12 @@ mlflow==3.14.0
 # air covers data + train + tune; serve covers the inference path. Together they
 # are what app/ and avaloka/ actually import: ray.data, ray.train.torch,
 # ray.job_submission, ray.util.
-ray[air,serve]==2.49.2
-getdaft>=0.5.0,<0.6
+ray[air,serve]==2.56.0
 onnx>=1.15.0
-onnxruntime>=1.16.0
+# Pinned: 1.31.0 is the version whose 1DS telemetry was measured and whose
+# ORT_DISABLE_TELEMETRY opt-out is tested (tests/test_thirdparty_optout.py).
+# A bump re-runs that test against the new build before it ships.
+onnxruntime==1.31.0
 onnxscript
 
 # Advanced ML Libraries
@@ -130,11 +149,21 @@ celery-redbeat==2.3.3
 azure-storage-blob
 supabase>=2.0.0
 
+# Resolves to 50.x now that langgraph-cli (and its langgraph-api 0.5.x, which
+# capped this <45) lives in requirements-langgraph-server.txt. The floor stays at
+# 42 because that file includes this one and its langgraph-api still needs <45;
+# tests/contract/test_c1_langgraph_server_split.py keeps the CLI out of here.
 cryptography>=42.0.0
+# Held where langgraph-api held them. With the CLI gone nothing else caps them,
+# and the resolver would jump protobuf 6 -> 7 (ray, google-cloud-*, mlflow) and
+# sse-starlette 2 -> 3 (the MCP server's SSE transport): two major versions that
+# moving the CLI should not smuggle in. Lifting either is its own change.
+protobuf>=6.32.1,<7
+sse-starlette>=2.1.0,<2.2.0
 
 
 # GCS streaming (register-existing-storage fast path)
-gcsfs==2025.9.0
+gcsfs==2026.6.0
 
 #data transfer
 sentence_transformers>=3.2.1
@@ -153,15 +182,25 @@ PyJWT>=2.8.0
 
 #data transfer agent
 langchain_anthropic>=0.3.21,<0.4
-# urllib3 / charset-normalizer must be compatible with requests
-urllib3>=1.21.1,<2.0
+# urllib3 2.x. The old `<2.0` cap said requests needed it; it no longer does:
+# requests 2.34 asks for urllib3<3, and the pinned botocore 1.41.5 for <3 (!=2.2.0)
+# on Python >= 3.10, the only interpreters this project supports.
+# 1.26.20 carried six high advisories with no 1.x fix (GHSA-2xpw, -38jv, -8988,
+# -gm62, -qccp, -vxq7) and, through the cap, held dvc's dulwich below its fixes.
+# Nothing in app/ or avaloka/ imports urllib3 directly; it is used via requests,
+# botocore, kubernetes, docker and kaggle.
+urllib3==2.8.0
+# Transitive, via dvc / scmrepo / dvc-studio-client, which all accept 1.x. Left
+# to the resolver it still lands on 0.24.1 (seven high advisories, e.g.
+# GHSA-9277-mp7x-85jf); 1.2.9 is the smallest release that clears them all.
+dulwich==1.2.9
 charset-normalizer>=3.0.0   # MIT; replaces chardet (LGPL, ASF Category X)
 psutil>=5.9.0              # for memory stats in test scripts
-s3fs==2025.9.0
+s3fs==2026.6.0
 
 
 # WBS 0.6 — Integration test dependencies
-pytest>=7.4.0
+pytest==9.1.1
 pytest-asyncio>=0.23.0
 pytest-mock>=3.12.0
 

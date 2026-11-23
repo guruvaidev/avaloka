@@ -90,7 +90,8 @@ When it finishes:
 | Streamlit UI (opt-in) | `--set ui.enabled=true`; NodePort 30086 → port 8501. Off by default. A different thing from the React UI above. |
 | Local Supabase gateway | <http://localhost:30091> (kong) |
 | Object store (S3 API) | `kubectl port-forward svc/avaloka-seaweedfs 8333:8333` — SeaweedFS has no console and no host port is mapped |
-| Ray dashboard | <http://localhost:8265> (kind NodePort 30265) |
+| Ray dashboard | `kubectl port-forward svc/avaloka-raycluster-head-svc 8265:8265`, then sign in with the token (see [Ray and MLflow authentication](#ray-and-mlflow-authentication)). There is no NodePort any more; kind's host port 8265 mapping is unused. |
+| MLflow | `kubectl port-forward svc/avaloka-mlflow 5000:5000`, then sign in as `MLFLOW_TRACKING_USERNAME` / `MLFLOW_TRACKING_PASSWORD` from `avaloka-secrets` |
 | Inference | `kubectl port-forward svc/avaloka-inference-serve-svc 8000:8000` |
 
 > **Port 9000 vs 9010.** The container and the Service both use 9000, so
@@ -157,11 +158,12 @@ gh attestation verify oci://ghcr.io/guruvaidev/avaloka-api:main \
 
 **Which tags exist.** Verified against the registry: every one of the four
 repositories serves `main` and `latest`, plus the content tags described below
-and a `sha-<short>` tag per build. **Semver tags start at 1.0.0** —
-`images.yml` publishes them on a `v*` git tag, so `v1.0.0` gives `:1.0.0` and
-`:1.0`; no earlier semver tag exists. There is also no
-`develop-1.6` tag today, despite that branch being a build trigger. Use `main`,
-or a content tag, and check before you pin:
+and a `sha-<short>` tag per build. From 2.0, every build also carries the
+release number read from the `VERSION` file of the branch it was built from —
+`:2.0.0` and `:2.0` for the 2.0 line, `:1.6.0` and `:1.6` for a branch whose
+`VERSION` still says 1.6.0 — so the tag is decided by the tree, not by a
+branch-name table. Those tags move with the branch until a `v*` git tag is
+pushed. Check before you pin:
 
 ```bash
 docker manifest inspect ghcr.io/guruvaidev/avaloka-api:main
@@ -361,34 +363,34 @@ Useful flags: `--service-type ClusterIP|NodePort|LoadBalancer`, `--skip-serve`,
 | `ui.enabled` | Opt-in **Streamlit** UI as a second Deployment/Service on `:8501` (NodePort 30086). Off by default. Not the React UI. |
 | `seaweedfs.enabled` | In-cluster S3 object store (SeaweedFS). **On by default.** |
 | `minio.enabled` | The store SeaweedFS replaced, kept for one release as a rollback path. Off by default; the chart refuses to render with both enabled. |
-| `config.deployment` | `AVALOKA_DEPLOYMENT`: who operates this install. `self_hosted` (default) or `avaloka_hosted`. See [Deployment type](#deployment-type) below. |
+| `config.deployment` | `AVALOKA_DEPLOYMENT`: who operates the install. `self_hosted` (default) or `avaloka_hosted`; anything else fails the render. See [Who operates the install](#who-operates-the-install-avaloka_deployment). |
 | `config.inferenceBackend` / `config.rayServeUrl` | `rayserve` (default) posts predictions to the in-cluster Ray Serve service; `gateway` uses the MTA v2 managed path. |
 | `ray.connectExisting` / `ray.address` | Attach to an external Ray cluster vs. use the in-cluster one. |
 | `ray.inClusterAddress` | `ray://avaloka-raycluster-head-svc:10001`. |
 | `secrets.groqPlanningKey` / `groqCodingKey` / `jwtSecret` / `existingSecret` | Planner and coder LLM keys + JWT secret, injected at install; or reference a pre-created Secret. `secrets.groqApiKey` is a third, separate key read only by `app/agents/visualization_agent.py`. |
 | `inference.provider` | `groq` by default; `local`, `openai`, `openrouter`, `bedrock`, `vertex` or `azure`. Always emitted as `INFERENCE_PROVIDER`, so it overrides the key-aware default in `app/core/inference.py`. |
 | `secrets.openrouterKey` | Optional OpenRouter key arming the planner's backup provider on 429/404/5xx. Omitted from the Secret when empty. |
-| `secrets.mcpServiceToken` | `MCP_SERVICE_TOKEN`, the shared API <-> MCP service secret. Reaches the API through the Secret and the MCP pod through a `secretKeyRef`. Required for DB registration and DB-to-DB transfers; see Safety. |
+| `secrets.mcpServiceToken` | `MCP_SERVICE_TOKEN`, the shared API <-> MCP service identity the planner presents to the onboarding routes. The API and the MCP pod read it from the same Secret. Empty generates one per release, kept across upgrades; with `existingSecret`, that Secret must carry it. See Safety. |
 | `secrets.langgraphServiceToken` | `LANGGRAPH_SERVICE_TOKEN`, the shared API <-> LangGraph server secret. Generated and kept across upgrades when empty. Reaches the api and langgraph pods through a `secretKeyRef` (so with `existingSecret`, that Secret must carry it). The LangGraph server answers `401` to every call without it except `GET /ok`; it is internal-only, with no Ingress route and a NetworkPolicy that admits only the api pods. |
 | `admin.emails` | Administrator addresses (list). **Empty by default, which means no admin.** See [Administrators](#administrators) below. |
 | `rbac.create` / `serviceAccount` | In-cluster RBAC so the app can submit Ray jobs and patch RayServices. |
 | `resources`, `nodeSelector`/`tolerations`/`affinity` | Standard scheduling/scaling controls. |
 
-### Deployment type
+### Who operates the install (`AVALOKA_DEPLOYMENT`)
 
-`config.deployment` renders `AVALOKA_DEPLOYMENT` into every app pod
-(`app/core/editions.py`, `declared_deployment`). It is the single signal the
-plan gates, billing and the plan-lookup fail mode read:
+One variable says whether an install is your own or one of the Avaloka-operated
+hosted sites. It is read in one place, `deployment_state()` in
+`app/core/editions.py`, by every check that differs between the two.
 
-| `AVALOKA_DEPLOYMENT` | Premium features (data transfer, model training, model inference) | A failed plan lookup |
-| --- | --- | --- |
-| `self_hosted` (chart default) | Always allowed: the operator pays for the compute | Allowed |
-| `avaloka_hosted` | Follow the user's plan; a plan without the feature gets `403 plan_upgrade_required` | `503 plan check unavailable`, never an upgrade prompt |
-| unset or unrecognised (undeclared) | Always allowed, as before this setting existed, plus one warning in the log | Allowed |
+| Value | Meaning |
+| ----- | ------- |
+| `self_hosted` | Your own install. No billing or plan caps; local auth may be enabled; the API docs and `/debug/whoami` are public. **The default** in the Helm chart (`config.deployment`), the quickstart and the scheduler compose file. |
+| `avaloka_hosted` | An Avaloka-operated hosted site. Billing and plan caps apply; local auth is refused; `/openapi.json`, `/docs`, `/docs/oauth2-redirect`, `/redoc` and `/debug/whoami` need a login. |
+| unset, or any other word | *Undeclared*. Each check keeps the default it had before the variable could be declared: billing and plan caps treat the install as hosted, while editions, local auth and the API docs treat it as self-hosted. The server logs one warning, naming only whether the variable is set. Declare it. |
 
-Billing (upload and message limits) is on for `avaloka_hosted`. For
-`self_hosted` and undeclared it follows `AVALOKA_EDITION` as before (`oss` or
-`community` is unbilled); `AVALOKA_PLAN_LIMITS=off` turns it off everywhere.
+`-` and `_` are interchangeable and case is ignored (`avaloka-hosted` works). The
+chart refuses any value but the two above, so a typo cannot render an undeclared
+install. `/api/capabilities` is public on both.
 
 A service that bills its users by plan sets the hosted value in its own
 values overlay:
@@ -404,7 +406,7 @@ on every `helm upgrade`; otherwise it renders `self_hosted` and premium features
 are open to every plan.
 
 `values-gke.yaml` is also a hosted service's overlay, so it declares
-`avaloka_hosted`. `make up` (`app/infra/deploy_stack.py`) always passes
+`avaloka_hosted` (and `values-gke-app.yaml` repeats it). `make up` (`app/infra/deploy_stack.py`) always passes
 `--set-string config.deployment=self_hosted`, for every provider, so an install it
 makes is self-hosted whatever its overlay says. Installing `values-gke.yaml` by
 hand on your own cluster, add `--set config.deployment=self_hosted`.
@@ -594,9 +596,9 @@ written before a newer one merged.
   every unrecorded local migration, older ones included.
 - **The chart hook is unaffected.** It records each file by full name and runs
   every unrecorded file, whatever its version.
-- **Prevention.** `tests/test_migration_versions_unique.py` fails a change whose
-  new migration sorts before the newest migration already merged: against the
-  destination branch in pull-request pipelines, and always against
+- **Prevention.** `tests/contract/test_migration_versions.py` and
+  `tests/test_migration_versions_unique.py` fail a change whose new migration sorts before the newest migration already merged: against
+  the destination branch in pull-request pipelines, and always against
   `MERGED_MIGRATIONS` in that file, which each migration change appends to.
   Give a new migration a version later than every merged one.
 - **Merged out of version order on 1.6.** `20261103145000_dedupe_seed_departments_roles.sql`
@@ -649,8 +651,56 @@ helm template deploy/helm/avaloka
   them with a ClusterIP head Service only; nothing creates a public
   LoadBalancer any more. The shared cluster is deleted after
   `RAY_IDLE_TEARDOWN_S` (2 h) without a job and re-applied on the next one.
-- **Operator version** is `1.4.2`, the default of `KUBERAY_OPERATOR_VERSION` in
-  `app/infra/ray_manager.py:34`; override it with that environment variable.
+- **Operator version** is `1.6.2`, the default of `KUBERAY_OPERATOR_VERSION` in
+  `app/infra/ray_manager.py`; override it with that environment variable, but not
+  below 1.6: that is the first operator that can read a token-authenticated
+  dashboard with a token from a Secret we name (`authOptions.secretName`), and
+  without it RayJobs never finish and the RayService never turns ready. Helm never
+  upgrades CRDs, so `install_kuberay_operator()` (and `k8s_invoker`'s install path)
+  first applies the chart's CRDs server-side (`helm show crds … | kubectl apply
+  --server-side`).
+
+### Ray and MLflow authentication
+
+Both used to accept anyone who could reach them. Now:
+
+- **Ray** runs with token authentication (`RAY_AUTH_MODE=token`, Ray 2.52+). One
+  token, generated by the chart on first install and kept on every upgrade
+  (`ray.auth`, `secrets.rayAuthToken`), is shared by the app's Ray clients
+  (`RAY_AUTH_TOKEN` in `avaloka-secrets`, `RAY_AUTH_MODE` in `avaloka-config`), the
+  RayCluster and RayService (every container, the autoscaler included, reads
+  `auth_token` from `avaloka-ray-auth` by `secretKeyRef`; `authOptions` hands the
+  operator the same Secret), and KubeRay-mode RayJobs (the job's own
+  `<rayjob>-env` Secret carries it). Ray's client and `JobSubmissionClient` send
+  it themselves; the app's plain HTTP calls to a dashboard add it
+  (`app/infra/ray_auth.py`).
+- **MLflow** runs `mlflow server --app-name basic-auth` (`mlflow.auth`). Its admin
+  user is `MLFLOW_TRACKING_USERNAME` with password `MLFLOW_TRACKING_PASSWORD`, both
+  in `avaloka-secrets`, the password generated and kept like the token. Every
+  MLflow client gets both from that Secret and the mlflow client sends them. The
+  user store is SQLite on the pod's emptyDir unless `mlflow.auth.databaseUri` is
+  set, so the admin is re-created from the Secret on every start.
+- **NetworkPolicies** admit only the clients: `api`, `langgraph`, `celery`,
+  `celery-redbeat` and the Ray pods to MLflow; those four, other Ray pods and the
+  KubeRay operator to the Ray pods. Neither has a NodePort or LoadBalancer.
+
+From a workstation, `kubectl port-forward` (unaffected by the NetworkPolicies),
+then:
+
+```bash
+# MLflow: the UI asks for the user and password; a script exports them.
+export MLFLOW_TRACKING_URI=http://localhost:5000 MLFLOW_TRACKING_USERNAME=avaloka
+export MLFLOW_TRACKING_PASSWORD="$(kubectl get secret avaloka-secrets -o jsonpath='{.data.MLFLOW_TRACKING_PASSWORD}' | base64 -d)"
+# Ray: paste the token into the dashboard's login page, or for the CLI:
+export RAY_AUTH_MODE=token
+export RAY_AUTH_TOKEN="$(kubectl get secret avaloka-ray-auth -o jsonpath='{.data.auth_token}' | base64 -d)"
+ray job submit --address http://localhost:8265 -- python -c 'print(1)'
+```
+
+Rotating either: change the value in the Secret(s) (for Ray, `RAY_AUTH_TOKEN` in
+`avaloka-secrets` and `auth_token` in `avaloka-ray-auth` together), then restart
+the MLflow pod, the Ray clusters (re-apply `deploy/helm/ray/*.yaml`) and the app
+pods.
 
 Because the app and the Ray cluster communicate over the Ray Client protocol
 (`ray://…:10001`), **the Ray version must match on both ends** — the app image
@@ -861,9 +911,11 @@ curl http://localhost:9010/health
 kubectl port-forward svc/avaloka 9000:9000 &
 curl http://localhost:9000/health
 
-# Ray dashboard / version (should match the version matrix)
+# Ray dashboard / version (should match the version matrix). Token auth is on:
+# read the token into a variable, never echo it.
 kubectl port-forward svc/avaloka-raycluster-head-svc 8265:8265 &
-curl http://localhost:8265/api/version
+RAY_AUTH_TOKEN="$(kubectl get secret avaloka-ray-auth -o jsonpath='{.data.auth_token}' | base64 -d)"
+curl -H "Authorization: Bearer $RAY_AUTH_TOKEN" http://localhost:8265/api/version
 
 # Inference (Ray Serve)
 kubectl port-forward svc/avaloka-inference-serve-svc 8000:8000 &
@@ -889,11 +941,26 @@ Use it as the source of truth for what "a working deployment" must prove.
   and `SUPABASE_JWT_SECRET` via environment/Secrets, never in committed values
   files. The variable is `SUPABASE_JWT_SECRET`; `JWT_SECRET` is only the Python
   name it is bound to (`app/api/server.py:322`) and setting it does nothing.
-- **Set `MCP_SERVICE_TOKEN` on both the API and the MCP server**, to the same
-  value. Every `/customers` route on the MCP server requires an identity (the
-  customer's api_key, or this token plus the end user's id), and
-  `/customers/{id}/credentials` releases a database password only to the token
-  holder. Unset, the MCP server fails closed: no password is released, so
-  DB-to-DB transfers cannot fetch credentials, and `/admin/customers` refuses
-  registrations. Generate it per install: `openssl rand -hex 32`.
+- **Generated secrets** (`DB_ENCRYPTION_KEY`, `MCP_SERVICE_TOKEN`,
+  `AVALOKA_PII_KEY`) are created per install and kept: the chart generates
+  each into the release Secret and keeps it across upgrades (a published value,
+  such as the old `avaloka-local-dev-encryption-key` default, is replaced, and
+  connections saved under it must be registered again: see INSTALL.md,
+  "Upgrade consequence");
+  `scripts/quickstart.sh` and `scripts/install.sh` write them to the env file.
+  See [INSTALL.md](INSTALL.md), Configuration.
+- **`MCP_SERVICE_TOKEN`** (`secrets.mcpServiceToken`) is generated per
+  install: `scripts/quickstart.sh` writes one to `.env.quickstart`, and the
+  chart generates one per release and keeps it across upgrades (pin your own
+  with `openssl rand -hex 32`; with `existingSecret`, that Secret must carry
+  it). Every `/customers` route on the MCP server requires an identity: the
+  customer's api_key, a signed user assertion from the API, or this token
+  plus the end user's id. `/customers/{id}/credentials` never returns a
+  password to anyone, only a handle sealed under `DB_ENCRYPTION_KEY`, and only
+  to the API: a signed user assertion for a database that user owns, or this
+  token. A customer's api_key gets 403. The token is the one identity that
+  reaches a customer registered before owners were recorded, so DB-to-DB
+  transfers from such a legacy database need it; unset, that path fails
+  closed. `/admin/*` never accepts it: those routes take only the onboarding
+  service's signed MAC.
 - **Don't expose the Ray dashboard publicly** — it has no authentication.

@@ -77,9 +77,10 @@ stage() {
 # STAGES
 # 1. environment      the install is coherent and will actually run
 # 2. hermetic tests   no cluster, no cloud, no network, no real LLM
-# 3. data science     capability suite -- planted facts, asserted findings
-# 4. cli robustness   what the CLI does when the user gets it wrong
-# 5. benchmark        ground-truth tasks, scoring the on-disk deliverables
+# 3. langgraph server the tests that start a real `langgraph dev`, in its own venv
+# 4. data science     capability suite -- planted facts, asserted findings
+# 5. cli robustness   what the CLI does when the user gets it wrong
+# 6. benchmark        ground-truth tasks, scoring the on-disk deliverables
 # END STAGES
 
 summary() {
@@ -94,7 +95,7 @@ stage "environment"    "$PY" scripts/doctor.py
 # at the stage timeout. The later stages are reported as not run, not as failed:
 # nothing is known about them.
 if [[ "$FAILED" -ne 0 ]]; then
-  for name in "hermetic tests" "data science" "cli robustness"; do
+  for name in "hermetic tests" "langgraph server" "data science" "cli robustness"; do
     RESULTS+=("${DIM}SKIP${OFF}  $name (environment failed)")
   done
   if [[ "$FAST" -eq 0 ]]; then
@@ -110,11 +111,15 @@ fi
 # --fast also drops `slow` and `kaggle`, which is what makes it fast: those
 # markers exist for multi-minute and download-dependent tests, and the default
 # selection did not exclude them.
-HERMETIC_MARKERS="not cluster and not cloud and not integration"
+# `not langgraph_server`: tests that start a real `langgraph dev` need the CLI,
+# which requirements.txt does not carry; the "langgraph server" stage below runs
+# them in a venv of their own (scripts/langgraph_server_tests.sh).
+HERMETIC_MARKERS="not cluster and not cloud and not integration and not langgraph_server"
 if [[ "$FAST" -eq 1 ]]; then
   HERMETIC_MARKERS="$HERMETIC_MARKERS and not slow and not kaggle"
 fi
 stage "hermetic tests" "$PY" -m pytest -q -p no:cacheprovider -m "$HERMETIC_MARKERS"
+stage "langgraph server" env PYTHON="$PY" bash scripts/langgraph_server_tests.sh
 
 # Optional suites. tests/datascience ships on develop-1.6 and not in the public tree --
 # the data-science suite is deliberately development-only while the code it

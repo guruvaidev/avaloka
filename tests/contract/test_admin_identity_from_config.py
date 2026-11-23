@@ -62,9 +62,9 @@ _SOURCE_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
         re.compile(r"\bin\s*[\[\(\{]\s*" + _Q + r"(" + _EMAIL + r")" + _Q),
     ),
     (
-        "UUID literal compared or assigned on an admin/role line",
         # Applied only to lines that mention admin/role (see _line_hits): a
         # lookahead here was quadratic on long minified lines.
+        "UUID literal compared or assigned on an admin/role line",
         re.compile(r"(?:===?|!==?|=|:)\s*" + _Q + r"(" + _UUID + r")" + _Q, re.I),
     ),
 )
@@ -192,8 +192,8 @@ def _source_files() -> list[pathlib.Path]:
         if not root.is_dir():
             continue
         for path in root.rglob("*"):
-            # Vendored minified bundles are third-party code, not where an admin
-            # decision is written.
+            # Vendored minified bundles (e.g. avaloka/outcomes/assets/echarts.min.js)
+            # are third-party code, not where an admin decision is written.
             if path.name.endswith((".min.js", ".min.mjs")):
                 continue
             # Skip directories are judged on the path INSIDE the scan root. The
@@ -452,6 +452,7 @@ def test_migrate_hook_keeps_image_timing_and_runs_the_tracking_script(default_re
     for needle in (
         "avaloka_meta.schema_migrations",      # the version table
         "'backfilled'",                        # existing installs are backfilled
+        "to_regclass('public.notifications')", # ... detected from the newest baseline objects
         "to_regclass('public.ray_jobs')",      # ... detected from the newest baseline objects
         "--single-transaction",                # new migrations run in one transaction
         "ON_ERROR_STOP=1",
@@ -477,7 +478,7 @@ def test_baseline_is_frozen_and_markers_come_from_it() -> None:
     shipped = {p.stem for p in CHART_MIGRATIONS.glob("*.sql")}
     assert set(baseline) <= shipped
     text = "\n".join((CHART_MIGRATIONS / f"{v}.sql").read_text().lower() for v in baseline)
-    for table in ("public.ray_jobs", "public.notifications", "public.user_roles"):
+    for table in ("public.ray_jobs", "public.notifications", "public.integration_connections", "public.user_roles"):
         assert re.search(r"create table (if not exists )?" + re.escape(table) + r"\b", text), table
 
 

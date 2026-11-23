@@ -1,0 +1,91 @@
+{{- if (include "avaloka.rayNetworkPolicyEnabled" $) }}
+{{- $rayNamespace := include "avaloka.rayNamespace" . }}
+{{- $np := (.Values.ray.networkPolicy | default dict) }}
+# Who may reach a Ray pod: the dashboard and Jobs API (8265), the Ray client
+# server (10001), GCS (6379), Serve (8000) and every port Ray nodes use between
+# themselves. Ray had no authentication, and RAY_AUTH_MODE=token (ray.auth) is
+# the lock; this is the wall around it. Admitted, read off the chart and the Ray
+# manifests:
+#   other Ray pods in the namespace          heads, workers, autoscaler traffic
+#   api, langgraph, celery, celery-redbeat   RAY_ADDRESS / RAY_DASHBOARD_URL /
+#                                            RAY_SERVE_URL from avaloka-config
+#   the KubeRay operator                     reads job and Serve status from the
+#                                            dashboard (RayJob, RayService)
+# Ray pods are created by the KubeRay operator, not by this chart, so they carry
+# none of this release's labels; ray.io/node-type is the label KubeRay puts on
+# every head and worker of every RayCluster, RayService and RayJob. No Service
+# of type LoadBalancer or NodePort fronts them (deploy/helm/ray); reach the
+# dashboard with kubectl port-forward, which this policy does not affect.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "avaloka.fullname" . }}-ray
+  namespace: {{ $rayNamespace }}
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ray
+spec:
+  podSelector:
+    matchExpressions:
+      - key: ray.io/node-type
+        operator: Exists
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - key: ray.io/node-type
+                operator: Exists
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Release.Namespace | quote }}
+          podSelector:
+            matchLabels:
+              {{- include "avaloka.selectorLabels" . | nindent 14 }}
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values:
+                  - api
+                  - langgraph
+                  - celery
+                  - celery-redbeat
+        {{- include "avaloka.kuberayOperatorPeer" . | nindent 8 }}
+        {{- with $np.extraIngressFrom }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+{{- with .Values.rbac.rayJobSecretsNamespace }}
+{{- if ne . $rayNamespace }}
+---
+# KubeRay-mode RayJobs (rbac.rayJobSecretsNamespace): each job brings up its own
+# Ray cluster here. Its head is reached by its own workers, by the job's
+# submitter pod in this namespace, and by the KubeRay operator; the app only
+# talks to the Kubernetes API about these jobs, never to their pods.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "avaloka.fullname" $ }}-ray-jobs
+  namespace: {{ . }}
+  labels:
+    {{- include "avaloka.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: ray
+spec:
+  podSelector:
+    matchExpressions:
+      - key: ray.io/node-type
+        operator: Exists
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        # Every pod of this namespace: the job's own Ray nodes and its submitter.
+        - podSelector:
+            matchLabels: {}
+        {{- include "avaloka.kuberayOperatorPeer" $ | nindent 8 }}
+        {{- with $np.extraIngressFrom }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

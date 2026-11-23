@@ -1,0 +1,4877 @@
+{
+  "harness_version": "0.2.0",
+  "suite": "dab",
+  "meta": {
+    "captured_at": "2026-10-18T09:39:51.985350+00:00",
+    "git_commit": "a90fa8afc1af52dcba28a82fddecdaa77e1742b8",
+    "git_branch": "bench/2.0-vs-1.0",
+    "git_dirty": false,
+    "python": "3.12.12",
+    "spend": {
+      "spent_usd": 0.0,
+      "ceiling_usd": 1.0,
+      "calls": 0,
+      "unpriced_calls": 0,
+      "usage_missing_calls": 0,
+      "blind_calls": 0,
+      "remaining_usd": 1.0
+    },
+    "estimate": {
+      "total_low_usd": 0.0,
+      "total_high_usd": 0.0,
+      "total_calls": 12,
+      "unpriced_configs": [
+        "dab_avaloka_native"
+      ],
+      "configs": [
+        {
+          "config_id": "dab_avaloka_native",
+          "provider": "groq",
+          "model": "ollama/gemma4:e4b",
+          "calls": 12,
+          "prompt_tokens": 1826,
+          "max_completion_tokens": 4800,
+          "low_usd": 0.0,
+          "high_usd": 0.0,
+          "cost_source": "unpriced"
+        }
+      ]
+    },
+    "aborted_reason": null
+  },
+  "configs": [
+    {
+      "config_id": "dab_avaloka_native",
+      "sut": "avaloka_dab",
+      "llm": "ollama/gemma4:e4b",
+      "agents_enabled": "full_swarm",
+      "sampling_mode": "entire_dataset",
+      "model_routing": "default",
+      "environment": "dab-local",
+      "trials": 1,
+      "internet_allowed": false,
+      "budget": {
+        "max_cost_usd": 2.0,
+        "max_latency_s": 600.0,
+        "max_tokens": 2000000,
+        "max_data_scanned_ratio": null
+      },
+      "seed": 0,
+      "extra": {
+        "agent_command_env": "AVALOKA_DAB_AGENT_CMD",
+        "max_iterations": 25,
+        "max_output_tokens": 8192,
+        "max_prompt_tool_result_bytes": 100000,
+        "protocol_version": "dab-command-v2",
+        "python_timeout_s": 120,
+        "tool_timeout_s": 120
+      }
+    }
+  ],
+  "results": {
+    "dab_avaloka_native": {
+      "config": {
+        "config_id": "dab_avaloka_native",
+        "sut": "avaloka_dab",
+        "llm": "ollama/gemma4:e4b",
+        "agents_enabled": "full_swarm",
+        "sampling_mode": "entire_dataset",
+        "model_routing": "default",
+        "environment": "dab-local",
+        "trials": 1,
+        "internet_allowed": false,
+        "budget": {
+          "max_cost_usd": 2.0,
+          "max_latency_s": 600.0,
+          "max_tokens": 2000000,
+          "max_data_scanned_ratio": null
+        },
+        "seed": 0,
+        "extra": {
+          "agent_command_env": "AVALOKA_DAB_AGENT_CMD",
+          "max_iterations": 25,
+          "max_output_tokens": 8192,
+          "max_prompt_tool_result_bytes": 100000,
+          "protocol_version": "dab-command-v2",
+          "python_timeout_s": 120,
+          "tool_timeout_s": 120
+        }
+      },
+      "tasks": {
+        "dab:agnews:1": {
+          "track": "dab",
+          "stats": {
+            "n_trials": 1,
+            "pass_at_1": 0.0,
+            "best_of_n": 0.0,
+            "quality": {
+              "pass": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 1
+              },
+              "score": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 1
+              }
+            },
+            "tuple": {
+              "cost_usd": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 1
+              },
+              "latency_s": {
+                "mean": 216.75555045799774,
+                "median": 216.75555045799774,
+                "std": 0.0,
+                "min": 216.75555045799774,
+                "max": 216.75555045799774,
+                "n": 1
+              },
+              "data_scanned_ratio": {
+                "mean": NaN,
+                "median": NaN,
+                "std": NaN,
+                "min": NaN,
+                "max": NaN,
+                "n": 0
+              },
+              "tool_calls": {
+                "mean": 4.0,
+                "median": 4,
+                "std": 0.0,
+                "min": 4,
+                "max": 4,
+                "n": 1
+              },
+              "tokens": {
+                "mean": 13274.0,
+                "median": 13274,
+                "std": 0.0,
+                "min": 13274,
+                "max": 13274,
+                "n": 1
+              },
+              "prompt_tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 1
+              },
+              "completion_tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 1
+              },
+              "retries": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 1
+              }
+            },
+            "total_cost_usd": 0.0,
+            "n_cost_unknown": 0,
+            "cost_sources": [
+              "local_zero"
+            ],
+            "n_errors": 0,
+            "errors": [],
+            "failure_kinds": {}
+          },
+          "trials": [
+            {
+              "task_id": "dab:agnews:1",
+              "track": "dab",
+              "config_id": "dab_avaloka_native",
+              "trial_index": 0,
+              "quality": {
+                "pass": 0.0,
+                "score": 0.0
+              },
+              "outcome": {
+                "answer": "The available data sources indicate that there are no articles associated with the 'sports' region in the `metadata_database`'s `article_metadata` table. Therefore, it is not possible to determine the title of a sports article whose description has the greatest number of characters.",
+                "cost_usd": 0.0,
+                "latency_s": 216.75555045799774,
+                "data_scanned_ratio": null,
+                "tool_calls": 4,
+                "tokens": 13274,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "local_zero",
+                "retries": 0,
+                "recovered": null,
+                "trajectory": [
+                  {
+                    "kind": "mission_start",
+                    "limits": {
+                      "max_cost_usd": 2.0,
+                      "max_data_scanned_ratio": null,
+                      "max_latency_s": 600.0,
+                      "max_tokens": 2000000
+                    },
+                    "model": "ollama/gemma4:e4b",
+                    "policy": {
+                      "enable_specialists": true,
+                      "max_iterations": 25,
+                      "max_output_tokens": 8192,
+                      "max_prompt_tool_result_bytes": 100000,
+                      "max_review_repairs": 1,
+                      "max_tool_errors": 8,
+                      "repeated_call_limit": 3,
+                      "require_data_evidence": true,
+                      "tool_timeout_s": 120
+                    },
+                    "prompt_version": "avaloka-data-reasoning-v4-specialists",
+                    "task_id": "dab:agnews:1"
+                  },
+                  {
+                    "kind": "question_plan_created",
+                    "plan": {
+                      "ambiguities": [],
+                      "join_required": true,
+                      "numeric_result_required": false,
+                      "output_shape": "scalar",
+                      "prediction_intent": "none",
+                      "question": "What is the title of the sports article whose description has the greatest number of characters?",
+                      "return_only": false,
+                      "statistical_intent": "none",
+                      "temporal_required": false,
+                      "transforms": [
+                        "normalize_join_keys",
+                        "bounded_text_extraction",
+                        "nested_projection"
+                      ],
+                      "unstructured_required": true
+                    }
+                  },
+                  {
+                    "kind": "source_map_created",
+                    "source_map": {
+                      "multi_source": true,
+                      "schema_terms": [],
+                      "source_types": [
+                        "postgresql",
+                        "mongodb",
+                        "sqlite"
+                      ]
+                    }
+                  },
+                  {
+                    "kind": "specialist_routed",
+                    "specialists": [
+                      "cartographer",
+                      "transformer",
+                      "skeptic"
+                    ]
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 1,
+                    "kind": "model",
+                    "response_id": "chatcmpl-160",
+                    "tool_call_ids": [
+                      "call_l2ha1oej"
+                    ],
+                    "tool_names": [
+                      "list_db"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 613,
+                      "prompt_tokens": 1794,
+                      "total_tokens": 2407
+                    }
+                  },
+                  {
+                    "bytes_read": 12,
+                    "content_sha256": "1093f1b452d0dfd2046d1da9aa6ad3db404f01e44d39237188209476e412ae46",
+                    "content_truncated": false,
+                    "iteration": 1,
+                    "kind": "tool",
+                    "metadata": {
+                      "tool": "list_db"
+                    },
+                    "result_key": "var_call_l2ha1oej",
+                    "rows_read": 1,
+                    "success": true,
+                    "tool": "list_db",
+                    "tool_call_id": "call_l2ha1oej"
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 2,
+                    "kind": "model",
+                    "response_id": "chatcmpl-345",
+                    "tool_call_ids": [
+                      "call_4vvbfpxa"
+                    ],
+                    "tool_names": [
+                      "list_db"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 395,
+                      "prompt_tokens": 1849,
+                      "total_tokens": 2244
+                    }
+                  },
+                  {
+                    "bytes_read": 31,
+                    "content_sha256": "3a431e5a7ad250256bf9ca65560bfb73600986676a36c4824ce4608b4b981c3c",
+                    "content_truncated": false,
+                    "iteration": 2,
+                    "kind": "tool",
+                    "metadata": {
+                      "tool": "list_db"
+                    },
+                    "result_key": "var_call_4vvbfpxa",
+                    "rows_read": 2,
+                    "success": true,
+                    "tool": "list_db",
+                    "tool_call_id": "call_4vvbfpxa"
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 3,
+                    "kind": "model",
+                    "response_id": "chatcmpl-369",
+                    "tool_call_ids": [
+                      "call_f9a47zv1"
+                    ],
+                    "tool_names": [
+                      "query_db"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 668,
+                      "prompt_tokens": 1905,
+                      "total_tokens": 2573
+                    }
+                  },
+                  {
+                    "bytes_read": 2,
+                    "content_sha256": "54bcd21e5d26aaa7e50fe4ed062c88dc7a7621313c464704c5c726b1828cea47",
+                    "content_truncated": false,
+                    "iteration": 3,
+                    "kind": "tool",
+                    "metadata": {
+                      "tool": "query_db"
+                    },
+                    "result_key": "var_call_f9a47zv1",
+                    "rows_read": 0,
+                    "success": true,
+                    "tool": "query_db",
+                    "tool_call_id": "call_f9a47zv1"
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 4,
+                    "kind": "model",
+                    "response_id": "chatcmpl-140",
+                    "tool_call_ids": [
+                      "call_zu0g6yki"
+                    ],
+                    "tool_names": [
+                      "query_db"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 887,
+                      "prompt_tokens": 1975,
+                      "total_tokens": 2862
+                    }
+                  },
+                  {
+                    "bytes_read": 2,
+                    "content_sha256": "53123eebf56d6a33f7f1dc07c681feeb275be34ede924cf36533b38a1dad209d",
+                    "content_truncated": false,
+                    "iteration": 4,
+                    "kind": "tool",
+                    "metadata": {
+                      "tool": "query_db"
+                    },
+                    "result_key": "var_call_zu0g6yki",
+                    "rows_read": 0,
+                    "success": true,
+                    "tool": "query_db",
+                    "tool_call_id": "call_zu0g6yki"
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 5,
+                    "kind": "model",
+                    "response_id": "chatcmpl-449",
+                    "tool_call_ids": [],
+                    "tool_names": [],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 1145,
+                      "prompt_tokens": 2043,
+                      "total_tokens": 3188
+                    }
+                  },
+                  {
+                    "kind": "termination",
+                    "reason": "content_answer"
+                  }
+                ],
+                "artifacts": {
+                  "budget": {
+                    "actual": {
+                      "cost_usd": 0.0,
+                      "data_scanned_ratio": null,
+                      "latency_s": 216.75555045799774,
+                      "tokens": 13274
+                    },
+                    "limits": {
+                      "max_cost_usd": 2.0,
+                      "max_data_scanned_ratio": null,
+                      "max_latency_s": 600.0,
+                      "max_tokens": 2000000
+                    },
+                    "violations": []
+                  },
+                  "completion_tokens": 3708,
+                  "effective_limits": {
+                    "max_cost_usd": 2.0,
+                    "max_data_scanned_ratio": null,
+                    "max_latency_s": 600.0,
+                    "max_tokens": 2000000
+                  },
+                  "effective_policy": {
+                    "enable_specialists": true,
+                    "max_iterations": 25,
+                    "max_output_tokens": 8192,
+                    "max_prompt_tool_result_bytes": 100000,
+                    "max_review_repairs": 1,
+                    "max_tool_errors": 8,
+                    "repeated_call_limit": 3,
+                    "require_data_evidence": true,
+                    "tool_timeout_s": 120
+                  },
+                  "evaluation": {
+                    "validator_reason": "Ground truth 'The Rundown' not found in LLM output: The available data sources indicate that there are no articles associated with the 'sports' region in the `metadata_database`'s `article_metadata` table. Therefore, it is not possible to determine the title of a sports article whose description has the greatest number of characters."
+                  },
+                  "iterations": 5,
+                  "mission_latency_s": 204.09549158400114,
+                  "model": "ollama/gemma4:e4b",
+                  "model_log": "/Users/leelakrishna/code/ki/avaloka-dev/.benchmarks/DataAgentBench/query_agnews/logs/avaloka/avaloka_native_agnews_q1_r0_1792309708269527000_58771/model_calls.jsonl",
+                  "pricing_configured": true,
+                  "pricing_version": "local-zero",
+                  "prompt_tokens": 9566,
+                  "prompt_version": "avaloka-data-reasoning-v4-specialists",
+                  "protocol_version": "dab-command-v2",
+                  "run_dir": "/Users/leelakrishna/code/ki/avaloka-dev/.benchmarks/DataAgentBench/query_agnews/logs/avaloka/avaloka_native_agnews_q1_r0_1792309708269527000_58771",
+                  "stderr": "",
+                  "sut_name": "avaloka.data_agent.DataQueryMission",
+                  "termination_reason": "content_answer",
+                  "tool_log": "/Users/leelakrishna/code/ki/avaloka-dev/.benchmarks/DataAgentBench/query_agnews/logs/avaloka/avaloka_native_agnews_q1_r0_1792309708269527000_58771/tool_calls.jsonl"
+                },
+                "error": null,
+                "error_kind": null
+              }
+            }
+          ]
+        },
+        "dab:bookreview:1": {
+          "track": "dab",
+          "stats": {
+            "n_trials": 1,
+            "pass_at_1": 0.0,
+            "best_of_n": 0.0,
+            "quality": {
+              "pass": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 1
+              },
+              "score": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 1
+              }
+            },
+            "tuple": {
+              "cost_usd": {
+                "mean": NaN,
+                "median": NaN,
+                "std": NaN,
+                "min": NaN,
+                "max": NaN,
+                "n": 0
+              },
+              "latency_s": {
+                "mean": 630.0153065420018,
+                "median": 630.0153065420018,
+                "std": 0.0,
+                "min": 630.0153065420018,
+                "max": 630.0153065420018,
+                "n": 1
+              },
+              "data_scanned_ratio": {
+                "mean": NaN,
+                "median": NaN,
+                "std": NaN,
+                "min": NaN,
+                "max": NaN,
+                "n": 0
+              },
+              "tool_calls": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 1
+              },
+              "tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 1
+              },
+              "prompt_tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 1
+              },
+              "completion_tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 1
+              },
+              "retries": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 1
+              }
+            },
+            "total_cost_usd": 0,
+            "n_cost_unknown": 1,
+            "cost_sources": [
+              "unknown"
+            ],
+            "n_errors": 1,
+            "errors": [
+              "timeout: Avaloka DAB command exceeded 630.0s: Command '['/Users/leelakrishna/code/ki/avaloka-dev/.benchmarks/dab-venv/bin/python', '/private/tmp/claude-505/-Users-leelakrishna-code-ki-avaloka-dev/523f2974-7c63-4383-8c84-7340f46500b7/scratchpad/wt-bench/scripts/avaloka_dab_agent.py']' timed out after 630.0 seconds\nbudget_exceeded: latency_s=630.015307>600.000000"
+            ],
+            "failure_kinds": {
+              "timeout": 1
+            }
+          },
+          "trials": [
+            {
+              "task_id": "dab:bookreview:1",
+              "track": "dab",
+              "config_id": "dab_avaloka_native",
+              "trial_index": 0,
+              "quality": {
+                "pass": 0.0,
+                "score": 0.0
+              },
+              "outcome": {
+                "answer": null,
+                "cost_usd": null,
+                "latency_s": 630.0153065420018,
+                "data_scanned_ratio": null,
+                "tool_calls": 0,
+                "tokens": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "unknown",
+                "retries": 0,
+                "recovered": null,
+                "trajectory": [],
+                "artifacts": {
+                  "budget": {
+                    "actual": {
+                      "cost_usd": null,
+                      "data_scanned_ratio": null,
+                      "latency_s": 630.0153065420018,
+                      "tokens": 0
+                    },
+                    "limits": {
+                      "max_cost_usd": 2.0,
+                      "max_data_scanned_ratio": null,
+                      "max_latency_s": 600.0,
+                      "max_tokens": 2000000
+                    },
+                    "violations": [
+                      "latency_s=630.015307>600.000000"
+                    ]
+                  }
+                },
+                "error": "timeout: Avaloka DAB command exceeded 630.0s: Command '['/Users/leelakrishna/code/ki/avaloka-dev/.benchmarks/dab-venv/bin/python', '/private/tmp/claude-505/-Users-leelakrishna-code-ki-avaloka-dev/523f2974-7c63-4383-8c84-7340f46500b7/scratchpad/wt-bench/scripts/avaloka_dab_agent.py']' timed out after 630.0 seconds\nbudget_exceeded: latency_s=630.015307>600.000000",
+                "error_kind": "timeout"
+              }
+            }
+          ]
+        },
+        "dab:crmarenapro:1": {
+          "track": "dab",
+          "stats": {
+            "n_trials": 1,
+            "pass_at_1": 1.0,
+            "best_of_n": 1.0,
+            "quality": {
+              "pass": {
+                "mean": 1.0,
+                "median": 1.0,
+                "std": 0.0,
+                "min": 1.0,
+                "max": 1.0,
+                "n": 1
+              },
+              "score": {
+                "mean": 1.0,
+                "median": 1.0,
+                "std": 0.0,
+                "min": 1.0,
+                "max": 1.0,
+                "n": 1
+              }
+            },
+            "tuple": {
+              "cost_usd": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 1
+              },
+              "latency_s": {
+                "mean": 131.2880824999993,
+                "median": 131.2880824999993,
+                "std": 0.0,
+                "min": 131.2880824999993,
+                "max": 131.2880824999993,
+                "n": 1
+              },
+              "data_scanned_ratio": {
+                "mean": NaN,
+                "median": NaN,
+                "std": NaN,
+                "min": NaN,
+                "max": NaN,
+                "n": 0
+              },
+              "tool_calls": {
+                "mean": 1.0,
+                "median": 1,
+                "std": 0.0,
+                "min": 1,
+                "max": 1,
+                "n": 1
+              },
+              "tokens": {
+                "mean": 7691.0,
+                "median": 7691,
+                "std": 0.0,
+                "min": 7691,
+                "max": 7691,
+                "n": 1
+              },
+              "prompt_tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 1
+              },
+              "completion_tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 1
+              },
+              "retries": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 1
+              }
+            },
+            "total_cost_usd": 0.0,
+            "n_cost_unknown": 0,
+            "cost_sources": [
+              "local_zero"
+            ],
+            "n_errors": 0,
+            "errors": [],
+            "failure_kinds": {}
+          },
+          "trials": [
+            {
+              "task_id": "dab:crmarenapro:1",
+              "track": "dab",
+              "config_id": "dab_avaloka_native",
+              "trial_index": 0,
+              "quality": {
+                "pass": 1.0,
+                "score": 1.0
+              },
+              "outcome": {
+                "answer": "The lead qualification fails on the following BANT factor(s):\n['Authority']",
+                "cost_usd": 0.0,
+                "latency_s": 131.2880824999993,
+                "data_scanned_ratio": null,
+                "tool_calls": 1,
+                "tokens": 7691,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "local_zero",
+                "retries": 0,
+                "recovered": null,
+                "trajectory": [
+                  {
+                    "kind": "mission_start",
+                    "limits": {
+                      "max_cost_usd": 2.0,
+                      "max_data_scanned_ratio": null,
+                      "max_latency_s": 600.0,
+                      "max_tokens": 2000000
+                    },
+                    "model": "ollama/gemma4:e4b",
+                    "policy": {
+                      "enable_specialists": true,
+                      "max_iterations": 25,
+                      "max_output_tokens": 8192,
+                      "max_prompt_tool_result_bytes": 100000,
+                      "max_review_repairs": 1,
+                      "max_tool_errors": 8,
+                      "repeated_call_limit": 3,
+                      "require_data_evidence": true,
+                      "tool_timeout_s": 120
+                    },
+                    "prompt_version": "avaloka-data-reasoning-v4-specialists",
+                    "task_id": "dab:crmarenapro:1"
+                  },
+                  {
+                    "kind": "question_plan_created",
+                    "plan": {
+                      "ambiguities": [],
+                      "join_required": true,
+                      "numeric_result_required": true,
+                      "output_shape": "scalar",
+                      "prediction_intent": "none",
+                      "question": "Can this lead be qualified based on the latest discussions? If the answer is no, which factors\u2014'Budget', 'Authority', 'Need', or 'Timeline'\u2014are responsible? Return only one or several of the four BANT factors that the lead qualification fails to meet (i.e. 'Budget', 'Authority', 'Need', 'Timeline').\n\n## Lead qualification guide.\nLook for the voice call transcripts with the lead and relevant knowledge articles to justify the lead qualification.\n\n- Lead Id to be considered is: 00QWt0000089AekMAE",
+                      "return_only": true,
+                      "statistical_intent": "descriptive",
+                      "temporal_required": true,
+                      "transforms": [
+                        "temporal",
+                        "normalize_join_keys",
+                        "nested_projection"
+                      ],
+                      "unstructured_required": false
+                    }
+                  },
+                  {
+                    "kind": "source_map_created",
+                    "source_map": {
+                      "multi_source": true,
+                      "schema_terms": [],
+                      "source_types": [
+                        "postgresql",
+                        "mongodb",
+                        "sqlite",
+                        "duckdb"
+                      ]
+                    }
+                  },
+                  {
+                    "kind": "specialist_routed",
+                    "specialists": [
+                      "cartographer",
+                      "transformer",
+                      "statistician",
+                      "skeptic"
+                    ]
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 1,
+                    "kind": "model",
+                    "response_id": "chatcmpl-675",
+                    "tool_call_ids": [
+                      "call_3il3hp33"
+                    ],
+                    "tool_names": [
+                      "query_db"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 557,
+                      "prompt_tokens": 2773,
+                      "total_tokens": 3330
+                    }
+                  },
+                  {
+                    "bytes_read": 2757,
+                    "content_sha256": "997d532314b735a780520f803a253a65c7f8bc74424fa526cd2f629cfee8bb3d",
+                    "content_truncated": false,
+                    "iteration": 1,
+                    "kind": "tool",
+                    "metadata": {
+                      "tool": "query_db"
+                    },
+                    "result_key": "var_call_3il3hp33",
+                    "rows_read": 1,
+                    "success": true,
+                    "tool": "query_db",
+                    "tool_call_id": "call_3il3hp33"
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 2,
+                    "kind": "model",
+                    "response_id": "chatcmpl-0",
+                    "tool_call_ids": [],
+                    "tool_names": [],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 522,
+                      "prompt_tokens": 3839,
+                      "total_tokens": 4361
+                    }
+                  },
+                  {
+                    "kind": "termination",
+                    "reason": "content_answer"
+                  }
+                ],
+                "artifacts": {
+                  "budget": {
+                    "actual": {
+                      "cost_usd": 0.0,
+                      "data_scanned_ratio": null,
+                      "latency_s": 131.2880824999993,
+                      "tokens": 7691
+                    },
+                    "limits": {
+                      "max_cost_usd": 2.0,
+                      "max_data_scanned_ratio": null,
+                      "max_latency_s": 600.0,
+                      "max_tokens": 2000000
+                    },
+                    "violations": []
+                  },
+                  "completion_tokens": 1079,
+                  "effective_limits": {
+                    "max_cost_usd": 2.0,
+                    "max_data_scanned_ratio": null,
+                    "max_latency_s": 600.0,
+                    "max_tokens": 2000000
+                  },
+                  "effective_policy": {
+                    "enable_specialists": true,
+                    "max_iterations": 25,
+                    "max_output_tokens": 8192,
+                    "max_prompt_tool_result_bytes": 100000,
+                    "max_review_repairs": 1,
+                    "max_tool_errors": 8,
+                    "repeated_call_limit": 3,
+                    "require_data_evidence": true,
+                    "tool_timeout_s": 120
+                  },
+                  "evaluation": {
+                    "validator_reason": "Found expected BANT factor: Authority"
+                  },
+                  "iterations": 2,
+                  "mission_latency_s": 119.21227795899904,
+                  "model": "ollama/gemma4:e4b",
+                  "model_log": "/Users/leelakrishna/code/ki/avaloka-dev/.benchmarks/DataAgentBench/query_crmarenapro/logs/avaloka/avaloka_native_crmarenapro_q1_r0_1792310555098564000_89809/model_calls.jsonl",
+                  "pricing_configured": true,
+                  "pricing_version": "local-zero",
+                  "prompt_tokens": 6612,
+                  "prompt_version": "avaloka-data-reasoning-v4-specialists",
+                  "protocol_version": "dab-command-v2",
+                  "run_dir": "/Users/leelakrishna/code/ki/avaloka-dev/.benchmarks/DataAgentBench/query_crmarenapro/logs/avaloka/avaloka_native_crmarenapro_q1_r0_1792310555098564000_89809",
+                  "stderr": "",
+                  "sut_name": "avaloka.data_agent.DataQueryMission",
+                  "termination_reason": "content_answer",
+                  "tool_log": "/Users/leelakrishna/code/ki/avaloka-dev/.benchmarks/DataAgentBench/query_crmarenapro/logs/avaloka/avaloka_native_crmarenapro_q1_r0_1792310555098564000_89809/tool_calls.jsonl"
+                },
+                "error": null,
+                "error_kind": null
+              }
+            }
+          ]
+        },
+        "dab:DEPS_DEV_V1:1": {
+          "track": "dab",
+          "stats": {
+            "n_trials": 1,
+            "pass_at_1": 0.0,
+            "best_of_n": 0.0,
+            "quality": {
+              "pass": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 1
+              },
+              "score": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 1
+              }
+            },
+            "tuple": {
+              "cost_usd": {
+                "mean": NaN,
+                "median": NaN,
+                "std": NaN,
+                "min": NaN,
+                "max": NaN,
+                "n": 0
+              },
+              "latency_s": {
+                "mean": 630.0468598749976,
+                "median": 630.0468598749976,
+                "std": 0.0,
+                "min": 630.0468598749976,
+                "max": 630.0468598749976,
+                "n": 1
+              },
+              "data_scanned_ratio": {
+                "mean": NaN,
+                "median": NaN,
+                "std": NaN,
+                "min": NaN,
+                "max": NaN,
+                "n": 0
+              },
+              "tool_calls": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 1
+              },
+              "tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 1
+              },
+              "prompt_tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 1
+              },
+              "completion_tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 1
+              },
+              "retries": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 1
+              }
+            },
+            "total_cost_usd": 0,
+            "n_cost_unknown": 1,
+            "cost_sources": [
+              "unknown"
+            ],
+            "n_errors": 1,
+            "errors": [
+              "timeout: Avaloka DAB command exceeded 630.0s: Command '['/Users/leelakrishna/code/ki/avaloka-dev/.benchmarks/dab-venv/bin/python', '/private/tmp/claude-505/-Users-leelakrishna-code-ki-avaloka-dev/523f2974-7c63-4383-8c84-7340f46500b7/scratchpad/wt-bench/scripts/avaloka_dab_agent.py']' timed out after 630.0 seconds\nbudget_exceeded: latency_s=630.046860>600.000000"
+            ],
+            "failure_kinds": {
+              "timeout": 1
+            }
+          },
+          "trials": [
+            {
+              "task_id": "dab:DEPS_DEV_V1:1",
+              "track": "dab",
+              "config_id": "dab_avaloka_native",
+              "trial_index": 0,
+              "quality": {
+                "pass": 0.0,
+                "score": 0.0
+              },
+              "outcome": {
+                "answer": null,
+                "cost_usd": null,
+                "latency_s": 630.0468598749976,
+                "data_scanned_ratio": null,
+                "tool_calls": 0,
+                "tokens": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "unknown",
+                "retries": 0,
+                "recovered": null,
+                "trajectory": [],
+                "artifacts": {
+                  "budget": {
+                    "actual": {
+                      "cost_usd": null,
+                      "data_scanned_ratio": null,
+                      "latency_s": 630.0468598749976,
+                      "tokens": 0
+                    },
+                    "limits": {
+                      "max_cost_usd": 2.0,
+                      "max_data_scanned_ratio": null,
+                      "max_latency_s": 600.0,
+                      "max_tokens": 2000000
+                    },
+                    "violations": [
+                      "latency_s=630.046860>600.000000"
+                    ]
+                  }
+                },
+                "error": "timeout: Avaloka DAB command exceeded 630.0s: Command '['/Users/leelakrishna/code/ki/avaloka-dev/.benchmarks/dab-venv/bin/python', '/private/tmp/claude-505/-Users-leelakrishna-code-ki-avaloka-dev/523f2974-7c63-4383-8c84-7340f46500b7/scratchpad/wt-bench/scripts/avaloka_dab_agent.py']' timed out after 630.0 seconds\nbudget_exceeded: latency_s=630.046860>600.000000",
+                "error_kind": "timeout"
+              }
+            }
+          ]
+        },
+        "dab:GITHUB_REPOS:1": {
+          "track": "dab",
+          "stats": {
+            "n_trials": 1,
+            "pass_at_1": 0.0,
+            "best_of_n": 0.0,
+            "quality": {
+              "pass": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 1
+              },
+              "score": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 1
+              }
+            },
+            "tuple": {
+              "cost_usd": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 1
+              },
+              "latency_s": {
+                "mean": 321.3326642080028,
+                "median": 321.3326642080028,
+                "std": 0.0,
+                "min": 321.3326642080028,
+                "max": 321.3326642080028,
+                "n": 1
+              },
+              "data_scanned_ratio": {
+                "mean": NaN,
+                "median": NaN,
+                "std": NaN,
+                "min": NaN,
+                "max": NaN,
+                "n": 0
+              },
+              "tool_calls": {
+                "mean": 4.0,
+                "median": 4,
+                "std": 0.0,
+                "min": 4,
+                "max": 4,
+                "n": 1
+              },
+              "tokens": {
+                "mean": 89762.0,
+                "median": 89762,
+                "std": 0.0,
+                "min": 89762,
+                "max": 89762,
+                "n": 1
+              },
+              "prompt_tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 1
+              },
+              "completion_tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 1
+              },
+              "retries": {
+                "mean": 2.0,
+                "median": 2,
+                "std": 0.0,
+                "min": 2,
+                "max": 2,
+                "n": 1
+              }
+            },
+            "total_cost_usd": 0.0,
+            "n_cost_unknown": 0,
+            "cost_sources": [
+              "local_zero"
+            ],
+            "n_errors": 0,
+            "errors": [],
+            "failure_kinds": {}
+          },
+          "trials": [
+            {
+              "task_id": "dab:GITHUB_REPOS:1",
+              "track": "dab",
+              "config_id": "dab_avaloka_native",
+              "trial_index": 0,
+              "quality": {
+                "pass": 0.0,
+                "score": 0.0
+              },
+              "outcome": {
+                "answer": "The necessary evidence to answer this question cannot be retrieved.\n\nWhile the list of repositories that do not use Python was successfully identified from the `metadata_database` ($\\text{var\\_call\\_3cubfk35}$), accurately filtering the contents of the `README.md` files from the `artifacts_database` is too complex for the available querying tools. Specifically, the database search cannot effectively combine filtering by over 200 disparate repository names with a specific file path (`README.md`) across the massive `contents` table.\n\nTherefore, the full dataset containing the contents of the relevant `README.md` files required for counting copyright occurrences could not be retrieved to calculate the proportion.",
+                "cost_usd": 0.0,
+                "latency_s": 321.3326642080028,
+                "data_scanned_ratio": null,
+                "tool_calls": 4,
+                "tokens": 89762,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "local_zero",
+                "retries": 2,
+                "recovered": null,
+                "trajectory": [
+                  {
+                    "kind": "mission_start",
+                    "limits": {
+                      "max_cost_usd": 2.0,
+                      "max_data_scanned_ratio": null,
+                      "max_latency_s": 600.0,
+                      "max_tokens": 2000000
+                    },
+                    "model": "ollama/gemma4:e4b",
+                    "policy": {
+                      "enable_specialists": true,
+                      "max_iterations": 25,
+                      "max_output_tokens": 8192,
+                      "max_prompt_tool_result_bytes": 100000,
+                      "max_review_repairs": 1,
+                      "max_tool_errors": 8,
+                      "repeated_call_limit": 3,
+                      "require_data_evidence": true,
+                      "tool_timeout_s": 120
+                    },
+                    "prompt_version": "avaloka-data-reasoning-v4-specialists",
+                    "task_id": "dab:GITHUB_REPOS:1"
+                  },
+                  {
+                    "kind": "question_plan_created",
+                    "plan": {
+                      "ambiguities": [],
+                      "join_required": true,
+                      "numeric_result_required": true,
+                      "output_shape": "scalar",
+                      "prediction_intent": "none",
+                      "question": "Among repositories that do not use Python, what proportion of their README.md files include copyright information?",
+                      "return_only": false,
+                      "statistical_intent": "descriptive",
+                      "temporal_required": false,
+                      "transforms": [
+                        "ratio",
+                        "normalize_join_keys",
+                        "bounded_text_extraction",
+                        "nested_projection"
+                      ],
+                      "unstructured_required": true
+                    }
+                  },
+                  {
+                    "kind": "source_map_created",
+                    "source_map": {
+                      "multi_source": true,
+                      "schema_terms": [],
+                      "source_types": [
+                        "postgresql",
+                        "mongodb",
+                        "sqlite",
+                        "duckdb",
+                        "files"
+                      ]
+                    }
+                  },
+                  {
+                    "kind": "specialist_routed",
+                    "specialists": [
+                      "cartographer",
+                      "transformer",
+                      "statistician",
+                      "skeptic"
+                    ]
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 1,
+                    "kind": "model",
+                    "response_id": "chatcmpl-80",
+                    "tool_call_ids": [
+                      "call_tart17xh"
+                    ],
+                    "tool_names": [
+                      "list_db"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 590,
+                      "prompt_tokens": 2302,
+                      "total_tokens": 2892
+                    }
+                  },
+                  {
+                    "bytes_read": 34,
+                    "content_sha256": "3ce28ff809bdf69b60c306ea46a660e1a42768b80fe296ca492d2519caf16dcb",
+                    "content_truncated": false,
+                    "iteration": 1,
+                    "kind": "tool",
+                    "metadata": {
+                      "tool": "list_db"
+                    },
+                    "result_key": "var_call_tart17xh",
+                    "rows_read": 3,
+                    "success": true,
+                    "tool": "list_db",
+                    "tool_call_id": "call_tart17xh"
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 2,
+                    "kind": "model",
+                    "response_id": "chatcmpl-556",
+                    "tool_call_ids": [
+                      "call_3cubfk35"
+                    ],
+                    "tool_names": [
+                      "query_db"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 302,
+                      "prompt_tokens": 2361,
+                      "total_tokens": 2663
+                    }
+                  },
+                  {
+                    "bytes_read": 116399356,
+                    "content_sha256": "34eb8300385f28460f4b557b96033982c21dd6f3bbcf6810938653ea67dbcce0",
+                    "content_truncated": true,
+                    "iteration": 2,
+                    "kind": "tool",
+                    "metadata": {
+                      "tool": "query_db"
+                    },
+                    "result_key": "var_call_3cubfk35",
+                    "rows_read": 2774729,
+                    "success": true,
+                    "tool": "query_db",
+                    "tool_call_id": "call_3cubfk35"
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 3,
+                    "kind": "model",
+                    "response_id": "chatcmpl-504",
+                    "tool_call_ids": [
+                      "call_7e7zvjjr",
+                      "call_y6lt23pr"
+                    ],
+                    "tool_names": [
+                      "execute_python",
+                      "execute_python"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 3601,
+                      "prompt_tokens": 39188,
+                      "total_tokens": 42789
+                    }
+                  },
+                  {
+                    "bytes_read": 72,
+                    "content_sha256": "f96310f3a70e900705cbb3960394c5869271c1a58c9bb28a99166117cec569e4",
+                    "content_truncated": false,
+                    "iteration": 3,
+                    "kind": "tool",
+                    "metadata": {
+                      "tool": "execute_python"
+                    },
+                    "result_key": null,
+                    "rows_read": null,
+                    "success": false,
+                    "tool": "execute_python",
+                    "tool_call_id": "call_7e7zvjjr"
+                  },
+                  {
+                    "bytes_read": 72,
+                    "content_sha256": "f96310f3a70e900705cbb3960394c5869271c1a58c9bb28a99166117cec569e4",
+                    "content_truncated": false,
+                    "iteration": 3,
+                    "kind": "tool",
+                    "metadata": {
+                      "tool": "execute_python"
+                    },
+                    "result_key": null,
+                    "rows_read": null,
+                    "success": false,
+                    "tool": "execute_python",
+                    "tool_call_id": "call_y6lt23pr"
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 4,
+                    "kind": "model",
+                    "response_id": "chatcmpl-841",
+                    "tool_call_ids": [],
+                    "tool_names": [],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 539,
+                      "prompt_tokens": 40879,
+                      "total_tokens": 41418
+                    }
+                  },
+                  {
+                    "kind": "termination",
+                    "reason": "content_answer"
+                  }
+                ],
+                "artifacts": {
+                  "budget": {
+                    "actual": {
+                      "cost_usd": 0.0,
+                      "data_scanned_ratio": null,
+                      "latency_s": 321.3326642080028,
+                      "tokens": 89762
+                    },
+                    "limits": {
+                      "max_cost_usd": 2.0,
+                      "max_data_scanned_ratio": null,
+                      "max_latency_s": 600.0,
+                      "max_tokens": 2000000
+                    },
+                    "violations": []
+                  },
+                  "completion_tokens": 5032,
+                  "effective_limits": {
+                    "max_cost_usd": 2.0,
+                    "max_data_scanned_ratio": null,
+                    "max_latency_s": 600.0,
+                    "max_tokens": 2000000
+                  },
+                  "effective_policy": {
+                    "enable_specialists": true,
+                    "max_iterations": 25,
+                    "max_output_tokens": 8192,
+                    "max_prompt_tool_result_bytes": 100000,
+                    "max_review_repairs": 1,
+                    "max_tool_errors": 8,
+                    "repeated_call_limit": 3,
+                    "require_data_evidence": true,
+                    "tool_timeout_s": 120
+                  },
+                  "evaluation": {
+                    "validator_reason": "No value in LLM output rounds to 0.33"
+                  },
+                  "iterations": 4,
+                  "mission_latency_s": 309.3687405000019,
+                  "model": "ollama/gemma4:e4b",
+                  "model_log": "/Users/leelakrishna/code/ki/avaloka-dev/.benchmarks/DataAgentBench/query_GITHUB_REPOS/logs/avaloka/avaloka_native_GITHUB_REPOS_q1_r0_1792311316480593000_4169/model_calls.jsonl",
+                  "pricing_configured": true,
+                  "pricing_version": "local-zero",
+                  "prompt_tokens": 84730,
+                  "prompt_version": "avaloka-data-reasoning-v4-specialists",
+                  "protocol_version": "dab-command-v2",
+                  "run_dir": "/Users/leelakrishna/code/ki/avaloka-dev/.benchmarks/DataAgentBench/query_GITHUB_REPOS/logs/avaloka/avaloka_native_GITHUB_REPOS_q1_r0_1792311316480593000_4169",
+                  "stderr": "",
+                  "sut_name": "avaloka.data_agent.DataQueryMission",
+                  "termination_reason": "content_answer",
+                  "tool_log": "/Users/leelakrishna/code/ki/avaloka-dev/.benchmarks/DataAgentBench/query_GITHUB_REPOS/logs/avaloka/avaloka_native_GITHUB_REPOS_q1_r0_1792311316480593000_4169/tool_calls.jsonl"
+                },
+                "error": null,
+                "error_kind": null
+              }
+            }
+          ]
+        },
+        "dab:googlelocal:1": {
+          "track": "dab",
+          "stats": {
+            "n_trials": 1,
+            "pass_at_1": 0.0,
+            "best_of_n": 0.0,
+            "quality": {
+              "pass": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 1
+              },
+              "score": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 1
+              }
+            },
+            "tuple": {
+              "cost_usd": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 1
+              },
+              "latency_s": {
+                "mean": 221.25412591700297,
+                "median": 221.25412591700297,
+                "std": 0.0,
+                "min": 221.25412591700297,
+                "max": 221.25412591700297,
+                "n": 1
+              },
+              "data_scanned_ratio": {
+                "mean": NaN,
+                "median": NaN,
+                "std": NaN,
+                "min": NaN,
+                "max": NaN,
+                "n": 0
+              },
+              "tool_calls": {
+                "mean": 6.0,
+                "median": 6,
+                "std": 0.0,
+                "min": 6,
+                "max": 6,
+                "n": 1
+              },
+              "tokens": {
+                "mean": 69303.0,
+                "median": 69303,
+                "std": 0.0,
+                "min": 69303,
+                "max": 69303,
+                "n": 1
+              },
+              "prompt_tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 1
+              },
+              "completion_tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 1
+              },
+              "retries": {
+                "mean": 4.0,
+                "median": 4,
+                "std": 0.0,
+                "min": 4,
+                "max": 4,
+                "n": 1
+              }
+            },
+            "total_cost_usd": 0.0,
+            "n_cost_unknown": 0,
+            "cost_sources": [
+              "local_zero"
+            ],
+            "n_errors": 0,
+            "errors": [],
+            "failure_kinds": {}
+          },
+          "trials": [
+            {
+              "task_id": "dab:googlelocal:1",
+              "track": "dab",
+              "config_id": "dab_avaloka_native",
+              "trial_index": 0,
+              "quality": {
+                "pass": 0.0,
+                "score": 0.0
+              },
+              "outcome": {
+                "answer": "I have successfully gathered all the necessary data to answer your question, but due to persistent execution errors in the required multi-step calculation within the environment, I cannot provide the final ranked list.\n\nThe process to answer the question involves:\n1.  **Filtering Businesses:** Identifying businesses located in Los Angeles, CA, using the `business_database` (var\\_call\\_0hlb0rir).\n2.  **Calculating Average Ratings:** Aggregating all review ratings from the `review_database` (var\\_call\\_om55e2tu) based on the `gmap_id`.\n3.  **Joining and Ranking:** Merging these two datasets and calculating the average rating for only the Los Angeles-based businesses, then ranking the top 5.\n\nAll source data and the methodology were correctly applied, but the final required calculation failed repeatedly with a technical error, preventing the definitive answer retrieval.",
+                "cost_usd": 0.0,
+                "latency_s": 221.25412591700297,
+                "data_scanned_ratio": null,
+                "tool_calls": 6,
+                "tokens": 69303,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "local_zero",
+                "retries": 4,
+                "recovered": null,
+                "trajectory": [
+                  {
+                    "kind": "mission_start",
+                    "limits": {
+                      "max_cost_usd": 2.0,
+                      "max_data_scanned_ratio": null,
+                      "max_latency_s": 600.0,
+                      "max_tokens": 2000000
+                    },
+                    "model": "ollama/gemma4:e4b",
+                    "policy": {
+                      "enable_specialists": true,
+                      "max_iterations": 25,
+                      "max_output_tokens": 8192,
+                      "max_prompt_tool_result_bytes": 100000,
+                      "max_review_repairs": 1,
+                      "max_tool_errors": 8,
+                      "repeated_call_limit": 3,
+                      "require_data_evidence": true,
+                      "tool_timeout_s": 120
+                    },
+                    "prompt_version": "avaloka-data-reasoning-v4-specialists",
+                    "task_id": "dab:googlelocal:1"
+                  },
+                  {
+                    "kind": "question_plan_created",
+                    "plan": {
+                      "ambiguities": [],
+                      "join_required": true,
+                      "numeric_result_required": true,
+                      "output_shape": "list",
+                      "prediction_intent": "none",
+                      "question": "What are the top 5 businesses located in Los Angeles, California, ranked by highest average rating in descending order?",
+                      "return_only": false,
+                      "statistical_intent": "descriptive",
+                      "temporal_required": false,
+                      "transforms": [
+                        "normalize_join_keys",
+                        "nested_projection"
+                      ],
+                      "unstructured_required": false
+                    }
+                  },
+                  {
+                    "kind": "source_map_created",
+                    "source_map": {
+                      "multi_source": true,
+                      "schema_terms": [],
+                      "source_types": [
+                        "postgresql",
+                        "mongodb",
+                        "sqlite"
+                      ]
+                    }
+                  },
+                  {
+                    "kind": "specialist_routed",
+                    "specialists": [
+                      "cartographer",
+                      "transformer",
+                      "statistician",
+                      "skeptic"
+                    ]
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 1,
+                    "kind": "model",
+                    "response_id": "chatcmpl-636",
+                    "tool_call_ids": [
+                      "call_0hlb0rir"
+                    ],
+                    "tool_names": [
+                      "query_db"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 1003,
+                      "prompt_tokens": 1743,
+                      "total_tokens": 2746
+                    }
+                  },
+                  {
+                    "bytes_read": 20833,
+                    "content_sha256": "dbe3a83ca3038d96895feb90d8bff9f18f5948f5c57976ed0f32cc900d424590",
+                    "content_truncated": false,
+                    "iteration": 1,
+                    "kind": "tool",
+                    "metadata": {
+                      "tool": "query_db"
+                    },
+                    "result_key": "var_call_0hlb0rir",
+                    "rows_read": 79,
+                    "success": true,
+                    "tool": "query_db",
+                    "tool_call_id": "call_0hlb0rir"
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 2,
+                    "kind": "model",
+                    "response_id": "chatcmpl-174",
+                    "tool_call_ids": [
+                      "call_om55e2tu"
+                    ],
+                    "tool_names": [
+                      "query_db"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 2847,
+                      "prompt_tokens": 7344,
+                      "total_tokens": 10191
+                    }
+                  },
+                  {
+                    "bytes_read": 3783,
+                    "content_sha256": "6d454cf756481e98d30dd31976abb3c471a9161d14a68b29a1a4286234dd383e",
+                    "content_truncated": false,
+                    "iteration": 2,
+                    "kind": "tool",
+                    "metadata": {
+                      "tool": "query_db"
+                    },
+                    "result_key": "var_call_om55e2tu",
+                    "rows_read": 97,
+                    "success": true,
+                    "tool": "query_db",
+                    "tool_call_id": "call_om55e2tu"
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 3,
+                    "kind": "model",
+                    "response_id": "chatcmpl-316",
+                    "tool_call_ids": [
+                      "call_s5aaobvx"
+                    ],
+                    "tool_names": [
+                      "execute_python"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 972,
+                      "prompt_tokens": 9307,
+                      "total_tokens": 10279
+                    }
+                  },
+                  {
+                    "bytes_read": 96,
+                    "content_sha256": "acf74281ab41fab733e5bea4f82716f1628525f88dd2126638aa0e2f8efb07e4",
+                    "content_truncated": false,
+                    "iteration": 3,
+                    "kind": "tool",
+                    "metadata": {
+                      "tool": "execute_python"
+                    },
+                    "result_key": null,
+                    "rows_read": null,
+                    "success": false,
+                    "tool": "execute_python",
+                    "tool_call_id": "call_s5aaobvx"
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 4,
+                    "kind": "model",
+                    "response_id": "chatcmpl-303",
+                    "tool_call_ids": [
+                      "call_lrtxgd0b"
+                    ],
+                    "tool_names": [
+                      "execute_python"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 802,
+                      "prompt_tokens": 9730,
+                      "total_tokens": 10532
+                    }
+                  },
+                  {
+                    "bytes_read": 96,
+                    "content_sha256": "acf74281ab41fab733e5bea4f82716f1628525f88dd2126638aa0e2f8efb07e4",
+                    "content_truncated": false,
+                    "iteration": 4,
+                    "kind": "tool",
+                    "metadata": {
+                      "tool": "execute_python"
+                    },
+                    "result_key": null,
+                    "rows_read": null,
+                    "success": false,
+                    "tool": "execute_python",
+                    "tool_call_id": "call_lrtxgd0b"
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 5,
+                    "kind": "model",
+                    "response_id": "chatcmpl-294",
+                    "tool_call_ids": [
+                      "call_xai4n72p"
+                    ],
+                    "tool_names": [
+                      "execute_python"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 1162,
+                      "prompt_tokens": 10169,
+                      "total_tokens": 11331
+                    }
+                  },
+                  {
+                    "bytes_read": 96,
+                    "content_sha256": "acf74281ab41fab733e5bea4f82716f1628525f88dd2126638aa0e2f8efb07e4",
+                    "content_truncated": false,
+                    "iteration": 5,
+                    "kind": "tool",
+                    "metadata": {
+                      "tool": "execute_python"
+                    },
+                    "result_key": null,
+                    "rows_read": null,
+                    "success": false,
+                    "tool": "execute_python",
+                    "tool_call_id": "call_xai4n72p"
+                  },
+                  {
+                    "iteration": 6,
+                    "kind": "progress_guidance",
+                    "reasons": [
+                      "tool_errors"
+                    ]
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 6,
+                    "kind": "model",
+                    "response_id": "chatcmpl-453",
+                    "tool_call_ids": [
+                      "call_jababsl8"
+                    ],
+                    "tool_names": [
+                      "execute_python"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 1298,
+                      "prompt_tokens": 10866,
+                      "total_tokens": 12164
+                    }
+                  },
+                  {
+                    "bytes_read": 96,
+                    "content_sha256": "acf74281ab41fab733e5bea4f82716f1628525f88dd2126638aa0e2f8efb07e4",
+                    "content_truncated": false,
+                    "iteration": 6,
+                    "kind": "tool",
+                    "metadata": {
+                      "tool": "execute_python"
+                    },
+                    "result_key": null,
+                    "rows_read": null,
+                    "success": false,
+                    "tool": "execute_python",
+                    "tool_call_id": "call_jababsl8"
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 7,
+                    "kind": "model",
+                    "response_id": "chatcmpl-92",
+                    "tool_call_ids": [],
+                    "tool_names": [],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 706,
+                      "prompt_tokens": 11354,
+                      "total_tokens": 12060
+                    }
+                  },
+                  {
+                    "kind": "termination",
+                    "reason": "content_answer"
+                  }
+                ],
+                "artifacts": {
+                  "budget": {
+                    "actual": {
+                      "cost_usd": 0.0,
+                      "data_scanned_ratio": null,
+                      "latency_s": 221.25412591700297,
+                      "tokens": 69303
+                    },
+                    "limits": {
+                      "max_cost_usd": 2.0,
+                      "max_data_scanned_ratio": null,
+                      "max_latency_s": 600.0,
+                      "max_tokens": 2000000
+                    },
+                    "violations": []
+                  },
+                  "completion_tokens": 8790,
+                  "effective_limits": {
+                    "max_cost_usd": 2.0,
+                    "max_data_scanned_ratio": null,
+                    "max_latency_s": 600.0,
+                    "max_tokens": 2000000
+                  },
+                  "effective_policy": {
+                    "enable_specialists": true,
+                    "max_iterations": 25,
+                    "max_output_tokens": 8192,
+                    "max_prompt_tool_result_bytes": 100000,
+                    "max_review_repairs": 1,
+                    "max_tool_errors": 8,
+                    "repeated_call_limit": 3,
+                    "require_data_evidence": true,
+                    "tool_timeout_s": 120
+                  },
+                  "evaluation": {
+                    "validator_reason": "Missing name in LLM output: Widows Peak Salon"
+                  },
+                  "iterations": 7,
+                  "mission_latency_s": 209.67927150000105,
+                  "model": "ollama/gemma4:e4b",
+                  "model_log": "/Users/leelakrishna/code/ki/avaloka-dev/.benchmarks/DataAgentBench/query_googlelocal/logs/avaloka/avaloka_native_googlelocal_q1_r0_1792311637759477000_56087/model_calls.jsonl",
+                  "pricing_configured": true,
+                  "pricing_version": "local-zero",
+                  "prompt_tokens": 60513,
+                  "prompt_version": "avaloka-data-reasoning-v4-specialists",
+                  "protocol_version": "dab-command-v2",
+                  "run_dir": "/Users/leelakrishna/code/ki/avaloka-dev/.benchmarks/DataAgentBench/query_googlelocal/logs/avaloka/avaloka_native_googlelocal_q1_r0_1792311637759477000_56087",
+                  "stderr": "",
+                  "sut_name": "avaloka.data_agent.DataQueryMission",
+                  "termination_reason": "content_answer",
+                  "tool_log": "/Users/leelakrishna/code/ki/avaloka-dev/.benchmarks/DataAgentBench/query_googlelocal/logs/avaloka/avaloka_native_googlelocal_q1_r0_1792311637759477000_56087/tool_calls.jsonl"
+                },
+                "error": null,
+                "error_kind": null
+              }
+            }
+          ]
+        },
+        "dab:music_brainz_20k:1": {
+          "track": "dab",
+          "stats": {
+            "n_trials": 1,
+            "pass_at_1": 0.0,
+            "best_of_n": 0.0,
+            "quality": {
+              "pass": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 1
+              },
+              "score": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 1
+              }
+            },
+            "tuple": {
+              "cost_usd": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 1
+              },
+              "latency_s": {
+                "mean": 137.2845023339978,
+                "median": 137.2845023339978,
+                "std": 0.0,
+                "min": 137.2845023339978,
+                "max": 137.2845023339978,
+                "n": 1
+              },
+              "data_scanned_ratio": {
+                "mean": NaN,
+                "median": NaN,
+                "std": NaN,
+                "min": NaN,
+                "max": NaN,
+                "n": 0
+              },
+              "tool_calls": {
+                "mean": 11.0,
+                "median": 11,
+                "std": 0.0,
+                "min": 11,
+                "max": 11,
+                "n": 1
+              },
+              "tokens": {
+                "mean": 38710.0,
+                "median": 38710,
+                "std": 0.0,
+                "min": 38710,
+                "max": 38710,
+                "n": 1
+              },
+              "prompt_tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 1
+              },
+              "completion_tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 1
+              },
+              "retries": {
+                "mean": 8.0,
+                "median": 8,
+                "std": 0.0,
+                "min": 8,
+                "max": 8,
+                "n": 1
+              }
+            },
+            "total_cost_usd": 0.0,
+            "n_cost_unknown": 0,
+            "cost_sources": [
+              "local_zero"
+            ],
+            "n_errors": 0,
+            "errors": [],
+            "failure_kinds": {}
+          },
+          "trials": [
+            {
+              "task_id": "dab:music_brainz_20k:1",
+              "track": "dab",
+              "config_id": "dab_avaloka_native",
+              "trial_index": 0,
+              "quality": {
+                "pass": 0.0,
+                "score": 0.0
+              },
+              "outcome": {
+                "answer": "The total revenue that Apple Music made from Beyonc\u00e9's song 'Get Me Bodied' in Canada is **$601.44**.\n\nThis figure is calculated by summing the two revenues found in the `sales_database` for the identified tracks:\n*   $377.62\n*   $223.82\n**Total: $601.44**\n\nEvidence supporting the track identification and corresponding revenue amounts was retrieved from the database calls.",
+                "cost_usd": 0.0,
+                "latency_s": 137.2845023339978,
+                "data_scanned_ratio": null,
+                "tool_calls": 11,
+                "tokens": 38710,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "local_zero",
+                "retries": 8,
+                "recovered": null,
+                "trajectory": [
+                  {
+                    "kind": "mission_start",
+                    "limits": {
+                      "max_cost_usd": 2.0,
+                      "max_data_scanned_ratio": null,
+                      "max_latency_s": 600.0,
+                      "max_tokens": 2000000
+                    },
+                    "model": "ollama/gemma4:e4b",
+                    "policy": {
+                      "enable_specialists": true,
+                      "max_iterations": 25,
+                      "max_output_tokens": 8192,
+                      "max_prompt_tool_result_bytes": 100000,
+                      "max_review_repairs": 1,
+                      "max_tool_errors": 8,
+                      "repeated_call_limit": 3,
+                      "require_data_evidence": true,
+                      "tool_timeout_s": 120
+                    },
+                    "prompt_version": "avaloka-data-reasoning-v4-specialists",
+                    "task_id": "dab:music_brainz_20k:1"
+                  },
+                  {
+                    "kind": "question_plan_created",
+                    "plan": {
+                      "ambiguities": [],
+                      "join_required": true,
+                      "numeric_result_required": true,
+                      "output_shape": "scalar",
+                      "prediction_intent": "none",
+                      "question": "How much revenue in USD did Apple Music make from Beyonc\u00e9's song 'Get Me Bodied' in Canada?",
+                      "return_only": false,
+                      "statistical_intent": "descriptive",
+                      "temporal_required": false,
+                      "transforms": [
+                        "normalize_join_keys",
+                        "nested_projection"
+                      ],
+                      "unstructured_required": false
+                    }
+                  },
+                  {
+                    "kind": "source_map_created",
+                    "source_map": {
+                      "multi_source": true,
+                      "schema_terms": [],
+                      "source_types": [
+                        "postgresql",
+                        "mongodb",
+                        "sqlite",
+                        "duckdb"
+                      ]
+                    }
+                  },
+                  {
+                    "kind": "specialist_routed",
+                    "specialists": [
+                      "cartographer",
+                      "transformer",
+                      "statistician",
+                      "skeptic"
+                    ]
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 1,
+                    "kind": "model",
+                    "response_id": "chatcmpl-103",
+                    "tool_call_ids": [
+                      "call_9r0kr99y"
+                    ],
+                    "tool_names": [
+                      "list_db"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 520,
+                      "prompt_tokens": 1894,
+                      "total_tokens": 2414
+                    }
+                  },
+                  {
+                    "bytes_read": 10,
+                    "content_sha256": "2c54a2351aef9f79dcb139fc08bca63f0157cd0e259f230934408db939a7a3c2",
+                    "content_truncated": false,
+                    "iteration": 1,
+                    "kind": "tool",
+                    "metadata": {
+                      "tool": "list_db"
+                    },
+                    "result_key": "var_call_9r0kr99y",
+                    "rows_read": 1,
+                    "success": true,
+                    "tool": "list_db",
+                    "tool_call_id": "call_9r0kr99y"
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 2,
+                    "kind": "model",
+                    "response_id": "chatcmpl-938",
+                    "tool_call_ids": [
+                      "call_jj3xi0mm"
+                    ],
+                    "tool_names": [
+                      "query_db"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 386,
+                      "prompt_tokens": 1950,
+                      "total_tokens": 2336
+                    }
+                  },
+                  {
+                    "bytes_read": 199,
+                    "content_sha256": "da34830219e90019ae2f7f4785c5a1c263226ded76967fec201a2063d874f157",
+                    "content_truncated": false,
+                    "iteration": 2,
+                    "kind": "tool",
+                    "metadata": {
+                      "tool": "query_db"
+                    },
+                    "result_key": "var_call_jj3xi0mm",
+                    "rows_read": 2,
+                    "success": true,
+                    "tool": "query_db",
+                    "tool_call_id": "call_jj3xi0mm"
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 3,
+                    "kind": "model",
+                    "response_id": "chatcmpl-824",
+                    "tool_call_ids": [
+                      "call_2avzneri"
+                    ],
+                    "tool_names": [
+                      "query_db"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 675,
+                      "prompt_tokens": 2110,
+                      "total_tokens": 2785
+                    }
+                  },
+                  {
+                    "bytes_read": 54,
+                    "content_sha256": "8027e956eafcf304535996a129c85e18e4024e23da7e4bdd170c998ab23dd508",
+                    "content_truncated": false,
+                    "iteration": 3,
+                    "kind": "tool",
+                    "metadata": {
+                      "tool": "query_db"
+                    },
+                    "result_key": "var_call_2avzneri",
+                    "rows_read": 2,
+                    "success": true,
+                    "tool": "query_db",
+                    "tool_call_id": "call_2avzneri"
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 4,
+                    "kind": "model",
+                    "response_id": "chatcmpl-433",
+                    "tool_call_ids": [
+                      "call_fppjj7c8"
+                    ],
+                    "tool_names": [
+                      "execute_python"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 353,
+                      "prompt_tokens": 2227,
+                      "total_tokens": 2580
+                    }
+                  },
+                  {
+                    "bytes_read": 64,
+                    "content_sha256": "3596a7f28da45b40e8067dd4a853862937fbcc8836f97cff70aed6e1131dde49",
+                    "content_truncated": false,
+                    "iteration": 4,
+                    "kind": "tool",
+                    "metadata": {
+                      "tool": "execute_python"
+                    },
+                    "result_key": null,
+                    "rows_read": null,
+                    "success": false,
+                    "tool": "execute_python",
+                    "tool_call_id": "call_fppjj7c8"
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 5,
+                    "kind": "model",
+                    "response_id": "chatcmpl-352",
+                    "tool_call_ids": [
+                      "call_61tzcrp7"
+                    ],
+                    "tool_names": [
+                      "execute_python"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 349,
+                      "prompt_tokens": 2384,
+                      "total_tokens": 2733
+                    }
+                  },
+                  {
+                    "bytes_read": 64,
+                    "content_sha256": "3596a7f28da45b40e8067dd4a853862937fbcc8836f97cff70aed6e1131dde49",
+                    "content_truncated": false,
+                    "iteration": 5,
+                    "kind": "tool",
+                    "metadata": {
+                      "tool": "execute_python"
+                    },
+                    "result_key": null,
+                    "rows_read": null,
+                    "success": false,
+                    "tool": "execute_python",
+                    "tool_call_id": "call_61tzcrp7"
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 6,
+                    "kind": "model",
+                    "response_id": "chatcmpl-975",
+                    "tool_call_ids": [
+                      "call_41c3x0hg"
+                    ],
+                    "tool_names": [
+                      "execute_python"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 484,
+                      "prompt_tokens": 2548,
+                      "total_tokens": 3032
+                    }
+                  },
+                  {
+                    "bytes_read": 64,
+                    "content_sha256": "3596a7f28da45b40e8067dd4a853862937fbcc8836f97cff70aed6e1131dde49",
+                    "content_truncated": false,
+                    "iteration": 6,
+                    "kind": "tool",
+                    "metadata": {
+                      "tool": "execute_python"
+                    },
+                    "result_key": null,
+                    "rows_read": null,
+                    "success": false,
+                    "tool": "execute_python",
+                    "tool_call_id": "call_41c3x0hg"
+                  },
+                  {
+                    "iteration": 7,
+                    "kind": "progress_guidance",
+                    "reasons": [
+                      "tool_errors"
+                    ]
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 7,
+                    "kind": "model",
+                    "response_id": "chatcmpl-211",
+                    "tool_call_ids": [
+                      "call_dcq69ubk"
+                    ],
+                    "tool_names": [
+                      "return_answer"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 545,
+                      "prompt_tokens": 2821,
+                      "total_tokens": 3366
+                    }
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 8,
+                    "kind": "model",
+                    "response_id": "chatcmpl-562",
+                    "tool_call_ids": [
+                      "call_t0jykwdp"
+                    ],
+                    "tool_names": [
+                      "return_answer"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 388,
+                      "prompt_tokens": 3108,
+                      "total_tokens": 3496
+                    }
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 9,
+                    "kind": "model",
+                    "response_id": "chatcmpl-514",
+                    "tool_call_ids": [
+                      "call_tvsltewk"
+                    ],
+                    "tool_names": [
+                      "return_answer"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 505,
+                      "prompt_tokens": 3262,
+                      "total_tokens": 3767
+                    }
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 10,
+                    "kind": "model",
+                    "response_id": "chatcmpl-736",
+                    "tool_call_ids": [
+                      "call_eucu44rs"
+                    ],
+                    "tool_names": [
+                      "return_answer"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 295,
+                      "prompt_tokens": 3592,
+                      "total_tokens": 3887
+                    }
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 11,
+                    "kind": "model",
+                    "response_id": "chatcmpl-930",
+                    "tool_call_ids": [
+                      "call_w4hyy3vt"
+                    ],
+                    "tool_names": [
+                      "return_answer"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 348,
+                      "prompt_tokens": 3744,
+                      "total_tokens": 4092
+                    }
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 12,
+                    "kind": "model",
+                    "response_id": "chatcmpl-663",
+                    "tool_call_ids": [],
+                    "tool_names": [],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 323,
+                      "prompt_tokens": 3899,
+                      "total_tokens": 4222
+                    }
+                  },
+                  {
+                    "kind": "termination",
+                    "reason": "content_answer"
+                  }
+                ],
+                "artifacts": {
+                  "budget": {
+                    "actual": {
+                      "cost_usd": 0.0,
+                      "data_scanned_ratio": null,
+                      "latency_s": 137.2845023339978,
+                      "tokens": 38710
+                    },
+                    "limits": {
+                      "max_cost_usd": 2.0,
+                      "max_data_scanned_ratio": null,
+                      "max_latency_s": 600.0,
+                      "max_tokens": 2000000
+                    },
+                    "violations": []
+                  },
+                  "completion_tokens": 5171,
+                  "effective_limits": {
+                    "max_cost_usd": 2.0,
+                    "max_data_scanned_ratio": null,
+                    "max_latency_s": 600.0,
+                    "max_tokens": 2000000
+                  },
+                  "effective_policy": {
+                    "enable_specialists": true,
+                    "max_iterations": 25,
+                    "max_output_tokens": 8192,
+                    "max_prompt_tool_result_bytes": 100000,
+                    "max_review_repairs": 1,
+                    "max_tool_errors": 8,
+                    "repeated_call_limit": 3,
+                    "require_data_evidence": true,
+                    "tool_timeout_s": 120
+                  },
+                  "evaluation": {
+                    "validator_reason": "Ground truth '1059.46' not found in LLM output: The total revenue that Apple Music made from Beyonc\u00e9's song 'Get Me Bodied' in Canada is **$601.44**.\n\nThis figure is calculated by summing the two revenues found in the `sales_database` for the identified tracks:\n*   $377.62\n*   $223.82\n**Total: $601.44**\n\nEvidence supporting the track identification and corresponding revenue amounts was retrieved from the database calls."
+                  },
+                  "iterations": 12,
+                  "mission_latency_s": 124.97373687500658,
+                  "model": "ollama/gemma4:e4b",
+                  "model_log": "/Users/leelakrishna/code/ki/avaloka-dev/.benchmarks/DataAgentBench/query_music_brainz_20k/logs/avaloka/avaloka_native_music_brainz_20k_q1_r0_1792311859056954000_93577/model_calls.jsonl",
+                  "pricing_configured": true,
+                  "pricing_version": "local-zero",
+                  "prompt_tokens": 33539,
+                  "prompt_version": "avaloka-data-reasoning-v4-specialists",
+                  "protocol_version": "dab-command-v2",
+                  "run_dir": "/Users/leelakrishna/code/ki/avaloka-dev/.benchmarks/DataAgentBench/query_music_brainz_20k/logs/avaloka/avaloka_native_music_brainz_20k_q1_r0_1792311859056954000_93577",
+                  "stderr": "",
+                  "sut_name": "avaloka.data_agent.DataQueryMission",
+                  "termination_reason": "content_answer",
+                  "tool_log": "/Users/leelakrishna/code/ki/avaloka-dev/.benchmarks/DataAgentBench/query_music_brainz_20k/logs/avaloka/avaloka_native_music_brainz_20k_q1_r0_1792311859056954000_93577/tool_calls.jsonl"
+                },
+                "error": null,
+                "error_kind": null
+              }
+            }
+          ]
+        },
+        "dab:PANCANCER_ATLAS:1": {
+          "track": "dab",
+          "stats": {
+            "n_trials": 1,
+            "pass_at_1": 0.0,
+            "best_of_n": 0.0,
+            "quality": {
+              "pass": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 1
+              },
+              "score": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 1
+              }
+            },
+            "tuple": {
+              "cost_usd": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 1
+              },
+              "latency_s": {
+                "mean": 237.21636645899707,
+                "median": 237.21636645899707,
+                "std": 0.0,
+                "min": 237.21636645899707,
+                "max": 237.21636645899707,
+                "n": 1
+              },
+              "data_scanned_ratio": {
+                "mean": NaN,
+                "median": NaN,
+                "std": NaN,
+                "min": NaN,
+                "max": NaN,
+                "n": 0
+              },
+              "tool_calls": {
+                "mean": 5.0,
+                "median": 5,
+                "std": 0.0,
+                "min": 5,
+                "max": 5,
+                "n": 1
+              },
+              "tokens": {
+                "mean": 18126.0,
+                "median": 18126,
+                "std": 0.0,
+                "min": 18126,
+                "max": 18126,
+                "n": 1
+              },
+              "prompt_tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 1
+              },
+              "completion_tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 1
+              },
+              "retries": {
+                "mean": 3.0,
+                "median": 3,
+                "std": 0.0,
+                "min": 3,
+                "max": 3,
+                "n": 1
+              }
+            },
+            "total_cost_usd": 0.0,
+            "n_cost_unknown": 0,
+            "cost_sources": [
+              "local_zero"
+            ],
+            "n_errors": 0,
+            "errors": [],
+            "failure_kinds": {}
+          },
+          "trials": [
+            {
+              "task_id": "dab:PANCANCER_ATLAS:1",
+              "track": "dab",
+              "config_id": "dab_avaloka_native",
+              "trial_index": 0,
+              "quality": {
+                "pass": 0.0,
+                "score": 0.0
+              },
+              "outcome": {
+                "answer": "The inability to execute a successful query on the `clinical_database` is the limiting factor. All attempts to select `PatientID`, `ParticipantBarcode`, or even to verify the existence of `HistologyType` and `CancerType` columns in the `clinical_info` table have failed with \"UndefinedColumn\" errors. Without a confirmed schema for reliably linking patient identifiers, recording the `LGG` cancer type, and filtering historical tissue types (`HistologyType`), I cannot join the clinical context with the `IGF2` gene expression data from the `molecular_database`.\n\nTherefore, I cannot compute the average log10-transformed expression of the IGF2 gene across different histology types for LGG patients.",
+                "cost_usd": 0.0,
+                "latency_s": 237.21636645899707,
+                "data_scanned_ratio": null,
+                "tool_calls": 5,
+                "tokens": 18126,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "local_zero",
+                "retries": 3,
+                "recovered": null,
+                "trajectory": [
+                  {
+                    "kind": "mission_start",
+                    "limits": {
+                      "max_cost_usd": 2.0,
+                      "max_data_scanned_ratio": null,
+                      "max_latency_s": 600.0,
+                      "max_tokens": 2000000
+                    },
+                    "model": "ollama/gemma4:e4b",
+                    "policy": {
+                      "enable_specialists": true,
+                      "max_iterations": 25,
+                      "max_output_tokens": 8192,
+                      "max_prompt_tool_result_bytes": 100000,
+                      "max_review_repairs": 1,
+                      "max_tool_errors": 8,
+                      "repeated_call_limit": 3,
+                      "require_data_evidence": true,
+                      "tool_timeout_s": 120
+                    },
+                    "prompt_version": "avaloka-data-reasoning-v4-specialists",
+                    "task_id": "dab:PANCANCER_ATLAS:1"
+                  },
+                  {
+                    "kind": "question_plan_created",
+                    "plan": {
+                      "ambiguities": [],
+                      "join_required": true,
+                      "numeric_result_required": true,
+                      "output_shape": "table",
+                      "prediction_intent": "none",
+                      "question": "For LGG patients, compute the average log10-transformed expression of the IGF2 gene across different histology types. Only include patients with valid IGF2 expression values and histology annotations that are not enclosed in square brackets. Report the final average values with at least four decimal places of precision.",
+                      "return_only": false,
+                      "statistical_intent": "descriptive",
+                      "temporal_required": false,
+                      "transforms": [
+                        "log10",
+                        "normalize_join_keys",
+                        "nested_projection"
+                      ],
+                      "unstructured_required": false
+                    }
+                  },
+                  {
+                    "kind": "source_map_created",
+                    "source_map": {
+                      "multi_source": true,
+                      "schema_terms": [],
+                      "source_types": [
+                        "postgresql",
+                        "mongodb",
+                        "duckdb"
+                      ]
+                    }
+                  },
+                  {
+                    "kind": "specialist_routed",
+                    "specialists": [
+                      "cartographer",
+                      "transformer",
+                      "statistician",
+                      "skeptic"
+                    ]
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 1,
+                    "kind": "model",
+                    "response_id": "chatcmpl-304",
+                    "tool_call_ids": [
+                      "call_vf9dgszf"
+                    ],
+                    "tool_names": [
+                      "list_db"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 509,
+                      "prompt_tokens": 2000,
+                      "total_tokens": 2509
+                    }
+                  },
+                  {
+                    "bytes_read": 17,
+                    "content_sha256": "f6a7085b664165cd2f3148ad4027e543df97bc834697f344fa98c34bdbb83d03",
+                    "content_truncated": false,
+                    "iteration": 1,
+                    "kind": "tool",
+                    "metadata": {
+                      "tool": "list_db"
+                    },
+                    "result_key": "var_call_vf9dgszf",
+                    "rows_read": 1,
+                    "success": true,
+                    "tool": "list_db",
+                    "tool_call_id": "call_vf9dgszf"
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 2,
+                    "kind": "model",
+                    "response_id": "chatcmpl-687",
+                    "tool_call_ids": [
+                      "call_kpm692k5"
+                    ],
+                    "tool_names": [
+                      "list_db"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 329,
+                      "prompt_tokens": 2055,
+                      "total_tokens": 2384
+                    }
+                  },
+                  {
+                    "bytes_read": 38,
+                    "content_sha256": "a1c487c2fd14ef0f4a5dcf3ac66ba54c94ebfc5fb8f5897f8701013b67e769d7",
+                    "content_truncated": false,
+                    "iteration": 2,
+                    "kind": "tool",
+                    "metadata": {
+                      "tool": "list_db"
+                    },
+                    "result_key": "var_call_kpm692k5",
+                    "rows_read": 2,
+                    "success": true,
+                    "tool": "list_db",
+                    "tool_call_id": "call_kpm692k5"
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 3,
+                    "kind": "model",
+                    "response_id": "chatcmpl-897",
+                    "tool_call_ids": [
+                      "call_x96xfy4l"
+                    ],
+                    "tool_names": [
+                      "query_db"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 621,
+                      "prompt_tokens": 2116,
+                      "total_tokens": 2737
+                    }
+                  },
+                  {
+                    "bytes_read": 512,
+                    "content_sha256": "4399ce4d1663ead8edb837b0a13417a1d7a7594e9ce6c7ef6ba1fae1a6964e96",
+                    "content_truncated": false,
+                    "iteration": 3,
+                    "kind": "tool",
+                    "metadata": {
+                      "tool": "query_db"
+                    },
+                    "result_key": null,
+                    "rows_read": null,
+                    "success": false,
+                    "tool": "query_db",
+                    "tool_call_id": "call_x96xfy4l"
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 4,
+                    "kind": "model",
+                    "response_id": "chatcmpl-55",
+                    "tool_call_ids": [
+                      "call_6amlbm98"
+                    ],
+                    "tool_names": [
+                      "query_db"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 770,
+                      "prompt_tokens": 2380,
+                      "total_tokens": 3150
+                    }
+                  },
+                  {
+                    "bytes_read": 521,
+                    "content_sha256": "6d64241ca8cf789de11a997a281811f0fc30b51e59543640f718ab990b430252",
+                    "content_truncated": false,
+                    "iteration": 4,
+                    "kind": "tool",
+                    "metadata": {
+                      "tool": "query_db"
+                    },
+                    "result_key": null,
+                    "rows_read": null,
+                    "success": false,
+                    "tool": "query_db",
+                    "tool_call_id": "call_6amlbm98"
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 5,
+                    "kind": "model",
+                    "response_id": "chatcmpl-450",
+                    "tool_call_ids": [
+                      "call_vm2zrbty"
+                    ],
+                    "tool_names": [
+                      "query_db"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 1134,
+                      "prompt_tokens": 2643,
+                      "total_tokens": 3777
+                    }
+                  },
+                  {
+                    "bytes_read": 474,
+                    "content_sha256": "c513397b7bb58b39ac29da1eb230c0bd6c892bb7f5a102e8b72c4e09a6f0b904",
+                    "content_truncated": false,
+                    "iteration": 5,
+                    "kind": "tool",
+                    "metadata": {
+                      "tool": "query_db"
+                    },
+                    "result_key": null,
+                    "rows_read": null,
+                    "success": false,
+                    "tool": "query_db",
+                    "tool_call_id": "call_vm2zrbty"
+                  },
+                  {
+                    "iteration": 6,
+                    "kind": "progress_guidance",
+                    "reasons": [
+                      "tool_errors"
+                    ]
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 6,
+                    "kind": "model",
+                    "response_id": "chatcmpl-191",
+                    "tool_call_ids": [],
+                    "tool_names": [],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 630,
+                      "prompt_tokens": 2939,
+                      "total_tokens": 3569
+                    }
+                  },
+                  {
+                    "kind": "termination",
+                    "reason": "content_answer"
+                  }
+                ],
+                "artifacts": {
+                  "budget": {
+                    "actual": {
+                      "cost_usd": 0.0,
+                      "data_scanned_ratio": null,
+                      "latency_s": 237.21636645899707,
+                      "tokens": 18126
+                    },
+                    "limits": {
+                      "max_cost_usd": 2.0,
+                      "max_data_scanned_ratio": null,
+                      "max_latency_s": 600.0,
+                      "max_tokens": 2000000
+                    },
+                    "violations": []
+                  },
+                  "completion_tokens": 3993,
+                  "effective_limits": {
+                    "max_cost_usd": 2.0,
+                    "max_data_scanned_ratio": null,
+                    "max_latency_s": 600.0,
+                    "max_tokens": 2000000
+                  },
+                  "effective_policy": {
+                    "enable_specialists": true,
+                    "max_iterations": 25,
+                    "max_output_tokens": 8192,
+                    "max_prompt_tool_result_bytes": 100000,
+                    "max_review_repairs": 1,
+                    "max_tool_errors": 8,
+                    "repeated_call_limit": 3,
+                    "require_data_evidence": true,
+                    "tool_timeout_s": 120
+                  },
+                  "evaluation": {
+                    "validator_reason": "Missing histology type: 9382/3"
+                  },
+                  "iterations": 6,
+                  "mission_latency_s": 224.19351670800097,
+                  "model": "ollama/gemma4:e4b",
+                  "model_log": "/Users/leelakrishna/code/ki/avaloka-dev/.benchmarks/DataAgentBench/query_PANCANCER_ATLAS/logs/avaloka/avaloka_native_PANCANCER_ATLAS_q1_r0_1792311996332619000_21459/model_calls.jsonl",
+                  "pricing_configured": true,
+                  "pricing_version": "local-zero",
+                  "prompt_tokens": 14133,
+                  "prompt_version": "avaloka-data-reasoning-v4-specialists",
+                  "protocol_version": "dab-command-v2",
+                  "run_dir": "/Users/leelakrishna/code/ki/avaloka-dev/.benchmarks/DataAgentBench/query_PANCANCER_ATLAS/logs/avaloka/avaloka_native_PANCANCER_ATLAS_q1_r0_1792311996332619000_21459",
+                  "stderr": "",
+                  "sut_name": "avaloka.data_agent.DataQueryMission",
+                  "termination_reason": "content_answer",
+                  "tool_log": "/Users/leelakrishna/code/ki/avaloka-dev/.benchmarks/DataAgentBench/query_PANCANCER_ATLAS/logs/avaloka/avaloka_native_PANCANCER_ATLAS_q1_r0_1792311996332619000_21459/tool_calls.jsonl"
+                },
+                "error": null,
+                "error_kind": null
+              }
+            }
+          ]
+        },
+        "dab:PATENTS:1": {
+          "track": "dab",
+          "stats": {
+            "n_trials": 1,
+            "pass_at_1": 0.0,
+            "best_of_n": 0.0,
+            "quality": {
+              "pass": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 1
+              },
+              "score": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 1
+              }
+            },
+            "tuple": {
+              "cost_usd": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 1
+              },
+              "latency_s": {
+                "mean": 416.52755541700026,
+                "median": 416.52755541700026,
+                "std": 0.0,
+                "min": 416.52755541700026,
+                "max": 416.52755541700026,
+                "n": 1
+              },
+              "data_scanned_ratio": {
+                "mean": NaN,
+                "median": NaN,
+                "std": NaN,
+                "min": NaN,
+                "max": NaN,
+                "n": 0
+              },
+              "tool_calls": {
+                "mean": 7.0,
+                "median": 7,
+                "std": 0.0,
+                "min": 7,
+                "max": 7,
+                "n": 1
+              },
+              "tokens": {
+                "mean": 179209.0,
+                "median": 179209,
+                "std": 0.0,
+                "min": 179209,
+                "max": 179209,
+                "n": 1
+              },
+              "prompt_tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 1
+              },
+              "completion_tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 1
+              },
+              "retries": {
+                "mean": 2.0,
+                "median": 2,
+                "std": 0.0,
+                "min": 2,
+                "max": 2,
+                "n": 1
+              }
+            },
+            "total_cost_usd": 0.0,
+            "n_cost_unknown": 0,
+            "cost_sources": [
+              "local_zero"
+            ],
+            "n_errors": 0,
+            "errors": [],
+            "failure_kinds": {}
+          },
+          "trials": [
+            {
+              "task_id": "dab:PATENTS:1",
+              "track": "dab",
+              "config_id": "dab_avaloka_native",
+              "trial_index": 0,
+              "quality": {
+                "pass": 0.0,
+                "score": 0.0
+              },
+              "outcome": {
+                "answer": "Based on a thorough inspection of the supplied source data, all patent filing records are dated to 2019.\n\nTherefore, it is impossible to identify any CPC technology areas whose \"best year\" (highest annual filings or maximum EMA) is 2022, as no data for 2022 is available in the system.\n\nTo perform the requested calculation\u2014which requires comparing filing trends over multiple years to determine the highest Exponential Moving Average (EMA) and identifying a peak in 2022\u2014the source data must include records from 2022.\n\nI recommend supplying data covering the necessary time range (e.g., 2018-2022) for an accurate analysis.",
+                "cost_usd": 0.0,
+                "latency_s": 416.52755541700026,
+                "data_scanned_ratio": null,
+                "tool_calls": 7,
+                "tokens": 179209,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "local_zero",
+                "retries": 2,
+                "recovered": null,
+                "trajectory": [
+                  {
+                    "kind": "mission_start",
+                    "limits": {
+                      "max_cost_usd": 2.0,
+                      "max_data_scanned_ratio": null,
+                      "max_latency_s": 600.0,
+                      "max_tokens": 2000000
+                    },
+                    "model": "ollama/gemma4:e4b",
+                    "policy": {
+                      "enable_specialists": true,
+                      "max_iterations": 25,
+                      "max_output_tokens": 8192,
+                      "max_prompt_tool_result_bytes": 100000,
+                      "max_review_repairs": 1,
+                      "max_tool_errors": 8,
+                      "repeated_call_limit": 3,
+                      "require_data_evidence": true,
+                      "tool_timeout_s": 120
+                    },
+                    "prompt_version": "avaloka-data-reasoning-v4-specialists",
+                    "task_id": "dab:PATENTS:1"
+                  },
+                  {
+                    "kind": "question_plan_created",
+                    "plan": {
+                      "ambiguities": [],
+                      "join_required": true,
+                      "numeric_result_required": true,
+                      "output_shape": "scalar",
+                      "prediction_intent": "none",
+                      "question": "Identify the CPC technology areas with the highest exponential moving average of patent filings each year (smoothing factor 0.2), and return only the CPC group codes at level 5 whose best year is 2022.",
+                      "return_only": true,
+                      "statistical_intent": "descriptive",
+                      "temporal_required": true,
+                      "transforms": [
+                        "ema",
+                        "temporal",
+                        "normalize_join_keys",
+                        "nested_projection"
+                      ],
+                      "unstructured_required": false
+                    }
+                  },
+                  {
+                    "kind": "source_map_created",
+                    "source_map": {
+                      "multi_source": true,
+                      "schema_terms": [],
+                      "source_types": [
+                        "postgresql",
+                        "mongodb",
+                        "sqlite"
+                      ]
+                    }
+                  },
+                  {
+                    "kind": "specialist_routed",
+                    "specialists": [
+                      "cartographer",
+                      "transformer",
+                      "statistician",
+                      "skeptic"
+                    ]
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 1,
+                    "kind": "model",
+                    "response_id": "chatcmpl-74",
+                    "tool_call_ids": [
+                      "call_zhfylg3z"
+                    ],
+                    "tool_names": [
+                      "list_db"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 598,
+                      "prompt_tokens": 2539,
+                      "total_tokens": 3137
+                    }
+                  },
+                  {
+                    "bytes_read": 19,
+                    "content_sha256": "8fb051d6912cf58c9193b58aad628f083fae325e95339740b63acb81239457fb",
+                    "content_truncated": false,
+                    "iteration": 1,
+                    "kind": "tool",
+                    "metadata": {
+                      "tool": "list_db"
+                    },
+                    "result_key": "var_call_zhfylg3z",
+                    "rows_read": 1,
+                    "success": true,
+                    "tool": "list_db",
+                    "tool_call_id": "call_zhfylg3z"
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 2,
+                    "kind": "model",
+                    "response_id": "chatcmpl-351",
+                    "tool_call_ids": [
+                      "call_j9vrc4i4"
+                    ],
+                    "tool_names": [
+                      "query_db"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 436,
+                      "prompt_tokens": 2595,
+                      "total_tokens": 3031
+                    }
+                  },
+                  {
+                    "bytes_read": 4169,
+                    "content_sha256": "6be38a2f5c49ebaa530f98346ad855a6ef776994a3f63b5566e790487b9a5931",
+                    "content_truncated": false,
+                    "iteration": 2,
+                    "kind": "tool",
+                    "metadata": {
+                      "tool": "query_db"
+                    },
+                    "result_key": "var_call_j9vrc4i4",
+                    "rows_read": 1,
+                    "success": true,
+                    "tool": "query_db",
+                    "tool_call_id": "call_j9vrc4i4"
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 3,
+                    "kind": "model",
+                    "response_id": "chatcmpl-224",
+                    "tool_call_ids": [
+                      "call_v70rdb2c"
+                    ],
+                    "tool_names": [
+                      "list_db"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 703,
+                      "prompt_tokens": 4424,
+                      "total_tokens": 5127
+                    }
+                  },
+                  {
+                    "bytes_read": 18,
+                    "content_sha256": "c0be0431761fc8d97a6bd17b1cd4660e97bda40d199b1a4421e33a4b6607be09",
+                    "content_truncated": false,
+                    "iteration": 3,
+                    "kind": "tool",
+                    "metadata": {
+                      "tool": "list_db"
+                    },
+                    "result_key": "var_call_v70rdb2c",
+                    "rows_read": 1,
+                    "success": true,
+                    "tool": "list_db",
+                    "tool_call_id": "call_v70rdb2c"
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 4,
+                    "kind": "model",
+                    "response_id": "chatcmpl-506",
+                    "tool_call_ids": [
+                      "call_ingzmlfm"
+                    ],
+                    "tool_names": [
+                      "query_db"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 607,
+                      "prompt_tokens": 4481,
+                      "total_tokens": 5088
+                    }
+                  },
+                  {
+                    "bytes_read": 4206,
+                    "content_sha256": "7cb860b620e4d9a7395e910c86b1ffa378be4aff66c379eddf2cd9a46277af2a",
+                    "content_truncated": false,
+                    "iteration": 4,
+                    "kind": "tool",
+                    "metadata": {
+                      "tool": "query_db"
+                    },
+                    "result_key": "var_call_ingzmlfm",
+                    "rows_read": 1,
+                    "success": true,
+                    "tool": "query_db",
+                    "tool_call_id": "call_ingzmlfm"
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 5,
+                    "kind": "model",
+                    "response_id": "chatcmpl-615",
+                    "tool_call_ids": [
+                      "call_6tpckqdk"
+                    ],
+                    "tool_names": [
+                      "query_db"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 921,
+                      "prompt_tokens": 6327,
+                      "total_tokens": 7248
+                    }
+                  },
+                  {
+                    "bytes_read": 307834726,
+                    "content_sha256": "29476633a01a0335bf82476a4bbe12b8a758ee7592c155afaa8699431f9d0167",
+                    "content_truncated": true,
+                    "iteration": 5,
+                    "kind": "tool",
+                    "metadata": {
+                      "tool": "query_db"
+                    },
+                    "result_key": "var_call_6tpckqdk",
+                    "rows_read": 277813,
+                    "success": true,
+                    "tool": "query_db",
+                    "tool_call_id": "call_6tpckqdk"
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 6,
+                    "kind": "model",
+                    "response_id": "chatcmpl-303",
+                    "tool_call_ids": [
+                      "call_kaknnxdi"
+                    ],
+                    "tool_names": [
+                      "execute_python"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 1978,
+                      "prompt_tokens": 48880,
+                      "total_tokens": 50858
+                    }
+                  },
+                  {
+                    "bytes_read": 63,
+                    "content_sha256": "a8a07ff9140a529e6498c790b396135f014fe3b83cd9aeced7f994834ef00dab",
+                    "content_truncated": false,
+                    "iteration": 6,
+                    "kind": "tool",
+                    "metadata": {
+                      "tool": "execute_python"
+                    },
+                    "result_key": null,
+                    "rows_read": null,
+                    "success": false,
+                    "tool": "execute_python",
+                    "tool_call_id": "call_kaknnxdi"
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 7,
+                    "kind": "model",
+                    "response_id": "chatcmpl-74",
+                    "tool_call_ids": [
+                      "call_1m0mdc3c"
+                    ],
+                    "tool_names": [
+                      "execute_python"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 2126,
+                      "prompt_tokens": 50128,
+                      "total_tokens": 52254
+                    }
+                  },
+                  {
+                    "bytes_read": 90,
+                    "content_sha256": "585c213a785463f8343c1d6e387c2851d6a5f5688dfedd9537e02b618d12f41f",
+                    "content_truncated": false,
+                    "iteration": 7,
+                    "kind": "tool",
+                    "metadata": {
+                      "tool": "execute_python"
+                    },
+                    "result_key": null,
+                    "rows_read": null,
+                    "success": false,
+                    "tool": "execute_python",
+                    "tool_call_id": "call_1m0mdc3c"
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 8,
+                    "kind": "model",
+                    "response_id": "chatcmpl-816",
+                    "tool_call_ids": [],
+                    "tool_names": [],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 468,
+                      "prompt_tokens": 51998,
+                      "total_tokens": 52466
+                    }
+                  },
+                  {
+                    "kind": "termination",
+                    "reason": "content_answer"
+                  }
+                ],
+                "artifacts": {
+                  "budget": {
+                    "actual": {
+                      "cost_usd": 0.0,
+                      "data_scanned_ratio": null,
+                      "latency_s": 416.52755541700026,
+                      "tokens": 179209
+                    },
+                    "limits": {
+                      "max_cost_usd": 2.0,
+                      "max_data_scanned_ratio": null,
+                      "max_latency_s": 600.0,
+                      "max_tokens": 2000000
+                    },
+                    "violations": []
+                  },
+                  "completion_tokens": 7837,
+                  "effective_limits": {
+                    "max_cost_usd": 2.0,
+                    "max_data_scanned_ratio": null,
+                    "max_latency_s": 600.0,
+                    "max_tokens": 2000000
+                  },
+                  "effective_policy": {
+                    "enable_specialists": true,
+                    "max_iterations": 25,
+                    "max_output_tokens": 8192,
+                    "max_prompt_tool_result_bytes": 100000,
+                    "max_review_repairs": 1,
+                    "max_tool_errors": 8,
+                    "repeated_call_limit": 3,
+                    "require_data_evidence": true,
+                    "tool_timeout_s": 120
+                  },
+                  "evaluation": {
+                    "validator_reason": "Missing CPC code: A22B"
+                  },
+                  "iterations": 8,
+                  "mission_latency_s": 402.81454400000075,
+                  "model": "ollama/gemma4:e4b",
+                  "model_log": "/Users/leelakrishna/code/ki/avaloka-dev/.benchmarks/DataAgentBench/query_PATENTS/logs/avaloka/avaloka_native_PATENTS_q1_r0_1792312233646244000_64541/model_calls.jsonl",
+                  "pricing_configured": true,
+                  "pricing_version": "local-zero",
+                  "prompt_tokens": 171372,
+                  "prompt_version": "avaloka-data-reasoning-v4-specialists",
+                  "protocol_version": "dab-command-v2",
+                  "run_dir": "/Users/leelakrishna/code/ki/avaloka-dev/.benchmarks/DataAgentBench/query_PATENTS/logs/avaloka/avaloka_native_PATENTS_q1_r0_1792312233646244000_64541",
+                  "stderr": "",
+                  "sut_name": "avaloka.data_agent.DataQueryMission",
+                  "termination_reason": "content_answer",
+                  "tool_log": "/Users/leelakrishna/code/ki/avaloka-dev/.benchmarks/DataAgentBench/query_PATENTS/logs/avaloka/avaloka_native_PATENTS_q1_r0_1792312233646244000_64541/tool_calls.jsonl"
+                },
+                "error": null,
+                "error_kind": null
+              }
+            }
+          ]
+        },
+        "dab:stockindex:1": {
+          "track": "dab",
+          "stats": {
+            "n_trials": 1,
+            "pass_at_1": 0.0,
+            "best_of_n": 0.0,
+            "quality": {
+              "pass": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 1
+              },
+              "score": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 1
+              }
+            },
+            "tuple": {
+              "cost_usd": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 1
+              },
+              "latency_s": {
+                "mean": 465.15718341700267,
+                "median": 465.15718341700267,
+                "std": 0.0,
+                "min": 465.15718341700267,
+                "max": 465.15718341700267,
+                "n": 1
+              },
+              "data_scanned_ratio": {
+                "mean": NaN,
+                "median": NaN,
+                "std": NaN,
+                "min": NaN,
+                "max": NaN,
+                "n": 0
+              },
+              "tool_calls": {
+                "mean": 8.0,
+                "median": 8,
+                "std": 0.0,
+                "min": 8,
+                "max": 8,
+                "n": 1
+              },
+              "tokens": {
+                "mean": 266892.0,
+                "median": 266892,
+                "std": 0.0,
+                "min": 266892,
+                "max": 266892,
+                "n": 1
+              },
+              "prompt_tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 1
+              },
+              "completion_tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 1
+              },
+              "retries": {
+                "mean": 4.0,
+                "median": 4,
+                "std": 0.0,
+                "min": 4,
+                "max": 4,
+                "n": 1
+              }
+            },
+            "total_cost_usd": 0.0,
+            "n_cost_unknown": 0,
+            "cost_sources": [
+              "local_zero"
+            ],
+            "n_errors": 0,
+            "errors": [],
+            "failure_kinds": {}
+          },
+          "trials": [
+            {
+              "task_id": "dab:stockindex:1",
+              "track": "dab",
+              "config_id": "dab_avaloka_native",
+              "trial_index": 0,
+              "quality": {
+                "pass": 0.0,
+                "score": 0.0
+              },
+              "outcome": {
+                "answer": "The analysis of the provided data is limited by the available historical dataset.\n\n1.  The available data contains price records for the HSI (Hang Seng Index), which is an Asian stock index.\n2.  However, all successful evidence observations related to the price trades show data recorded predominantly from the 1980s, 1990s, and early 2000s.\n3.  Attempts to filter this dataset for records dated **since 2020** failed due to the absence of such modern records in the observable sample.\n\nTherefore, based **only** on the successful, available data evidence, it is impossible to determine which stock index in the Asia region exhibited the highest average intraday volatility since 2020.\n\n**Limitation:** The historical source data (`indextrade_database`) does not contain any intraday price data for any index in the Asia region with a recording date of 2020 or later.",
+                "cost_usd": 0.0,
+                "latency_s": 465.15718341700267,
+                "data_scanned_ratio": null,
+                "tool_calls": 8,
+                "tokens": 266892,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "local_zero",
+                "retries": 4,
+                "recovered": null,
+                "trajectory": [
+                  {
+                    "kind": "mission_start",
+                    "limits": {
+                      "max_cost_usd": 2.0,
+                      "max_data_scanned_ratio": null,
+                      "max_latency_s": 600.0,
+                      "max_tokens": 2000000
+                    },
+                    "model": "ollama/gemma4:e4b",
+                    "policy": {
+                      "enable_specialists": true,
+                      "max_iterations": 25,
+                      "max_output_tokens": 8192,
+                      "max_prompt_tool_result_bytes": 100000,
+                      "max_review_repairs": 1,
+                      "max_tool_errors": 8,
+                      "repeated_call_limit": 3,
+                      "require_data_evidence": true,
+                      "tool_timeout_s": 120
+                    },
+                    "prompt_version": "avaloka-data-reasoning-v4-specialists",
+                    "task_id": "dab:stockindex:1"
+                  },
+                  {
+                    "kind": "question_plan_created",
+                    "plan": {
+                      "ambiguities": [],
+                      "join_required": true,
+                      "numeric_result_required": true,
+                      "output_shape": "scalar",
+                      "prediction_intent": "none",
+                      "question": "Which stock index in the Asia region has exhibited the highest average intraday volatility since 2020?",
+                      "return_only": false,
+                      "statistical_intent": "descriptive",
+                      "temporal_required": true,
+                      "transforms": [
+                        "volatility",
+                        "temporal",
+                        "normalize_join_keys",
+                        "nested_projection"
+                      ],
+                      "unstructured_required": false
+                    }
+                  },
+                  {
+                    "kind": "source_map_created",
+                    "source_map": {
+                      "multi_source": true,
+                      "schema_terms": [],
+                      "source_types": [
+                        "postgresql",
+                        "mongodb",
+                        "sqlite",
+                        "duckdb"
+                      ]
+                    }
+                  },
+                  {
+                    "kind": "specialist_routed",
+                    "specialists": [
+                      "cartographer",
+                      "transformer",
+                      "statistician",
+                      "skeptic"
+                    ]
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 1,
+                    "kind": "model",
+                    "response_id": "chatcmpl-479",
+                    "tool_call_ids": [
+                      "call_rz1gp9k8"
+                    ],
+                    "tool_names": [
+                      "list_db"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 456,
+                      "prompt_tokens": 1687,
+                      "total_tokens": 2143
+                    }
+                  },
+                  {
+                    "bytes_read": 14,
+                    "content_sha256": "b9e5b72f07b493f2095a48bc918899a7186c0887d974902230c87fa1ef1d45c0",
+                    "content_truncated": false,
+                    "iteration": 1,
+                    "kind": "tool",
+                    "metadata": {
+                      "tool": "list_db"
+                    },
+                    "result_key": "var_call_rz1gp9k8",
+                    "rows_read": 1,
+                    "success": true,
+                    "tool": "list_db",
+                    "tool_call_id": "call_rz1gp9k8"
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 2,
+                    "kind": "model",
+                    "response_id": "chatcmpl-714",
+                    "tool_call_ids": [
+                      "call_qocvmvnp"
+                    ],
+                    "tool_names": [
+                      "query_db"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 454,
+                      "prompt_tokens": 1745,
+                      "total_tokens": 2199
+                    }
+                  },
+                  {
+                    "bytes_read": 60,
+                    "content_sha256": "e1ae02aa457e124279acfd5a6b4b1249bf4b4aa88440d4cb71a708b6dd8afa6e",
+                    "content_truncated": false,
+                    "iteration": 2,
+                    "kind": "tool",
+                    "metadata": {
+                      "tool": "query_db"
+                    },
+                    "result_key": "var_call_qocvmvnp",
+                    "rows_read": 1,
+                    "success": true,
+                    "tool": "query_db",
+                    "tool_call_id": "call_qocvmvnp"
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 3,
+                    "kind": "model",
+                    "response_id": "chatcmpl-962",
+                    "tool_call_ids": [
+                      "call_ocm40k65"
+                    ],
+                    "tool_names": [
+                      "query_db"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 818,
+                      "prompt_tokens": 1826,
+                      "total_tokens": 2644
+                    }
+                  },
+                  {
+                    "bytes_read": 186,
+                    "content_sha256": "39a5e663b3d2edb9568ed71892c126ec22352218c7b36d1837e61ca1fa5a98ca",
+                    "content_truncated": false,
+                    "iteration": 3,
+                    "kind": "tool",
+                    "metadata": {
+                      "tool": "query_db"
+                    },
+                    "result_key": "var_call_ocm40k65",
+                    "rows_read": 5,
+                    "success": true,
+                    "tool": "query_db",
+                    "tool_call_id": "call_ocm40k65"
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 4,
+                    "kind": "model",
+                    "response_id": "chatcmpl-309",
+                    "tool_call_ids": [
+                      "call_qbdivi5q"
+                    ],
+                    "tool_names": [
+                      "query_db"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 1125,
+                      "prompt_tokens": 1934,
+                      "total_tokens": 3059
+                    }
+                  },
+                  {
+                    "bytes_read": 152,
+                    "content_sha256": "142a66ae1ec09cc50b65257985adfaff84c9cb635ebc9c51ece8578f9a75ee5e",
+                    "content_truncated": false,
+                    "iteration": 4,
+                    "kind": "tool",
+                    "metadata": {
+                      "tool": "query_db"
+                    },
+                    "result_key": null,
+                    "rows_read": null,
+                    "success": false,
+                    "tool": "query_db",
+                    "tool_call_id": "call_qbdivi5q"
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 5,
+                    "kind": "model",
+                    "response_id": "chatcmpl-818",
+                    "tool_call_ids": [
+                      "call_pumnkomk"
+                    ],
+                    "tool_names": [
+                      "query_db"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 1479,
+                      "prompt_tokens": 2015,
+                      "total_tokens": 3494
+                    }
+                  },
+                  {
+                    "bytes_read": 4821743,
+                    "content_sha256": "96b71190fc2c8a56f91d7b3034e7ac91be1905442b7648829794b3a1dc94e984",
+                    "content_truncated": true,
+                    "iteration": 5,
+                    "kind": "tool",
+                    "metadata": {
+                      "tool": "query_db"
+                    },
+                    "result_key": "var_call_pumnkomk",
+                    "rows_read": 48151,
+                    "success": true,
+                    "tool": "query_db",
+                    "tool_call_id": "call_pumnkomk"
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 6,
+                    "kind": "model",
+                    "response_id": "chatcmpl-760",
+                    "tool_call_ids": [
+                      "call_4qav1uoc"
+                    ],
+                    "tool_names": [
+                      "execute_python"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 1549,
+                      "prompt_tokens": 60909,
+                      "total_tokens": 62458
+                    }
+                  },
+                  {
+                    "bytes_read": 108,
+                    "content_sha256": "c40d199aedeaac617e1d882e350dcff0955d41d5f224aaa8230da4d228458dd3",
+                    "content_truncated": false,
+                    "iteration": 6,
+                    "kind": "tool",
+                    "metadata": {
+                      "tool": "execute_python"
+                    },
+                    "result_key": null,
+                    "rows_read": null,
+                    "success": false,
+                    "tool": "execute_python",
+                    "tool_call_id": "call_4qav1uoc"
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 7,
+                    "kind": "model",
+                    "response_id": "chatcmpl-702",
+                    "tool_call_ids": [
+                      "call_f3z2lvuf"
+                    ],
+                    "tool_names": [
+                      "execute_python"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 1493,
+                      "prompt_tokens": 61732,
+                      "total_tokens": 63225
+                    }
+                  },
+                  {
+                    "bytes_read": 108,
+                    "content_sha256": "c40d199aedeaac617e1d882e350dcff0955d41d5f224aaa8230da4d228458dd3",
+                    "content_truncated": false,
+                    "iteration": 7,
+                    "kind": "tool",
+                    "metadata": {
+                      "tool": "execute_python"
+                    },
+                    "result_key": null,
+                    "rows_read": null,
+                    "success": false,
+                    "tool": "execute_python",
+                    "tool_call_id": "call_f3z2lvuf"
+                  },
+                  {
+                    "iteration": 8,
+                    "kind": "progress_guidance",
+                    "reasons": [
+                      "tool_errors"
+                    ]
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 8,
+                    "kind": "model",
+                    "response_id": "chatcmpl-224",
+                    "tool_call_ids": [
+                      "call_byte9z9g"
+                    ],
+                    "tool_names": [
+                      "execute_python"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 1250,
+                      "prompt_tokens": 62623,
+                      "total_tokens": 63873
+                    }
+                  },
+                  {
+                    "bytes_read": 108,
+                    "content_sha256": "c40d199aedeaac617e1d882e350dcff0955d41d5f224aaa8230da4d228458dd3",
+                    "content_truncated": false,
+                    "iteration": 8,
+                    "kind": "tool",
+                    "metadata": {
+                      "tool": "execute_python"
+                    },
+                    "result_key": null,
+                    "rows_read": null,
+                    "success": false,
+                    "tool": "execute_python",
+                    "tool_call_id": "call_byte9z9g"
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 9,
+                    "kind": "model",
+                    "response_id": "chatcmpl-621",
+                    "tool_call_ids": [],
+                    "tool_names": [],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 560,
+                      "prompt_tokens": 63237,
+                      "total_tokens": 63797
+                    }
+                  },
+                  {
+                    "kind": "termination",
+                    "reason": "content_answer"
+                  }
+                ],
+                "artifacts": {
+                  "budget": {
+                    "actual": {
+                      "cost_usd": 0.0,
+                      "data_scanned_ratio": null,
+                      "latency_s": 465.15718341700267,
+                      "tokens": 266892
+                    },
+                    "limits": {
+                      "max_cost_usd": 2.0,
+                      "max_data_scanned_ratio": null,
+                      "max_latency_s": 600.0,
+                      "max_tokens": 2000000
+                    },
+                    "violations": []
+                  },
+                  "completion_tokens": 9184,
+                  "effective_limits": {
+                    "max_cost_usd": 2.0,
+                    "max_data_scanned_ratio": null,
+                    "max_latency_s": 600.0,
+                    "max_tokens": 2000000
+                  },
+                  "effective_policy": {
+                    "enable_specialists": true,
+                    "max_iterations": 25,
+                    "max_output_tokens": 8192,
+                    "max_prompt_tool_result_bytes": 100000,
+                    "max_review_repairs": 1,
+                    "max_tool_errors": 8,
+                    "repeated_call_limit": 3,
+                    "require_data_evidence": true,
+                    "tool_timeout_s": 120
+                  },
+                  "evaluation": {
+                    "validator_reason": "Target '399001.SZ' not stated as primary answer (not in first 200 chars)."
+                  },
+                  "iterations": 9,
+                  "mission_latency_s": 451.62600133300293,
+                  "model": "ollama/gemma4:e4b",
+                  "model_log": "/Users/leelakrishna/code/ki/avaloka-dev/.benchmarks/DataAgentBench/query_stockindex/logs/avaloka/avaloka_native_stockindex_q1_r0_1792312650171054000_42312/model_calls.jsonl",
+                  "pricing_configured": true,
+                  "pricing_version": "local-zero",
+                  "prompt_tokens": 257708,
+                  "prompt_version": "avaloka-data-reasoning-v4-specialists",
+                  "protocol_version": "dab-command-v2",
+                  "run_dir": "/Users/leelakrishna/code/ki/avaloka-dev/.benchmarks/DataAgentBench/query_stockindex/logs/avaloka/avaloka_native_stockindex_q1_r0_1792312650171054000_42312",
+                  "stderr": "",
+                  "sut_name": "avaloka.data_agent.DataQueryMission",
+                  "termination_reason": "content_answer",
+                  "tool_log": "/Users/leelakrishna/code/ki/avaloka-dev/.benchmarks/DataAgentBench/query_stockindex/logs/avaloka/avaloka_native_stockindex_q1_r0_1792312650171054000_42312/tool_calls.jsonl"
+                },
+                "error": null,
+                "error_kind": null
+              }
+            }
+          ]
+        },
+        "dab:stockmarket:1": {
+          "track": "dab",
+          "stats": {
+            "n_trials": 1,
+            "pass_at_1": 0.0,
+            "best_of_n": 0.0,
+            "quality": {
+              "pass": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 1
+              },
+              "score": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 1
+              }
+            },
+            "tuple": {
+              "cost_usd": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 1
+              },
+              "latency_s": {
+                "mean": 131.88526945799822,
+                "median": 131.88526945799822,
+                "std": 0.0,
+                "min": 131.88526945799822,
+                "max": 131.88526945799822,
+                "n": 1
+              },
+              "data_scanned_ratio": {
+                "mean": NaN,
+                "median": NaN,
+                "std": NaN,
+                "min": NaN,
+                "max": NaN,
+                "n": 0
+              },
+              "tool_calls": {
+                "mean": 11.0,
+                "median": 11,
+                "std": 0.0,
+                "min": 11,
+                "max": 11,
+                "n": 1
+              },
+              "tokens": {
+                "mean": 31216.0,
+                "median": 31216,
+                "std": 0.0,
+                "min": 31216,
+                "max": 31216,
+                "n": 1
+              },
+              "prompt_tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 1
+              },
+              "completion_tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 1
+              },
+              "retries": {
+                "mean": 7.0,
+                "median": 7,
+                "std": 0.0,
+                "min": 7,
+                "max": 7,
+                "n": 1
+              }
+            },
+            "total_cost_usd": 0.0,
+            "n_cost_unknown": 0,
+            "cost_sources": [
+              "local_zero"
+            ],
+            "n_errors": 1,
+            "errors": [
+              "tool_error: repeated equivalent call made no progress"
+            ],
+            "failure_kinds": {
+              "tool_error": 1
+            }
+          },
+          "trials": [
+            {
+              "task_id": "dab:stockmarket:1",
+              "track": "dab",
+              "config_id": "dab_avaloka_native",
+              "trial_index": 0,
+              "quality": {
+                "pass": 0.0,
+                "score": 0.0
+              },
+              "outcome": {
+                "answer": null,
+                "cost_usd": 0.0,
+                "latency_s": 131.88526945799822,
+                "data_scanned_ratio": null,
+                "tool_calls": 11,
+                "tokens": 31216,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "local_zero",
+                "retries": 7,
+                "recovered": null,
+                "trajectory": [
+                  {
+                    "kind": "mission_start",
+                    "limits": {
+                      "max_cost_usd": 2.0,
+                      "max_data_scanned_ratio": null,
+                      "max_latency_s": 600.0,
+                      "max_tokens": 2000000
+                    },
+                    "model": "ollama/gemma4:e4b",
+                    "policy": {
+                      "enable_specialists": true,
+                      "max_iterations": 25,
+                      "max_output_tokens": 8192,
+                      "max_prompt_tool_result_bytes": 100000,
+                      "max_review_repairs": 1,
+                      "max_tool_errors": 8,
+                      "repeated_call_limit": 3,
+                      "require_data_evidence": true,
+                      "tool_timeout_s": 120
+                    },
+                    "prompt_version": "avaloka-data-reasoning-v4-specialists",
+                    "task_id": "dab:stockmarket:1"
+                  },
+                  {
+                    "kind": "question_plan_created",
+                    "plan": {
+                      "ambiguities": [],
+                      "join_required": true,
+                      "numeric_result_required": false,
+                      "output_shape": "scalar",
+                      "prediction_intent": "none",
+                      "question": "What was the maximum adjusted closing price in 2020 for The RealReal, Inc.?",
+                      "return_only": false,
+                      "statistical_intent": "none",
+                      "temporal_required": true,
+                      "transforms": [
+                        "temporal",
+                        "normalize_join_keys",
+                        "nested_projection"
+                      ],
+                      "unstructured_required": false
+                    }
+                  },
+                  {
+                    "kind": "source_map_created",
+                    "source_map": {
+                      "multi_source": true,
+                      "schema_terms": [],
+                      "source_types": [
+                        "postgresql",
+                        "mongodb",
+                        "sqlite",
+                        "duckdb"
+                      ]
+                    }
+                  },
+                  {
+                    "kind": "specialist_routed",
+                    "specialists": [
+                      "cartographer",
+                      "transformer",
+                      "skeptic"
+                    ]
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 1,
+                    "kind": "model",
+                    "response_id": "chatcmpl-530",
+                    "tool_call_ids": [
+                      "call_2e2aam7x"
+                    ],
+                    "tool_names": [
+                      "query_db"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 309,
+                      "prompt_tokens": 1790,
+                      "total_tokens": 2099
+                    }
+                  },
+                  {
+                    "bytes_read": 193,
+                    "content_sha256": "a0b7a09bbd974f9d6a9080a259a163e5868bf4b8f9b3981041fe39c7e053615c",
+                    "content_truncated": false,
+                    "iteration": 1,
+                    "kind": "tool",
+                    "metadata": {
+                      "tool": "query_db"
+                    },
+                    "result_key": null,
+                    "rows_read": null,
+                    "success": false,
+                    "tool": "query_db",
+                    "tool_call_id": "call_2e2aam7x"
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 2,
+                    "kind": "model",
+                    "response_id": "chatcmpl-217",
+                    "tool_call_ids": [
+                      "call_1j2dyedb"
+                    ],
+                    "tool_names": [
+                      "query_db"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 232,
+                      "prompt_tokens": 1891,
+                      "total_tokens": 2123
+                    }
+                  },
+                  {
+                    "bytes_read": 192,
+                    "content_sha256": "c78602dde42bf62745d51016449ad72655b8c2ce63a14d8ff8f7c7396b3831b0",
+                    "content_truncated": false,
+                    "iteration": 2,
+                    "kind": "tool",
+                    "metadata": {
+                      "tool": "query_db"
+                    },
+                    "result_key": null,
+                    "rows_read": null,
+                    "success": false,
+                    "tool": "query_db",
+                    "tool_call_id": "call_1j2dyedb"
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 3,
+                    "kind": "model",
+                    "response_id": "chatcmpl-676",
+                    "tool_call_ids": [
+                      "call_sdyw6tkz"
+                    ],
+                    "tool_names": [
+                      "list_db"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 165,
+                      "prompt_tokens": 1986,
+                      "total_tokens": 2151
+                    }
+                  },
+                  {
+                    "bytes_read": 13,
+                    "content_sha256": "7dcee6225252d13a685355a8d9741227005a27e77c3dbb737eb7b441a38f1f9e",
+                    "content_truncated": false,
+                    "iteration": 3,
+                    "kind": "tool",
+                    "metadata": {
+                      "tool": "list_db"
+                    },
+                    "result_key": "var_call_sdyw6tkz",
+                    "rows_read": 1,
+                    "success": true,
+                    "tool": "list_db",
+                    "tool_call_id": "call_sdyw6tkz"
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 4,
+                    "kind": "model",
+                    "response_id": "chatcmpl-225",
+                    "tool_call_ids": [
+                      "call_8ez2fmnt"
+                    ],
+                    "tool_names": [
+                      "query_db"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 684,
+                      "prompt_tokens": 2040,
+                      "total_tokens": 2724
+                    }
+                  },
+                  {
+                    "bytes_read": 20,
+                    "content_sha256": "fb7da4cfbd8c082e306280cbe2846d900f7b1a0307ec7a79dad85c55d52ead2b",
+                    "content_truncated": false,
+                    "iteration": 4,
+                    "kind": "tool",
+                    "metadata": {
+                      "tool": "query_db"
+                    },
+                    "result_key": "var_call_8ez2fmnt",
+                    "rows_read": 1,
+                    "success": true,
+                    "tool": "query_db",
+                    "tool_call_id": "call_8ez2fmnt"
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 5,
+                    "kind": "model",
+                    "response_id": "chatcmpl-969",
+                    "tool_call_ids": [
+                      "call_i9s1dlno"
+                    ],
+                    "tool_names": [
+                      "query_db"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 245,
+                      "prompt_tokens": 2121,
+                      "total_tokens": 2366
+                    }
+                  },
+                  {
+                    "bytes_read": 563,
+                    "content_sha256": "34294aef5277e03ea21201077591542ea0bc1ef8ad5029421a7255293f11715f",
+                    "content_truncated": false,
+                    "iteration": 5,
+                    "kind": "tool",
+                    "metadata": {
+                      "tool": "query_db"
+                    },
+                    "result_key": null,
+                    "rows_read": null,
+                    "success": false,
+                    "tool": "query_db",
+                    "tool_call_id": "call_i9s1dlno"
+                  },
+                  {
+                    "iteration": 6,
+                    "kind": "progress_guidance",
+                    "reasons": [
+                      "tool_errors"
+                    ]
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 6,
+                    "kind": "model",
+                    "response_id": "chatcmpl-192",
+                    "tool_call_ids": [
+                      "call_5bpo086u"
+                    ],
+                    "tool_names": [
+                      "query_db"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 486,
+                      "prompt_tokens": 2407,
+                      "total_tokens": 2893
+                    }
+                  },
+                  {
+                    "bytes_read": 258,
+                    "content_sha256": "3b8adc06175ece945ee0928696d509570e848952a82b158496e4f0010a3b39a5",
+                    "content_truncated": false,
+                    "iteration": 6,
+                    "kind": "tool",
+                    "metadata": {
+                      "tool": "query_db"
+                    },
+                    "result_key": null,
+                    "rows_read": null,
+                    "success": false,
+                    "tool": "query_db",
+                    "tool_call_id": "call_5bpo086u"
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 7,
+                    "kind": "model",
+                    "response_id": "chatcmpl-947",
+                    "tool_call_ids": [
+                      "call_75vctx55"
+                    ],
+                    "tool_names": [
+                      "query_db"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 617,
+                      "prompt_tokens": 2534,
+                      "total_tokens": 3151
+                    }
+                  },
+                  {
+                    "bytes_read": 97,
+                    "content_sha256": "3e385d5458e267fa9c119a30101a644942a186ee718e2bac8da9408e8351e5d4",
+                    "content_truncated": false,
+                    "iteration": 7,
+                    "kind": "tool",
+                    "metadata": {
+                      "tool": "query_db"
+                    },
+                    "result_key": null,
+                    "rows_read": null,
+                    "success": false,
+                    "tool": "query_db",
+                    "tool_call_id": "call_75vctx55"
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 8,
+                    "kind": "model",
+                    "response_id": "chatcmpl-345",
+                    "tool_call_ids": [
+                      "call_yivx9et8"
+                    ],
+                    "tool_names": [
+                      "query_db"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 670,
+                      "prompt_tokens": 2633,
+                      "total_tokens": 3303
+                    }
+                  },
+                  {
+                    "bytes_read": 46,
+                    "content_sha256": "2d7143e76773857c7f5be9fab8fbcdee4f2554b688beeb3bdb64cc6d7aa1166c",
+                    "content_truncated": false,
+                    "iteration": 8,
+                    "kind": "tool",
+                    "metadata": {
+                      "tool": "query_db"
+                    },
+                    "result_key": "var_call_yivx9et8",
+                    "rows_read": 1,
+                    "success": true,
+                    "tool": "query_db",
+                    "tool_call_id": "call_yivx9et8"
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 9,
+                    "kind": "model",
+                    "response_id": "chatcmpl-146",
+                    "tool_call_ids": [
+                      "call_js8gdknl"
+                    ],
+                    "tool_names": [
+                      "return_answer"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 619,
+                      "prompt_tokens": 2756,
+                      "total_tokens": 3375
+                    }
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 10,
+                    "kind": "model",
+                    "response_id": "chatcmpl-584",
+                    "tool_call_ids": [
+                      "call_skya4gsi"
+                    ],
+                    "tool_names": [
+                      "return_answer"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 341,
+                      "prompt_tokens": 3022,
+                      "total_tokens": 3363
+                    }
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 11,
+                    "kind": "model",
+                    "response_id": "chatcmpl-672",
+                    "tool_call_ids": [
+                      "call_a50ma136"
+                    ],
+                    "tool_names": [
+                      "return_answer"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 400,
+                      "prompt_tokens": 3268,
+                      "total_tokens": 3668
+                    }
+                  },
+                  {
+                    "count": 3,
+                    "kind": "progress_guard",
+                    "signature": "18420862b1ddeffb",
+                    "tool": "return_answer",
+                    "tool_call_id": "call_a50ma136"
+                  }
+                ],
+                "artifacts": {
+                  "budget": {
+                    "actual": {
+                      "cost_usd": 0.0,
+                      "data_scanned_ratio": null,
+                      "latency_s": 131.88526945799822,
+                      "tokens": 31216
+                    },
+                    "limits": {
+                      "max_cost_usd": 2.0,
+                      "max_data_scanned_ratio": null,
+                      "max_latency_s": 600.0,
+                      "max_tokens": 2000000
+                    },
+                    "violations": []
+                  },
+                  "completion_tokens": 4768,
+                  "effective_limits": {
+                    "max_cost_usd": 2.0,
+                    "max_data_scanned_ratio": null,
+                    "max_latency_s": 600.0,
+                    "max_tokens": 2000000
+                  },
+                  "effective_policy": {
+                    "enable_specialists": true,
+                    "max_iterations": 25,
+                    "max_output_tokens": 8192,
+                    "max_prompt_tool_result_bytes": 100000,
+                    "max_review_repairs": 1,
+                    "max_tool_errors": 8,
+                    "repeated_call_limit": 3,
+                    "require_data_evidence": true,
+                    "tool_timeout_s": 120
+                  },
+                  "iterations": 11,
+                  "mission_latency_s": 118.91400437500124,
+                  "model": "ollama/gemma4:e4b",
+                  "model_log": "/Users/leelakrishna/code/ki/avaloka-dev/.benchmarks/DataAgentBench/query_stockmarket/logs/avaloka/avaloka_native_stockmarket_q1_r0_1792313115426295000_70919/model_calls.jsonl",
+                  "pricing_configured": true,
+                  "pricing_version": "local-zero",
+                  "prompt_tokens": 26448,
+                  "prompt_version": "avaloka-data-reasoning-v4-specialists",
+                  "protocol_version": "dab-command-v2",
+                  "run_dir": "/Users/leelakrishna/code/ki/avaloka-dev/.benchmarks/DataAgentBench/query_stockmarket/logs/avaloka/avaloka_native_stockmarket_q1_r0_1792313115426295000_70919",
+                  "stderr": "",
+                  "sut_name": "avaloka.data_agent.DataQueryMission",
+                  "termination_reason": "repeated_tool_call",
+                  "tool_log": "/Users/leelakrishna/code/ki/avaloka-dev/.benchmarks/DataAgentBench/query_stockmarket/logs/avaloka/avaloka_native_stockmarket_q1_r0_1792313115426295000_70919/tool_calls.jsonl"
+                },
+                "error": "tool_error: repeated equivalent call made no progress",
+                "error_kind": "tool_error"
+              }
+            }
+          ]
+        },
+        "dab:yelp:1": {
+          "track": "dab",
+          "stats": {
+            "n_trials": 1,
+            "pass_at_1": 0.0,
+            "best_of_n": 0.0,
+            "quality": {
+              "pass": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 1
+              },
+              "score": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 1
+              }
+            },
+            "tuple": {
+              "cost_usd": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 1
+              },
+              "latency_s": {
+                "mean": 50.26429416700557,
+                "median": 50.26429416700557,
+                "std": 0.0,
+                "min": 50.26429416700557,
+                "max": 50.26429416700557,
+                "n": 1
+              },
+              "data_scanned_ratio": {
+                "mean": NaN,
+                "median": NaN,
+                "std": NaN,
+                "min": NaN,
+                "max": NaN,
+                "n": 0
+              },
+              "tool_calls": {
+                "mean": 2.0,
+                "median": 2,
+                "std": 0.0,
+                "min": 2,
+                "max": 2,
+                "n": 1
+              },
+              "tokens": {
+                "mean": 8351.0,
+                "median": 8351,
+                "std": 0.0,
+                "min": 8351,
+                "max": 8351,
+                "n": 1
+              },
+              "prompt_tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 1
+              },
+              "completion_tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 1
+              },
+              "retries": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 1
+              }
+            },
+            "total_cost_usd": 0.0,
+            "n_cost_unknown": 0,
+            "cost_sources": [
+              "local_zero"
+            ],
+            "n_errors": 0,
+            "errors": [],
+            "failure_kinds": {}
+          },
+          "trials": [
+            {
+              "task_id": "dab:yelp:1",
+              "track": "dab",
+              "config_id": "dab_avaloka_native",
+              "trial_index": 0,
+              "quality": {
+                "pass": 0.0,
+                "score": 0.0
+              },
+              "outcome": {
+                "answer": "The current sources do not contain sufficient data to determine the list of business IDs for locations specifically in Indianapolis, Indiana.\n\nThe initial attempt to filter the `business` collection using the description field for \"Indianapolis, Indiana\" yielded no results. Without a list of eligible `business_id`s, it is impossible to retrieve the ratings for those businesses from the `review` table.",
+                "cost_usd": 0.0,
+                "latency_s": 50.26429416700557,
+                "data_scanned_ratio": null,
+                "tool_calls": 2,
+                "tokens": 8351,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "local_zero",
+                "retries": 0,
+                "recovered": null,
+                "trajectory": [
+                  {
+                    "kind": "mission_start",
+                    "limits": {
+                      "max_cost_usd": 2.0,
+                      "max_data_scanned_ratio": null,
+                      "max_latency_s": 600.0,
+                      "max_tokens": 2000000
+                    },
+                    "model": "ollama/gemma4:e4b",
+                    "policy": {
+                      "enable_specialists": true,
+                      "max_iterations": 25,
+                      "max_output_tokens": 8192,
+                      "max_prompt_tool_result_bytes": 100000,
+                      "max_review_repairs": 1,
+                      "max_tool_errors": 8,
+                      "repeated_call_limit": 3,
+                      "require_data_evidence": true,
+                      "tool_timeout_s": 120
+                    },
+                    "prompt_version": "avaloka-data-reasoning-v4-specialists",
+                    "task_id": "dab:yelp:1"
+                  },
+                  {
+                    "kind": "question_plan_created",
+                    "plan": {
+                      "ambiguities": [],
+                      "join_required": true,
+                      "numeric_result_required": true,
+                      "output_shape": "scalar",
+                      "prediction_intent": "none",
+                      "question": "What is the average rating of all businesses located in Indianapolis, Indiana?",
+                      "return_only": false,
+                      "statistical_intent": "descriptive",
+                      "temporal_required": false,
+                      "transforms": [
+                        "normalize_join_keys",
+                        "nested_projection"
+                      ],
+                      "unstructured_required": false
+                    }
+                  },
+                  {
+                    "kind": "source_map_created",
+                    "source_map": {
+                      "multi_source": true,
+                      "schema_terms": [],
+                      "source_types": [
+                        "postgresql",
+                        "mongodb",
+                        "duckdb",
+                        "files"
+                      ]
+                    }
+                  },
+                  {
+                    "kind": "specialist_routed",
+                    "specialists": [
+                      "cartographer",
+                      "transformer",
+                      "statistician",
+                      "skeptic"
+                    ]
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 1,
+                    "kind": "model",
+                    "response_id": "chatcmpl-334",
+                    "tool_call_ids": [
+                      "call_apacp5vd"
+                    ],
+                    "tool_names": [
+                      "query_db"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 292,
+                      "prompt_tokens": 2121,
+                      "total_tokens": 2413
+                    }
+                  },
+                  {
+                    "bytes_read": 2,
+                    "content_sha256": "efe64b76682fa00e4ffd4c2b595ccb4aaa7dbdf9176cca1fe7cb1a96687a2609",
+                    "content_truncated": false,
+                    "iteration": 1,
+                    "kind": "tool",
+                    "metadata": {
+                      "tool": "query_db"
+                    },
+                    "result_key": "var_call_apacp5vd",
+                    "rows_read": 0,
+                    "success": true,
+                    "tool": "query_db",
+                    "tool_call_id": "call_apacp5vd"
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 2,
+                    "kind": "model",
+                    "response_id": "chatcmpl-929",
+                    "tool_call_ids": [
+                      "call_4ohf6ebi"
+                    ],
+                    "tool_names": [
+                      "query_db"
+                    ],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 542,
+                      "prompt_tokens": 2222,
+                      "total_tokens": 2764
+                    }
+                  },
+                  {
+                    "bytes_read": 950,
+                    "content_sha256": "449c884882c7f4af72c8a787bf8217b8ee4e7fad868367d9ade534090193575e",
+                    "content_truncated": false,
+                    "iteration": 2,
+                    "kind": "tool",
+                    "metadata": {
+                      "tool": "query_db"
+                    },
+                    "result_key": "var_call_4ohf6ebi",
+                    "rows_read": 3,
+                    "success": true,
+                    "tool": "query_db",
+                    "tool_call_id": "call_4ohf6ebi"
+                  },
+                  {
+                    "cost_usd": 0.0,
+                    "iteration": 3,
+                    "kind": "model",
+                    "response_id": "chatcmpl-275",
+                    "tool_call_ids": [],
+                    "tool_names": [],
+                    "usage": {
+                      "cached_prompt_tokens": 0,
+                      "completion_tokens": 565,
+                      "prompt_tokens": 2609,
+                      "total_tokens": 3174
+                    }
+                  },
+                  {
+                    "kind": "termination",
+                    "reason": "content_answer"
+                  }
+                ],
+                "artifacts": {
+                  "budget": {
+                    "actual": {
+                      "cost_usd": 0.0,
+                      "data_scanned_ratio": null,
+                      "latency_s": 50.26429416700557,
+                      "tokens": 8351
+                    },
+                    "limits": {
+                      "max_cost_usd": 2.0,
+                      "max_data_scanned_ratio": null,
+                      "max_latency_s": 600.0,
+                      "max_tokens": 2000000
+                    },
+                    "violations": []
+                  },
+                  "completion_tokens": 1399,
+                  "effective_limits": {
+                    "max_cost_usd": 2.0,
+                    "max_data_scanned_ratio": null,
+                    "max_latency_s": 600.0,
+                    "max_tokens": 2000000
+                  },
+                  "effective_policy": {
+                    "enable_specialists": true,
+                    "max_iterations": 25,
+                    "max_output_tokens": 8192,
+                    "max_prompt_tool_result_bytes": 100000,
+                    "max_review_repairs": 1,
+                    "max_tool_errors": 8,
+                    "repeated_call_limit": 3,
+                    "require_data_evidence": true,
+                    "tool_timeout_s": 120
+                  },
+                  "evaluation": {
+                    "validator_reason": "No number found in LLM output."
+                  },
+                  "iterations": 3,
+                  "mission_latency_s": 37.728906624994124,
+                  "model": "ollama/gemma4:e4b",
+                  "model_log": "/Users/leelakrishna/code/ki/avaloka-dev/.benchmarks/DataAgentBench/query_yelp/logs/avaloka/avaloka_native_yelp_q1_r0_1792313247212410000_86656/model_calls.jsonl",
+                  "pricing_configured": true,
+                  "pricing_version": "local-zero",
+                  "prompt_tokens": 6952,
+                  "prompt_version": "avaloka-data-reasoning-v4-specialists",
+                  "protocol_version": "dab-command-v2",
+                  "run_dir": "/Users/leelakrishna/code/ki/avaloka-dev/.benchmarks/DataAgentBench/query_yelp/logs/avaloka/avaloka_native_yelp_q1_r0_1792313247212410000_86656",
+                  "stderr": "",
+                  "sut_name": "avaloka.data_agent.DataQueryMission",
+                  "termination_reason": "content_answer",
+                  "tool_log": "/Users/leelakrishna/code/ki/avaloka-dev/.benchmarks/DataAgentBench/query_yelp/logs/avaloka/avaloka_native_yelp_q1_r0_1792313247212410000_86656/tool_calls.jsonl"
+                },
+                "error": null,
+                "error_kind": null
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

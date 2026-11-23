@@ -1,18 +1,17 @@
-"""Child side of ``app.executor.sample``: the validator's sample check.
+"""Child-side helpers of ``app.executor.sample``: the validator's sample check.
 
-Run as ``python -I _sample_runner.py <workdir> <memory_mb>`` with the
-scrubbed environment, in ``<workdir>``. It imports nothing from ``app`` (with
-``-I`` the repository is not even on ``sys.path``), so the generated code
-reaches no server module, global or object.
-
-It repeats what ``validator.execute_code_node`` did in process: one exec scope
-holding ``pd`` with ``__name__`` not ``"__main__"`` (so the script's entry
-block stays inert), ``main`` looked up in it, and stdout/stderr captured
-around the ``main()`` call only. What it found is written to
-``<workdir>/result.json``; the frame ``main()`` returned goes to
-``out.parquet`` (names in ``out.columns.json``) or, when parquet cannot
-carry it faithfully, ``out.json``.
-Never a pickle: the parent would execute whatever the script put in one.
+Not run as a script any more. ``app.executor.sample`` builds the child's
+script itself (the sample check also has to run in the executor service, which
+has no path to this package) and inlines these functions into it by source:
+``_limit_memory`` caps the address space before any generated code or pandas
+import, and ``_write_frame`` writes the frame ``main()`` returned to
+``out.parquet`` (names in ``out.columns.json``, so a pivot's ints and
+duplicate names survive) or, when parquet cannot carry it faithfully,
+``out.json`` -- never a pickle, which the parent would execute. They import
+nothing from ``app``, since the script runs under ``python -I`` with nothing
+of the repository on ``sys.path``. ``run()`` below is the original
+in-process-free runner (``python -I _sample_runner.py <workdir> <memory_mb>``),
+kept as the reference for what the inlined script does.
 """
 
 import io

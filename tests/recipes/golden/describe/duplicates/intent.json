@@ -1,0 +1,9 @@
+{
+  "question": "What is the typical revenue?",
+  "recipe": "describe",
+  "params": {
+    "measure": "revenue"
+  },
+  "confidence": 1.0,
+  "source": "fixture"
+}

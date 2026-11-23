@@ -213,6 +213,62 @@ Fields not in this table are never transmitted. Adding a field requires a change
 | `llm_provider` / `llm_model` | `groq` / `openai/gpt-oss-120b` | |
 | `tokens_in` / `tokens_out` | `1800` / `420` | |
 
+**Swarm events** — one per coordinated mission, after it finishes
+
+| Field | Example | Notes |
+| --- | --- | --- |
+| `event_id` | UUID4 | Server-side deduplication |
+| `event_type` | `swarm.completed` | Fixed vocabulary |
+| `clones_requested` / `clones_granted` / `parallel` | `4` / `3` / `3` | The fan-out asked for and allowed |
+| `limited` | `true` | Whether the edition cap applied |
+| `edition` | `oss` | oss / free / professional / enterprise |
+| `kind` | `analyze` | analyze / train |
+| `outcome` | `success` | success / failed |
+| `verdict` | `warn` | pass / warn / fail — the merged verdict |
+| `duration_ms` | `8400` | |
+| `row_count_bucket` | `1e3-1e4` | **Bucketed, never exact** |
+
+The clone steps themselves arrive as `agent.started` / `agent.completed`
+pairs named after the firefly. **Nothing of what was fanned out travels:** no
+goal, no source, no column, no clone output, no path, no mission id, no clone
+name (AGENT_TRACE.md §6.5).
+
+**Agent understanding** — one per completed agent step (2.0, `agent.understanding`)
+
+What the agent concluded about the data and decided to do, as buckets, histograms and counts. One schema, two layers: the full record stays on the customer's disk (§5.4); this table is the projection.
+
+| Field | Example | Notes |
+| --- | --- | --- |
+| `event_id` | UUID4 | Server-side deduplication |
+| `event_type` | `agent.understanding` | Fixed vocabulary |
+| `agent` / `role` | `data_scout` / `understanding` | Both fixed vocabularies; a role is what the agent is *for* (understanding, sampling, feature_engineering, planning, coding, modeling, execution, verification, finops, deployment, reporting) |
+| `outcome` / `error_class` | `success` / `KeyError` | Class name only, never the message |
+| `clone_index` / `step_no` | `0` / `3` | Position in the fleet and in the clone's run; never a clone name or a step id |
+| `duration_ms` | `1240` | |
+| `row_count_bucket` / `column_count_bucket` | `1e3-1e4` / `5-10` | **Bucketed, never exact** |
+| `column_type_counts` | `{"numeric": 4, "categorical": 2}` | Histogram keyed by column *kind* |
+| `null_rate_counts` | `{"0": 5, "10-50%": 1}` | How many columns fall in each missingness band — never which |
+| `cardinality_counts` | `{"2": 1, "11-100": 5}` | How many columns fall in each distinct-count band — never which |
+| `file_format` / `size_bucket` | `csv` / `1-10MB` | The shard the clone read, bucketed |
+| `quality_score` | `71` | The profiler's 0–100 score |
+| `sampled` / `sampling_strategy` / `sample_fraction_bucket` | `true` / `stratified` / `10-50%` | The sampling decision; the reason stays local |
+| `operation_count` / `op_counts` | `3` / `{"drop_duplicate_rows": 1, "strip_whitespace": 2}` | Histogram keyed by operation *kind*; columns and formulas stay local |
+| `checks_run` / `checks_passed` / `checks_warned` / `checks_failed` / `retry_count` / `verdict` | `5` / `4` / `1` / `0` / `0` / `warn` | Verification outcomes as counts; check names and detail stay local |
+| `llm_provider` / `llm_model` / `model_calls` / `tokens_in` / `tokens_out` | `groq` / `openai/gpt-oss-120b` / `1` / `1800` / `420` | A model not shipped as a default is `other` |
+
+**Fleet understanding** — one per coordinated mission (2.0, `swarm.understanding`)
+
+| Field | Example | Notes |
+| --- | --- | --- |
+| `clones` / `parallel` | `4` / `2` | The fan-out |
+| `steps_total` / `steps_per_clone_min` / `steps_per_clone_max` | `32` / `8` / `8` | A range, never a per-clone list |
+| `role_counts` | `{"understanding": 4, "verification": 4}` | Which roles ran, how often |
+| `row_count_bucket`, `column_count_bucket`, `column_type_counts`, `null_rate_counts`, `cardinality_counts`, `file_format`, `size_bucket`, `quality_score` | as above | The fleet's data shape |
+| `sampled_clones` / `sampling_strategy_counts` | `1` / `{"random": 1, "none": 3}` | |
+| `checks_run` … `verdict` | as above | Summed over the fleet's verifiers; the merged verdict |
+| `merge_agreement` / `model_selected` / `candidates` | `split` / `true` / `4` | Whether the clones agreed, whether a model was chosen, from how many — never which clone |
+| `duration_ms` / `outcome` | `8400` / `success` | |
+
 **Dataset shape** — never dataset content
 
 | Field | Example | Notes |
@@ -246,6 +302,40 @@ A random UUID4, generated once at install and stored in the config directory. It
 Its purpose is to distinguish "one install did this a thousand times" from "a thousand installs did it once". Deleting the file yields a new identity, and that is acceptable: the identifier is for counting, not for tracking.
 
 ---
+
+### 5.4 Agent understanding: one schema, two layers
+
+The 2.0 understanding records (`avaloka/understanding_trace.py`) exist so the
+CLI's `--debug` mode and the UI can tell the user what each agent in the fleet
+concluded about *their* data and why it did what it did. That narration needs
+column names, file names, the reasons an agent gave and the detail of each
+check. Telemetry must carry none of those. Rather than two schemas that drift,
+there is one record and two layers of it:
+
+| Layer | Where | May contain | Read by |
+| --- | --- | --- | --- |
+| Local, full fidelity | `<output_dir>/understanding.jsonl`, the swarm trace stream, `GET /api/swarm/missions/{id}/understanding` | column names, file names, formulas, reasons, check detail, conclusions, prompt fragments a model-backed firefly recorded | the CLI's `--debug` narration, the UI, the customer |
+| Egress projection | `egress_event()`; `<output_dir>/understanding_egress.json`; `GET …/understanding/telemetry` | only the fields in §5.1 | nothing today (no uploader is built); the ingest when one is |
+
+The privacy argument is structural, not a scrub. The projection is built as
+an **allowlist** from closed vocabularies (`role`, `agent`, `op` kinds, column
+kinds), **buckets** (`row_count_bucket`, `size_bucket`, `sample_fraction_bucket`)
+and **bounded counts**. Histograms are keyed by vocabulary, so
+`{"numeric": 4}` can travel where `{"salary": 4}` cannot: a key outside the
+vocabulary is dropped by the producer and rejected by the ingest. A free-text
+field has no slot to land in. `avaloka/understanding_trace.EGRESS_KEYS` is the
+closed key set, held equal to the ingest's `UNDERSTANDING_FIELDS` /
+`SWARM_UNDERSTANDING_FIELDS` by `tests/avaloka/test_understanding_trace.py`,
+and disjoint from `REFUSED_KEYS`.
+
+`tests/test_understanding_trace_privacy.py` runs a real two-clone mission on a
+frame whose column name, file name, cell value, goal and (through a
+firefly's metadata) prompt fragment and model name are planted, confirms the
+local layer carries them, and asserts none reach the projection, the JSON Lines
+POST body or the ingest's store. The harness is then turned on itself: a
+projection deliberately leaking one planted string must fail the same scan, so
+a green run is one in which the scan found nothing rather than one in which it
+looked at nothing.
 
 ## 6. Consent
 
@@ -307,6 +397,21 @@ Disabling stops collection at the source — no file is written. It does not mer
 | 5 | Aggregation and dashboards | 3 |
 
 Phase 1 is independently useful: with the upload disabled it becomes local diagnostics a user can attach to a support ticket by hand — which is the same data, delivered by consent, and a reasonable interim posture while phases 2 and 3 are reviewed.
+
+The agent trace (1.7, [AGENT_TRACE.md](AGENT_TRACE.md)) already produces the
+agent-level records this design needs: `app/trace/telemetry.agent_events` maps
+each recorded step onto the `agent.started` / `agent.completed` pair §5.1
+allows. It is validated against the ingest schema and against planted customer
+content in `tests/test_agent_trace_telemetry.py`. The swarm trace
+(AGENT_TRACE.md §6) adds `swarm_events`: the clone steps as the same pair and
+one `swarm.completed` per mission, held to the same tests in
+`tests/test_swarm_trace_telemetry.py`. The 2.0 understanding records add
+`agent.understanding` / `swarm.understanding` (§5.4): projected by
+`avaloka/understanding_trace.egress_events`, served by
+`app/trace/telemetry.understanding_events`, held to the same tests in
+`tests/test_understanding_trace_privacy.py`, and reported on by
+`telemetry_service/reports.py:understanding`. Phase 1's writer only has to
+consume them; nothing sends them today.
 
 ### Testing
 

@@ -106,12 +106,11 @@ minio:
   enabled: false
 
 config:
-  # A hosted service that bills plans (app/core/editions.declared_deployment).
-  # The chart default is self_hosted, so this must ship with the overlay, or an
-  # upgrade from it would run the service ungated. values-gke-app.yaml repeats it.
-  # The self-hosted provisioner (make up PROVIDER=gcp, app/infra/deploy_stack.py)
-  # also applies this file and overrides this with self_hosted.
-  deployment: "avaloka_hosted"
+  # The Avaloka-operated hosted sites deploy with this overlay (test.avaloka.ai on
+  # its own, app.avaloka.ai under values-gke-app.yaml): billing and plan caps on,
+  # API docs behind a login (docs/deployment.md). `make up PROVIDER=gcp` applies
+  # this file too and sets config.deployment=self_hosted over it.
+  deployment: avaloka_hosted
   storageBackend: "gcs"
   # TEST instance bucket; values-gke-app.yaml points production at its own.
   gcsBucket: "avaloka-test-user-filestore"

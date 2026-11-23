@@ -1,0 +1,642 @@
+{
+ "schema_version": "1.1",
+ "report_id": "rpt_5f57dd3c851c4f00",
+ "kind": "analysis",
+ "domain": "generic",
+ "template": "generic",
+ "audience": "analyst",
+ "created_at": "2026-11-10T19:43:43Z",
+ "analysis": {
+  "analysis_id": "recipe-ab_test",
+  "thread_id": "local",
+  "turn_id": "run",
+  "version": 1,
+  "parent_version": null,
+  "dataset_ids": []
+ },
+ "headline": {
+  "text": "The treatment arm's outcome is {f2} against {f3} in the control arm; a difference of {f4} ({f6} to {f7}) not distinguishable from zero at this sample size.",
+  "bullets": [
+   {
+    "so_what": "The p-value is {f8}; power at the observed difference is {f9}; the smallest difference detectable at this sample size is {f10}.",
+    "now_what": "Read the interval, not the point estimate; a larger sample is needed to settle a difference of this size."
+   },
+   {
+    "so_what": "The smallest arm holds {f1} rows, and the arm counts fit an equal split (sample-ratio test p-value {f11}).",
+    "now_what": "Confirm that rows were assigned to arms at random before reading this as a test."
+   }
+  ]
+ },
+ "figures": [
+  {
+   "id": "f1",
+   "value": 60.0,
+   "unit": "count",
+   "decimals": 0,
+   "evidence_ref": "/arms/smallest_n"
+  },
+  {
+   "id": "f2",
+   "value": 13.333333333333334,
+   "unit": "percent",
+   "decimals": 1,
+   "evidence_ref": "/lead/treatment_mean"
+  },
+  {
+   "id": "f3",
+   "value": 10.0,
+   "unit": "percent",
+   "decimals": 1,
+   "evidence_ref": "/lead/control_mean"
+  },
+  {
+   "id": "f4",
+   "value": 3.3333333333333326,
+   "unit": "pp",
+   "decimals": 1,
+   "evidence_ref": "/lead/difference"
+  },
+  {
+   "id": "f6",
+   "value": -8.138612171764239,
+   "unit": "pp",
+   "decimals": 1,
+   "evidence_ref": "/lead/ci_low"
+  },
+  {
+   "id": "f7",
+   "value": 14.805278838430901,
+   "unit": "pp",
+   "decimals": 1,
+   "evidence_ref": "/lead/ci_high"
+  },
+  {
+   "id": "f8",
+   "value": 0.5695415802691225,
+   "unit": "unitless",
+   "decimals": 3,
+   "evidence_ref": "/lead/p"
+  },
+  {
+   "id": "f9",
+   "value": 8.798546820202215,
+   "unit": "percent",
+   "decimals": 0,
+   "evidence_ref": "/lead/power"
+  },
+  {
+   "id": "f10",
+   "value": 19.803963195613846,
+   "unit": "pp",
+   "decimals": 1,
+   "evidence_ref": "/lead/mde"
+  },
+  {
+   "id": "f11",
+   "value": 1.0,
+   "unit": "unitless",
+   "decimals": 3,
+   "evidence_ref": "/arms/srm_p"
+  },
+  {
+   "id": "f12",
+   "value": 1.0,
+   "unit": "count",
+   "decimals": 0,
+   "evidence_ref": "/comparisons/count"
+  },
+  {
+   "id": "f13",
+   "value": 0.0,
+   "unit": "count",
+   "decimals": 0,
+   "evidence_ref": "/rows/duplicates"
+  },
+  {
+   "id": "f5",
+   "value": 33.33333333333333,
+   "unit": "percent",
+   "decimals": 1,
+   "evidence_ref": "/lead/relative"
+  }
+ ],
+ "kpis": [
+  {
+   "id": "treatment",
+   "label": "Treatment arm",
+   "value": "f2",
+   "baseline": "f3",
+   "baseline_label": "control arm",
+   "direction_good": "neutral",
+   "delta": "f5",
+   "delta_kind": "pct"
+  },
+  {
+   "id": "difference",
+   "label": "Difference",
+   "value": "f4",
+   "direction_good": "neutral"
+  },
+  {
+   "id": "power",
+   "label": "Power at observed difference",
+   "value": "f9",
+   "direction_good": "up"
+  }
+ ],
+ "charts": [
+  {
+   "id": "arms",
+   "title": "converted by variant",
+   "chart_kind": "bar",
+   "question_type": "ranking",
+   "option": {
+    "aria": {
+     "enabled": true,
+     "decal": {
+      "show": true
+     }
+    },
+    "color": [
+     "#0072B2",
+     "#D55E00",
+     "#009E73",
+     "#CC79A7",
+     "#E69F00",
+     "#56B4E9",
+     "#000000",
+     "#F0E442"
+    ],
+    "tooltip": {
+     "trigger": "item",
+     "confine": true
+    },
+    "animation": true,
+    "xAxis": {
+     "type": "value",
+     "name": "converted"
+    },
+    "yAxis": {
+     "type": "category",
+     "data": [
+      "A",
+      "B"
+     ],
+     "name": "variant"
+    },
+    "legend": {
+     "show": true
+    },
+    "series": [
+     {
+      "type": "bar",
+      "name": "converted",
+      "data": [
+       0.1,
+       0.13333333333333333
+      ]
+     },
+     {
+      "type": "scatter",
+      "name": "interval low",
+      "symbol": "rect",
+      "symbolSize": [
+       2,
+       14
+      ],
+      "data": [
+       [
+        0.04664283447388416,
+        0
+       ],
+       [
+        0.06914109480586972,
+        1
+       ]
+      ]
+     },
+     {
+      "type": "scatter",
+      "name": "interval high",
+      "symbol": "rect",
+      "symbolSize": [
+       2,
+       14
+      ],
+      "data": [
+       [
+        0.20149464723978772,
+        0
+       ],
+       [
+        0.24165159676499615,
+        1
+       ]
+      ]
+     }
+    ]
+   },
+   "alt_text": "Horizontal bars of mean converted per variant with each arm's interval; the difference is given in the headline.",
+   "data_table": {
+    "columns": [
+     "variant",
+     "converted",
+     "low",
+     "high"
+    ],
+    "rows": [
+     [
+      "A",
+      0.1,
+      0.04664283447388416,
+      0.20149464723978772
+     ],
+     [
+      "B",
+      0.13333333333333333,
+      0.06914109480586972,
+      0.24165159676499615
+     ]
+    ]
+   }
+  },
+  {
+   "id": "power",
+   "title": "Power by rows in the treatment arm",
+   "chart_kind": "line",
+   "question_type": "trend",
+   "option": {
+    "aria": {
+     "enabled": true,
+     "decal": {
+      "show": true
+     }
+    },
+    "color": [
+     "#0072B2",
+     "#D55E00",
+     "#009E73",
+     "#CC79A7",
+     "#E69F00",
+     "#56B4E9",
+     "#000000",
+     "#F0E442"
+    ],
+    "tooltip": {
+     "trigger": "axis",
+     "confine": true
+    },
+    "animation": true,
+    "xAxis": {
+     "type": "category",
+     "data": [
+      "10",
+      "20",
+      "30",
+      "40",
+      "50",
+      "60",
+      "70",
+      "80",
+      "90",
+      "100",
+      "110",
+      "120"
+     ],
+     "name": "rows in the treatment arm"
+    },
+    "yAxis": {
+     "type": "value",
+     "name": "power"
+    },
+    "legend": {
+     "show": false
+    },
+    "series": [
+     {
+      "type": "line",
+      "name": "power",
+      "data": [
+       0.0562279289204335,
+       0.06250039642534638,
+       0.0688148544733147,
+       0.07516880701313446,
+       0.08155980946637106,
+       0.08798546820202216,
+       0.09444344000388984,
+       0.10093143153123817,
+       0.10744719877329191,
+       0.11398854649811348,
+       0.12055332769637571,
+       0.1271394430205324
+      ]
+     }
+    ]
+   },
+   "alt_text": "Line of the test's power at the observed difference over 12 sample sizes; the power at the observed rows is given in the first bullet.",
+   "data_table": {
+    "columns": [
+     "rows in the treatment arm",
+     "power"
+    ],
+    "rows": [
+     [
+      "10",
+      0.0562279289204335
+     ],
+     [
+      "20",
+      0.06250039642534638
+     ],
+     [
+      "30",
+      0.0688148544733147
+     ],
+     [
+      "40",
+      0.07516880701313446
+     ],
+     [
+      "50",
+      0.08155980946637106
+     ],
+     [
+      "60",
+      0.08798546820202216
+     ],
+     [
+      "70",
+      0.09444344000388984
+     ],
+     [
+      "80",
+      0.10093143153123817
+     ],
+     [
+      "90",
+      0.10744719877329191
+     ],
+     [
+      "100",
+      0.11398854649811348
+     ],
+     [
+      "110",
+      0.12055332769637571
+     ],
+     [
+      "120",
+      0.1271394430205324
+     ]
+    ]
+   }
+  }
+ ],
+ "method": {
+  "summary": "Each arm of variant against the control arm (A) on converted: two-proportion z-test with Wilson intervals per arm and an unpooled interval on the difference (scipy); chi-square test of the arm counts against an equal split; power at the observed rows for the observed difference and the smallest difference detectable at the target power (statsmodels). Rows are taken as they are.",
+  "steps": [
+   "Recipe ab_test, version 1.0."
+  ],
+  "sample": {
+   "rows_analyzed": 120,
+   "total_rows": 120,
+   "is_sampled": false
+  }
+ },
+ "caveats": [
+  {
+   "kind": "small_n",
+   "text": "At this sample size the test would often miss a difference of the observed size; read the interval, not the point estimate."
+  }
+ ],
+ "steps": [
+  {
+   "id": "ab_test",
+   "order": 1,
+   "title": "Compare the arms of an experiment",
+   "status": "done"
+  }
+ ],
+ "completion": {
+  "state": "partial",
+  "missing": [
+   "At this sample size the test would often miss a difference of the observed size; read the interval, not the point estimate."
+  ]
+ },
+ "data_checks": [
+  {
+   "gate": "min_rows",
+   "status": "passed"
+  },
+  {
+   "gate": "sample_ratio",
+   "status": "passed"
+  },
+  {
+   "gate": "power",
+   "status": "qualified",
+   "caveat_kind": "small_n",
+   "figure": "f9"
+  },
+  {
+   "gate": "duplicates",
+   "status": "passed"
+  }
+ ],
+ "evidence": {
+  "rows": {
+   "raw": {
+    "value": 120.0,
+    "unit": "count"
+   },
+   "distinct": {
+    "value": 120.0,
+    "unit": "count"
+   },
+   "duplicates": {
+    "value": 0.0,
+    "unit": "count"
+   }
+  },
+  "arms": {
+   "count": {
+    "value": 2.0,
+    "unit": "count"
+   },
+   "smallest_n": {
+    "value": 60.0,
+    "unit": "count"
+   },
+   "srm_p": {
+    "value": 1.0,
+    "unit": "unitless"
+   },
+   "by": {
+    "A": {
+     "n": {
+      "value": 60.0,
+      "unit": "count"
+     },
+     "mean": {
+      "value": 0.1,
+      "unit": "fraction"
+     },
+     "ci_low": {
+      "value": 0.04664283447388416,
+      "unit": "fraction"
+     },
+     "ci_high": {
+      "value": 0.20149464723978772,
+      "unit": "fraction"
+     }
+    },
+    "B": {
+     "n": {
+      "value": 60.0,
+      "unit": "count"
+     },
+     "mean": {
+      "value": 0.13333333333333333,
+      "unit": "fraction"
+     },
+     "ci_low": {
+      "value": 0.06914109480586972,
+      "unit": "fraction"
+     },
+     "ci_high": {
+      "value": 0.24165159676499615,
+      "unit": "fraction"
+     }
+    }
+   }
+  },
+  "comparisons": {
+   "count": {
+    "value": 1.0,
+    "unit": "count"
+   },
+   "by": {
+    "c1": {
+     "treatment_n": {
+      "value": 60.0,
+      "unit": "count"
+     },
+     "control_n": {
+      "value": 60.0,
+      "unit": "count"
+     },
+     "treatment_mean": {
+      "value": 0.13333333333333333,
+      "unit": "fraction"
+     },
+     "control_mean": {
+      "value": 0.1,
+      "unit": "fraction"
+     },
+     "difference": {
+      "value": 3.3333333333333326,
+      "unit": "pp"
+     },
+     "ci_low": {
+      "value": -8.138612171764239,
+      "unit": "pp"
+     },
+     "ci_high": {
+      "value": 14.805278838430901,
+      "unit": "pp"
+     },
+     "se": {
+      "value": 5.853140973807077,
+      "unit": "pp"
+     },
+     "p": {
+      "value": 0.5695415802691225,
+      "unit": "unitless"
+     },
+     "power": {
+      "value": 0.08798546820202216,
+      "unit": "fraction"
+     },
+     "mde": {
+      "value": 19.803963195613846,
+      "unit": "pp"
+     },
+     "relative": {
+      "value": 0.33333333333333326,
+      "unit": "fraction"
+     }
+    }
+   }
+  },
+  "lead": {
+   "treatment_n": {
+    "value": 60.0,
+    "unit": "count"
+   },
+   "control_n": {
+    "value": 60.0,
+    "unit": "count"
+   },
+   "treatment_mean": {
+    "value": 0.13333333333333333,
+    "unit": "fraction"
+   },
+   "control_mean": {
+    "value": 0.1,
+    "unit": "fraction"
+   },
+   "difference": {
+    "value": 3.3333333333333326,
+    "unit": "pp"
+   },
+   "ci_low": {
+    "value": -8.138612171764239,
+    "unit": "pp"
+   },
+   "ci_high": {
+    "value": 14.805278838430901,
+    "unit": "pp"
+   },
+   "se": {
+    "value": 5.853140973807077,
+    "unit": "pp"
+   },
+   "p": {
+    "value": 0.5695415802691225,
+    "unit": "unitless"
+   },
+   "power": {
+    "value": 0.08798546820202216,
+    "unit": "fraction"
+   },
+   "mde": {
+    "value": 19.803963195613846,
+    "unit": "pp"
+   },
+   "relative": {
+    "value": 0.33333333333333326,
+    "unit": "fraction"
+   }
+  }
+ },
+ "provenance": {
+  "generator": "avaloka",
+  "generator_version": "2.0.0",
+  "llm_used": false,
+  "llm_model": null,
+  "verifier": {
+   "passed": true,
+   "rejections": []
+  },
+  "recipe": {
+   "id": "ab_test",
+   "version": "1.0"
+  },
+  "engine": {
+   "duckdb": "2.0.0",
+   "scipy": "1.17.1",
+   "statsmodels": "0.15.0",
+   "pandas": "2.3.3"
+  }
+ }
+}

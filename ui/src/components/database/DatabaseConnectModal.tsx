@@ -5,16 +5,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { AlertTriangle, Database, Loader2, X } from "lucide-react";
 import { toast } from "sonner";
-import { supabase } from "@/integrations/supabase/client";
-import { MCP_API_BASE } from "@/lib/api/mcp-config";
-import { BACKEND_API_BASE } from "@/lib/api/backend-config";
-import { mcpProxyFetch, proxyFetch } from "@/lib/api/backendApi";
+import { ConnectionsApiError, connectionsApi } from "@/lib/api/connections";
 
-type Stage = "idle" | "registering" | "saving" | "encrypting";
+type Stage = "idle" | "registering";
 const STAGE_LABEL: Record<Exclude<Stage, "idle">, string> = {
   registering: "Registering database…",
-  saving: "Saving connection…",
-  encrypting: "Encrypting credentials…",
 };
 
 export type DbType = "postgresql" | "mysql" | "mariadb" | "mssql" | "mongodb" | "oracle" | "sqlite";
@@ -40,6 +35,10 @@ const DEFAULT_PORT: Record<DbType, number> = {
 };
 
 const CUSTOMER_ID_RE = /^[a-z0-9_]+$/;
+
+// The API's analysis read cap (AVALOKA_DB_ANALYSIS_MAX_ROWS). It was 1,000, so
+// the quickstart's 2,000-row orders table was analysed as a sample of 1,000.
+export const DEFAULT_MAX_ROWS = 50000;
 
 export type DatabaseRegisterResponse = {
   customer_id: string;
@@ -73,7 +72,9 @@ export function DatabaseConnectModal({
     username: "",
     password: "",
     query_timeout: "30",
-    max_rows: "1000",
+    // Rows MCP returns per query, the analysis read included: a table this
+    // size or smaller is analysed whole.
+    max_rows: String(DEFAULT_MAX_ROWS),
     connection_string: "",
   }));
   const isMongo = dbType === "mongodb";
@@ -114,162 +115,54 @@ export function DatabaseConnectModal({
     setBusy(true);
     setStage("registering");
 
-    let insertedId: string | null = null;
-    let reg: DatabaseRegisterResponse;
-
-    // --- Stage 1: Register with MCP ---
+    // One call: the API registers the database with MCP and saves the
+    // connection, and rolls the registration back if saving fails. The UI
+    // never writes the connection itself and never keeps the password.
     try {
-      const port = parseInt(form.port, 10) || DEFAULT_PORT[dbType];
-      const query_timeout = parseInt(form.query_timeout, 10) || 30;
-      const max_rows = parseInt(form.max_rows, 10) || 1000;
-
-      let res: Response;
-      try {
-        res = await mcpProxyFetch(MCP_API_BASE, "/customers/register", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            customer_id: cidNormalized,
-            customer_name: form.customer_name.trim(),
-            contact_email: form.contact_email.trim(),
-            environment: form.environment,
-            database_type: dbType,
-            host: form.host.trim(),
-            port,
-            database_name: form.database_name.trim(),
-            username: form.username,
-            password: form.password,
-            query_timeout,
-            max_rows,
-            ...(isMongo && form.connection_string.trim()
-              ? { connection_string: form.connection_string.trim() }
-              : {}),
-          }),
-        });
-      } catch (netErr: any) {
-        setError(
-          `Registering database failed: could not reach the registration service (${netErr?.message || "network error"}).`,
-        );
-        setBusy(false);
-        setStage("idle");
-        return;
-      }
-
-      const body = await res.json().catch(() => ({} as any));
-      if (!res.ok) {
-        if (res.status === 409) {
-          setError(
-            `Customer ID "${cidNormalized}" is already registered. Choose a different Customer ID.`,
-          );
-          setTimeout(() => customerIdRef.current?.focus(), 0);
-        } else if (res.status === 422) {
-          const detail =
-            typeof body?.detail === "string"
-              ? body.detail
-              : Array.isArray(body?.detail)
-                ? body.detail.map((d: any) => d?.msg || JSON.stringify(d)).join("; ")
-                : JSON.stringify(body?.detail || {});
-          setError(`Registering database failed (validation): ${detail}`);
-        } else {
-          setError(
-            `Registration failed: ${body?.detail || res.statusText || `HTTP ${res.status}`}`,
-          );
-        }
-        setBusy(false);
-        setStage("idle");
-        return;
-      }
-      reg = body as DatabaseRegisterResponse;
-
-      // --- Stage 2: Save connection row ---
-      setStage("saving");
-      const { data: userData } = await supabase.auth.getUser();
-      const uid = userData.user?.id;
-      if (!uid) {
-        setError("Saving connection failed: not signed in.");
-        setBusy(false);
-        setStage("idle");
-        return;
-      }
-
-      const { data: inserted, error: insertErr } = await (supabase.from as any)("mcp_connections")
-        .insert({
-          user_id: uid,
-          connection_name: form.connection_name.trim(),
-          customer_id: reg.customer_id,
-          customer_name: form.customer_name.trim(),
-          contact_email: form.contact_email.trim(),
-          database_type: dbType,
-          host: form.host.trim(),
-          port,
-          database_name: form.database_name.trim(),
-          username: "",
-          api_key: "",
-          mcp_endpoint: reg.mcp_endpoint,
-          status: reg.status,
-          query_timeout,
-          max_rows,
-        })
-        .select("id")
-        .single();
-
-      if (insertErr || !inserted) {
-        setError(`Saving connection failed: ${insertErr?.message || "unknown error"}`);
-        setBusy(false);
-        setStage("idle");
-        return;
-      }
-      insertedId = (inserted as any).id as string;
-
-      // --- Stage 3: Encrypt credentials (via backend, no CORS preflight) ---
-      setStage("encrypting");
-      try {
-        const { data: sess } = await supabase.auth.getSession();
-        const token = sess.session?.access_token;
-        if (!token) throw new Error("Your session expired. Sign in again.");
-        const encRes = await proxyFetch(
-          `/api/mcp-connections/${insertedId}/encrypt`,
-          {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${token}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({ apiKey: reg.api_key, username: form.username }),
-          },
-        );
-        if (!encRes.ok) {
-          let msg = `Encrypting credentials failed (${encRes.status})`;
-          if (encRes.status === 401) msg = "Your session expired. Sign in again.";
-          else if (encRes.status === 403) msg = "That connection belongs to another account.";
-          else if (encRes.status === 500)
-            msg = "Server could not encrypt credentials (encryption key not configured).";
-          throw new Error(msg);
-        }
-      } catch (encErr: any) {
-        // rollback saved row
-        try {
-          await (supabase.from as any)("mcp_connections").delete().eq("id", insertedId);
-        } catch {}
-        const msg = encErr?.message || "";
-        if (/failed to fetch|network|cors/i.test(msg)) {
-          setError(
-            "Could not reach the credential encryption service. The connection was not saved.",
-          );
-        } else {
-          setError(msg || "Encrypting credentials failed");
-        }
-        setBusy(false);
-        setStage("idle");
-        return;
-      }
-
+      const saved = await connectionsApi.create({
+        connection_name: form.connection_name.trim(),
+        customer_id: cidNormalized,
+        customer_name: form.customer_name.trim(),
+        contact_email: form.contact_email.trim(),
+        environment: form.environment,
+        database_type: dbType,
+        host: form.host.trim(),
+        port: parseInt(form.port, 10) || DEFAULT_PORT[dbType],
+        database_name: form.database_name.trim(),
+        username: form.username,
+        password: form.password,
+        query_timeout: parseInt(form.query_timeout, 10) || 30,
+        max_rows: parseInt(form.max_rows, 10) || DEFAULT_MAX_ROWS,
+        ...(isMongo && form.connection_string.trim()
+          ? { connection_string: form.connection_string.trim() }
+          : {}),
+      });
+      setForm((f) => ({ ...f, password: "" }));
       toast.success("Database connected");
-      onConnected?.(insertedId);
+      onConnected?.(saved.id);
       onOpenChange(false);
+    } catch (e: any) {
+      const status = e instanceof ConnectionsApiError ? e.status : 0;
+      const detail = e?.message || "unknown error";
+      if (status === 401) {
+        setError("Your session expired. Sign in again.");
+      } else if (status === 409) {
+        setError(
+          `Customer ID "${cidNormalized}" is already registered. Choose a different Customer ID.`,
+        );
+        setTimeout(() => customerIdRef.current?.focus(), 0);
+      } else if (status === 422) {
+        setError(`Registering database failed (validation): ${detail}`);
+      } else if (/^Saving connection failed/.test(detail)) {
+        setError(detail);
+      } else if (status === 0 || status === 503) {
+        setError(`Registering database failed: could not reach the API (${detail}).`);
+      } else {
+        setError(`Registration failed: ${detail}`);
+      }
     } finally {
       setBusy(false);
-      setStage((s) => (s === "idle" ? s : "idle"));
+      setStage("idle");
     }
   };
 

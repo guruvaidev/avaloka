@@ -479,7 +479,10 @@ def test_a_429_is_answered_by_the_backup(with_backup, monkeypatch):
     # Groq-shaped kwargs are translated on the way through, not forwarded raw.
     assert "description" not in seen["tools"][0]
     assert "reasoning_format" not in seen
-    assert seen["tool_choice"] == "required"
+    # The primary's "required" is a Groq value. OpenRouter answers it with
+    # finish_reason="error" and no tool call, so the backup gets the choice
+    # OpenRouter accepts (tool_choice_for_provider("openrouter")).
+    assert seen["tool_choice"] == "auto"
     assert seen["reasoning_effort"] == "high"
 
 
@@ -536,8 +539,98 @@ def test_a_real_429_is_answered_by_the_backup(with_backup, monkeypatch):
                             tool_choice="required", reasoning_effort="high")
 
     assert result == "answered by openrouter"
-    assert backup.seen["tool_choice"] == "required"
+    assert backup.seen["tool_choice"] == "auto"  # never "required" on OpenRouter
     assert "description" not in backup.seen["tools"][0]
+
+
+# --------------------------------------------------------------------------- #
+# tool_choice across the failover: keyed on the provider that receives it
+# --------------------------------------------------------------------------- #
+
+class _RecordingRateLimitedPrimary:
+    """A primary (Groq, Ollama, Vertex...) that records its kwargs, then 429s."""
+
+    def __init__(self):
+        self.seen = None
+
+    def invoke(self, _value, _config=None, **kwargs):
+        self.seen = dict(kwargs)
+        raise _groq_error("RateLimitError", 429)
+
+    def with_fallbacks(self, fallbacks, *, exceptions_to_handle=(Exception,), exception_key=None):
+        primary = self
+
+        class _Wrapped:
+            def invoke(self, value, config=None, **kwargs):
+                try:
+                    return primary.invoke(value, config, **kwargs)
+                except exceptions_to_handle:
+                    return fallbacks[0].invoke(value, config, **kwargs)
+
+        return _Wrapped()
+
+
+@pytest.mark.parametrize("forcing", ["required", "any"])
+def test_the_primary_keeps_its_forcing_choice_and_only_openrouter_gets_auto(
+        with_backup, monkeypatch, forcing):
+    """One failed-over call, two providers, two tool_choice values.
+
+    The rewrite lives in the OpenRouter adapter and works on a copy of the
+    kwargs, so the non-OpenRouter primary still received its own forcing value
+    ("required" for Groq/Ollama, "any" for Vertex) on the attempt that 429'd.
+    """
+    backup = _RecordingBackup()
+    monkeypatch.setattr("app.core.model_fallback.build_backup_chat_model",
+                        lambda model, temperature=0.0: backup)
+    primary = _RecordingRateLimitedPrimary()
+    wrapped = attach_fallback(primary, "openai/gpt-oss-120b", agent="planner")
+
+    assert wrapped.invoke([("human", "hi")], tools=[PLANNER_SHAPED_TOOL],
+                          tool_choice=forcing) == "answered by openrouter"
+    assert primary.seen["tool_choice"] == forcing
+    assert backup.seen["tool_choice"] == "auto"
+
+
+@pytest.mark.parametrize("choice", ["auto", "none",
+                                    {"type": "function", "function": {"name": "plan"}}])
+def test_a_non_forcing_tool_choice_reaches_openrouter_unchanged(with_backup, monkeypatch, choice):
+    backup = _RecordingBackup()
+    monkeypatch.setattr("app.core.model_fallback.build_backup_chat_model",
+                        lambda model, temperature=0.0: backup)
+    wrapped = attach_fallback(_RecordingRateLimitedPrimary(), "openai/gpt-oss-120b")
+
+    wrapped.invoke([("human", "hi")], tools=[PLANNER_SHAPED_TOOL], tool_choice=choice)
+    assert backup.seen["tool_choice"] == choice
+
+
+def test_the_only_backup_ever_armed_is_openrouter(with_backup, monkeypatch):
+    """Why the rewrite cannot reach a Groq or local backup: there is none.
+
+    attach_fallback arms exactly one backup, the OpenRouter adapter, and
+    inference._with_fallback never wraps an OpenRouter primary. If a second
+    backup provider is ever added, this test is where that assumption breaks.
+    """
+    from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+    from app.core import inference
+    from app.core.model_fallback import _OpenRouterCompat, fallback_models
+
+    monkeypatch.setattr("app.core.model_fallback.build_backup_chat_model",
+                        lambda model, temperature=0.0: _RecordingBackup())
+    primary = GenericFakeChatModel(messages=iter([]))
+    backups = fallback_models(attach_fallback(primary, "openai/gpt-oss-120b"))
+    assert len(backups) == 1
+    assert isinstance(backups[0], _OpenRouterCompat)
+    assert backups[0].provider == inference.OPENROUTER
+
+    # Owner decision 2026-11-01: an OpenRouter primary carries the next OpenRouter tier (GPT-6 Luna),
+    # never a same-model OpenRouter backup; with the tier switched off, nothing.
+    same = GenericFakeChatModel(messages=iter([]))
+    tiered = inference._with_fallback(same, model="openai/gpt-oss-120b", temperature=0.0,
+                                      agent="planner", provider=inference.OPENROUTER)
+    assert [b.model for b in fallback_models(tiered)] == ["openai/gpt-6-luna"]
+    monkeypatch.setenv("AVALOKA_OPENROUTER_FALLBACK_MODEL", "none")
+    assert inference._with_fallback(same, model="openai/gpt-oss-120b", temperature=0.0,
+                                    agent="planner", provider=inference.OPENROUTER) is same
 
 
 def test_reasoning_effort_is_translated_for_a_reasoning_capable_backup(

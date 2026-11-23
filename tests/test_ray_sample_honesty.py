@@ -214,7 +214,9 @@ def _local_state(tmp_path, rows=1_234, **extra):
     }
 
 
-def _fake_local_exec(code, input_data_location, output_location, read_path_map=None):
+def _fake_local_exec(code, input_data_location, output_location, read_path_map=None, **_read_options):
+    # execute_code_on_local's extra keywords (input_options, read_sheet_map) describe the
+    # read; this fake writes a fixed frame whatever they say.
     os.makedirs(os.path.dirname(output_location), exist_ok=True)
     with open(output_location, "w") as fh:
         fh.write("region,total\nr0,1.0\n")

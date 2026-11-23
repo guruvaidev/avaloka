@@ -21,6 +21,12 @@ HIGH_MISSING_PCT = 0.30
 HIGH_CARDINALITY_RATIO = 0.90
 ID_UNIQUE_RATIO = 0.98
 SMALL_SAMPLE_ROWS = 200
+# A categorical feature whose values alone predict the target this accurately,
+# and remove most of the errors the majority-class baseline makes, is treated
+# as leakage. The margin is relative to the baseline's error, not in points: on
+# a 97/3 target a perfect copy is only 3 points above the baseline.
+LEAKAGE_PURITY = 0.95
+LEAKAGE_ERROR_REDUCTION = 0.75
 
 
 def infer_role(series: pd.Series, n_rows: int) -> str:
@@ -59,9 +65,22 @@ def infer_role(series: pd.Series, n_rows: int) -> str:
 #: an order number both parse as timestamps, and an identifier column becomes
 #: the thing the train/test split is ordered by -- a worse error than missing a
 #: date column, because the metrics still look fine.
+#: Forms a real export writes: ISO, day-first or month-first with a four-digit
+#: year, a month name ("Jan 30, 2023", "30 January 2023") and the compact
+#: %Y%m%d. Two-digit years are left out on purpose: "1.2.10" is a version.
 _DATE_HINT_RE = re.compile(
-    r"^\s*(?:\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|\d{1,2}[-/.]\d{1,2}[-/.]\d{4})(?:[T\s]|$)"
+    r"^\s*(?:\d{4}[-/.]\d{1,2}[-/.]\d{1,2}"
+    r"|\d{1,2}[-/.]\d{1,2}[-/.]\d{4}"
+    r"|[A-Za-z]{3,9}\.? \d{1,2},? \d{4}"
+    r"|\d{1,2} [A-Za-z]{3,9}\.?,? \d{4}"
+    r"|(?:19|20)\d{6})(?:[T\s]|$)"
 )
+
+#: How much of a column must carry one of the forms above before parsing is
+#: even attempted. Lower than the parse threshold: a column that mixes five
+#: date formats carries the hinted ones in most but not all cells, and the
+#: parse gate below is what actually decides.
+DATE_HINT_SHARE = 0.75
 
 
 def _looks_like_dates(non_null: pd.Series, threshold: float = 0.95) -> bool:
@@ -69,7 +88,8 @@ def _looks_like_dates(non_null: pd.Series, threshold: float = 0.95) -> bool:
 
     Deliberately strict. Mistaking an identifier for a date would order the
     split by it, which is a worse error than missing a date column: the metrics
-    would still look fine.
+    would still look fine. The hint share guards against identifiers; the
+    parse share, ``threshold``, decides.
     """
     if not len(non_null):
         return False
@@ -78,7 +98,7 @@ def _looks_like_dates(non_null: pd.Series, threshold: float = 0.95) -> bool:
     except Exception:
         return False
     sample = text.head(200)
-    if (sample.str.match(_DATE_HINT_RE).mean() or 0) < threshold:
+    if (sample.str.match(_DATE_HINT_RE).mean() or 0) < DATE_HINT_SHARE:
         return False
     try:
         with warnings.catch_warnings():
@@ -148,10 +168,17 @@ def _jsonable(v: Any) -> Any:
     return str(v) if not isinstance(v, (int, float, bool, str)) else v
 
 
-def quality_report(frame: pd.DataFrame, columns: list[dict[str, Any]]) -> dict[str, Any]:
-    """Score data quality 0–100 and enumerate concrete, actionable issues."""
+def quality_report(
+    frame: pd.DataFrame, columns: list[dict[str, Any]],
+    extra_issues: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Score data quality 0–100 and enumerate concrete, actionable issues.
+
+    ``extra_issues`` are issues the loader found while reading (stray words
+    read as missing, sheets not analysed); they are scored like the rest.
+    """
     n_rows = len(frame)
-    issues: list[dict[str, Any]] = []
+    issues: list[dict[str, Any]] = list(extra_issues or [])
 
     duplicates = int(frame.duplicated().sum())
     if duplicates:
@@ -242,12 +269,34 @@ def detect_target_leakage(
                                      "value": round(corr, 4), "severity": "high",
                                      "detail": f"|corr| with target = {corr:.3f}; likely leakage."})
             else:
-                # Genuine categorical: does each value map to exactly one label?
-                grp = frame.groupby(s.astype("string"))[target].nunique(dropna=True)
-                if len(grp) > 1 and (grp <= 1).mean() >= 0.99:
+                # Categorical: how well does this one feature predict the target
+                # on its own? "Purity" is the accuracy of predicting the majority
+                # label within each category. Requiring every category to map to
+                # exactly one label (the previous rule) missed any leak with a
+                # little noise -- a status column 98.8% aligned with churn passed
+                # as clean, and the model was certified PASS at level 4.
+                sub = frame[[name, target]].dropna()
+                if sub.empty:
+                    continue
+                groups = sub.groupby(sub[name].astype("string"))[target]
+                if groups.ngroups < 2:
+                    continue
+                purity = float(groups.agg(lambda t: t.value_counts().iloc[0]).sum()) / len(sub)
+                baseline = float(sub[target].value_counts(normalize=True).iloc[0])
+                # Compare against the majority-class baseline too, so an
+                # imbalanced target (e.g. 97/3) does not flag ordinary features
+                # but still flags a copy of the rare label.
+                reduction = (purity - baseline) / (1.0 - baseline) if baseline < 1.0 else 0.0
+                if purity >= 1.0:
                     findings.append({"column": name, "kind": "deterministic_mapping",
                                      "value": 1.0, "severity": "high",
                                      "detail": "Feature value determines the target; likely leakage."})
+                elif purity >= LEAKAGE_PURITY and reduction >= LEAKAGE_ERROR_REDUCTION:
+                    findings.append({"column": name, "kind": "near_deterministic_mapping",
+                                     "value": round(purity, 4), "severity": "high",
+                                     "detail": (f"Feature alone predicts the target with {purity:.1%} "
+                                                f"accuracy (majority baseline {baseline:.1%}); "
+                                                "likely leakage.")})
         except Exception:
             continue
     return findings

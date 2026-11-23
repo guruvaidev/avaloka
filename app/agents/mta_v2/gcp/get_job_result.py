@@ -4,6 +4,8 @@ import re
 import json
 import logging
 
+from app.infra.ray_auth import auth_headers
+
 
 def get_job_logs(
     dashboard_url: str, job_id: str, retries: int = 3, delay: int = 5
@@ -11,7 +13,9 @@ def get_job_logs(
     """Return the Ray job's raw log output for failure diagnostics."""
     for attempt in range(retries):
         try:
-            response = requests.get(f"{dashboard_url}/api/jobs/{job_id}/logs", timeout=10)
+            response = requests.get(
+                f"{dashboard_url}/api/jobs/{job_id}/logs", headers=auth_headers(), timeout=10
+            )
             response.raise_for_status()
             return str(response.json().get("logs", ""))
         except requests.exceptions.RequestException as exc:

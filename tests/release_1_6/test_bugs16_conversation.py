@@ -42,8 +42,12 @@ def sent(monkeypatch):
     monkeypatch.setattr(agent, "_reply_llm_error", None, raising=False)
     state = {"messages": [HumanMessage(content="What kind of models can you build?")]}
     redis_ctx = {"dataset_id": "ds-1", "schema_columns": COLUMNS, "input_data_type": "csv"}
+    # The directive the agent node builds for this turn (1.7's conversation
+    # policy): the same call avaloka_agent_node makes before the direct reply.
+    directive = agent.build_conversation_directive(
+        agent.policy_for(agent.infer_expertise(state["messages"], None)))
     reply = agent._render_direct_reply(
-        state, IntentResult(intent="exploration", confidence=0.9), redis_ctx, None, "exploring")
+        state, IntentResult(intent="exploration", confidence=0.9), redis_ctx, None, "exploring", directive)
     assert reply.startswith("1. Train"), "the recorder's reply is returned unchanged"
     assert len(llm.calls) == 1
     system, human = llm.calls[0]

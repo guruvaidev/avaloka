@@ -22,7 +22,7 @@ their licenses are:
   - LangChain, LangGraph .......................... MIT
   - Ray, KubeRay .................................. Apache-2.0
   - Apache Spark (pyspark), Apache Arrow .......... Apache-2.0
-  - Daft (getdaft) ................................ Apache-2.0
+  - Daft ......................................... Apache-2.0
   - FastAPI, Starlette, Uvicorn, Pydantic ......... MIT / BSD-3-Clause
   - Streamlit ..................................... Apache-2.0
   - pandas, NumPy ................................. BSD-3-Clause
@@ -30,6 +30,9 @@ their licenses are:
   - ONNX / ONNX Runtime ........................... Apache-2.0 / MIT
   - MLflow ........................................ Apache-2.0
   - scikit-learn .................................. BSD-3-Clause
+  - DuckDB ........................................ MIT
+  - SciPy ......................................... BSD-3-Clause
+  - statsmodels ................................... BSD-3-Clause
   - Redis client (redis-py) ....................... MIT
   - Celery, RedBeat ............................... BSD-3-Clause / Apache-2.0
   - Kubernetes Python client ...................... Apache-2.0
@@ -37,6 +40,13 @@ their licenses are:
   - Model Context Protocol SDK (mcp) .............. MIT
   - sqlglot ....................................... MIT
       Copyright (c) 2026 Toby Mao
+
+Model weights are likewise NOT redistributed here. The local-inference
+manifests (deploy/inference/, the Helm chart's localLLM) download them at run
+time from their publishers. The defaults and their licenses are:
+
+  - Qwen3-4B-Instruct-2507 (Ollama: qwen3:4b-instruct-2507-q4_K_M) . Apache-2.0
+  - Qwen2.5-14B-Instruct (vLLM GPU default) ...................... Apache-2.0
 
 Model weights are likewise NOT redistributed here. The local-inference
 manifests (deploy/inference/, the Helm chart's localLLM) download them at run

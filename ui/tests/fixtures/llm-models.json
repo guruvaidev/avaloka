@@ -6,21 +6,21 @@
        {"provider": "openrouter", "model": "openai/gpt-6-luna", "armed": true, "providers_only": ["azure"]},
        {"provider": "groq", "model": "openai/gpt-oss-120b", "armed": false, "providers_only": null}
      ],
-     "routing": {"sort": "price", "allow_fallbacks": false, "data_collection": "deny", "zdr": true}},
+     "routing": {"sort": "throughput", "allow_fallbacks": false, "data_collection": "deny", "zdr": true}},
     {"role": "coding", "agent": "CODER", "provider": "openrouter", "model": "openai/gpt-oss-120b",
      "chain": [
        {"provider": "openrouter", "model": "openai/gpt-oss-120b", "armed": true, "providers_only": ["deepinfra/bf16", "together", "crusoe", "parasail"]},
        {"provider": "openrouter", "model": "openai/gpt-6-luna", "armed": true, "providers_only": ["azure"]},
        {"provider": "groq", "model": "openai/gpt-oss-120b", "armed": false, "providers_only": null}
      ],
-     "routing": {"sort": "price", "allow_fallbacks": false, "data_collection": "deny", "zdr": true}},
+     "routing": {"sort": "throughput", "allow_fallbacks": false, "data_collection": "deny", "zdr": true}},
     {"role": "viz", "agent": "VIZ", "provider": "openrouter", "model": "openai/gpt-oss-120b",
      "chain": [
        {"provider": "openrouter", "model": "openai/gpt-oss-120b", "armed": true, "providers_only": ["deepinfra/bf16", "together", "crusoe", "parasail"]},
        {"provider": "openrouter", "model": "openai/gpt-6-luna", "armed": true, "providers_only": ["azure"]},
        {"provider": "groq", "model": "openai/gpt-oss-120b", "armed": false, "providers_only": null}
      ],
-     "routing": {"sort": "price", "allow_fallbacks": false, "data_collection": "deny", "zdr": true}}
+     "routing": {"sort": "throughput", "allow_fallbacks": false, "data_collection": "deny", "zdr": true}}
   ],
   "note": "Each reply states which model answered it when a fallback tier stood in."
 }

@@ -1,0 +1,233 @@
+[
+ {
+  "question": "Any outliers in revenue?",
+  "columns": {
+   "order_date": "time",
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "units": "measure",
+   "customer_id": "id",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "anomalies",
+   "params": {
+    "measure": "revenue",
+    "time": "order_date"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Find anomalies in latency_ms",
+  "columns": {
+   "ts": "time",
+   "latency_ms": "measure",
+   "errors": "measure",
+   "service": "dimension",
+   "host": "high_card_dimension"
+  },
+  "expected": {
+   "recipe": "anomalies",
+   "params": {
+    "measure": "latency_ms",
+    "time": "ts"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Were there unusual spikes in errors?",
+  "columns": {
+   "ts": "time",
+   "latency_ms": "measure",
+   "errors": "measure",
+   "service": "dimension",
+   "host": "high_card_dimension"
+  },
+  "expected": {
+   "recipe": "anomalies",
+   "params": {
+    "measure": "errors",
+    "time": "ts"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Which days look weird for sessions?",
+  "columns": {
+   "signup_date": "time",
+   "user_id": "id",
+   "plan": "dimension",
+   "mrr": "measure",
+   "churned": "measure",
+   "sessions": "measure",
+   "country": "dimension"
+  },
+  "expected": {
+   "recipe": "anomalies",
+   "params": {
+    "measure": "sessions",
+    "time": "signup_date"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "anything odd in the salary numbers",
+  "columns": {
+   "employee_id": "id",
+   "salary": "measure",
+   "age": "measure",
+   "department": "dimension",
+   "hire_date": "time",
+   "tenure_years": "measure"
+  },
+  "expected": {
+   "recipe": "anomalies",
+   "params": {
+    "measure": "salary",
+    "time": "hire_date"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Did units spike or dip at any point?",
+  "columns": {
+   "order_date": "time",
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "units": "measure",
+   "customer_id": "id",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "anomalies",
+   "params": {
+    "measure": "units",
+    "time": "order_date"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Flag abnormal mrr values",
+  "columns": {
+   "signup_date": "time",
+   "user_id": "id",
+   "plan": "dimension",
+   "mrr": "measure",
+   "churned": "measure",
+   "sessions": "measure",
+   "country": "dimension"
+  },
+  "expected": {
+   "recipe": "anomalies",
+   "params": {
+    "measure": "mrr",
+    "time": "signup_date"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Which orders stand out on cost?",
+  "columns": {
+   "order_date": "time",
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "units": "measure",
+   "customer_id": "id",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "anomalies",
+   "params": {
+    "measure": "cost",
+    "time": "order_date"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "outliers in revenue",
+  "columns": {
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "anomalies",
+   "params": {
+    "measure": "revenue"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Suspicious jumps in errors?",
+  "columns": {
+   "ts": "time",
+   "latency_ms": "measure",
+   "errors": "measure",
+   "service": "dimension",
+   "host": "high_card_dimension"
+  },
+  "expected": {
+   "recipe": "anomalies",
+   "params": {
+    "measure": "errors",
+    "time": "ts"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Is the revenue spike due to one region?",
+  "columns": {
+   "order_date": "time",
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "units": "measure",
+   "customer_id": "id",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "anomalies",
+   "params": {
+    "measure": "revenue",
+    "time": "order_date"
+   },
+   "flags": [
+    "causal_question"
+   ]
+  }
+ },
+ {
+  "question": "Outliers or just a trend in latency?",
+  "columns": {
+   "ts": "time",
+   "latency_ms": "measure",
+   "errors": "measure",
+   "service": "dimension",
+   "host": "high_card_dimension"
+  },
+  "expected": {
+   "recipe": "anomalies",
+   "params": {
+    "measure": "latency_ms",
+    "time": "ts"
+   },
+   "flags": [
+    "ambiguous"
+   ]
+  }
+ }
+]

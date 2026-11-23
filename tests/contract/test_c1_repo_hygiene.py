@@ -14,7 +14,10 @@ the day the leak is fixed, which is the signal to delete the xfail.
 E11.09 asks for a documented data-egress inventory. There is no document to assert
 against, so the inventory is frozen here as a source-level fact: the set of app
 modules that talk to a third party is pinned, and a new egress path fails the test
-until both the frozen set and the DPA inventory are updated.
+until both the frozen set and the DPA inventory are updated. The scan covers both
+Python packages that ship -- ``app/`` (the API and agents) and ``avaloka/`` (the
+CLI) -- because the CLI reads customer databases, document stores and object
+storage directly (``avaloka/io/sources.py``) and used to sit outside the inventory.
 
 Secret hygiene of the suite itself: no assertion message, parametrize id, or repr
 in this file may contain a secret value. Findings are reported as
@@ -408,7 +411,55 @@ EGRESS_INVENTORY_UPDATE_INSTRUCTION = (
     "prompt leaving the cluster to a third party."
 )
 
-EGRESS_CHANNELS: Dict[str, Tuple[re.Pattern, str, Set[str]]] = {
+#: Modules that import daft, each of which must disable daft's usage beacon
+#: before it does (see the ``daft_usage_beacon`` channel).
+DAFT_IMPORTERS: Tuple[str, ...] = (
+    "app/agents/avaloka_agent/discovery_tools.py",
+    "app/agents/data_transfer_agent/daft_execution.py",
+    "app/agents/data_transfer_agent/data_transfer_agent.py",
+    "app/agents/data_transfer_agent/datasink/sql_sink.py",
+    "app/agents/sampling_agent_daft.py",
+    "app/agents/sampling_async.py",
+    "app/data_transfer_docker/container_file.py",
+)
+
+#: Modules that import onnxruntime, or chromadb (whose default embedding
+#: function runs onnxruntime), each of which would start onnxruntime's 1DS
+#: telemetry uploader unless ORT_DISABLE_TELEMETRY is set first (see the
+#: ``onnxruntime_1ds_telemetry`` channel).
+ORT_IMPORTERS: Tuple[str, ...] = (
+    "app/agents/mta/inference_docker/inference_job.py",
+    "app/agents/mta/local_inference.py",
+    "app/agents/mta/onnx_exporter.py",
+    "app/agents/mta_v2/inference_service_manager.py",
+    "app/core/offline.py",
+    "app/rag/daft_ingest.py",
+    "app/rag/daft_retrieval.py",
+    "app/serve/inference.py",
+    "app/services/db/chroma_client.py",
+)
+#: Of those, the ones run as a standalone script inside their own image, where
+#: app/__init__.py never runs: each must set the switch itself before the import.
+ORT_STANDALONE_SCRIPTS: Tuple[str, ...] = (
+    "app/agents/mta/inference_docker/inference_job.py",
+)
+
+#: Every channel is matched against these trees unless it names its own
+#: roots (the fourth tuple element). Egress is about what leaves the cluster,
+#: not which package it left from, so every tree that can hold an outbound
+#: call is here.
+#:
+#: This was ``app/`` alone, then ``app/`` and ``avaloka/``, and always ``.py``
+#: only. ``ui/`` failed both conditions, so no channel could fail on anything
+#: the web app or the Supabase edge functions sent, however much they sent.
+#: Proved rather than argued: a module under ``ui/`` posting ``dataset_samples``
+#: to a third party was committed to a clone and every case here still passed.
+#: The edge functions were in fact POSTing chart data to quickchart.io the
+#: whole time (DEF-013).
+EGRESS_SCAN_ROOTS: Tuple[str, ...] = ("app/", "avaloka/", "ui/src/", "ui/supabase/")
+EGRESS_SCAN_SUFFIXES: Tuple[str, ...] = (".py", ".ts", ".tsx")
+
+EGRESS_CHANNELS: Dict[str, tuple] = {
     "product_analytics_export": (
         # Anchored on the endpoint variable and its one accessor, NOT on an import
         # like the entries around it. The sender uses stdlib urllib, so there is
@@ -439,6 +490,44 @@ EGRESS_CHANNELS: Dict[str, Tuple[re.Pattern, str, Set[str]]] = {
             "app/analytics/config.py",
             "app/analytics/export.py",
         },
+    ),
+    "analysis_email_delivery": (
+        # Anchored on the SMTP credentials, not on a mail library: these are Deno
+        # edge functions and the transport is hand-rolled in _shared/raw-smtp.ts,
+        # so there is no package name to match on.
+        re.compile(r"SMTP_HOST|SMTP_USERNAME|SMTP_PASSWORD"),
+        "analysis and report results are emailed to recipient addresses the sharing user "
+        "types in. The result rows themselves are encrypted -- buildEncryptedPdf sets a "
+        "userPassword and the handler rejects one outside 6-128 characters -- but the "
+        "SUBJECT LINE carries the analysis NAME verbatim (`Analysis results: ${title}`) "
+        "and the attachment filename is that same name with punctuation substituted "
+        "(DEF-010). A subject line is never end-to-end encrypted, is indexed by the "
+        "recipient's mail provider, and is retained in transit logs at every hop. The "
+        "sending user's own e-mail address appears in the body. "
+        "LIMIT OF THIS ENTRY: it anchors on the credentials these functions read, so it "
+        "would not notice a sender that hard-coded a relay host.",
+        {
+            "ui/supabase/functions/_shared/raw-smtp.ts",
+            "ui/supabase/functions/send-analysis-email/index.ts",
+            "ui/supabase/functions/send-report-email/index.ts",
+            "ui/supabase/functions/send-smtp-email/index.ts",
+        },
+    ),
+    # The TypeScript twin of http_client_to_literal_host below: a fetch() aimed
+    # at a host written into the source is a destination no operator can
+    # configure away. Until the commit that emptied this set, the two mail
+    # functions POSTed every chart's data values and labels to quickchart.io,
+    # and send-report-email pulled its watermark from a Lovable-hosted asset on
+    # every report (DEF-013); neither host was in the egress inventory or on
+    # the sub-processor list. Charts are now drawn locally with the pdf-lib the
+    # functions already embed and the watermark is text, so this entry is the
+    # tripwire: the next hard-coded host in ui/ shows up here.
+    "ui_fetch_to_literal_host": (
+        re.compile(r"\bfetch\(\s*[\"'`]https?://(?!localhost|127\.0\.0\.1)"),
+        "a fetch() in the web app or an edge function whose destination is written "
+        "into the source",
+        set(),
+        ("ui/src/", "ui/supabase/"),
     ),
     "groq_llm_prompts": (
         re.compile(r"^[ \t]*(?:from[ \t]+langchain_groq|import[ \t]+langchain_groq)", re.M),
@@ -475,7 +564,7 @@ EGRESS_CHANNELS: Dict[str, Tuple[re.Pattern, str, Set[str]]] = {
             "app/services/embedding_utils.py",
         },
     ),
-    # Embeddings are local by default (1.6 hotfix, as 2.0's #579). Before, the "auto" default sent
+    # Embeddings are local by default since 2.0. Before, the "auto" default sent
     # memory text (raw queries, hints, LLM answers, schema JSON with table and
     # column names) to OpenAI whenever the CHAT key OPENAI_API_KEY was set. The
     # pattern now names the dedicated opt-in key separately: \b keeps
@@ -492,6 +581,10 @@ EGRESS_CHANNELS: Dict[str, Tuple[re.Pattern, str, Set[str]]] = {
             # hosted model is available before it routes a turn.
             "app/agents/avaloka_agent/agent.py",
             "app/core/inference.py",
+            # The CLI's provider table names OPENAI_API_KEY to select OpenAI as a
+            # chat provider for --llm; it embeds nothing. Its chat egress is
+            # declared under cli_llm_prompts.
+            "avaloka/llm/providers.py",
             # model_fallback.py is NOT listed here any more: its only match was
             # the langchain_openai package name, which is the chat client, not
             # OpenAIEmbeddings. It is declared under openai_compatible_llm_prompts.
@@ -539,11 +632,160 @@ EGRESS_CHANNELS: Dict[str, Tuple[re.Pattern, str, Set[str]]] = {
             "app/infra/providers/aws_eks.py",
         },
     ),
+    # ---- the CLI's source connectors (avaloka/io/sources.py and what it
+    # ---- is built on). Scoped to avaloka/: the app's SQLAlchemy use is its
+    # ---- own lineage/telemetry store and the MCP server's registered
+    # ---- customer databases, which the MCP inventory above describes.
+    "cli_relational_database_sources": (
+        re.compile(r"^[ \t]*(?:import[ \t]+sqlalchemy|from[ \t]+sqlalchemy(?:\.[\w.]+)?[ \t]+import|import[ \t]+psycopg)", re.M),
+        "the CLI reads whole tables, SELECT-only queries and catalogue/statistics from "
+        "any SQLAlchemy URL the user names (Postgres via psycopg); the destination is the "
+        "user's own database, and the connection string is held in process and redacted "
+        "in provenance. avaloka/catalog/store.py is the one WRITER in this set: the dataset "
+        "catalog records what Avaloka touched -- dataset kind, a locator (connection id, "
+        "schema, table; check_locator refuses secret-bearing keys), typed column names, row "
+        "counts, which analysis used which version -- to AVALOKA_CATALOG_DB_URL, which is "
+        "the operator's own lineage database in the application and a SQLite file under "
+        "~/.avaloka in the CLI; never a DSN, a key or a data row",
+        {
+            "avaloka/benchmark/runner.py",
+            "avaloka/catalog/store.py",
+            "avaloka/connectors/postgres.py",
+            "avaloka/io/sources.py",
+            "avaloka/source_statistics.py",
+        },
+        ("avaloka/",),
+    ),
+    "cli_document_database_sources": (
+        re.compile(r"^[ \t]*(?:import[ \t]+pymongo|from[ \t]+pymongo(?:\.[\w.]+)?[ \t]+import)", re.M),
+        "the CLI reads a bounded MongoDB collection selection the user names "
+        "(AVALOKA_MONGO_MAX_DOCUMENTS); the destination is the user's own cluster",
+        {
+            "avaloka/io/sources.py",
+        },
+        ("avaloka/",),
+    ),
+    "cli_object_storage_sources": (
+        re.compile(r"^[ \t]*(?:import[ \t]+fsspec|from[ \t]+fsspec(?:\.[\w.]+)?[ \t]+import)", re.M),
+        "the CLI streams one object the user names from s3/gs/az/http through fsspec "
+        "into a bounded local file; the destination is the user's own bucket or URL. "
+        "The connector contract's object store (avaloka/connectors/objectstore.py) is "
+        "read-only: it lists, stats and reads bounded byte ranges of the objects in the "
+        "one bucket or container its URL names, at the host endpoints() reports -- the "
+        "configured S3 endpoint_url, else AWS S3; storage.googleapis.com; or "
+        "<account>.blob.core.windows.net. Each request carries the bucket and object key "
+        "and is authenticated with the user's own storage options (access key, secret and "
+        "session token; a service account, whose token exchange also reaches Google's "
+        "OAuth endpoint; an account key, SAS token or connection string). With no options "
+        "it reads anonymously; options that name no key leave the fsspec backend's default "
+        "credential lookup in charge, which for S3 and GCS can query the cloud "
+        "instance-metadata service. It writes nothing, and sends no row, column name or "
+        "object name anywhere but that store",
+        {
+            "avaloka/benchmark/runner.py",
+            "avaloka/connectors/objectstore.py",
+            "avaloka/io/sources.py",
+        },
+        ("avaloka/",),
+    ),
+    # ---- the CLI's optional narrator (avaloka --llm). Off unless the user
+    # ---- passes --llm or --llm-provider; then each line Avaloka says (which
+    # ---- can quote column names and measured figures) goes to the provider.
+    "cli_llm_prompts": (
+        re.compile(r"/chat/completions|^[ \t]*import[ \t]+anthropic\b", re.M),
+        "with --llm, the CLI sends each persona line (which can name columns and quote "
+        "measured statistics) to the selected model provider: a local Ollama / "
+        "OpenAI-compatible server the user runs, or Groq, OpenRouter, OpenAI or Anthropic. "
+        "No provider is contacted without --llm or --llm-provider. The opt-in live run of "
+        "the conversational benchmark sends its synthetic probe evidence to Groq's chat "
+        "endpoint when no local model answers",
+        {
+            "avaloka/benchmark/conversational.py",
+            "avaloka/llm/client.py",
+            "avaloka/llm/openai_compat.py",
+        },
+        ("avaloka/",),
+    ),
+    # A third-party destination that is DISABLED BY DEFAULT. daft's
+    # __init__ calls scarf_telemetry.track_import_on_scarf(), and every query
+    # calls track_runner_on_scarf(): each sends daft's version, the OS, the
+    # Python version and the CPU arch (no customer data) to
+    # daft.gateway.scarf.sh and osstelemetry.io -- unless DO_NOT_TRACK or
+    # SCARF_NO_ANALYTICS is set before the import. app/core/thirdparty_optout.py
+    # sets both (as defaults), app/__init__.py calls it before any app module
+    # loads, every module below calls it again before its first daft import
+    # (test_daft_importers_disable_the_beacon_first), and the images and the
+    # chart set the same variables. tests/test_thirdparty_optout.py imports
+    # daft in a subprocess and fails if a connection to either host is tried.
+    "daft_usage_beacon": (
+        re.compile(r"^[ \t]*(?:import[ \t]+daft\b|from[ \t]+daft(?:\.[\w.]+)?[ \t]+import\b)", re.M),
+        "DISABLED BY DEFAULT: importing daft would send daft's version, platform, Python "
+        "version and CPU arch -- never data, column or file names -- to daft.gateway.scarf.sh "
+        "and osstelemetry.io; every module that imports daft first sets DO_NOT_TRACK and "
+        "SCARF_NO_ANALYTICS (app/core/thirdparty_optout.py), and a deployment must unset "
+        "both to opt in",
+        set(DAFT_IMPORTERS),
+    ),
+    # A third-party destination that is DISABLED BY DEFAULT. onnxruntime's
+    # official builds (1.31.0 is pinned) start Microsoft's 1DS uploader when the
+    # ORT environment is created -- chroma's default embedding function does that
+    # on its first query -- and POST trace events (ORT version, session and
+    # execution-provider metadata, a device id; never data, column or file
+    # names) to mobile.events.data.microsoft.com/OneCollector/1.0 ~15 s later.
+    # ORT_DISABLE_TELEMETRY=1 before initialisation stops the uploader;
+    # onnxruntime.disable_telemetry_events() does not (measured). Defaulted by
+    # app/core/thirdparty_optout.py (via app/__init__.py), every image, the
+    # quickstart compose and the chart; tests/test_thirdparty_optout.py loads an
+    # ONNX model behind a recording proxy and fails on a CONNECT to the collector.
+    "onnxruntime_1ds_telemetry": (
+        re.compile(
+            r"^[ \t]*(?:import[ \t]+(?:onnxruntime|chromadb)\b"
+            r"|from[ \t]+(?:onnxruntime|chromadb)(?:\.[\w.]+)?[ \t]+import\b)",
+            re.M,
+        ),
+        "DISABLED BY DEFAULT: loading an ONNX model (directly, or through chroma's default "
+        "embedding function) would send onnxruntime trace events -- never data, column or "
+        "file names -- to Microsoft's mobile.events.data.microsoft.com; "
+        "app/core/thirdparty_optout.py sets ORT_DISABLE_TELEMETRY=1 before any of these "
+        "modules load, and a deployment must unset it to opt in",
+        set(ORT_IMPORTERS),
+    ),
+    # Cloud instance-metadata services. A destination inside the provider, not a
+    # third party -- but answering it hands the process the VM's credentials and
+    # identity. Only describe_environment(allow_network=True) (an explicit MCP
+    # tool argument) probes it; detection is env-only otherwise. botocore's own
+    # credential-chain probe of 169.254.169.254 is off by default through
+    # AWS_EC2_METADATA_DISABLED=true (app/core/thirdparty_optout.py, images,
+    # compose, chart), and the DTA sysdocs load that triggered it is off unless
+    # AVALOKA_SYSDOCS_PATH is set.
+    "cloud_instance_metadata": (
+        re.compile(r"169\.254\.169\.254|metadata\.google\.internal"),
+        "OPT-IN ONLY: the MCP describe_environment tool asks the GCP/Azure/AWS instance-"
+        "metadata service which cloud it runs on when called with allow_network=True; "
+        "nothing else contacts it, and botocore's credential probe is disabled by "
+        "AWS_EC2_METADATA_DISABLED=true unless an operator opts in to instance credentials",
+        {"app/execution/environment.py"},
+    ),
+    # An HTTP client aimed at a literal, non-local host is a destination the
+    # operator cannot configure away. Nothing in either package does this
+    # today (the GitHub call in persistence_service goes through a client
+    # variable, and the benchmark fetches go to a URL argument), so this
+    # entry is the tripwire: the first module that posts to a hard-coded
+    # host shows up here.
+    "http_client_to_literal_host": (
+        re.compile(
+            r"(?:requests|httpx|urllib\.request)\.(?:get|post|put|patch|delete|urlopen|Request)\("
+            r"\s*f?[\"']https?://(?!localhost|127\.0\.0\.1)",
+        ),
+        "an HTTP client call whose destination is written into the source",
+        set(),
+    ),
 }
 
 
-def _tracked_app_modules() -> List[str]:
-    return [p for p in _tracked_paths() if p.startswith("app/") and p.endswith(".py")]
+def _tracked_modules(roots: Sequence[str] = EGRESS_SCAN_ROOTS) -> List[str]:
+    return [p for p in _tracked_paths()
+            if p.startswith(tuple(roots)) and p.endswith(EGRESS_SCAN_SUFFIXES)]
 
 
 def _modules_matching(pattern: re.Pattern, modules: Sequence[str]) -> Set[str]:
@@ -556,13 +798,117 @@ def _modules_matching(pattern: re.Pattern, modules: Sequence[str]) -> Set[str]:
             text = path.read_text("utf-8", errors="ignore")
         except OSError:
             continue
-        if pattern.search(_code_only(text)):
+        if pattern.search(_code_only(text, relpath)):
             found.add(relpath)
     return found
 
 
-def _code_only(text: str) -> str:
+C_STYLE_SUFFIXES = (".ts", ".tsx", ".js", ".jsx")
+
+#: What may precede a `/` for it to open a regex literal rather than divide.
+#: The usual tokenizer heuristic: after an operator, an opening bracket, a
+#: separator or one of these keywords the parser expects an operand; after an
+#: identifier, a number or a closing bracket it expects an operator.
+_REGEX_PRECEDERS = set("(,=:[!&|?{};+-*%<>~^")
+_REGEX_KEYWORDS = {"return", "typeof", "case", "in", "of", "delete", "void", "throw", "new", "do", "else"}
+
+
+def _opens_regex(text: str, i: int) -> bool:
+    j = i - 1
+    while j >= 0 and text[j] in " \t":
+        j -= 1
+    if j < 0 or text[j] in "\n\r" or text[j] in _REGEX_PRECEDERS:
+        return True
+    k = j
+    while k >= 0 and (text[k].isalnum() or text[k] == "_" or text[k] == "$"):
+        k -= 1
+    return text[k + 1:j + 1] in _REGEX_KEYWORDS
+
+
+def _code_only_cstyle(text: str) -> str:
+    """TypeScript/JavaScript with comments blanked in place, offsets preserved.
+
+    Without this the TS files fall through to the Python path, `tokenize` raises
+    on them, and it returns the raw text -- so a `.ts` file whose only mention of
+    OPENAI_API_KEY is inside a `//` comment is reported as an egress module. That
+    is the same false positive docstrings caused for Python, which listed
+    milvus_recorder.py under embedding_provider on comment hits alone.
+
+    String-aware, because `"https://host"` is not the start of a comment. Inside a
+    template literal everything up to the closing backtick is treated as string,
+    including a `${...}` hole: that can leave a comment unblanked, which costs a
+    false positive, never a missed call.
+
+    Regex-literal-aware too, because `/[&<>"']/g` is not the start of a string.
+    The first port of this stripper was not: send-analysis-email escapes HTML
+    with exactly that literal on its line 30, the unmatched `"` put the scanner
+    into string state, and from then on every `"` toggled it the wrong way --
+    so `fetch("https://quickchart.io/chart"` was blanked as a `//` comment and
+    the one call this widening exists to catch was invisible to it. Whether a
+    `/` opens a regex or divides is decided from the token before it
+    (``_opens_regex``); a mistake in the divide direction can only leave a
+    comment unblanked, never hide code.
+    """
+    out = list(text)
+    i, n = 0, len(text)
+    quote = None
+    while i < n:
+        ch = text[i]
+        if quote is not None:
+            if ch == "\\":
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in "'\"`":
+            quote = ch
+            i += 1
+            continue
+        if ch == "/" and i + 1 < n:
+            following = text[i + 1]
+            if following == "/":
+                while i < n and text[i] != "\n":
+                    out[i] = " "
+                    i += 1
+                continue
+            if following == "*":
+                end = text.find("*/", i + 2)
+                end = n if end == -1 else end + 2
+                for j in range(i, end):
+                    if out[j] != "\n":
+                        out[j] = " "
+                i = end
+                continue
+            if _opens_regex(text, i):
+                # Skip the literal as code: escapes pass, a `/` inside a
+                # character class does not close it, and the line ends it
+                # (an unterminated regex is a syntax error, not a string).
+                i += 1
+                in_class = False
+                while i < n and text[i] != "\n":
+                    if text[i] == "\\":
+                        i += 2
+                        continue
+                    if text[i] == "[":
+                        in_class = True
+                    elif text[i] == "]":
+                        in_class = False
+                    elif text[i] == "/" and not in_class:
+                        i += 1
+                        break
+                    i += 1
+                continue
+        i += 1
+    return "".join(out)
+
+
+def _code_only(text: str, relpath: str = "") -> str:
     """Source with comments and docstrings blanked, everything else byte-identical.
+
+    TypeScript and JavaScript (by ``relpath`` suffix) go through
+    ``_code_only_cstyle``; everything else is treated as Python.
 
     Blanks the comment/docstring spans IN PLACE rather than reassembling the file
     from tokens. The first version joined tokens with newlines, which split
@@ -576,6 +922,9 @@ def _code_only(text: str) -> str:
     explaining what is capped, and was reported as a new egress module on that
     basis.
     """
+    if relpath.endswith(C_STYLE_SUFFIXES):
+        return _code_only_cstyle(text)
+
     import io
     import tokenize
 
@@ -615,9 +964,10 @@ def _code_only(text: str) -> str:
 
 @pytest.mark.parametrize("channel", sorted(EGRESS_CHANNELS))
 def test_e11_09_egress_inventory_is_complete(channel: str) -> None:
-    """The app modules that send user data to each third party are exactly the inventoried set."""
-    pattern, description, expected = EGRESS_CHANNELS[channel]
-    actual = _modules_matching(pattern, _tracked_app_modules())
+    """The app and CLI modules that send user data to each third party are exactly the inventoried set."""
+    pattern, description, expected, *scope = EGRESS_CHANNELS[channel]
+    roots = scope[0] if scope else EGRESS_SCAN_ROOTS
+    actual = _modules_matching(pattern, _tracked_modules(roots))
     added = sorted(actual - expected)
     removed = sorted(expected - actual)
     assert actual == expected, (
@@ -625,6 +975,241 @@ def test_e11_09_egress_inventory_is_complete(channel: str) -> None:
         f"  new egress modules: {added or 'none'}\n"
         f"  inventoried modules that no longer match: {removed or 'none'}\n"
         f"{EGRESS_INVENTORY_UPDATE_INSTRUCTION}"
+    )
+
+
+def test_e11_09_inventory_scans_the_cli_package() -> None:
+    """The scan reaches avaloka/: a CLI module with a known anchor is seen, so a new one would be."""
+    assert "avaloka/io/sources.py" in _tracked_modules(), (
+        "avaloka/io/sources.py is not in the scanned set; the CLI package has dropped out "
+        "of the egress inventory"
+    )
+    pattern = EGRESS_CHANNELS["cli_object_storage_sources"][0]
+    assert "avaloka/io/sources.py" in _modules_matching(pattern, _tracked_modules()), (
+        "the fsspec anchor no longer matches avaloka/io/sources.py; the inventory would "
+        "not notice a new object-storage reader"
+    )
+
+
+def test_e11_09_inventory_scans_the_web_app_and_edge_functions() -> None:
+    """The scan's scope, asserted -- a scan that cannot see a tree cannot fail on it.
+
+    This is the regression guard for the defect that let the quickchart.io
+    sender ship unnoticed (DEF-009, DEF-013): ``_tracked_modules`` filtered on
+    ``app/`` and ``.py``, so every EGRESS_CHANNELS case was vacuous outside one
+    tree. Narrowing the scope again fails here rather than silently going green.
+    """
+    scanned = _tracked_modules()
+    for root in EGRESS_SCAN_ROOTS:
+        assert any(p.startswith(root) for p in scanned), (
+            f"no tracked file under {root} is scanned, so no egress channel can "
+            f"fail on anything in it; see EGRESS_SCAN_ROOTS")
+    # The sender that proved the point. Named so a move does not quietly
+    # un-scan it.
+    assert "ui/supabase/functions/send-analysis-email/index.ts" in scanned
+    pattern = EGRESS_CHANNELS["analysis_email_delivery"][0]
+    assert "ui/supabase/functions/send-analysis-email/index.ts" in _modules_matching(
+        pattern, scanned), (
+        "the SMTP anchor no longer matches send-analysis-email; the inventory would "
+        "not notice a new mail sender")
+
+
+@pytest.mark.parametrize("source,fragment,visible", [
+    ("// uses OPENAI_API_KEY historically\nconst a = 1;\n", "OPENAI_API_KEY", False),
+    ("/* dataset_samples used to go here */\nconst b = 2;\n", "dataset_samples", False),
+    ("const k = process.env.OPENAI_API_KEY;\n", "OPENAI_API_KEY", True),
+    # The trap: a URL is not a comment.
+    ('const u = "https://api.openai.com/v1"; const k = OPENAI_API_KEY;\n', "OPENAI_API_KEY", True),
+    ('const u = "https://x"; // OPENAI_API_KEY note\n', "OPENAI_API_KEY", False),
+    ("const u = `https://h/${OPENAI_API_KEY}`;\n", "OPENAI_API_KEY", True),
+    ('const s = "a\\" // not a comment OPENAI_API_KEY";\n', "OPENAI_API_KEY", True),
+    # The trap that hid quickchart.io: a regex literal holding a quote is not a
+    # string, and the fetch on the next line is code.
+    ('s.replace(/[&<>"\']/g, esc);\nfetch("https://quickchart.io/OPENAI_API_KEY");\n',
+     "OPENAI_API_KEY", True),
+    ("const r = /x/g; // OPENAI_API_KEY in a comment after a regex\n", "OPENAI_API_KEY", False),
+    ("const q = a / b; // OPENAI_API_KEY after a division\n", "OPENAI_API_KEY", False),
+    ("const d = a / b / OPENAI_API_KEY;\n", "OPENAI_API_KEY", True),
+    ("return /\\/\\//.test(OPENAI_API_KEY);\n", "OPENAI_API_KEY", True),
+], ids=["line-comment", "block-comment", "real-code", "url-in-string",
+        "url-then-comment", "template-literal", "escaped-quote",
+        "regex-with-quote", "comment-after-regex", "comment-after-division",
+        "two-divisions", "slashes-inside-regex"])
+def test_the_comment_stripper_understands_typescript(source: str, fragment: str, visible: bool) -> None:
+    """A mention in a TS comment is not egress; a URL in a string is not a comment."""
+    out = _code_only(source, "example.ts")
+    assert (fragment in out) is visible
+    assert len(out) == len(source), "offsets must survive: the matcher reports line numbers"
+
+
+def test_the_python_comment_stripper_still_blanks_docstrings_only() -> None:
+    """The TS path must not have changed what Python files do."""
+    out = _code_only('"""mentions OPENAI_API_KEY"""\nimport os\nk = os.environ["OPENAI_API_KEY"]\n',
+                     "example.py")
+    assert out.count("OPENAI_API_KEY") == 1
+
+
+# ---------------------------------------------------------------------------
+# Edge functions authenticate before they act
+# ---------------------------------------------------------------------------
+#
+# The egress inventory above only ever catches outbound DATA. It was never
+# going to notice an inbound endpoint that answers without asking who is
+# calling, however wide its path filter gets -- and widening that filter
+# should not be mistaken for covering this class too.
+#
+# The class is real here because the edge runtime sets VERIFY_JWT=false
+# (deploy/helm/avaloka/templates/supabase.yaml, ui/supabase/config.toml), so
+# the platform enforces nothing and each function must check for itself. One
+# omission is an unauthenticated endpoint, and the pod it runs in holds
+# SUPABASE_SERVICE_ROLE_KEY and the Postgres password as plaintext env values
+# (DEF-011). Kong fronts it as a NodePort whose functions-v1 route carries only
+# the cors plugin, so "unauthenticated" means reachable, not merely internal.
+#
+# Cheap while the surface is three functions. That is the moment to write it.
+
+#: The functions this suite knows about. Frozen deliberately: a new function is
+#: a visible edit here with a reason, not something that quietly joins an
+#: audited set -- and a test that enumerated the directory itself would pass
+#: happily if the directory ever moved.
+EDGE_FUNCTIONS = (
+    "ui/supabase/functions/send-analysis-email/index.ts",
+    "ui/supabase/functions/send-report-email/index.ts",
+    "ui/supabase/functions/send-smtp-email/index.ts",
+)
+
+#: Where each of these functions puts its gate: a 401. Matching the refusal
+#: rather than the check means this does not care whether the function reads a
+#: bearer header, calls auth.getUser or compares a shared token.
+_AUTH_GATE = re.compile(r"\b401\b")
+
+#: What a handler must not do before that gate. `Array.from` and `Object.from`
+#: are excluded because they are not database reads, and mislabelling one would
+#: send the next reader hunting for a query that is not there. Reading the
+#: request body counts too: a malformed-JSON 400 in front of the gate is an
+#: oracle anyone can query.
+_HANDLER_EFFECTS = {
+    "an outbound SMTP login": re.compile(r"\blogin\s*\("),
+    "an outbound fetch": re.compile(r"\bfetch\s*\("),
+    "a database query": re.compile(r"(?<!Array)(?<!Object)\.from\s*\("),
+    "a raw socket": re.compile(r"Deno\.connect\s*\("),
+    "a read of the request body": re.compile(r"\breq\.(?:json|text|formData|arrayBuffer)\s*\("),
+}
+
+
+def _handler_region(text: str) -> str:
+    """Everything from `Deno.serve(` on -- the request handler and nothing above it.
+
+    Scoped on purpose. These files define their helpers above the handler, so a
+    whole-file offset comparison would find `Deno.connect` inside an SMTP client
+    class declared at the top and conclude the socket is opened before the auth
+    check in every function, including the two that are correct.
+    """
+    start = text.find("Deno.serve(")
+    return "" if start < 0 else text[start:]
+
+
+def test_the_edge_function_set_is_what_this_suite_thinks_it_is() -> None:
+    """The audited set matches the tree, so the check below cannot audit nothing."""
+    # Enumerated from the filesystem, not `git ls-files`: `_tracked_paths()`
+    # skips when git is unusable, and this test is what stops the strict xfail
+    # below from going quiet if a function disappears. A guard that skips is not
+    # a guard. The stricter direction is also the right one here -- an untracked
+    # function directory is still a function somebody deployed.
+    root = REPO_ROOT / "ui" / "supabase" / "functions"
+    found = tuple(sorted(
+        str(entry.relative_to(REPO_ROOT)).replace("\\", "/")
+        for entry in root.glob("*/index.ts"))) if root.is_dir() else ()
+    assert found == EDGE_FUNCTIONS, (
+        f"the edge-function set changed: {found}\n"
+        "(An empty tuple means the directory itself is gone, which would leave "
+        "the authentication check below auditing nothing.)\n"
+        "Every function must authenticate before it acts (VERIFY_JWT=false means "
+        "nothing else will). Add it to EDGE_FUNCTIONS and to the parametrisation "
+        "below, deliberately.")
+
+
+@pytest.mark.parametrize("relpath", EDGE_FUNCTIONS)
+def test_an_edge_function_authenticates_before_it_acts(relpath: str) -> None:
+    """No outbound call, socket, query or body read in the handler before the 401.
+
+    send-smtp-email carried a strict xfail here (DEF-012: the diagnose branch
+    ran ahead of the bearer check). The fix moved the check to the top of the
+    handler and the marker went with it; the case now holds like the other two.
+    """
+    path = REPO_ROOT / relpath
+    # Deliberately NOT pytest.skip. A check that skips when the file is missing
+    # goes quiet rather than red. An absent function is a loud failure here; the
+    # frozen-set test above says which files must exist.
+    assert path.is_file(), (
+        f"{relpath} is absent. If a function was renamed or removed, update "
+        "EDGE_FUNCTIONS and this parametrisation deliberately -- do not let this "
+        "check go quiet.")
+    handler = _handler_region(_code_only(path.read_text("utf-8", errors="ignore"), relpath))
+    assert handler, f"{relpath} has no Deno.serve handler; this check cannot see it"
+
+    gate = _AUTH_GATE.search(handler)
+    assert gate, (
+        f"{relpath} never returns 401, so it refuses nobody. With VERIFY_JWT=false "
+        "the platform will not do it either.")
+
+    earliest = None
+    for label, pattern in _HANDLER_EFFECTS.items():
+        found = pattern.search(handler)
+        if found and (earliest is None or found.start() < earliest[1]):
+            earliest = (label, found.start())
+    if earliest is None:
+        return
+
+    label, where = earliest
+    assert gate.start() < where, (
+        f"{relpath} performs {label} before it authenticates anyone. An early "
+        "return above the auth check is an unauthenticated endpoint, and the "
+        "functions pod holds the service-role key and the Postgres password.")
+
+
+_DAFT_IMPORT = re.compile(r"^[ \t]*(?:import[ \t]+daft\b|from[ \t]+daft(?:\.[\w.]+)?[ \t]+import\b)", re.M)
+# The helper call, or -- for a script that may run without the app package --
+# setting the variables directly.
+_BEACON_OFF = re.compile(r"disable_thirdparty_telemetry\(\)|DO_NOT_TRACK|SCARF_NO_ANALYTICS")
+
+
+@pytest.mark.parametrize("relpath", DAFT_IMPORTERS)
+def test_daft_importers_disable_the_beacon_first(relpath: str) -> None:
+    """Every daft import is preceded, in its own module, by the opt-out."""
+    text = _code_only((REPO_ROOT / relpath).read_text("utf-8", errors="ignore"))
+    first = _DAFT_IMPORT.search(text)
+    assert first, f"{relpath}: no daft import; update DAFT_IMPORTERS"
+    assert _BEACON_OFF.search(text[: first.start()]), (
+        f"{relpath}: imports daft before disabling its usage beacon "
+        "(call app.core.thirdparty_optout.disable_thirdparty_telemetry() first)"
+    )
+
+
+_ORT_IMPORT = re.compile(
+    r"^[ \t]*(?:import[ \t]+(?:onnxruntime|chromadb)\b"
+    r"|from[ \t]+(?:onnxruntime|chromadb)(?:\.[\w.]+)?[ \t]+import\b)",
+    re.M,
+)
+_ORT_OFF = re.compile(r"disable_thirdparty_telemetry\(\)|ORT_DISABLE_TELEMETRY")
+
+
+@pytest.mark.parametrize("relpath", ORT_STANDALONE_SCRIPTS)
+def test_standalone_onnxruntime_scripts_disable_its_telemetry_first(relpath: str) -> None:
+    """A script that runs without app/__init__.py sets ORT_DISABLE_TELEMETRY itself, first."""
+    text = _code_only((REPO_ROOT / relpath).read_text("utf-8", errors="ignore"))
+    first = _ORT_IMPORT.search(text)
+    assert first, f"{relpath}: no onnxruntime/chromadb import; update ORT_STANDALONE_SCRIPTS"
+    assert _ORT_OFF.search(text[: first.start()]), (
+        f"{relpath}: imports onnxruntime before setting ORT_DISABLE_TELEMETRY"
+    )
+
+
+def test_app_package_disables_third_party_beacons_on_import() -> None:
+    """``import app.<anything>`` runs the opt-out before the module that asked for it."""
+    text = _code_only((REPO_ROOT / "app" / "__init__.py").read_text("utf-8"))
+    assert re.search(r"disable_thirdparty_telemetry\(\)", text), (
+        "app/__init__.py no longer calls disable_thirdparty_telemetry()"
     )
 
 

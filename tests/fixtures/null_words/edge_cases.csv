@@ -1,0 +1,201 @@
+patient_id,Glucose,visit_date,Notes,Outcome
+P0000,102,2022-01-01,follow-up booked,Recovered
+P0001,108,02/02/2023,n/a,RECOVERED
+P0002,112,03-03-22,none,Readmitted
+P0003,83,"Apr 4, 2023",,Recovered
+P0004,103,20220505,NULL,RECOVERED
+P0005,N/A,2023-06-06,-,Readmitted
+P0006,110,07/07/2022,?,Recovered
+P0007,79,N/A,follow-up booked,RECOVERED
+P0008,119,"Sep 9, 2022",n/a,Readmitted
+P0009,103,20231010,none,Recovered
+P0010,145,2022-11-11,called back,RECOVERED
+P0011,111,12/12/2023,NULL,Readmitted
+P0012,126,01-13-22,-,Recovered
+P0013,93,"Feb 14, 2023",?,RECOVERED
+P0014,145,20220315,follow-up booked,Readmitted
+P0015,97,2023-04-16,n/a,Recovered
+P0016,71,17/05/2022,none,RECOVERED
+P0017,111,06-18-23,called back,Readmitted
+P0018,107,"Jul 19, 2022",NULL,Recovered
+P0019,83,20230820,-,RECOVERED
+P0020,141,2022-09-21,?,Readmitted
+P0021,81,22/10/2023,follow-up booked,Recovered
+P0022,116,11-23-22,n/a,RECOVERED
+P0023,77,"Dec 24, 2023",none,Readmitted
+P0024,105,20220125,called back,Recovered
+P0025,107,2023-02-26,NULL,RECOVERED
+P0026,126,27/03/2022,-,Readmitted
+P0027,118,04-28-23,?,Recovered
+P0028,162,"May 1, 2022",follow-up booked,RECOVERED
+P0029,130,20230602,n/a,Readmitted
+P0030,81,2022-07-03,none,Recovered
+P0031,121,04/08/2023,called back,RECOVERED
+P0032,104,09-05-22,NULL,Readmitted
+P0033,144,"Oct 6, 2023",-,Recovered
+P0034,88,20221107,?,RECOVERED
+P0035,76,2023-12-08,follow-up booked,Readmitted
+P0036,99,09/01/2022,n/a,Recovered
+P0037,143,02-10-23,none,RECOVERED
+P0038,174,"Mar 11, 2022",called back,Readmitted
+P0039,142,20230412,NULL,Recovered
+P0040,112,2022-05-13,-,RECOVERED
+P0041,167,14/06/2023,?,Readmitted
+P0042,168,07-15-22,follow-up booked,Recovered
+P0043,72,"Aug 16, 2023",n/a,RECOVERED
+P0044,84,N/A,none,Readmitted
+P0045,101,2023-10-18,called back,Recovered
+P0046,88,19/11/2022,NULL,RECOVERED
+P0047,72,12-20-23,-,Readmitted
+P0048,159,"Jan 21, 2022",?,Recovered
+P0049,109,20230222,follow-up booked,RECOVERED
+P0050,none,2022-03-23,n/a,Readmitted
+P0051,139,24/04/2023,none,Recovered
+P0052,79,05-25-22,called back,RECOVERED
+P0053,94,"Jun 26, 2023",NULL,Readmitted
+P0054,92,20220727,-,Recovered
+P0055,85,2023-08-28,?,RECOVERED
+P0056,72,01/09/2022,follow-up booked,Readmitted
+P0057,153,10-02-23,n/a,Recovered
+P0058,150,"Nov 3, 2022",none,RECOVERED
+P0059,125,20231204,called back,Readmitted
+P0060,89,2022-01-05,,Recovered
+P0061,113,06/02/2023,-,RECOVERED
+P0062,89,03-07-22,?,Readmitted
+P0063,136,"Apr 8, 2023",follow-up booked,Recovered
+P0064,136,20220509,n/a,RECOVERED
+P0065,102,2023-06-10,none,Readmitted
+P0066,173,11/07/2022,called back,Recovered
+P0067,146,08-12-23,NULL,RECOVERED
+P0068,76,"Sep 13, 2022",-,Readmitted
+P0069,174,20231014,?,Recovered
+P0070,138,2022-11-15,follow-up booked,RECOVERED
+P0071,139,16/12/2023,n/a,Readmitted
+P0072,123,01-17-22,none,Recovered
+P0073,129,"Feb 18, 2023",called back,RECOVERED
+P0074,174,20220319,NULL,Readmitted
+P0075,136,2023-04-20,-,Recovered
+P0076,142,21/05/2022,?,RECOVERED
+P0077,144,06-22-23,follow-up booked,Readmitted
+P0078,171,"Jul 23, 2022",n/a,Recovered
+P0079,163,20230824,none,RECOVERED
+P0080,139,2022-09-25,called back,Readmitted
+P0081,112,26/10/2023,NULL,Recovered
+P0082,173,11-27-22,-,RECOVERED
+P0083,75,"Dec 28, 2023",?,Readmitted
+P0084,71,20220101,follow-up booked,Recovered
+P0085,102,2023-02-02,n/a,RECOVERED
+P0086,91,03/03/2022,none,Readmitted
+P0087,115,04-04-23,called back,Recovered
+P0088,159,"May 5, 2022",NULL,RECOVERED
+P0089,177,20230606,-,Readmitted
+P0090,152,2022-07-07,?,Recovered
+P0091,81,08/08/2023,follow-up booked,RECOVERED
+P0092,137,09-09-22,n/a,Readmitted
+P0093,99,"Oct 10, 2023",none,Recovered
+P0094,157,20221111,called back,RECOVERED
+P0095,80,2023-12-12,NULL,Readmitted
+P0096,174,13/01/2022,-,Recovered
+P0097,129,02-14-23,?,RECOVERED
+P0098,91,"Mar 15, 2022",follow-up booked,Readmitted
+P0099,86,20230416,n/a,Recovered
+P0100,143,2022-05-17,none,RECOVERED
+P0101,97,18/06/2023,called back,Readmitted
+P0102,85,07-19-22,NULL,Recovered
+P0103,127,"Aug 20, 2023",-,RECOVERED
+P0104,172,20220921,?,Readmitted
+P0105,114,2023-10-22,follow-up booked,Recovered
+P0106,128,23/11/2022,n/a,RECOVERED
+P0107,169,12-24-23,none,Readmitted
+P0108,79,"Jan 25, 2022",called back,Recovered
+P0109,83,20230226,NULL,RECOVERED
+P0110,94,2022-03-27,-,Readmitted
+P0111,95,N/A,?,Recovered
+P0112,145,05-01-22,follow-up booked,RECOVERED
+P0113,138,"Jun 2, 2023",n/a,Readmitted
+P0114,156,20220703,none,Recovered
+P0115,125,2023-08-04,called back,RECOVERED
+P0116,87,05/09/2022,NULL,Readmitted
+P0117,83,10-06-23,-,Recovered
+P0118,121,"Nov 7, 2022",?,RECOVERED
+P0119,123,20231208,follow-up booked,Readmitted
+P0120,-,2022-01-09,n/a,Recovered
+P0121,148,10/02/2023,none,RECOVERED
+P0122,98,03-11-22,called back,Readmitted
+P0123,92,"Apr 12, 2023",NULL,Recovered
+P0124,100,20220513,-,RECOVERED
+P0125,150,2023-06-14,?,Readmitted
+P0126,176,15/07/2022,follow-up booked,Recovered
+P0127,109,08-16-23,n/a,RECOVERED
+P0128,118,"Sep 17, 2022",none,Readmitted
+P0129,152,20231018,called back,Recovered
+P0130,113,2022-11-19,NULL,RECOVERED
+P0131,174,20/12/2023,-,Readmitted
+P0132,148,01-21-22,?,Recovered
+P0133,139,"Feb 22, 2023",follow-up booked,RECOVERED
+P0134,125,20220323,n/a,Readmitted
+P0135,114,2023-04-24,none,Recovered
+P0136,70,25/05/2022,called back,RECOVERED
+P0137,169,06-26-23,NULL,Readmitted
+P0138,106,"Jul 27, 2022",-,Recovered
+P0139,151,20230828,?,RECOVERED
+P0140,105,2022-09-01,follow-up booked,Readmitted
+P0141,126,02/10/2023,n/a,Recovered
+P0142,102,11-03-22,none,RECOVERED
+P0143,175,"Dec 4, 2023",called back,Readmitted
+P0144,174,20220105,NULL,Recovered
+P0145,180,2023-02-06,-,RECOVERED
+P0146,175,07/03/2022,?,Readmitted
+P0147,174,04-08-23,follow-up booked,Recovered
+P0148,151,"May 9, 2022",n/a,RECOVERED
+P0149,173,20230610,none,Readmitted
+P0150,125,2022-07-11,,Recovered
+P0151,159,12/08/2023,NULL,RECOVERED
+P0152,97,09-13-22,-,Readmitted
+P0153,126,"Oct 14, 2023",?,Recovered
+P0154,147,20221115,follow-up booked,RECOVERED
+P0155,78,2023-12-16,n/a,Readmitted
+P0156,86,17/01/2022,none,Recovered
+P0157,145,02-18-23,called back,RECOVERED
+P0158,179,"Mar 19, 2022",NULL,Readmitted
+P0159,145,20230420,-,Recovered
+P0160,179,2022-05-21,?,RECOVERED
+P0161,92,22/06/2023,follow-up booked,Readmitted
+P0162,149,07-23-22,n/a,Recovered
+P0163,70,"Aug 24, 2023",none,RECOVERED
+P0164,175,20220925,called back,Readmitted
+P0165,79,2023-10-26,NULL,Recovered
+P0166,76,27/11/2022,-,RECOVERED
+P0167,117,12-28-23,?,Readmitted
+P0168,153,"Jan 1, 2022",follow-up booked,Recovered
+P0169,70,20230202,n/a,RECOVERED
+P0170,171,N/A,none,Readmitted
+P0171,142,04/04/2023,called back,Recovered
+P0172,85,05-05-22,NULL,RECOVERED
+P0173,126,"Jun 6, 2023",-,Readmitted
+P0174,107,20220707,?,Recovered
+P0175,96,2023-08-08,follow-up booked,RECOVERED
+P0176,126,09/09/2022,n/a,Readmitted
+P0177,154,10-10-23,none,Recovered
+P0178,128,"Nov 11, 2022",called back,RECOVERED
+P0179,110,20231212,NULL,Readmitted
+P0180,83,2022-01-13,-,Recovered
+P0181,94,14/02/2023,?,RECOVERED
+P0182,127,03-15-22,follow-up booked,Readmitted
+P0183,100,"Apr 16, 2023",n/a,Recovered
+P0184,101,20220517,none,RECOVERED
+P0185,160,2023-06-18,called back,Readmitted
+P0186,176,19/07/2022,NULL,Recovered
+P0187,147,08-20-23,-,RECOVERED
+P0188,131,"Sep 21, 2022",?,Readmitted
+P0189,100,20231022,follow-up booked,Recovered
+P0190,140,2022-11-23,n/a,RECOVERED
+P0191,113,24/12/2023,none,Readmitted
+P0192,78,01-25-22,called back,Recovered
+P0193,135,"Feb 26, 2023",NULL,RECOVERED
+P0194,145,20220327,-,Readmitted
+P0195,118,2023-04-28,?,Recovered
+P0196,113,01/05/2022,follow-up booked,RECOVERED
+P0197,171,06-02-23,n/a,Readmitted
+P0198,110,"Jul 3, 2022",none,Recovered
+P0199,168,20230804,called back,RECOVERED

@@ -18,14 +18,31 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 from typing import Any, Dict, List, Optional
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
+from app.agents.user_text import own_words
+from app.api import reply_segments as _rs
+
 from app.agents.avaloka_agent.discovery_tools import discover as native_discover
-from app.agents.avaloka_agent.execution_profile import decide_execution_profile
+from app.agents.avaloka_agent.conversation_policy import (
+    build_conversation_directive, infer_expertise, policy_for,
+)
+from app.agents.avaloka_agent.execution_profile import LOCAL_ETA_TEXT, decide_execution_profile
 from app.agents.avaloka_agent.infra_preference import resolve_infra_preference
-from app.agents.avaloka_agent.intent_classifier import IntentResult, classify_intent
+from app.agents.avaloka_agent.correction import (
+    CorrectionFacts,
+    correction_facts,
+    phrasing_holds,
+    reasoning_text,
+)
+from app.agents.avaloka_agent.intent_classifier import (
+    IntentResult,
+    asks_about_results,
+    classify_intent,
+)
 from app.agents.avaloka_agent.openclaw_client import (
     OpenclawDiscoveryClient,
     OpenclawUnavailable,
@@ -288,12 +305,46 @@ def _describe_dataset(
     return "\n".join(lines)
 
 
+#: How much of the conversation the direct reply sees before the current
+#: message: the last six messages (three exchanges), each cut at 600 characters.
+#: Without any of it, "that's wrong, it's 42.5" arrived with no record of what
+#: had been said, so there was no claim to stand by. Three exchanges hold the
+#: claim being disputed, the question it answered and the turn before; the cap
+#: keeps a pasted table or a long earlier answer from swamping a small model's
+#: context, which is the same unbounded growth the memory plane was cut back for.
+_DIALOGUE_MESSAGES = 6
+_DIALOGUE_CHARS = 600
+
+
+def _dialogue_before(messages: List[BaseMessage]) -> str:
+    """The recent turns before the current human message, as plain lines."""
+    history = list(messages or [])
+    for i in range(len(history) - 1, -1, -1):
+        if isinstance(history[i], HumanMessage):
+            history = history[:i]
+            break
+    lines = []
+    for m in history[-_DIALOGUE_MESSAGES:]:
+        if not isinstance(m, (HumanMessage, AIMessage)):
+            continue
+        content = m.content if isinstance(m.content, str) else str(m.content)
+        if isinstance(m, HumanMessage):
+            content = own_words(content)
+        content = " ".join(content.split())
+        if len(content) > _DIALOGUE_CHARS:
+            content = content[:_DIALOGUE_CHARS].rstrip() + "…"
+        if content:
+            lines.append(f"{'user' if isinstance(m, HumanMessage) else 'assistant'}: {content}")
+    return "\n".join(lines) or "none"
+
+
 def _render_direct_reply(
     state: Dict[str, Any],
     intent: IntentResult,
     redis_ctx: Dict[str, Any],
     discovery: Optional[Dict[str, Any]],
     avaloka_mode: str,
+    conversation_directive: str,
 ) -> str:
     """Render a user-facing reply for non-delegating intents."""
     llm = _get_reply_llm()
@@ -358,12 +409,14 @@ def _render_direct_reply(
         f"<session_context>\n{ctx_text}\n</session_context>\n"
         f"<discovery_result>{discovery or 'none'}</discovery_result>\n"
         f"<recommendation>{state.get('avaloka_recommendation') or 'none'}</recommendation>\n"
-        f"<user_message>{user_msg}</user_message>"
+        f"<conversation_so_far>\n{_dialogue_before(state.get('messages') or [])}\n</conversation_so_far>\n"
+        f"<user_message>{user_msg}</user_message>\n"
+        f"<communication_policy>{conversation_directive}</communication_policy>"
     )
 
     try:
         result = llm.invoke([
-            SystemMessage(content=AVALOKA_SYSTEM_PROMPT + "\n\n" + DIRECT_REPLY_PROMPT),
+            SystemMessage(content=AVALOKA_SYSTEM_PROMPT + "\n\n" + DIRECT_REPLY_PROMPT + "\n\n" + conversation_directive),
             HumanMessage(content=payload),
         ])
         out = getattr(result, "content", "") or ""
@@ -419,6 +472,168 @@ def _preconfigure_for_planner(
 # ---------------------------------------------------------------------------
 
 
+def _results_in_hand(state: Dict[str, Any]) -> bool:
+    """Whether the reply prompt will carry verified results to answer from.
+
+    ``avaloka_recommendation`` is forwarded into the reply as
+    ``<recommendation>``; its ``results`` are verified analysis results for the
+    connected dataset. The execution profile written beside them (fidelity,
+    mode, ETA) is not a result and does not count.
+    """
+    rec = state.get("avaloka_recommendation")
+    return isinstance(rec, dict) and bool(rec.get("results"))
+
+
+# ---------------------------------------------------------------------------
+# New work with no data bound
+# ---------------------------------------------------------------------------
+
+#: Intents whose work runs on a dataset. Delegated with none bound, the
+#: planner wrote code against no input, the run failed, and the user read "the
+#: analysis code stopped with an error". Transfer, infrastructure, schedules,
+#: status and inference name their own targets and are not stopped here. A
+#: correction re-plans work on data, so it needs data too.
+_DATA_INTENTS = frozenset({"statistical_analysis", "visualization", "ml_training",
+                           "sampling_mode", "correction"})
+
+#: State that says a data source is bound to this conversation: an upload, a
+#: bucket path, a database connection, a dataset id.
+_SOURCE_KEYS = (
+    "data_source_location", "data_source_location_cloud", "data_source_location_local",
+    "full_data_source_location_cloud", "full_data_location", "sample_data_location",
+    "connection_id", "active_dataset_id", "active_dataset_ids", "datasets_context",
+    "dataset_id", "uploaded_csv_columns", "db_credential_handles", "source_table",
+    "dataset_size_bytes", "file_size_bytes",
+)
+
+#: A request that names where its data is ("from s3://…", "the orders table",
+#: "load titanic from kaggle") is the planner's to fetch; it is not stopped.
+_NAMES_A_SOURCE = re.compile(
+    r"://|\bkaggle\b|\.(?:csv|tsv|parquet|xlsx?|json|avro)\b|"
+    r"\b(?:database|table|bucket|s3|gcs|postgres\w*|mysql|snowflake|bigquery|sqlite)\b|"
+    # A SQL statement names its own table: "SELECT ... FROM orders".
+    r"\bselect\b[\s\S]*?\bfrom\s+[a-z_\"`\[]", re.I)
+
+#: Column-like names the user wrote (snake_case or `quoted`), to say which data.
+_COLUMN_NAME = re.compile(r"`([^`]{1,64})`|\b([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\b")
+
+#: A prior artifact the request refers to ("the cleaned dataset", "the filtered
+#: table", "those results"): with nothing connected it does not exist, and the
+#: reply says so rather than leaving the reference hanging.
+_PRIOR_ARTIFACT = re.compile(
+    r"\b(?:the|that|this)\s+(?P<name>(?:[a-z][a-z\-]*\s+){1,2}?)"
+    r"(?P<kind>dataset|data|table|frame|results?|output|sample)\b", re.I)
+_ARTIFACT_FILLER = frozenset({"entire", "whole", "full", "same", "current", "new", "original",
+                              "connected", "uploaded", "raw", "underlying"})
+
+
+def _data_bound(state: Dict[str, Any], redis_ctx: Dict[str, Any]) -> bool:
+    if any(state.get(k) for k in _SOURCE_KEYS):
+        return True
+    return bool(redis_ctx.get("dataset_id") or redis_ctx.get("schema_columns")
+                or redis_ctx.get("connection_id"))
+
+
+def _needs_data(intent: IntentResult, user_text: str, state: Dict[str, Any],
+                redis_ctx: Dict[str, Any]) -> bool:
+    """New work on a dataset, asked with none bound and none named."""
+    new_work = intent.intent in _DATA_INTENTS or (
+        intent.intent == "clarification" and not asks_about_results(user_text))
+    return (new_work and not _data_bound(state, redis_ctx)
+            and _NAMES_A_SOURCE.search(user_text or "") is None)
+
+
+def _needs_data_reply(messages: List[BaseMessage]) -> str:
+    """What is needed and how to provide it, in plain words. Written by code:
+    every word of it is true whatever the request was, and nothing in it is a
+    guess about data the conversation does not have."""
+    said = " ".join(own_words(m.content) for m in messages
+                    if isinstance(m, HumanMessage) and isinstance(m.content, str))
+    columns: List[str] = []
+    for quoted, snake in _COLUMN_NAME.findall(said):
+        name = quoted or snake
+        if name and name not in columns:
+            columns.append(name)
+    which = (f"a table with the columns {', '.join(columns[:-1])} and {columns[-1]}"
+             if len(columns) > 1 else
+             f"a table with the column {columns[0]}" if columns else
+             "the data this request is about")
+    current = next((own_words(m.content) for m in reversed(messages)
+                    if isinstance(m, HumanMessage) and isinstance(m.content, str)), "")
+    referred = ""
+    for m in _PRIOR_ARTIFACT.finditer(current):
+        words = [w for w in m.group("name").split() if w.lower() not in _ARTIFACT_FILLER]
+        if words:
+            # "the cleaned dataset": the earlier step it names never ran here.
+            referred = (f" The {' '.join(words)} {m.group('kind')} you refer to does not exist "
+                        "in this conversation: no data was connected, so no earlier step ran on any.")
+            break
+    return (
+        "There is no dataset connected to this conversation yet, so I haven't run "
+        f"anything.{referred} To do this I need {which}.\n\n"
+        "You can provide it by uploading a file (CSV, Parquet, Excel or JSON), by "
+        "giving a bucket path such as s3://… or gs://…, or by connecting a database. "
+        "As soon as it is connected I'll say what I'm about to run and how long it "
+        f"should take -- a job like this usually runs in {LOCAL_ETA_TEXT} -- then run it."
+    )
+
+
+def _correction_reasoning(state: Dict[str, Any], facts: CorrectionFacts) -> str:
+    """The reasoning for a re-plan: the model's phrasing if it keeps to the
+    facts code wrote, otherwise code's own words for the same facts."""
+    llm = _get_reply_llm()
+    if llm is None:
+        return reasoning_text(facts)
+    from app.agents.avaloka_agent.prompts import CORRECTION_REASONING_PROMPT
+    payload = (
+        f"<correction>\n<original>{facts.original}</original>\n"
+        f"<corrected>{facts.corrected}</corrected>\n<subject>{facts.subject}</subject>\n"
+        f"</correction>\n"
+        f"<conversation_so_far>\n{_dialogue_before(state.get('messages') or [])}\n"
+        f"</conversation_so_far>"
+    )
+    try:
+        result = llm.invoke([SystemMessage(content=CORRECTION_REASONING_PROMPT),
+                             HumanMessage(content=payload)])
+        candidate = getattr(result, "content", "") or ""
+    except Exception as exc:                          # noqa: BLE001 - code's words instead
+        logger.warning("avaloka_agent: correction reasoning LLM failed: %s", exc)
+        return reasoning_text(facts)
+    known = [str(state.get("avaloka_recommendation") or "")] + [
+        own_words(m.content) for m in (state.get("messages") or [])
+        if isinstance(m, HumanMessage) and isinstance(m.content, str)]
+    if isinstance(candidate, str) and phrasing_holds(candidate, facts, known):
+        return candidate.strip()
+    logger.info("avaloka_agent: correction phrasing did not keep to the facts; using code's words")
+    return reasoning_text(facts)
+
+
+def _results_ambiguity(state: Dict[str, Any], user_text: str) -> Optional[Dict[str, Any]]:
+    """The clarifying question for an ambiguous ask about results in hand, or None.
+
+    The planner's own measure check (``_detect_metric_ambiguity``) decides it,
+    over the measures the verified results name: "What was revenue last
+    quarter?" against gross_revenue and net_revenue is ambiguous for the same
+    reason it is against a table with those two columns. When it fires the
+    question is the check's own text -- "Which revenue measure do you mean:
+    gross revenue or net revenue?" -- written by code, and no model is asked
+    to write the reply, so neither candidate figure can reach it. Recorded on
+    gpt-oss, a prompt rule alone was not enough: the model showed both figures
+    and then asked which.
+    """
+    rec = state.get("avaloka_recommendation")
+    results = rec.get("results") if isinstance(rec, dict) else None
+    if not isinstance(results, dict):
+        return None
+    measures = {str(k): "float" for k, v in results.items()
+                if isinstance(v, (int, float)) and not isinstance(v, bool)}
+    if len(measures) < 2:
+        return None
+    from app.agents.planner import _detect_metric_ambiguity
+    return _detect_metric_ambiguity(user_text, {"schema": measures,
+                                                "avaloka_intent": state.get("avaloka_intent")})
+
+
 def avaloka_agent_node(state: ETLState) -> Dict[str, Any]:
     """Top-level node. Returns a dict shallow-merged into ETLState."""
     messages = list(state.get("messages") or [])
@@ -439,6 +654,12 @@ def avaloka_agent_node(state: ETLState) -> Dict[str, Any]:
     # 1. Redis-backed thread context (best-effort)
     redis_ctx = _load_redis_context(dict(state))
 
+    expertise = infer_expertise(
+        messages,
+        state.get("avaloka_expertise") or redis_ctx.get("avaloka_expertise"),
+    )
+    conversation_policy = policy_for(expertise)
+    conversation_directive = build_conversation_directive(conversation_policy)
     # 2. Connection event detection: state takes precedence over redis
     connection_event = state.get("connection_event") or redis_ctx.get("connection_event")
     has_connection_event = bool(connection_event)
@@ -449,6 +670,7 @@ def avaloka_agent_node(state: ETLState) -> Dict[str, Any]:
         messages,
         has_connection_event=has_connection_event,
         session_summary=session_summary,
+        results_in_hand=_results_in_hand(state),
     )
     logger.info(
         "avaloka_agent: intent=%s confidence=%.2f reasoning=%s",
@@ -465,7 +687,7 @@ def avaloka_agent_node(state: ETLState) -> Dict[str, Any]:
         avaloka_mode = "onboarding"
     elif intent.intent == "status":
         avaloka_mode = "status"
-    elif intent.intent in ("exploration", "chit_chat", "clarification"):
+    elif intent.intent in ("exploration", "chit_chat", "clarification", "discussion"):
         avaloka_mode = "exploring"
     else:
         avaloka_mode = "analyzing"
@@ -477,16 +699,32 @@ def avaloka_agent_node(state: ETLState) -> Dict[str, Any]:
     pending = state.get("pending_clarification")
     answering_planner = isinstance(pending, dict) and pending.get("type") in {
         "filter_value", "metric_choice", "infrastructure_confirmation",
+        # The replan loop's question (app/agents/replan_choice.py).
+        "replan_measured_choice",
     }
     delegate = intent.should_delegate() or answering_planner
+    needs_data = (delegate and not answering_planner
+                  and _needs_data(intent, user_text, dict(state), redis_ctx))
+    if needs_data:
+        # Upstream of the planner: no code is planned, written or run with no
+        # data to run it on. The reply says what is needed and how to give it.
+        delegate = False
+        avaloka_mode = "needs_data"
 
     # 7. Build the state update bundle
     updates: Dict[str, Any] = {
         "avaloka_mode": avaloka_mode,
         "avaloka_intent": intent.intent,
-        "redis_context": redis_ctx or None,
+        "avaloka_intent_reasoning": (getattr(intent, "reasoning", "") or None),
+        "avaloka_intent_confidence": getattr(intent, "confidence", None),
+        # The sealed credential handle is for discovery only; it does not
+        # travel in graph state.
+        "redis_context": {k: v for k, v in redis_ctx.items() if k != "db_credential_handle"} or None,
         "discovery_result": discovery,
         "delegate_to_planner": bool(delegate),
+        "avaloka_expertise": expertise.as_dict(),
+        "avaloka_conversation_policy": conversation_policy.as_dict(),
+        "conversation_guidance": conversation_directive,
     }
 
     if delegate:
@@ -500,10 +738,25 @@ def avaloka_agent_node(state: ETLState) -> Dict[str, Any]:
         rec = updates.get("avaloka_recommendation") or {}
         if rec.get("execution_mode") == "k8s-ray" and rec.get("eta_text"):
             handoff = f"{handoff} Running on the Ray cluster — ETA {rec['eta_text']}."
-        # Surface the handoff via a dedicated field rather than the message
-        # stream — the downstream planner / coder / executor own user-facing
-        # AI messages, and we don't want to interfere with their content.
+        elif rec.get("eta_text"):
+            # The profile's own estimate for a local run: a fact code wrote.
+            handoff = f"{handoff} Expect {rec['eta_text']}."
+        # The handoff is said in the chat: it is the line that tells the user
+        # what is about to happen before a long job, and kept only in this
+        # field it reached the trace and nobody else. It goes in as commentary
+        # after the user's message; the planner reads the latest human turn by
+        # searching back from the end, so the request it plans is unchanged.
         updates["avaloka_handoff_message"] = handoff
+        updates["messages"] = messages + [_rs.commentary_message(content=handoff)]
+        if intent.intent == "correction":
+            # A correction re-plans, and the user is told why before it runs:
+            # the facts are code's (correction_facts), the phrasing is checked.
+            facts = correction_facts(user_text)
+            if facts is not None:
+                reasoning = _correction_reasoning(dict({**state, **updates}), facts)
+                updates["correction"] = facts.as_dict()
+                updates["avaloka_handoff_message"] = reasoning
+                updates["messages"] = messages + [_rs.commentary_message(content=reasoning)]
         # The clone plan for this intent: the ordered set of focused copies
         # Avaloka is dispatching. Rides in state and is surfaced to the UI via
         # execution_context.swarm; it narrates the real pipeline, never routes.
@@ -517,19 +770,38 @@ def avaloka_agent_node(state: ETLState) -> Dict[str, Any]:
         if picked is not None:
             # Hand the planner the option text rather than the number, and
             # retire the offer now it has been taken.
-            updates["messages"] = messages
+            updates.setdefault("messages", messages)
             updates["pending_suggestions"] = None
         return updates
 
+    if needs_data:
+        said = []
+        facts = correction_facts(user_text) if intent.intent == "correction" else None
+        if facts is not None:
+            # A correction is still re-planned in words, then told what it needs.
+            said.append(_correction_reasoning(dict({**state, **updates}), facts))
+            updates["correction"] = facts.as_dict()
+        said.append(_needs_data_reply(messages))
+        updates["messages"] = messages + [_rs.commentary_message(content=t) for t in said]
+        return updates
+
     # Direct reply path
+    ambiguity = _results_ambiguity(dict({**state, **updates}), user_text) \
+        if intent.intent == "discussion" else None
+    if ambiguity is not None:
+        # Asked in code's words; the model does not write this turn at all.
+        updates["messages"] = messages + [_rs.commentary_message(content=ambiguity["message"])]
+        updates["pending_clarification"] = ambiguity["pending_clarification"]
+        return updates
     reply_text = _render_direct_reply(
         dict({**state, **updates}),
         intent,
         redis_ctx,
         discovery,
         avaloka_mode,
+        conversation_directive,
     )
-    updates["messages"] = messages + [AIMessage(content=reply_text)]
+    updates["messages"] = messages + [_rs.commentary_message(content=reply_text)]
     # The prompt tells this reply to end with a numbered list and to invite a
     # pick ("Say the number and I'll start"). Record what was offered, or that
     # nothing was, so the next turn can honour that invitation instead of

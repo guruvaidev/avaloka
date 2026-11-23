@@ -1,0 +1,689 @@
+{
+  "harness_version": "0.2.0",
+  "suite": "dab",
+  "meta": {
+    "captured_at": "2026-10-18T04:45:27.174497+00:00",
+    "git_commit": "4542d264b4d287daf9d6fd3ac9fa57e66a105ae3",
+    "git_branch": "bench/2.0-vs-1.0",
+    "git_dirty": true,
+    "python": "3.12.12",
+    "spend": {
+      "spent_usd": 0.00310515,
+      "ceiling_usd": 1.0,
+      "calls": 3,
+      "unpriced_calls": 0,
+      "usage_missing_calls": 0,
+      "blind_calls": 0,
+      "remaining_usd": 0.99689485
+    },
+    "estimate": {
+      "total_low_usd": 0.0,
+      "total_high_usd": 0.0,
+      "total_calls": 3,
+      "unpriced_configs": [
+        "dab_avaloka_native"
+      ],
+      "configs": [
+        {
+          "config_id": "dab_avaloka_native",
+          "provider": "groq",
+          "model": "groq/openai/gpt-oss-120b",
+          "calls": 3,
+          "prompt_tokens": 440,
+          "max_completion_tokens": 1200,
+          "low_usd": 0.0,
+          "high_usd": 0.0,
+          "cost_source": "unpriced"
+        }
+      ]
+    },
+    "aborted_reason": null
+  },
+  "configs": [
+    {
+      "config_id": "dab_avaloka_native",
+      "sut": "avaloka_dab",
+      "llm": "groq/openai/gpt-oss-120b",
+      "agents_enabled": "full_swarm",
+      "sampling_mode": "entire_dataset",
+      "model_routing": "default",
+      "environment": "dab-local",
+      "trials": 1,
+      "internet_allowed": false,
+      "budget": {
+        "max_cost_usd": 2.0,
+        "max_latency_s": 600.0,
+        "max_tokens": 2000000,
+        "max_data_scanned_ratio": null
+      },
+      "seed": 0,
+      "extra": {
+        "agent_command_env": "AVALOKA_DAB_AGENT_CMD",
+        "max_iterations": 25,
+        "max_output_tokens": 8192,
+        "max_prompt_tool_result_bytes": 100000,
+        "protocol_version": "dab-command-v2",
+        "python_timeout_s": 120,
+        "tool_timeout_s": 120
+      }
+    }
+  ],
+  "results": {
+    "dab_avaloka_native": {
+      "config": {
+        "config_id": "dab_avaloka_native",
+        "sut": "avaloka_dab",
+        "llm": "groq/openai/gpt-oss-120b",
+        "agents_enabled": "full_swarm",
+        "sampling_mode": "entire_dataset",
+        "model_routing": "default",
+        "environment": "dab-local",
+        "trials": 1,
+        "internet_allowed": false,
+        "budget": {
+          "max_cost_usd": 2.0,
+          "max_latency_s": 600.0,
+          "max_tokens": 2000000,
+          "max_data_scanned_ratio": null
+        },
+        "seed": 0,
+        "extra": {
+          "agent_command_env": "AVALOKA_DAB_AGENT_CMD",
+          "max_iterations": 25,
+          "max_output_tokens": 8192,
+          "max_prompt_tool_result_bytes": 100000,
+          "protocol_version": "dab-command-v2",
+          "python_timeout_s": 120,
+          "tool_timeout_s": 120
+        }
+      },
+      "tasks": {
+        "dab:bookreview:1": {
+          "track": "dab",
+          "stats": {
+            "n_trials": 1,
+            "pass_at_1": 0.0,
+            "best_of_n": 0.0,
+            "quality": {
+              "pass": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 1
+              },
+              "score": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 1
+              }
+            },
+            "tuple": {
+              "cost_usd": {
+                "mean": 0.0008118,
+                "median": 0.0008118,
+                "std": 0.0,
+                "min": 0.0008118,
+                "max": 0.0008118,
+                "n": 1
+              },
+              "latency_s": {
+                "mean": 8.142934415998752,
+                "median": 8.142934415998752,
+                "std": 0.0,
+                "min": 8.142934415998752,
+                "max": 8.142934415998752,
+                "n": 1
+              },
+              "data_scanned_ratio": {
+                "mean": NaN,
+                "median": NaN,
+                "std": NaN,
+                "min": NaN,
+                "max": NaN,
+                "n": 0
+              },
+              "tool_calls": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 1
+              },
+              "tokens": {
+                "mean": 1980.0,
+                "median": 1980,
+                "std": 0.0,
+                "min": 1980,
+                "max": 1980,
+                "n": 1
+              },
+              "prompt_tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 1
+              },
+              "completion_tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 1
+              },
+              "retries": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 1
+              }
+            },
+            "total_cost_usd": 0.0008118,
+            "n_cost_unknown": 0,
+            "cost_sources": [
+              "operator_rate"
+            ],
+            "n_errors": 0,
+            "errors": [],
+            "failure_kinds": {}
+          },
+          "trials": [
+            {
+              "task_id": "dab:bookreview:1",
+              "track": "dab",
+              "config_id": "dab_avaloka_native",
+              "trial_index": 0,
+              "quality": {
+                "pass": 0.0,
+                "score": 0.0
+              },
+              "outcome": {
+                "answer": "null",
+                "cost_usd": 0.0008118,
+                "latency_s": 8.142934415998752,
+                "data_scanned_ratio": null,
+                "tool_calls": 0,
+                "tokens": 1980,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "operator_rate",
+                "retries": 0,
+                "recovered": null,
+                "trajectory": [
+                  {
+                    "kind": "model_call",
+                    "prompt_tokens": 836,
+                    "completion_tokens": 1144,
+                    "program_chars": 2372
+                  },
+                  {
+                    "kind": "program_run",
+                    "returncode": 0,
+                    "duration_s": 1.0376232089984114,
+                    "stdout_chars": 17,
+                    "marker_found": true
+                  }
+                ],
+                "artifacts": {
+                  "sut_name": "oneshot.single_program",
+                  "prompt_version": "oneshot-dab-v1",
+                  "model": "groq/openai/gpt-oss-120b",
+                  "run_dir": "/Users/leelakrishna/code/ki/avaloka-dev/.benchmarks/DataAgentBench/query_bookreview/logs/oneshot/oneshot_bookreview_q1_r0_1792298704657042000_6418",
+                  "program": "/Users/leelakrishna/code/ki/avaloka-dev/.benchmarks/DataAgentBench/query_bookreview/logs/oneshot/oneshot_bookreview_q1_r0_1792298704657042000_6418/program.py",
+                  "stdout_tail": "__RESULT__:\nnull\n",
+                  "stderr_tail": "/Users/leelakrishna/code/ki/avaloka-dev/.benchmarks/DataAgentBench/query_bookreview/logs/oneshot/oneshot_bookreview_q1_r0_1792298704657042000_6418/program.py:16: UserWarning: pandas only supports SQLAlchemy connectable (engine/connection) or database string URI or sqlite3 DBAPI2 connection. Other DBAPI2 objects are not tested. Please consider using SQLAlchemy.\n  books_df = pd.read_sql(books_query, pg_conn)\n",
+                  "termination_reason": "answered",
+                  "iterations": 1,
+                  "prompt_tokens": 836,
+                  "completion_tokens": 1144,
+                  "pricing_version": "groq-public-2026-10-17",
+                  "pricing_configured": true,
+                  "effective_policy": {
+                    "max_iterations": 1,
+                    "tool_timeout_s": 120,
+                    "max_output_tokens": 8192,
+                    "max_prompt_tool_result_bytes": 100000,
+                    "repeated_call_limit": 3,
+                    "max_tool_errors": 8,
+                    "require_data_evidence": true,
+                    "enable_specialists": true,
+                    "max_review_repairs": 1
+                  },
+                  "effective_limits": {
+                    "max_cost_usd": 2.0,
+                    "max_latency_s": 600.0,
+                    "max_tokens": 2000000,
+                    "max_data_scanned_ratio": null
+                  },
+                  "stderr": "",
+                  "protocol_version": "dab-command-v2",
+                  "mission_latency_s": 4.058228665999195,
+                  "budget": {
+                    "limits": {
+                      "max_cost_usd": 2.0,
+                      "max_latency_s": 600.0,
+                      "max_tokens": 2000000,
+                      "max_data_scanned_ratio": null
+                    },
+                    "actual": {
+                      "cost_usd": 0.0008118,
+                      "latency_s": 8.142934415998752,
+                      "tokens": 1980,
+                      "data_scanned_ratio": null
+                    },
+                    "violations": []
+                  },
+                  "evaluation": {
+                    "validator_reason": "Ground truth '2020' not found in LLM output."
+                  }
+                },
+                "error": null,
+                "error_kind": null
+              }
+            }
+          ]
+        },
+        "dab:bookreview:2": {
+          "track": "dab",
+          "stats": {
+            "n_trials": 1,
+            "pass_at_1": 0.0,
+            "best_of_n": 0.0,
+            "quality": {
+              "pass": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 1
+              },
+              "score": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 1
+              }
+            },
+            "tuple": {
+              "cost_usd": {
+                "mean": 0.0014424,
+                "median": 0.0014424,
+                "std": 0.0,
+                "min": 0.0014424,
+                "max": 0.0014424,
+                "n": 1
+              },
+              "latency_s": {
+                "mean": 8.757306708001124,
+                "median": 8.757306708001124,
+                "std": 0.0,
+                "min": 8.757306708001124,
+                "max": 8.757306708001124,
+                "n": 1
+              },
+              "data_scanned_ratio": {
+                "mean": NaN,
+                "median": NaN,
+                "std": NaN,
+                "min": NaN,
+                "max": NaN,
+                "n": 0
+              },
+              "tool_calls": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 1
+              },
+              "tokens": {
+                "mean": 3022.0,
+                "median": 3022,
+                "std": 0.0,
+                "min": 3022,
+                "max": 3022,
+                "n": 1
+              },
+              "prompt_tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 1
+              },
+              "completion_tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 1
+              },
+              "retries": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 1
+              }
+            },
+            "total_cost_usd": 0.0014424,
+            "n_cost_unknown": 0,
+            "cost_sources": [
+              "operator_rate"
+            ],
+            "n_errors": 0,
+            "errors": [],
+            "failure_kinds": {}
+          },
+          "trials": [
+            {
+              "task_id": "dab:bookreview:2",
+              "track": "dab",
+              "config_id": "dab_avaloka_native",
+              "trial_index": 0,
+              "quality": {
+                "pass": 0.0,
+                "score": 0.0
+              },
+              "outcome": {
+                "answer": "[]",
+                "cost_usd": 0.0014424,
+                "latency_s": 8.757306708001124,
+                "data_scanned_ratio": null,
+                "tool_calls": 0,
+                "tokens": 3022,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "operator_rate",
+                "retries": 0,
+                "recovered": null,
+                "trajectory": [
+                  {
+                    "kind": "model_call",
+                    "prompt_tokens": 824,
+                    "completion_tokens": 2198,
+                    "program_chars": 6468
+                  },
+                  {
+                    "kind": "program_run",
+                    "returncode": 0,
+                    "duration_s": 0.7075621250005497,
+                    "stdout_chars": 15,
+                    "marker_found": true
+                  }
+                ],
+                "artifacts": {
+                  "sut_name": "oneshot.single_program",
+                  "prompt_version": "oneshot-dab-v1",
+                  "model": "groq/openai/gpt-oss-120b",
+                  "run_dir": "/Users/leelakrishna/code/ki/avaloka-dev/.benchmarks/DataAgentBench/query_bookreview/logs/oneshot/oneshot_bookreview_q2_r0_1792298712959802000_7800",
+                  "program": "/Users/leelakrishna/code/ki/avaloka-dev/.benchmarks/DataAgentBench/query_bookreview/logs/oneshot/oneshot_bookreview_q2_r0_1792298712959802000_7800/program.py",
+                  "stdout_tail": "__RESULT__:\n[]\n",
+                  "stderr_tail": "/Users/leelakrishna/code/ki/avaloka-dev/.benchmarks/DataAgentBench/query_bookreview/logs/oneshot/oneshot_bookreview_q2_r0_1792298712959802000_7800/program.py:63: UserWarning: pandas only supports SQLAlchemy connectable (engine/connection) or database string URI or sqlite3 DBAPI2 connection. Other DBAPI2 objects are not tested. Please consider using SQLAlchemy.\n  books_df = pd.read_sql(f\"SELECT {', '.join(select_cols)} FROM {books_table}\", pg_conn)\n",
+                  "termination_reason": "answered",
+                  "iterations": 1,
+                  "prompt_tokens": 824,
+                  "completion_tokens": 2198,
+                  "pricing_version": "groq-public-2026-10-17",
+                  "pricing_configured": true,
+                  "effective_policy": {
+                    "max_iterations": 1,
+                    "tool_timeout_s": 120,
+                    "max_output_tokens": 8192,
+                    "max_prompt_tool_result_bytes": 100000,
+                    "repeated_call_limit": 3,
+                    "max_tool_errors": 8,
+                    "require_data_evidence": true,
+                    "enable_specialists": true,
+                    "max_review_repairs": 1
+                  },
+                  "effective_limits": {
+                    "max_cost_usd": 2.0,
+                    "max_latency_s": 600.0,
+                    "max_tokens": 2000000,
+                    "max_data_scanned_ratio": null
+                  },
+                  "stderr": "",
+                  "protocol_version": "dab-command-v2",
+                  "mission_latency_s": 5.79072816599728,
+                  "budget": {
+                    "limits": {
+                      "max_cost_usd": 2.0,
+                      "max_latency_s": 600.0,
+                      "max_tokens": 2000000,
+                      "max_data_scanned_ratio": null
+                    },
+                    "actual": {
+                      "cost_usd": 0.0014424,
+                      "latency_s": 8.757306708001124,
+                      "tokens": 3022,
+                      "data_scanned_ratio": null
+                    },
+                    "violations": []
+                  },
+                  "evaluation": {
+                    "validator_reason": "Missing book title in LLM output: The Sludge"
+                  }
+                },
+                "error": null,
+                "error_kind": null
+              }
+            }
+          ]
+        },
+        "dab:bookreview:3": {
+          "track": "dab",
+          "stats": {
+            "n_trials": 1,
+            "pass_at_1": 0.0,
+            "best_of_n": 0.0,
+            "quality": {
+              "pass": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 1
+              },
+              "score": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 1
+              }
+            },
+            "tuple": {
+              "cost_usd": {
+                "mean": 0.00085095,
+                "median": 0.00085095,
+                "std": 0.0,
+                "min": 0.00085095,
+                "max": 0.00085095,
+                "n": 1
+              },
+              "latency_s": {
+                "mean": 5.607558499999868,
+                "median": 5.607558499999868,
+                "std": 0.0,
+                "min": 5.607558499999868,
+                "max": 5.607558499999868,
+                "n": 1
+              },
+              "data_scanned_ratio": {
+                "mean": NaN,
+                "median": NaN,
+                "std": NaN,
+                "min": NaN,
+                "max": NaN,
+                "n": 0
+              },
+              "tool_calls": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 1
+              },
+              "tokens": {
+                "mean": 2037.0,
+                "median": 2037,
+                "std": 0.0,
+                "min": 2037,
+                "max": 2037,
+                "n": 1
+              },
+              "prompt_tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 1
+              },
+              "completion_tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 1
+              },
+              "retries": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 1
+              }
+            },
+            "total_cost_usd": 0.00085095,
+            "n_cost_unknown": 0,
+            "cost_sources": [
+              "operator_rate"
+            ],
+            "n_errors": 0,
+            "errors": [],
+            "failure_kinds": {}
+          },
+          "trials": [
+            {
+              "task_id": "dab:bookreview:3",
+              "track": "dab",
+              "config_id": "dab_avaloka_native",
+              "trial_index": 0,
+              "quality": {
+                "pass": 0.0,
+                "score": 0.0
+              },
+              "outcome": {
+                "answer": "[]",
+                "cost_usd": 0.00085095,
+                "latency_s": 5.607558499999868,
+                "data_scanned_ratio": null,
+                "tool_calls": 0,
+                "tokens": 2037,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "operator_rate",
+                "retries": 0,
+                "recovered": null,
+                "trajectory": [
+                  {
+                    "kind": "model_call",
+                    "prompt_tokens": 825,
+                    "completion_tokens": 1212,
+                    "program_chars": 3500
+                  },
+                  {
+                    "kind": "program_run",
+                    "returncode": 0,
+                    "duration_s": 0.4945183330019063,
+                    "stdout_chars": 15,
+                    "marker_found": true
+                  }
+                ],
+                "artifacts": {
+                  "sut_name": "oneshot.single_program",
+                  "prompt_version": "oneshot-dab-v1",
+                  "model": "groq/openai/gpt-oss-120b",
+                  "run_dir": "/Users/leelakrishna/code/ki/avaloka-dev/.benchmarks/DataAgentBench/query_bookreview/logs/oneshot/oneshot_bookreview_q3_r0_1792298721604099000_9129",
+                  "program": "/Users/leelakrishna/code/ki/avaloka-dev/.benchmarks/DataAgentBench/query_bookreview/logs/oneshot/oneshot_bookreview_q3_r0_1792298721604099000_9129/program.py",
+                  "stdout_tail": "__RESULT__:\n[]\n",
+                  "stderr_tail": "/Users/leelakrishna/code/ki/avaloka-dev/.benchmarks/DataAgentBench/query_bookreview/logs/oneshot/oneshot_bookreview_q3_r0_1792298721604099000_9129/program.py:18: UserWarning: pandas only supports SQLAlchemy connectable (engine/connection) or database string URI or sqlite3 DBAPI2 connection. Other DBAPI2 objects are not tested. Please consider using SQLAlchemy.\n  books_df = pd.read_sql_query(query, conn)\n",
+                  "termination_reason": "answered",
+                  "iterations": 1,
+                  "prompt_tokens": 825,
+                  "completion_tokens": 1212,
+                  "pricing_version": "groq-public-2026-10-17",
+                  "pricing_configured": true,
+                  "effective_policy": {
+                    "max_iterations": 1,
+                    "tool_timeout_s": 120,
+                    "max_output_tokens": 8192,
+                    "max_prompt_tool_result_bytes": 100000,
+                    "repeated_call_limit": 3,
+                    "max_tool_errors": 8,
+                    "require_data_evidence": true,
+                    "enable_specialists": true,
+                    "max_review_repairs": 1
+                  },
+                  "effective_limits": {
+                    "max_cost_usd": 2.0,
+                    "max_latency_s": 600.0,
+                    "max_tokens": 2000000,
+                    "max_data_scanned_ratio": null
+                  },
+                  "stderr": "",
+                  "protocol_version": "dab-command-v2",
+                  "mission_latency_s": 3.5365265410000575,
+                  "budget": {
+                    "limits": {
+                      "max_cost_usd": 2.0,
+                      "max_latency_s": 600.0,
+                      "max_tokens": 2000000,
+                      "max_data_scanned_ratio": null
+                    },
+                    "actual": {
+                      "cost_usd": 0.00085095,
+                      "latency_s": 5.607558499999868,
+                      "tokens": 2037,
+                      "data_scanned_ratio": null
+                    },
+                    "violations": []
+                  },
+                  "evaluation": {
+                    "validator_reason": "Missing book title in LLM output: Around the World Mazes"
+                  }
+                },
+                "error": null,
+                "error_kind": null
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

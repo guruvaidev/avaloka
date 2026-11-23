@@ -1,0 +1,19 @@
+{
+  "inference": [
+    {"agent": "planner", "provider": "openrouter", "model": "openai/gpt-4o", "outcome": "failed",
+     "error_class": "TierUnavailable", "status": 404,
+     "reason": "no allowed zero-retention provider serves openai/gpt-4o",
+     "tokens_in": null, "tokens_out": null, "cost_usd": null},
+    {"agent": "planner", "provider": "openrouter", "model": "openai/gpt-6-luna", "outcome": "success",
+     "tokens_in": 1, "tokens_out": 1, "cost_usd": null, "tool_calls": 0,
+     "answered_by": {
+       "configured_model": "openai/gpt-4o",
+       "answered_model": "openai/gpt-6-luna",
+       "provider": "openrouter",
+       "reason": "no allowed zero-retention provider serves openai/gpt-4o",
+       "status": 404,
+       "tiers_failed": [{"model": "openai/gpt-4o", "provider": "openrouter", "status": 404, "reason": "no allowed zero-retention provider serves openai/gpt-4o"}],
+       "note": "no allowed zero-retention provider serves openai/gpt-4o; answered by openai/gpt-6-luna"
+     }}
+  ]
+}

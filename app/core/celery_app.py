@@ -373,6 +373,15 @@ def _ray_job_from_final(final: dict) -> dict | None:
 NOTHING_RAN_MESSAGE = "Nothing was executed: the scheduled analysis produced no execution result."
 
 
+class ScheduledRunFailed(RuntimeError):
+    """A scheduled run that finished without doing its work.
+
+    Raised after the run row is written, so Celery records FAILURE rather than
+    SUCCESS for it. The message is what the user is told, in plain words; the
+    logs stay on the run row.
+    """
+
+
 def _run_status_from_final(final: dict, task_type: str | None = None):
     """(status, error) for scheduled_runs; status is derived from run truth."""
     status, error, _truth = _run_outcome_from_final(final, task_type=task_type)
@@ -386,7 +395,7 @@ def _run_outcome_from_final(final: dict, task_type: str | None = None):
     final state, or an execute run with no execution_result status.
     """
     status, error = _legacy_status_from_final(final, task_type=task_type)
-    truth = run_truth.classify_scheduled(
+    truth = run_truth.classify_scheduled_with_recovery(
         final,
         task_type=task_type or "execute",
         training_failure=error if task_type == "training" and status == "failure" else None,
@@ -424,6 +433,34 @@ def _legacy_status_from_final(final: dict, task_type: str | None = None):
     if final.get("error"):
         return "failure", str(final.get("error"))
     return "success", None
+
+
+def scheduled_failure_message(final: dict, task_type: str | None, error: str | None) -> str:
+    """What the user is told about a failed scheduled run, in plain words.
+
+    The raw error (a traceback, stderr) stays on the run row's logs; the
+    training wording is #522's, the analysis wording is analysis_outcome's.
+    """
+    if task_type == "training":
+        failure = _training_failure_from_final(final)
+        return format_training_failure(failure) if failure else (error or TRAINING_FAILURE_MESSAGE)
+    if error == NOTHING_RAN_MESSAGE:
+        return NOTHING_RAN_MESSAGE
+    if task_type == "sample_profile":
+        return "The full profile of this dataset could not be built; the quick profile still stands."
+    if task_type in {"start_inference", "stop_inference"}:
+        return "The scheduled inference service change did not complete."
+    er = (final or {}).get("execution_result") if isinstance(final, dict) else None
+    if isinstance(er, dict) and str(er.get("status", "")).lower() == "refused":
+        # MAJ-030: the code ran but the output contract refused the result. The
+        # run truth's reason says what was not answered; that is the message,
+        # never a guess about the code having crashed.
+        reason = (str(error or "").splitlines() or [""])[0].strip()
+        return reason or "The scheduled analysis did not answer the question, so its result was not shown."
+    from app.agents.analysis_outcome import failure_detail, plain_failure_reason
+
+    detail = failure_detail(final) if isinstance(final, dict) else ""
+    return f"The scheduled analysis failed: {plain_failure_reason(detail or error)}."
 
 
 def _record_run_finish(
@@ -823,6 +860,15 @@ def agent_task(json_state: dict) -> None:
             scheduled_state=json_state,
         )
     _notify_job_finished(json_state, final_state, execution_id=execution_id)
+    # A run that failed, or did nothing, is a FAILURE in Celery too: returning
+    # its state made the task SUCCESS, and every reader of the task state
+    # (the scheduler's "ran successfully", the run history) believed it. The
+    # ledger row and the bell above already carry the failure; this only makes
+    # Celery's own state agree with them.
+    task_type = str(((json_state or {}).get("task_schedule") or {}).get("task_type") or "execute")
+    run_status, run_error = _run_status_from_final(final_state, task_type=task_type)
+    if run_status == "failure":
+        raise ScheduledRunFailed(scheduled_failure_message(final_state, task_type, run_error))
     return final_state
 
 
@@ -944,7 +990,11 @@ def _run_agent_task(json_state: dict) -> dict:
         elif state.get("deploy_on_k8s"):
             state = execution_agent.execution_agent_node(state)
         elif scheduled_executor == "local":
-            state = execution_agent.execution_agent_node_local(state)
+            from app.agents.replan import run_scheduled_local
+
+            # The replan loop's data steps, with no one to ask: a decision
+            # it needs ends the run with the question (app/agents/replan.py).
+            state = run_scheduled_local(state, execution_agent.execution_agent_node_local)
         else:
             state = execution_agent.execution_agent_node_scheduled_pod(state)
 

@@ -1,3 +1,4 @@
+import glob
 import os
 import copy
 import json
@@ -5,14 +6,17 @@ import re
 import uuid
 import logging
 import requests
+from urllib.parse import urlparse
 import pandas as pd
 from dotenv import load_dotenv
 from typing import Any, Optional, Sequence
 from langchain_groq import ChatGroq
 from langchain_core.messages import BaseMessage, AIMessage, HumanMessage, SystemMessage
+from app.api import reply_segments as _rs
 
 from app.core.agent_llm import build_agent_llm
 from app.agents.lineage_hooks import record_model_lineage
+from app.agents.mta_v2 import estimators
 from app.graph.etl_state import ETLState
 from app.agents.mta_v2.ray_trainer import RayTrainer
 from app.core import job_ledger
@@ -50,7 +54,14 @@ from app.agents.pii_agent import (
     require_pii_key,
     scan_dataframe,
 )
-from app.core.inference import resolve_provider, tool_choice_for_provider
+from app.core.inference import (
+    forced_tool_choice_for_provider,
+    resolve_provider,
+    tool_choice_for_provider,
+)
+from app.core.model_fallback import fallback_models
+from app.agents.contract import failure_record
+from app.trace.recorder import fail_inference_since, inference_mark
 
 load_dotenv()
 
@@ -100,9 +111,154 @@ if llm is None:
 # errored too. Switching to "auto" on the OpenAI-compatible clients took a
 # four-prompt live planner run from 0/4 working to 3/4. Groq keeps "required",
 # where it works and the dispatch logic relies on it; Vertex keeps "any".
-TOOL_CHOICE = tool_choice_for_provider(
-    resolve_provider(role="planning", agent="MTA"), type(llm).__name__
+MTA_PROVIDER = resolve_provider(role="planning", agent="MTA")
+TOOL_CHOICE = tool_choice_for_provider(MTA_PROVIDER, type(llm).__name__)
+# What the no-tool-call retry sends. Where the provider rejects every forcing
+# value (OpenRouter) this is TOOL_CHOICE again and the instruction below does
+# the work; where it accepts one but does not enforce it (Ollama) the
+# instruction is still what moves the model. See forced_tool_choice_for_provider.
+FORCED_TOOL_CHOICE = (
+    forced_tool_choice_for_provider(MTA_PROVIDER, type(llm).__name__) or TOOL_CHOICE
 )
+
+#: Appended to the conversation on the retry after a reply with no tool call.
+#: Measured on gemma4:e4b via Ollama with "what predicts a stroke?": bare
+#: tool_choice="required" and a named function both came back as prose; with
+#: this note the model called generate_training_plan 2/2.
+TOOL_CALL_REQUIRED_NOTE = (
+    "Your previous reply contained no tool call. You must answer this turn by "
+    "calling one or more of the provided tools; do not write prose. Choose the "
+    "flow that best fits the request: generate_training_plan when the user wants "
+    "a model built or asks what predicts a column, "
+    "ask_more_detail_to_update_training_plan when something needed is missing."
+)
+
+
+class ModelTrainingAgentFailure(RuntimeError):
+    """A turn the model training agent could not complete.
+
+    One family so every failed turn travels the same way: the class name is
+    the step's ``error_class`` in the trace (telemetry sends the class only),
+    the failure is recorded on ``agent_errors``, and ``REPLY`` is what the user
+    hears -- plain words about what was needed, never the mechanism. Release
+    testing on gemma4:e4b surfaced two internal strings as answers ("did not
+    receive any tool calls", "Please train model at the first"); every
+    ``Sorry, ...`` the agent used to append is now one of these.
+    """
+
+    REPLY = (
+        "I ran into a problem while working on this and couldn't finish the turn. "
+        "Please try again; if it keeps happening, ask me to analyse the data instead."
+    )
+
+
+class TrainingPlanMissing(ModelTrainingAgentFailure):
+    REPLY = (
+        "I don't have a training plan to build from yet. Tell me what you want to "
+        "predict (the target column) and I'll propose a plan first; once you confirm "
+        "it, I can train the model."
+    )
+
+
+class TrainedModelMissing(ModelTrainingAgentFailure):
+    REPLY = (
+        "I don't have a trained model to run predictions with yet. Tell me what you "
+        "want to predict (the target column) and I'll propose a training plan, or ask "
+        "me to analyse the data instead and I'll answer from the dataset."
+    )
+
+
+#: TrainedModelMissing, worded for the inference-service turns.
+TRAINED_MODEL_MISSING_FOR_SERVICE_START = (
+    "I don't have a trained model to start an inference service for yet. Tell me what "
+    "you want to predict (the target column) and I'll propose a training plan, or ask "
+    "me to analyse the data instead."
+)
+TRAINED_MODEL_MISSING_FOR_SERVICE_STOP = (
+    "There's no trained model here whose inference service I could stop. If you meant a "
+    "different model, train it first by telling me the target column, or ask me to "
+    "analyse the data instead."
+)
+
+
+class ModelDetailsUnavailable(ModelTrainingAgentFailure):
+    REPLY = (
+        "I couldn't load the details of the trained model, so I can't run predictions "
+        "with it right now. You can train it again, or ask me to analyse the data instead."
+    )
+
+
+class InferenceServiceConfigureFailed(ModelTrainingAgentFailure):
+    REPLY = (
+        "I couldn't set up the inference service for this model. You can ask me to "
+        "try again, run a prediction here in the chat instead, or have an operator "
+        "check the inference service logs."
+    )
+
+
+class InferenceServiceStopFailed(ModelTrainingAgentFailure):
+    REPLY = (
+        "I couldn't stop the inference service. You can ask me to try again, or have "
+        "an operator check the inference service logs."
+    )
+
+
+#: The enqueue-side failures of the two service turns (the work itself runs in
+#: the Celery worker, app/infra/training_tasks). A prediction asked for here in
+#: the chat runs in this process, so it is offered even when the worker is down.
+SERVICE_START_NO_WORKER = (
+    "I couldn't start the inference service for this model because the background "
+    "worker that runs it isn't running. Ask an operator to start the worker, then ask "
+    "me to try again. In the meantime you can ask me for a prediction here in the chat."
+)
+SERVICE_START_NOT_QUEUED = (
+    "I couldn't queue the start of the inference service for this model. You can ask "
+    "me to try again, ask me for a prediction here in the chat instead, or have an "
+    "operator check the application logs."
+)
+SERVICE_STOP_NO_WORKER = (
+    "I couldn't stop the inference service for this model because the background "
+    "worker that unloads it isn't running. The Inference panel may already show it as "
+    "stopped, but the model can stay loaded until the worker unloads it. Ask an "
+    "operator to start the worker, then ask me to try again."
+)
+SERVICE_STOP_NOT_QUEUED = (
+    "I couldn't queue the stop of the inference service for this model. You can ask "
+    "me to try again, or have an operator check the application logs."
+)
+
+
+class InferenceExecutionFailed(ModelTrainingAgentFailure):
+    REPLY = (
+        "I couldn't run the prediction on this model. Check that the feature values "
+        "you gave me match the columns the model was trained on and try again, or ask "
+        "me to analyse the data instead."
+    )
+
+
+class AgentUnavailable(ModelTrainingAgentFailure):
+    REPLY = (
+        "The model training assistant isn't available right now because no model "
+        "provider is configured for it. Ask me to analyse the data instead, or have "
+        "an operator check the inference provider settings."
+    )
+
+
+class NoToolCallsError(ModelTrainingAgentFailure):
+    """The tool-selection call returned no usable tool call on every attempt.
+
+    Raised after the portable call, the forced retry and each armed backup
+    all came back unusable: prose with no tool call, tool calls naming only
+    tools this agent does not have, or a provider rejection of the model's
+    tool call (Groq HTTP 400 ``code=tool_use_failed``). ``attempts`` lists
+    ``(provider, tool_choice)`` per try, never the replies or the names the
+    model invented: this class name travels to telemetry.
+    """
+
+    def __init__(self, attempts: list) -> None:
+        self.attempts = list(attempts)
+        tried = ", ".join(f"{p or '?'}:{tc}" for p, tc in self.attempts) or "none"
+        super().__init__(f"no tool call after {len(self.attempts)} attempt(s) ({tried})")
 
 
 TOOLS = [
@@ -180,6 +336,10 @@ TOOLS = [
     },
 ]
 
+#: The tool names execute() can dispatch. A reply whose tool calls name none
+#: of these is as unusable as a reply with no tool call at all.
+KNOWN_TOOL_NAMES = frozenset(tool["function"]["name"] for tool in TOOLS)
+
 tool_descriptions = "\n".join(
     f"    {idx}. {tool['function']['name']}: {tool['description']}"
     for idx, tool in enumerate(TOOLS, 1)
@@ -210,6 +370,20 @@ Important:
 You should meet one of these request. So determine what flow is best for current state, and call all of tools of that flow to accomplish the task. Always think step by step and be precise about which tools to use.
 You can call multiple tools in one response if necessary.
 """
+
+
+#: What to tell the planner about choosing a family. Written as advice rather
+#: than rules because the right answer depends on the data in front of it, and
+#: the default has to stay sensible when the model declines to choose.
+_ALGORITHM_GUIDANCE = (
+    "algorithm must be one of: " + ", ".join(estimators.ALGORITHMS) + ".\n"
+    + "\n".join(f"- {name}: {why}" for name, why in estimators.FAMILY_RATIONALE.items())
+    + "\nOn ordinary tabular data gradient_boosting is the strongest default and "
+      "is usually the right choice. Prefer mlp only when the user asks for a "
+      "neural network, or when the task genuinely calls for one. Prefer linear "
+      "when the user asks for something interpretable or the dataset is small. "
+      "algorithm_rationale should be one short sentence a non-specialist can read."
+)
 
 
 #: k-fold cross-validation on the training split (1.7/1.8 runs it; the plan
@@ -910,17 +1084,21 @@ class ModelTrainingAgent:
         return ""
 
     @staticmethod
-    def _tool_use_failed_text(exc: Exception) -> str:
-        """Extract the model's conversational reply from a Groq tool_use_failed error.
+    def _is_tool_use_failed(exc: BaseException) -> bool:
+        """True when the provider rejected the model's tool call.
 
-        Returns "" when the exception is anything else, so callers can fall
-        through to their generic handler.
+        Groq answers HTTP 400 ``code=tool_use_failed`` when the generation
+        cannot be read as a tool call (prose under a forcing tool_choice, a
+        phantom tool, malformed arguments). The request was well formed; the
+        model's reply was not usable. Reads the body the OpenAI-compatible
+        SDKs attach (bare error dict or ``{"error": {...}}``), as
+        avaloka.data_agent.contracts.tool_use_failed_text does.
         """
         body = getattr(exc, "body", None)
         err = body.get("error") if isinstance(body, dict) and isinstance(body.get("error"), dict) else body
         if isinstance(err, dict) and err.get("code") == "tool_use_failed":
-            return str(err.get("failed_generation") or "").strip()
-        return ""
+            return True
+        return getattr(exc, "code", None) == "tool_use_failed"
 
     def _first_column_mentioned(self, columns: list[str], user_text: str) -> str:
         """Return the earliest column named verbatim (whole word) in the text."""
@@ -1050,11 +1228,38 @@ class ModelTrainingAgent:
             )
         data_config["feature_columns"] = normalized_features
 
+    @staticmethod
+    def _require_local_training_input(data_uri: str) -> None:
+        """Fail in words, before training, when a session's local input is gone.
+
+        Session inputs live under TMP_ROOT (/var/tmp/avaloka by default). When
+        that is not on a volume, recreating the API container deletes them
+        while Redis still names them, and the column check falls back to the
+        schema in state -- so the plan validated and the trainer then died on
+        "No such file", reported as an unclassified error.
+        """
+        if not data_uri or not _is_local(data_uri):
+            return
+        path = urlparse(data_uri).path if data_uri.startswith("file://") else data_uri
+        if os.path.exists(path):
+            return
+        # Only * and ? mean a pattern here: uploaded names contain brackets
+        # ("sheets [2022].csv"), which glob would read as a character class.
+        if any(ch in path for ch in "*?") and glob.glob(path):
+            return
+        raise ValueError(
+            f"The file this session was working on ({os.path.basename(path)}) is no "
+            "longer on the server, so there is nothing to train on. This happens when "
+            "the API restarts without a persistent volume for uploads (TMP_ROOT). "
+            "Please upload the file again, then ask me to train the model."
+        )
+
     def _validate_training_data_config(self, data_config: DataConfig, state: ETLState) -> None:
         self._sanitize_training_data_config(data_config, state)
         data_uri = data_config.get("dataset_uri", "")
         columns = self._columns_for_training_data(data_uri, state)
         columns = self._maybe_switch_data_config_to_latest_output(data_config, state, columns)
+        self._require_local_training_input(data_config.get("dataset_uri", ""))
         if not columns:
             return
 
@@ -1383,10 +1588,45 @@ class ModelTrainingAgent:
         feature_count = len(feature_columns)
         excluded_identifier_columns = data_config.get("excluded_identifier_columns") or []
         time_column = data_config.get("time_column")
-        epochs = hyperparameter_config.get("epochs")
-        optimizer = _display(hyperparameter_config.get("optimizer_name"))
-        learning_rate = hyperparameter_config.get("learning_rate")
-        batch_size = hyperparameter_config.get("batch_size")
+        # The family that will train, and the values it will train with. The
+        # plan once said "30 epochs, Adam optimizer" for gradient boosting and
+        # "None epochs, None optimizer" when only the family's keys were set.
+        algorithm = estimators.normalise_algorithm(training_plan.get("algorithm"))
+        real = estimators.plan_hyperparameters(
+            algorithm, str(training_plan.get("model_type") or ""), hyperparameter_config,
+        )
+        if algorithm == "mlp":
+            training_line = (
+                f"**Training:** {real['epochs']} epochs, {_display(real['optimizer'])} optimizer, "
+                f"learning rate `{real['learning_rate']}`, batch size `{real['batch_size']}`"
+            )
+            architecture = "DynamicMLP (PyTorch)"
+        elif algorithm == "gradient_boosting":
+            training_line = (
+                f"**Training:** gradient-boosted trees, up to {real['estimators']} estimators "
+                f"(early stopping), max depth {real['max_depth']}, "
+                f"learning rate `{real['learning_rate']}`"
+            )
+            architecture = "Gradient-boosted trees (scikit-learn HistGradientBoosting)"
+        elif algorithm == "random_forest":
+            training_line = (
+                f"**Training:** random forest, {real['estimators']} estimators, "
+                f"max depth {real['max_depth']}, at least {real['min_samples_leaf']} "
+                f"row{'s' if real['min_samples_leaf'] != 1 else ''} per leaf"
+            )
+            architecture = "Random forest (scikit-learn)"
+        elif "max_iter" in real:
+            training_line = (
+                "**Training:** regularised logistic regression, penalty chosen by "
+                f"cross-validation, up to {real['max_iter']} solver iterations"
+            )
+            architecture = "Regularised linear model (scikit-learn LogisticRegressionCV)"
+        else:
+            training_line = (
+                "**Training:** ridge regression, penalty chosen by cross-validation from "
+                + ", ".join(f"`{a}`" for a in real["alphas"])
+            )
+            architecture = "Regularised linear model (scikit-learn RidgeCV)"
         if not full:
             lines = [
                 "## Training Plan Ready" if not updated else "## Training Plan Updated",
@@ -1394,10 +1634,7 @@ class ModelTrainingAgent:
                 f"**Model:** {model_type} (`{model_name}`, {model_version})",
                 f"**Target:** `{target_column}`",
                 f"**Features:** {feature_count} selected column{'s' if feature_count != 1 else ''}",
-                (
-                    f"**Training:** {epochs} epochs, {optimizer} optimizer, "
-                    f"learning rate `{learning_rate}`, batch size `{batch_size}`"
-                ),
+                training_line,
                 "",
                 "Training has not started.",
                 "",
@@ -1425,23 +1662,32 @@ class ModelTrainingAgent:
             "**Model Configuration**",
             "",
             f"- **Model Type:** {model_type}",
-            "- **Trainer / Architecture:** DynamicMLP (PyTorch)",
+            f"- **Trainer / Architecture:** {architecture}",
             f"- **Model Name:** `{model_name}`",
             f"- **Model Description:** {_none_dash(training_plan.get('model_description'))}",
             f"- **Model Version:** {model_version}",
             "",
             "**Hyperparameter Configuration**",
             "",
-            f"- **Learning Rate:** {_none_dash(learning_rate)}",
-            f"- **Epochs:** {_none_dash(epochs)}",
-            f"- **Batch Size:** {_none_dash(batch_size)}",
-            f"- **Optimizer Name:** {_none_dash(optimizer)}",
-            f"- **Random Seed:** {_none_dash(hyperparameter_config.get('random_seed'))}",
-            f"- **Early Stopping Patience:** {_none_dash(hyperparameter_config.get('early_stopping_patience'))}",
-            f"- **Hidden Layer Sizes:** {_none_dash(hyperparameter_config.get('hidden_layer_sizes'))}",
-            f"- **Activation:** {_none_dash(_display(hyperparameter_config.get('activation')))}",
-            f"- **Dropout Rate:** {_none_dash(hyperparameter_config.get('dropout_rate'))}",
-            f"- **Batch Normalization:** {_none_dash(hyperparameter_config.get('batch_norm'))}",
+            *(
+                [
+                    f"- **Learning Rate:** {real['learning_rate']}",
+                    f"- **Epochs:** {real['epochs']}",
+                    f"- **Batch Size:** {real['batch_size']}",
+                    f"- **Optimizer Name:** {_display(real['optimizer'])}",
+                    f"- **Random Seed:** {_none_dash(hyperparameter_config.get('random_seed'))}",
+                    f"- **Early Stopping Patience:** {_none_dash(hyperparameter_config.get('early_stopping_patience'))}",
+                    f"- **Hidden Layer Sizes:** {_none_dash(hyperparameter_config.get('hidden_layer_sizes'))}",
+                    f"- **Activation:** {_none_dash(_display(hyperparameter_config.get('activation')))}",
+                    f"- **Dropout Rate:** {_none_dash(hyperparameter_config.get('dropout_rate'))}",
+                    f"- **Batch Normalization:** {_none_dash(hyperparameter_config.get('batch_norm'))}",
+                ]
+                if algorithm == "mlp"
+                else [
+                    f"- **{key.replace('_', ' ').capitalize()}:** {value}"
+                    for key, value in real.items() if key != "algorithm"
+                ]
+            ),
             "",
             "**Data Configuration**",
             "",
@@ -1465,7 +1711,11 @@ class ModelTrainingAgent:
                 else "- **Validation:** Deterministic 80/20 row-hash holdout for validation and early stopping."
             ),
             f"- **Metrics:** {metric_description}",
-            "- **Artifacts:** MLflow logs the PyTorch model, `.pth` weights, `.onnx` export, model config, metrics, and metadata.",
+            (
+                "- **Artifacts:** MLflow logs the PyTorch model, `.pth` weights, `.onnx` export, model config, metrics, and metadata."
+                if algorithm == "mlp"
+                else "- **Artifacts:** MLflow logs the scikit-learn model, model config, metrics, and metadata."
+            ),
         ]
         if ray_config:
             lines.extend(
@@ -2379,10 +2629,14 @@ class ModelTrainingAgent:
         system_prompt = (
             "Please extract model details including model type (classification or regression), model name, description and version from the user request or chat history.\n"
             f"Reference training dataset config: {data_config}\n"
+            "Also choose which model family to train.\n"
+            f"{_ALGORITHM_GUIDANCE}\n"
             "JSON schema:\n"
             "```json\n"
             "{\n"
             "  \"model_type\": str,\n"
+            "  \"algorithm\": str,\n"
+            "  \"algorithm_rationale\": str,\n"
             "  \"model_name\": str,\n"
             "  \"model_description\": str,\n"
             "  \"model_version\": str (e.g. v1.0)\n"
@@ -2396,6 +2650,7 @@ class ModelTrainingAgent:
         previous_plan = state.get("training_plan") or {}
         fallback_model_config = {
             "model_type": previous_plan.get("model_type") or "classification",
+            "algorithm": previous_plan.get("algorithm") or estimators.DEFAULT_ALGORITHM,
             "model_name": previous_plan.get("model_name") or f"{data_config.get('target_column') or 'Target'} Predictor",
             "model_description": (
                 previous_plan.get("model_description")
@@ -2423,6 +2678,21 @@ class ModelTrainingAgent:
         )
         model_version = config_data.get("model_version") or previous_plan.get("model_version") or "v1.0"
 
+        # Normalised here so an alias or an unknown name becomes a family we
+        # actually implement before it reaches the plan the user is shown.
+        algorithm = estimators.normalise_algorithm(
+            config_data.get("algorithm") or previous_plan.get("algorithm")
+        )
+        # The hyperparameters were extracted from the MLP's template before
+        # the family was known; give a tree or linear family its own defaults,
+        # keeping any value someone actually chose.
+        hyperparameter_config = estimators.family_hyperparameters(algorithm, hyperparameter_config)
+        algorithm_rationale = (
+            config_data.get("algorithm_rationale")
+            or previous_plan.get("algorithm_rationale")
+            or estimators.FAMILY_RATIONALE.get(algorithm)
+        )
+
         execution_backend, execution_reason, execution_size = self._training_backend_decision(
             data_config.get("dataset_uri", ""), self._state_dataset_size_bytes(state)
         )
@@ -2438,6 +2708,8 @@ class ModelTrainingAgent:
         if use_local:
             return TrainingPlan(
                 model_type=model_type,
+                algorithm=algorithm,
+                algorithm_rationale=algorithm_rationale,
                 model_name=model_name,
                 model_description=model_description,
                 model_version=model_version,
@@ -2451,6 +2723,8 @@ class ModelTrainingAgent:
             )
         return TrainingPlan(
             model_type=model_type,
+            algorithm=algorithm,
+            algorithm_rationale=algorithm_rationale,
             model_name=model_name,
             model_description=model_description,
             model_version=model_version,
@@ -2489,7 +2763,7 @@ class ModelTrainingAgent:
             new_state["training_plan"] = None
             new_state["training_completed"] = False
             new_state["messages"].append(
-                AIMessage(
+                _rs.plain_message(
                     content=(
                         "I can't create a training plan for this dataset yet.\n\n"
                         f"{exc}"
@@ -2528,7 +2802,7 @@ class ModelTrainingAgent:
         clarification = self._training_plan_update_clarification(state)
         if clarification:
             new_state = state.copy()
-            new_state["messages"].append(AIMessage(content=clarification))
+            new_state["messages"].append(_rs.plain_message(content=clarification))
             return new_state
 
         original_training_plan = copy.deepcopy(state.get("training_plan"))
@@ -2583,13 +2857,13 @@ class ModelTrainingAgent:
         full_response = llm.invoke(messages, tools=[], tool_choice="none")
 
         new_state = state.copy()
-        new_state["messages"].append(AIMessage(content=full_response.content))
+        new_state["messages"].append(_rs.commentary_message(content=full_response.content))
         return new_state
 
     def _ask_training_plan_reply_clarification(self, state: ETLState) -> ETLState:
         new_state = state.copy()
         new_state["messages"].append(
-            AIMessage(
+            _rs.plain_message(
                 content=(
                     "I could not tell whether you want to start training with the current plan "
                     "or change the plan first. You can also ask me to modify the dataset before training "
@@ -2667,6 +2941,7 @@ class ModelTrainingAgent:
         fields = [
             ("Model Name", "model_name"),
             ("Model Type", "model_type"),
+            ("Algorithm", "algorithm"),
             ("Model Version", "model_version"),
             ("MLflow Run ID", "mlflow_run_id"),
             ("Rows Processed", "rows_processed"),
@@ -2715,6 +2990,19 @@ class ModelTrainingAgent:
             splitter_reason = evaluation_report.get("splitter_reason")
             if splitter_reason:
                 metric_lines.append(f"* **Validation Reason:** {splitter_reason}")
+            # Say whether the score was cross-validated or is one holdout.
+            # The two are not the same evidence, and a reader given only a
+            # number cannot tell which they were handed.
+            cv = evaluation_report.get("cross_validation")
+            if isinstance(cv, dict) and cv.get("cv_mean") is not None:
+                metric_lines.append(
+                    f"* **Cross-validation:** {cv.get('primary_metric')} {cv['cv_mean']:.4f} "
+                    f"± {cv.get('cv_std') or 0.0:.4f} over {cv.get('n_folds')}-fold {cv.get('splitter')}"
+                )
+            elif evaluation_report.get("evaluation_strategy"):
+                metric_lines.append(
+                    f"* **Evaluation:** {evaluation_report['evaluation_strategy']} (no k-fold)"
+                )
 
         if not metric_lines:
             error_detail = training_result.get("error") or training_result.get("execution_error")
@@ -2797,6 +3085,14 @@ class ModelTrainingAgent:
             "",
             status_sentence,
         ]
+
+        # What the model learned, not just how well it scored. Until this
+        # existed, a user who asked why a prediction came out as it did got
+        # nothing back, because nothing in the system knew -- there was no
+        # importance, no coefficient and no baseline anywhere in the codebase.
+        summary_text = training_result.get("model_summary_text")
+        if summary_text:
+            lines.extend(["", "**What the model learned**", "", summary_text])
         dashboard_url = training_result.get("dashboard_url")
         if dashboard_url:
             lines.extend(
@@ -2844,12 +3140,8 @@ class ModelTrainingAgent:
         """
         training_plan = state.get("training_plan")
         if training_plan is None:
-            logger.error("No training plan found in state. Cannot execute training.")
-            new_state = state.copy()
-            new_state["messages"].append(
-                AIMessage(content="Sorry, the model training plan is not found. Please make plan at the first.")
-            )
-            return self._finish_mta(new_state)
+            return self._failed_turn(state, TrainingPlanMissing(
+                "no training plan in state; cannot build a code repository"))
 
         training_plan = copy.deepcopy(training_plan)
         data_config = training_plan.get("data_config") or {}
@@ -2862,7 +3154,7 @@ class ModelTrainingAgent:
                 new_state["training_completed"] = False
                 new_state["training_scheduled"] = False
                 new_state["messages"].append(
-                    AIMessage(
+                    _rs.plain_message(
                         content=(
                             "I can't start training with the current plan.\n\n"
                             f"{unavailable_reason}"
@@ -2901,7 +3193,7 @@ class ModelTrainingAgent:
                 else str(exc)
             )
             new_state["messages"].append(
-                AIMessage(
+                _rs.plain_message(
                     content=(
                         "I can't start training with the current plan.\n\n"
                         f"{detail}"
@@ -3020,7 +3312,7 @@ class ModelTrainingAgent:
             ].get("beats_baseline")
         if isinstance(training_result, dict) and training_result.get("mlflow_run_id"):
             new_state["mlflow_run_id"] = training_result["mlflow_run_id"]
-        new_state["messages"].append(AIMessage(content=report_content))
+        new_state["messages"].append(_rs.plain_message(content=report_content))
         new_state["training_scheduled"] = False
         new_state["training_completed"] = not training_failed
         self._mark_training_job(
@@ -3103,11 +3395,12 @@ class ModelTrainingAgent:
         training_result = state.get("training_result") or {}
         mlflow_run_id = training_result.get("mlflow_run_id") or state.get("mlflow_run_id")
         if not mlflow_run_id:
+            # The same condition _execute_inference fails on: no trained model.
             new_state = state.copy()
-            new_state["messages"].append(
-                AIMessage(content="A trained model is required before configuring an inference service.")
-            )
-            return self._finish_mta(new_state)
+            new_state["configure_inference_service_scheduled"] = False
+            return self._failed_turn(new_state, TrainedModelMissing(
+                "no mlflow_run_id in state; cannot configure an inference service"),
+                TRAINED_MODEL_MISSING_FOR_SERVICE_START)
 
         from app.infra import training_tasks
 
@@ -3122,21 +3415,19 @@ class ModelTrainingAgent:
                 warm=True,
             )
             new_state["ml_job_id"] = job.id
-            new_state["messages"].append(AIMessage(content=(
+            new_state["messages"].append(_rs.plain_message(content=(
                 "Starting the inference service for this model in the background "
                 f"(job {job.id[:8]}). The Inference panel will show it as running when it is ready."
             )))
         except training_tasks.EndpointBusy:
-            new_state["messages"].append(AIMessage(content="The inference service for this model is already starting."))
-        except training_tasks.NoWorker:
-            new_state["messages"].append(AIMessage(content=(
-                "The inference service could not be started: no background worker (Celery) is running."
-            )))
+            new_state["messages"].append(_rs.plain_message(content="The inference service for this model is already starting."))
+        except training_tasks.NoWorker as exc:
+            return self._failed_turn(new_state, InferenceServiceConfigureFailed(
+                f"{type(exc).__name__}: {exc}"), SERVICE_START_NO_WORKER)
         except Exception as exc:
             logger.error("Error enqueuing inference service deploy: %s", exc, exc_info=True)
-            new_state["messages"].append(
-                AIMessage(content="Sorry, there was an error configuring the inference service. Please try again.")
-            )
+            return self._failed_turn(new_state, InferenceServiceConfigureFailed(
+                f"{type(exc).__name__}: {exc}"), SERVICE_START_NOT_QUEUED)
         return self._finish_mta(new_state)
 
     def _stop_inference_service(self, state: ETLState) -> ETLState:
@@ -3144,11 +3435,12 @@ class ModelTrainingAgent:
         training_result = state.get("training_result") or {}
         mlflow_run_id = training_result.get("mlflow_run_id") or state.get("mlflow_run_id")
         if not mlflow_run_id:
+            # The same condition _execute_inference fails on: no trained model.
             new_state = state.copy()
-            new_state["messages"].append(
-                AIMessage(content="A trained model is required before stopping an inference service.")
-            )
-            return self._finish_mta(new_state)
+            new_state["stop_inference_service_scheduled"] = False
+            return self._failed_turn(new_state, TrainedModelMissing(
+                "no mlflow_run_id in state; cannot stop an inference service"),
+                TRAINED_MODEL_MISSING_FOR_SERVICE_STOP)
 
         from app.infra import training_tasks
 
@@ -3163,16 +3455,14 @@ class ModelTrainingAgent:
                 session_id=state.get("session_id"),
             )
             new_state["ml_job_id"] = job.id
-            new_state["messages"].append(AIMessage(content="The inference service is being stopped."))
-        except training_tasks.NoWorker:
-            new_state["messages"].append(AIMessage(content=(
-                "The inference service is marked stopped, but no background worker (Celery) is running to unload it."
-            )))
+            new_state["messages"].append(_rs.plain_message(content="The inference service is being stopped."))
+        except training_tasks.NoWorker as exc:
+            return self._failed_turn(new_state, InferenceServiceStopFailed(
+                f"{type(exc).__name__}: {exc}"), SERVICE_STOP_NO_WORKER)
         except Exception as exc:
             logger.error("Error enqueuing inference service stop: %s", exc, exc_info=True)
-            new_state["messages"].append(
-                AIMessage(content="Sorry, there was an error stopping the inference service. Please try again.")
-            )
+            return self._failed_turn(new_state, InferenceServiceStopFailed(
+                f"{type(exc).__name__}: {exc}"), SERVICE_STOP_NOT_QUEUED)
         return self._finish_mta(new_state)
 
     def _execute_inference(self, state: ETLState) -> ETLState:
@@ -3193,12 +3483,10 @@ class ModelTrainingAgent:
         ETLState with inference result summary appended to messages.
         """
         if state.get("training_result") is None or state["training_result"].get("mlflow_run_id") is None:
-            logger.error("No training result found in state. Cannot execute inference.")
-            new_state = state.copy()
-            new_state["messages"].append(
-                AIMessage(content="Sorry, the model training result is not found. Please train model at the first.")
-            )
-            return self._finish_mta(new_state)
+            # Seen live on gemma4:e4b: "what predicts the test results?" was
+            # routed here as an inference request with no model trained.
+            return self._failed_turn(state, TrainedModelMissing(
+                "no training result with an mlflow_run_id in state; cannot run inference"))
 
         state = self._drop_planner_inference_format_response(state)
 
@@ -3207,12 +3495,8 @@ class ModelTrainingAgent:
         model_detail = inferencer.get_model_details(mlflow_run_id)
 
         if model_detail is None:
-            logger.error("Model detail not found for run '%s'.", mlflow_run_id)
-            new_state = state.copy()
-            new_state["messages"].append(
-                AIMessage(content="Sorry, the model details could not be retrieved. Please try again.")
-            )
-            return self._finish_mta(new_state)
+            return self._failed_turn(state, ModelDetailsUnavailable(
+                f"model detail not found for run {mlflow_run_id!r}"))
 
         # ModelDetail uses "feature_names", not "feature_columns".
         feature_names = self._model_detail_value(model_detail, "feature_names", []) or []
@@ -3230,7 +3514,7 @@ class ModelTrainingAgent:
             elif llm is None:
                 new_state = state.copy()
                 new_state["messages"].append(
-                    AIMessage(content=self._inference_sample_input_prompt(feature_names))
+                    _rs.plain_message(content=self._inference_sample_input_prompt(feature_names))
                 )
                 return self._finish_mta(new_state)
 
@@ -3250,7 +3534,7 @@ class ModelTrainingAgent:
                 except ValueError:
                     new_state = state.copy()
                     new_state["messages"].append(
-                        AIMessage(content=self._inference_sample_input_prompt(feature_names))
+                        _rs.plain_message(content=self._inference_sample_input_prompt(feature_names))
                     )
                     return self._finish_mta(new_state)
 
@@ -3258,14 +3542,14 @@ class ModelTrainingAgent:
         if input_data == {}:
             new_state = state.copy()
             new_state["messages"].append(
-                AIMessage(content=self._inference_sample_input_prompt(feature_names))
+                _rs.plain_message(content=self._inference_sample_input_prompt(feature_names))
             )
             return self._finish_mta(new_state)
 
         input_error = self._inference_input_error(input_data, feature_names)
         if input_error:
             new_state = state.copy()
-            new_state["messages"].append(AIMessage(content=input_error))
+            new_state["messages"].append(_rs.plain_message(content=input_error))
             return self._finish_mta(new_state)
 
         try:
@@ -3313,7 +3597,7 @@ class ModelTrainingAgent:
             if not self._latest_user_requests_detailed_inference_report(state) or llm is None:
                 summary = self._format_compact_inference_summary(inference_result, model_detail)
                 new_state["messages"].append(
-                    AIMessage(content=summary)
+                    _rs.plain_message(content=summary)
                 )
                 return new_state
 
@@ -3333,17 +3617,14 @@ class ModelTrainingAgent:
             messages = [SystemMessage(content=system_prompt)] + self._normalize_messages(state["messages"])[-10:]
             full_response = llm.invoke(messages, tools=[], tool_choice="none")
             new_state["messages"].append(
-                AIMessage(content=full_response.content)
+                _rs.commentary_message(content=full_response.content)
             )
             return new_state
         
         except Exception as e:
             logger.error("Error during inference execution: %s", e, exc_info=True)
-            new_state = state.copy()
-            new_state["messages"].append(
-                AIMessage(content="Sorry, there was an error during inference execution. Please try again.")
-            )
-            return self._finish_mta(new_state)
+            return self._failed_turn(state, InferenceExecutionFailed(
+                f"{type(e).__name__}: {e}"))
 
     def _finish_mta(self, state: ETLState) -> ETLState:
         """
@@ -3374,6 +3655,178 @@ class ModelTrainingAgent:
         new_state["training_task"]      = None
         new_state["training_plan_reply_action"] = "none"
         return new_state
+
+    # ----------------------------------------------------------
+    # Tool selection: a reply with no tool call is not an answer
+    # ----------------------------------------------------------
+
+    @staticmethod
+    def _tool_calls_of(response: Any) -> list:
+        """Normalise tool_calls: some SDK versions expose different attrs."""
+        if hasattr(response, "tool_calls"):
+            return list(response.tool_calls or [])
+        if hasattr(response, "tool_call"):
+            return [response.tool_call]
+        return []
+
+    def _invoke_for_tools(self, model: Any, messages: list, tool_choice: str,
+                          *, provider: str, attempts: list) -> list:
+        """One tool-selection call, counted as failed on the trace if it
+        returns nothing usable. Returns the tool calls, or [] when unusable.
+
+        Unusable, and so retried like a reply with no tool call:
+        * no tool call at all (prose);
+        * tool calls that name only tools this agent does not have -- the
+          dispatch loop would skip every one and the turn would end "ok" with
+          no reply;
+        * a provider rejection of the model's tool call (Groq 400
+          tool_use_failed). Its failed_generation is the model's text; it is
+          never shown to the user as the answer (same rule as the data
+          agent's ToolCallRejected re-prompt).
+        """
+        mark = inference_mark()
+        try:
+            response = model.invoke(messages, tools=TOOLS, tool_choice=tool_choice)
+        except Exception as exc:  # noqa: BLE001 - only tool_use_failed is handled here
+            if not self._is_tool_use_failed(exc):
+                raise
+            attempts.append((provider, tool_choice))
+            logger.warning(
+                "Provider rejected the model's tool call (tool_use_failed) "
+                "(provider=%s, tool_choice=%s, attempt %d).",
+                provider, tool_choice, len(attempts),
+            )
+            fail_inference_since(mark, error_class="ToolUseFailed",
+                                 agent="mta", provider=provider)
+            return []
+        tool_calls = self._tool_calls_of(response)
+        attempts.append((provider, tool_choice))
+        if not tool_calls:
+            logger.warning(
+                "LLM response does not contain any tool calls "
+                "(provider=%s, tool_choice=%s, attempt %d).",
+                provider, tool_choice, len(attempts),
+            )
+            fail_inference_since(mark, error_class=NoToolCallsError.__name__,
+                                 agent="mta", provider=provider)
+            return []
+        known = []
+        for tool_call in tool_calls:
+            try:
+                name = self.parse_tool_call(tool_call)
+            except TypeError:
+                name = None
+            if name in KNOWN_TOOL_NAMES:
+                known.append(tool_call)
+        if not known:
+            logger.warning(
+                "LLM response names only unknown tools (%d call(s)) "
+                "(provider=%s, tool_choice=%s, attempt %d).",
+                len(tool_calls), provider, tool_choice, len(attempts),
+            )
+            fail_inference_since(mark, error_class="UnknownToolCall",
+                                 agent="mta", provider=provider)
+            return []
+        return tool_calls
+
+    def _select_tools(self, messages: list) -> list:
+        """The tool calls for this turn, insisting before giving up.
+
+        1. The portable call (TOOL_CHOICE).
+        2. Once more with the strongest tool_choice the provider accepts and
+           an explicit instruction that a tool call is mandatory -- the part
+           that moves a provider which accepts "required" without enforcing it.
+        3. Each backup armed by app.core.model_fallback, in policy order, with
+           the tool_choice THAT provider accepts. ``with_fallbacks`` never sees
+           this case on its own: a 200 with no tool call is not an exception.
+           AVALOKA_DISABLE_MODEL_FALLBACK=1 keeps the backups out (checked at
+           call time in fallback_models) and leaves step 2 in.
+
+        Raises NoToolCallsError when all of that came back as prose.
+        """
+        attempts: list = []
+        tool_calls = self._invoke_for_tools(
+            llm, messages, TOOL_CHOICE, provider=MTA_PROVIDER, attempts=attempts,
+        )
+        if tool_calls:
+            return tool_calls
+
+        insisting = list(messages) + [SystemMessage(content=TOOL_CALL_REQUIRED_NOTE)]
+        logger.info(
+            "Retrying MTA tool selection with tool_choice=%s and an explicit "
+            "tool-call instruction.", FORCED_TOOL_CHOICE,
+        )
+        tool_calls = self._invoke_for_tools(
+            llm, insisting, FORCED_TOOL_CHOICE, provider=MTA_PROVIDER, attempts=attempts,
+        )
+        if tool_calls:
+            return tool_calls
+
+        for backup in fallback_models(llm):
+            provider = str(getattr(backup, "provider", "") or "")
+            choice = tool_choice_for_provider(provider, type(backup).__name__)
+            logger.warning(
+                "MTA tool selection still empty; asking backup %s with tool_choice=%s.",
+                provider or type(backup).__name__, choice,
+            )
+            try:
+                tool_calls = self._invoke_for_tools(
+                    backup, insisting, choice, provider=provider, attempts=attempts,
+                )
+            except Exception as exc:  # noqa: BLE001 - a dead backup is not an answer either
+                logger.warning("MTA backup %s failed: %s: %s", provider, type(exc).__name__, exc)
+                attempts.append((provider, choice))
+                continue
+            if tool_calls:
+                return tool_calls
+
+        raise NoToolCallsError(attempts)
+
+    def _failed_turn(self, state: ETLState, exc: BaseException,
+                     reply: Optional[str] = None) -> ETLState:
+        """End the turn as a FAILED step that still answers the user.
+
+        The failure is recorded on ``agent_errors`` (contract.failure_record:
+        the shape the chat response already returns and the trace reads to
+        mark the step status=error with the class), the user gets ``reply`` --
+        the exception's REPLY by default -- and the training flags are cleared
+        so the graph does not route straight back in. Raising instead would
+        end the graph turn with no reply at all.
+        """
+        text = reply or getattr(exc, "REPLY", None) or ModelTrainingAgentFailure.REPLY
+        logger.error("MTA turn failed (%s): %s", type(exc).__name__, exc)
+        new_state = state.copy()
+        new_state["messages"] = list(state.get("messages") or []) + [_rs.plain_message(content=text)]
+        new_state["agent_errors"] = list(state.get("agent_errors") or []) + [
+            failure_record("train_models", exc)
+        ]
+        return self._finish_mta(new_state)
+
+    def _no_tool_calls_reply(self, state: ETLState) -> str:
+        """What to tell the user when no attempt yielded a plan of action.
+
+        Plain words about what was needed and what to try next; never the
+        mechanism (tool calls, providers, retries).
+        """
+        if state.get("training_plan") and not state.get("training_completed", False):
+            return (
+                "I couldn't work out what you'd like me to do next with the training plan. "
+                "Say \"confirm\" to start training with it, describe the change you want "
+                "(for example a different target column or model), or ask me for an "
+                "analysis of the data instead."
+            )
+        if state.get("training_result"):
+            return (
+                "I couldn't work out what you'd like me to do with the trained model. "
+                "Ask for a prediction with the feature values you want scored, ask me to "
+                "start or stop the inference service, or ask for an analysis of the data instead."
+            )
+        return (
+            "I couldn't plan a training run from this question. To train a model I need to "
+            "know what you want to predict: name the target column (for example "
+            "\"train a model to predict stroke\"). If you'd rather see what the data says "
+            "first, ask me to analyse it and I'll answer from the dataset."
+        )
 
     # ----------------------------------------------------------
     # Main entry point
@@ -3488,34 +3941,14 @@ class ModelTrainingAgent:
                 return self._finish_mta(new_state)
 
             if not llm:
-                logger.error("Planner LLM is not available. Cannot execute training plan.")
-                new_state = state.copy()
-                new_state["messages"].append(
-                    AIMessage(content="Sorry, the model training agent is currently unavailable. Please try again later.")
-                )
-                return self._finish_mta(new_state)
+                return self._failed_turn(state, AgentUnavailable(
+                    "planner LLM is not configured for the MTA"))
 
             messages = (
                 [SystemMessage(content=SYSTEM_PROMPT)]
                 + self._normalize_messages(state["messages"])[-10:]
             )
-            response = llm.invoke(messages, tools=TOOLS, tool_choice=TOOL_CHOICE)
-
-            # Normalise tool_calls — some SDK versions expose different attrs
-            if hasattr(response, "tool_calls"):
-                tool_calls = response.tool_calls
-            elif hasattr(response, "tool_call"):
-                tool_calls = [response.tool_call]
-            else:
-                tool_calls = []
-
-            if not tool_calls:
-                logger.warning("LLM response does not contain any tool calls.")
-                new_state = state.copy()
-                new_state["messages"].append(
-                    AIMessage(content="Sorry, the model training agent did not receive any tool calls. Please try again.")
-                )
-                return self._finish_mta(new_state)
+            tool_calls = self._select_tools(messages)
 
             requested_tools = [
                 self.parse_tool_call(tool_call)
@@ -3549,7 +3982,7 @@ class ModelTrainingAgent:
                 )
                 new_state = state.copy()
                 new_state["messages"].append(
-                    AIMessage(
+                    _rs.plain_message(
                         content=(
                             "I have the training plan ready, but training has not started yet. "
                             "Please confirm if you want me to start training with this plan."
@@ -3592,24 +4025,19 @@ class ModelTrainingAgent:
             else:
                 return self._finish_mta(new_state)
 
+        except NoToolCallsError as exc:
+            # Every attempt answered in prose. This turn FAILED: the step is
+            # recorded as such (failure_record -> agent_errors -> the trace reads
+            # it), and the user hears what was needed, in plain words. The
+            # graph must still get a state back -- raising would end the turn
+            # with no reply at all -- so the failure travels on the state like
+            # every other agent failure does.
+            return self._failed_turn(state, exc, self._no_tool_calls_reply(state))
         except Exception as exc:
-            # tool_choice="any" forbids conversational replies, so when an
-            # out-of-scope ask reaches the MTA the model's polite refusal comes
-            # back as a Groq 400 (code=tool_use_failed) with the refusal text in
-            # failed_generation. That text IS the right answer for the user —
-            # surface it instead of a generic apology.
-            declined_text = self._tool_use_failed_text(exc)
-            if declined_text:
-                logger.info(
-                    f"MTA got a conversational reply under tool_choice={TOOL_CHOICE}; "
-                    "surfacing it to the user: %s", declined_text[:120],
-                )
-                new_state = state.copy()
-                new_state["messages"].append(AIMessage(content=declined_text))
-                return self._finish_mta(new_state)
+            # A Groq 400 tool_use_failed no longer reaches here: _invoke_for_tools
+            # treats it as an unusable reply and re-prompts, so its
+            # failed_generation is never shown to the user as the answer.
             logger.error("Error during LLM invocation: %s", exc, exc_info=True)
-            new_state = state.copy()
-            new_state["messages"].append(
-                AIMessage(content="Sorry, something went wrong while processing your request. Please try again.")
-            )
-            return self._finish_mta(new_state)
+            # The real exception's class is the error_class: more useful to the
+            # operator than a wrapper, and the user still hears plain words.
+            return self._failed_turn(state, exc)

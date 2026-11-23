@@ -171,7 +171,8 @@ class TestCustomerContentIsRefused:
 
     @pytest.mark.parametrize("key", sorted(REMOVED_KEYS))
     @pytest.mark.parametrize("event_type",
-                             ["install", "agent.started", "agent.completed", "dataset"])
+                             ["install", "agent.started", "agent.completed", "dataset",
+                              "swarm.completed", "agent.understanding", "swarm.understanding"])
     def test_a_removed_key_is_rejected_on_every_event_type(self, key, event_type):
         record = {"event_id": "a" * 32, "event_type": event_type, key: REMOVED_KEYS[key]}
         with pytest.raises(Rejected) as exc:

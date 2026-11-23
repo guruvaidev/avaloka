@@ -35,6 +35,8 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Mapping, Optional, Tuple
 from contextlib import contextmanager
 
+from app.core.thirdparty_optout import disable_thirdparty_telemetry
+
 logger = logging.getLogger(__name__)
 
 
@@ -234,12 +236,15 @@ def _kubectl(*args: str, timeout_s: int = 120, input_text: Optional[str] = None)
 # Per-job credentials Secret (KubeRay mode)
 # ------------------------------------------------------------
 #
-# A job's connection keys never go into the RayJob CR, and the shared Ray pods
-# never carry them (deploy/helm/ray/raycluster.yaml gets named platform keys
-# only). They go into a Secret of the job's own, created right after the RayJob
-# with the RayJob as its owner, read by the job's pods (envFrom of that Secret
-# alone) -- so it is garbage-collected with the job even if this process dies.
-# It is also deleted explicitly when the job ends, on every exit path.
+# A job's credentials (a data transfer's database URLs and bucket keys, an
+# analysis job's connection keys) never go into the RayJob CR, which anyone
+# who can read RayJobs can read, and the shared Ray pods never carry them
+# (deploy/helm/ray/raycluster.yaml gets named platform keys only). They go
+# into a Secret of the job's own, created right after the RayJob with the
+# RayJob as its owner and read only by that job's pods (secretKeyRef in the
+# transfer template, envFrom of that one Secret in rayjob.yaml) -- so it is
+# garbage-collected with the job even if this process dies. It is also
+# deleted explicitly when the job ends, on every exit path.
 # The manifest reaches kubectl on stdin: never a temp file, never a log line.
 
 def job_secret_manifest(secret_name: str, namespace: str, secret_env: Dict[str, str],
@@ -483,12 +488,23 @@ def _preflight_dashboard(dashboard_url: str) -> None:
     import urllib.error
     import urllib.request
 
+    from app.infra.ray_auth import auth_headers
+
     timeout_s = float(os.getenv("RAY_DASHBOARD_CONNECT_TIMEOUT_S", "10"))
     url = f"{dashboard_url.rstrip('/')}/api/version"
+    headers = auth_headers()
+    request = urllib.request.Request(url, headers=headers) if headers else url
     try:
-        with urllib.request.urlopen(url, timeout=timeout_s):
+        with urllib.request.urlopen(request, timeout=timeout_s):
             pass
-    except urllib.error.HTTPError:
+    except urllib.error.HTTPError as exc:
+        # Reachable. But a dashboard that refuses our token (RAY_AUTH_MODE=token)
+        # will refuse the submission too: say so now, not after a client timeout.
+        if exc.code in (401, 403):
+            raise PermissionError(
+                f"Ray dashboard at {dashboard_url} refused the request ({exc.code}): "
+                "RAY_AUTH_TOKEN is missing or is not this cluster's token"
+            ) from None
         return
     except (urllib.error.URLError, OSError) as exc:
         raise ConnectionError(
@@ -642,8 +658,10 @@ def _run_ray_job_direct(
             gcp_env["DEST_GCP_SA_JSON"] = dest_gcp_sa
             logger.info("[ray_job_runner] Forwarding destination SA as DEST_GCP_SA_JSON (%d bytes)", len(dest_gcp_sa))
 
+        # Fallback when the template lists no pip packages: the gcsfs the app pins
+        # in requirements.txt, so a job never installs an unpinned release.
         pip_packages = _ensure_script_packages(
-            runtime_env.get("pip", ["gcsfs"]), script_text,
+            runtime_env.get("pip", ["gcsfs==2026.6.0"]), script_text,
         )
         logger.info("[ray_job_runner] DIRECT mode pip packages: %s", pip_packages)
 
@@ -653,6 +671,9 @@ def _run_ray_job_direct(
             "working_dir": tmpdir,
             "pip": pip_packages,
             "env_vars": {
+                # Third-party beacons (and the IMDS probe) off on the workers too,
+                # as this process has them; the job's own env wins.
+                **disable_thirdparty_telemetry(),
                 **runtime_env.get("env_vars", {}),
                 **gcp_env,
             },
@@ -916,14 +937,12 @@ def run_rayjob_from_yaml(
     """
     End-to-end RayJob execution.
 
-    ``secret_env`` is the job's own credentials (a connection's storage keys,
-    or a data transfer's database URLs and bucket keys), kept out of
-    ``yaml_text``. KubeRay mode puts them in the Secret ``secret_name``
-    (default ``<rayjob>-env``) that the template reads (envFrom for analysis
-    jobs, secretKeyRefs for data transfers), owned by the RayJob and deleted
-    when the job ends; direct mode
-    passes them to the Job Submission API as the job's env. Either way the
-    shared Ray pods never hold them.
+    ``secret_env`` is the job's own credentials (database URLs, bucket keys,
+    a connection's storage keys), kept out of ``yaml_text``. KubeRay mode
+    puts them in the Secret ``secret_name`` (default ``<rayjob>-env``) that
+    the template reads (secretKeyRef or envFrom), owned by the RayJob and
+    deleted when the job ends; direct mode passes them to the Job Submission
+    API as the job's env. Either way the shared Ray pods never hold them.
 
     If a dashboard URL is available → DIRECT mode (no kubectl/KubeRay needed).
     Otherwise → KUBERAY mode (kubectl apply).
@@ -995,12 +1014,30 @@ def run_rayjob_from_yaml(
     started = _now_utc()
     logs = ""
 
-    job_secret = (secret_name or f"{name}-env") if secret_env else None
+    # The job's Secret also carries the Ray auth token (RAY_AUTH_MODE=token): the
+    # job's Ray pods read it by secretKeyRef and its authOptions.secretName names
+    # this Secret, so the job's own cluster enforces the token and the KubeRay
+    # operator can still read its status. With auth on and no token, nothing is
+    # applied and the outcome is ERROR. With auth off, the templates' ray-auth
+    # blocks are removed, or the job would wait for a token it cannot have.
+    from app.infra.ray_auth import RayAuthTokenMissing, auth_enabled, strip_job_auth, with_job_auth
+
+    if not auth_enabled():
+        yaml_text = strip_job_auth(yaml_text)
+    try:
+        job_secret_env = with_job_auth(secret_env)
+    except RayAuthTokenMissing as e:
+        return RayJobOutcome(
+            status="ERROR", rayjob_name=name, namespace=namespace,
+            job_status=None, deployment_status=None, runtime_s=None,
+            logs="", details={"error": str(e), "kube_context": ctx},
+        )
+    job_secret = (secret_name or f"{name}-env") if job_secret_env else None
     try:
         apply_yaml_text(yaml_text, namespace=namespace)
         if job_secret:
             try:
-                create_job_secret(job_secret, namespace, secret_env, rayjob_name=name)
+                create_job_secret(job_secret, namespace, job_secret_env, rayjob_name=name)
             except Exception:
                 # A job that can never read its credentials must not sit waiting.
                 _kubectl("delete", "rayjob", name, "-n", namespace, "--ignore-not-found=true", timeout_s=60)

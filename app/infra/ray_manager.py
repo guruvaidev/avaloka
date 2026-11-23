@@ -14,6 +14,7 @@ canonical replacement for the legacy Flask ``/execute`` pod.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import tempfile
 
@@ -31,7 +32,30 @@ DEFAULT_RAY_IMAGE = "avaloka-ray:latest"
 RAY_IMAGE = os.environ.get("AVALOKA_RAY_IMAGE", DEFAULT_RAY_IMAGE)
 
 KUBERAY_HELM_REPO = "https://ray-project.github.io/kuberay-helm/"
-KUBERAY_OPERATOR_VERSION = os.environ.get("KUBERAY_OPERATOR_VERSION", "1.4.2")
+# 1.6 is the first operator that can read a token-authenticated Ray dashboard
+# from a Secret we name (authOptions.secretName, key auth_token): the RayCluster,
+# RayService and RayJob manifests set RAY_AUTH_MODE=token, and an older operator
+# is refused when it polls job and Serve status, so RayJobs never finish and the
+# RayService never turns ready. Its CRDs must carry authOptions too, which
+# `helm upgrade` never updates; upgrade_kuberay_crds() applies them first.
+KUBERAY_OPERATOR_VERSION = os.environ.get("KUBERAY_OPERATOR_VERSION", "1.6.2")
+KUBERAY_CHART = "kuberay/kuberay-operator"
+
+
+def upgrade_kuberay_crds(version: str = None) -> dict:
+    """Apply the operator chart's CRDs server-side: Helm installs CRDs once and never upgrades them."""
+    version = version or KUBERAY_OPERATOR_VERSION
+    if not re.fullmatch(r"[0-9A-Za-z.+-]+", version):
+        raise ValueError(f"KUBERAY_OPERATOR_VERSION {version!r} is not a chart version")
+    return run_command(
+        [
+            "bash", "-c",
+            "set -euo pipefail; "
+            f"helm show crds {KUBERAY_CHART} --version {version} "
+            "| kubectl apply --server-side --force-conflicts -f -",
+        ],
+        "Upgrade KubeRay CRDs",
+    )
 
 
 def _render_manifest(path: str) -> str:
@@ -69,9 +93,12 @@ def install_kuberay_operator(namespace: str = "default") -> dict:
     if add["status"] == "FAILED":
         return add
     run_command(["helm", "repo", "update", "kuberay"], "Update KubeRay Helm repo")
+    crds = upgrade_kuberay_crds()
+    if crds["status"] == "FAILED":
+        return crds
     return run_command(
         [
-            "helm", "upgrade", "--install", "kuberay-operator", "kuberay/kuberay-operator",
+            "helm", "upgrade", "--install", "kuberay-operator", KUBERAY_CHART,
             "--version", KUBERAY_OPERATOR_VERSION,
             "--namespace", namespace, "--create-namespace",
             "--wait", "--timeout", "5m",

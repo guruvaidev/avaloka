@@ -138,12 +138,9 @@ export function startTrainingJob(input: StartTrainingJobInput): Promise<PendingT
   const existing = jobs.get(key);
   if (existing) return existing.promise;
 
-  // A newer training turn on the same thread supersedes older ones.
-  for (const [k, j] of jobs) {
-    if (j.threadId === input.threadId && j.status === "running" && k !== key) {
-      finish(j, "superseded", { status: "superseded" });
-    }
-  }
+  // A newer turn on the same thread does NOT end an older one's poll: the
+  // older turn keeps running on the server and its answer is stored by id, so
+  // stopping here lost a finished answer. Each job polls its own turn.
 
   let resolve!: (v: PendingTurnResponse) => void;
   const promise = new Promise<PendingTurnResponse>((r) => (resolve = r));
@@ -186,7 +183,7 @@ export function startTrainingJob(input: StartTrainingJobInput): Promise<PendingT
       const status = String(data?.status ?? "").toLowerCase();
       if (status === "done") finish(job, "done", { ...data, status: "done" });
       else if (status === "error") finish(job, "error", { ...data, status: "error" });
-      else if (status === "superseded") finish(job, "superseded", { ...data, status: "superseded" });
+      else if (status === "superseded") followNewerTurn(job, data);
       // "running" / "none" / "" -> keep polling
     } catch (err: any) {
       job.errors += 1;
@@ -201,6 +198,27 @@ export function startTrainingJob(input: StartTrainingJobInput): Promise<PendingT
 
   job.timer = setInterval(() => void tick(), POLL_MS);
   return promise;
+}
+
+/**
+ * The server says a newer turn replaced this one before it finished. Keep the
+ * job alive and poll that newer turn instead, so its result is what this view
+ * shows: finishing here rendered nothing at all. Without a named successor,
+ * poll the thread's newest turn. Only when the newer turn already has its own
+ * job (which will show its result) does this one end as superseded.
+ */
+function followNewerTurn(job: InternalJob, data: PendingTurnResponse) {
+  const next = typeof data?.superseded_by === "string" && data.superseded_by ? data.superseded_by : null;
+  if (next !== null && next === job.deferredId) {
+    finish(job, "error", { status: "error", message: deferredJobText(job.kind).failed });
+    return;
+  }
+  const owner = next !== null ? jobs.get(`${job.threadId}::${next}`) : undefined;
+  if (owner && owner !== job) {
+    finish(job, "superseded", { ...data, status: "superseded" });
+    return;
+  }
+  job.deferredId = next;
 }
 
 /** Claim a finished result for a thread exactly once. */

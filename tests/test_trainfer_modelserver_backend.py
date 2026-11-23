@@ -114,3 +114,26 @@ def test_a_422_from_the_server_is_a_plain_runtime_error(monkeypatch):
 def test_rayserve_stays_available_as_an_opt_in(monkeypatch):
     monkeypatch.setattr(ism, "INFERENCE_BACKEND", "rayserve")
     assert ism.InferenceServiceManager._backend() == "rayserve"
+
+
+# 1.7 port: scikit-learn families have no ONNX graph ---------------------------------
+
+def test_prepare_skips_the_onnx_check_and_uses_the_model_dir_for_sklearn_families(monkeypatch):
+    monkeypatch.setattr(ism, "INFERENCE_BACKEND", "modelserver")
+    mgr = ism.InferenceServiceManager()
+    mgr._ensure_self_contained_onnx = MagicMock(side_effect=AssertionError("ONNX check ran for a sklearn run"))
+    mgr._persist_details = MagicMock()
+    mgr._registry_hint = MagicMock(return_value={})
+    mgr._run_algorithm = MagicMock(return_value="gradient_boosting")
+    details = mgr.prepare_inference_service("run-7")
+    assert details["model_uri"] == "runs:/run-7/model"
+    assert details["algorithm"] == "gradient_boosting"
+
+    mgr2 = ism.InferenceServiceManager()
+    mgr2._ensure_self_contained_onnx = MagicMock()
+    mgr2._persist_details = MagicMock()
+    mgr2._registry_hint = MagicMock(return_value={})
+    mgr2._run_algorithm = MagicMock(return_value="mlp")
+    details = mgr2.prepare_inference_service("run-8")
+    mgr2._ensure_self_contained_onnx.assert_called_once_with("run-8")
+    assert details["model_uri"].endswith("/model_files/model.onnx")

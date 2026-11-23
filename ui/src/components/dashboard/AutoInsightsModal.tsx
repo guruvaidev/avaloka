@@ -15,6 +15,8 @@ import { InsightsAvatarProvider, useInsightsAvatar, HIGHLIGHT_CLASS } from "@/co
 import { Button } from "@/components/base/buttons/button";
 import { Badge } from "@/components/base/badges/badges";
 import { Toggle } from "@/components/base/toggle/toggle";
+import { CommentaryLabel, CommentaryText, commentaryPlainText } from "@/components/chat/CommentaryText";
+import { COMMENTARY_TOOLTIP } from "@/lib/reply-segments";
 import { AutoInsightsHeader, InsightNavigator, ChartStatsRail, ColumnStatisticsTab, ChartNavigation, type InsightView } from "./auto-insights/AutoInsightsPanels";
 import { ChartScopeStrip } from "./auto-insights/ChartScopeStrip";
 
@@ -80,7 +82,9 @@ type ColumnStat = {
   last?: unknown;
   top_values?: Array<{ value?: unknown; pct?: number }>;
   meaning?: string;
+  meaning_segments?: unknown;
   predictive_value?: "high" | "medium" | "low";
+  predictive_value_source?: string;
 };
 
 const finiteNumber = (value: unknown) => {
@@ -136,24 +140,36 @@ function overviewSummaryData(config: any) {
   if (!profile || typeof profile !== "object") return null;
   const score = finiteNumber(profile.readiness_score);
   const metrics = overviewMetrics(config);
-  const warnings = (Array.isArray(profile.red_flags) && profile.red_flags.length ? profile.red_flags : Array.isArray(profile.concerns) ? profile.concerns : []).map((item: any) => typeof item === "string" ? item : item?.text ?? item?.message).filter(Boolean);
+  // Each list item travels with its segments (2.0 commentary marking), when sent.
+  const withSegments = (key: string, textOf: (item: any) => unknown) =>
+    (Array.isArray(profile[key]) ? (profile[key] as unknown[]) : []).map((item: any, i) => ({
+      text: typeof item === "string" ? item : textOf(item),
+      segments: Array.isArray(profile[`${key}_segments`]) ? profile[`${key}_segments`][i] : undefined,
+    }));
+  const warningKey = Array.isArray(profile.red_flags) && profile.red_flags.length ? "red_flags" : "concerns";
+  const warnings = withSegments(warningKey, (item) => item?.text ?? item?.message).filter((item): item is { text: string; segments: unknown } => typeof item.text === "string" && item.text.length > 0);
   const suggestions = [
-    ...(Array.isArray(profile.analysis_suggestions) ? profile.analysis_suggestions : []).map((text: any) => ({ text: typeof text === "string" ? text : text?.text ?? text?.question, type: "Q" })),
-    ...(Array.isArray(profile.quick_wins) ? profile.quick_wins : []).map((text: any) => ({ text: typeof text === "string" ? text : text?.text ?? text?.message, type: "C" })),
-  ].filter((item) => typeof item.text === "string" && item.text.trim());
+    ...withSegments("analysis_suggestions", (item) => item?.text ?? item?.question).map((item) => ({ ...item, type: "Q" })),
+    ...withSegments("quick_wins", (item) => item?.text ?? item?.message).map((item) => ({ ...item, type: "C" })),
+  ].filter((item): item is { text: string; segments: unknown; type: string } => typeof item.text === "string" && item.text.trim().length > 0);
   const readiness = score == null ? null : Math.max(0, Math.min(100, score));
-  return { profile, metrics, warnings, suggestions, readiness };
+  // c-strict: the readiness score is the profiling model's, always; the domain
+  // is plain only when the server says code decided it. Without segments (an
+  // older payload) both are the model's.
+  const scoreSegments = profile.readiness_score_segments ?? (readiness == null ? undefined : [{ text: `${readiness}/100`, kind: "commentary" }]);
+  const domainSegments = profile.domain_segments ?? (profile.domain ? [{ text: String(profile.domain), kind: "commentary" }] : undefined);
+  return { profile, metrics, warnings, suggestions, readiness, scoreSegments, domainSegments };
 }
 
 /** Domain tag, description and the readiness / rows / columns tiles. */
 function DatasetOverviewCard({ config }: { config: any }) {
   const data = overviewSummaryData(config);
   if (!data) return null;
-  const { profile, metrics, readiness } = data;
+  const { profile, metrics, readiness, scoreSegments, domainSegments } = data;
   return <section className="ai-surface ai-overview-dataset">
-    <div className="ai-overview-description"><h3>Dataset overview</h3>{profile.domain && <span className="ai-overview-domain">{profile.domain}</span>}{profile.domain_reasoning && <p>{profile.domain_reasoning}</p>}</div>
+    <div className="ai-overview-description"><h3>Dataset overview</h3>{profile.domain && <span className="ai-overview-domain"><CommentaryText text={String(profile.domain)} segments={domainSegments} /></span>}{profile.domain_reasoning && <p><CommentaryText text={profile.domain_reasoning} segments={profile.domain_reasoning_segments} /></p>}</div>
     <div className="ai-overview-tiles">
-      {readiness != null && <div className="ai-overview-tile ai-overview-readiness"><div className="ai-readiness-ring" role="progressbar" aria-label="Data readiness" aria-valuemin={0} aria-valuemax={100} aria-valuenow={readiness}><svg viewBox="0 0 72 72" aria-hidden="true"><circle cx="36" cy="36" r="32" className="ai-ring-track"/><circle cx="36" cy="36" r="32" className="ai-ring-progress" pathLength="100" strokeDasharray={`${readiness} 100`} transform="rotate(-90 36 36)"/></svg><strong>{readiness}</strong></div><span>Data readiness</span></div>}
+      {readiness != null && <div className="ai-overview-tile ai-overview-readiness"><div className="ai-readiness-ring" role="progressbar" aria-label="Data readiness" aria-valuemin={0} aria-valuemax={100} aria-valuenow={readiness}><svg viewBox="0 0 72 72" aria-hidden="true"><circle cx="36" cy="36" r="32" className="ai-ring-track"/><circle cx="36" cy="36" r="32" className="ai-ring-progress" pathLength="100" strokeDasharray={`${readiness} 100`} transform="rotate(-90 36 36)"/></svg><strong>{readiness}</strong></div><span>Data readiness <CommentaryText text={`${readiness}/100`} segments={scoreSegments} /></span></div>}
       {metrics.rows != null && <div className="ai-overview-tile"><span>Rows</span><strong>{formatStatNumber(metrics.rows)}</strong>{metrics.allRowsUsed && <small>all rows used</small>}{config?.dataset?.total_rows == null && <small>sample rows</small>}</div>}
       {metrics.count != null && <div className="ai-overview-tile"><span>Columns</span><strong>{metrics.count}</strong>{Object.values(metrics.types).some(Boolean) && <small>{Object.entries(metrics.types).filter(([, value]) => value > 0).map(([type, value]) => `${value} ${type}`).join(" · ")}</small>}</div>}
       {(metrics.missingPct != null || metrics.missingCount != null) && <div className="ai-overview-tile"><span>Missing</span>{metrics.missingPct != null && <strong>{formatStatNumber(metrics.missingPct)}%</strong>}{metrics.missingCount != null && <small>{metrics.missingCount === 0 ? "no empty cells" : `${formatStatNumber(metrics.missingCount)} empty cells`}</small>}</div>}
@@ -171,7 +187,7 @@ export function askInChatAndClose(onAsk: (text: string) => boolean | void, onOpe
 }
 
 /** Suggested steps: each whole row asks its text in chat once (spinner + all rows disabled while handing off). */
-export function SuggestedStepList({ items, onAsk }: { items: { type: string; text: string }[]; onAsk?: (text: string) => boolean | void }) {
+export function SuggestedStepList({ items, onAsk }: { items: { type: string; text: string; segments?: unknown }[]; onAsk?: (text: string) => boolean | void }) {
   const [pendingIndex, setPendingIndex] = useState<number | null>(null);
   const busyRef = useRef(false);
   const ask = (i: number, raw: string) => {
@@ -186,8 +202,9 @@ export function SuggestedStepList({ items, onAsk }: { items: { type: string; tex
     }
   };
   return <div className="ai-suggestion-list">{items.map((item, i) => {
-    const text = String(item.text ?? "").trim();
-    return <button key={i} type="button" className="ai-suggestion-row cursor-pointer text-foreground hover:bg-muted disabled:cursor-default" aria-label={`Ask in chat: ${text}`} disabled={pendingIndex !== null} onClick={() => ask(i, text)}><span className={`ai-step-tag ai-step-${item.type}`}>{item.type}</span><span className="ai-step-text">{item.text}</span>{pendingIndex === i ? <span role="status" aria-label="Sending" className="inline-block size-4 shrink-0 animate-spin rounded-full border-2 border-border border-t-primary" /> : <ChevronRight size={16} aria-hidden="true"/>}</button>;
+    // The chat gets the suggestion's words, never its "commentary" label or suffix.
+    const text = commentaryPlainText(String(item.text ?? ""), item.segments).trim();
+    return <button key={i} type="button" className="ai-suggestion-row cursor-pointer text-foreground hover:bg-muted disabled:cursor-default" aria-label={`Ask in chat: ${text}`} disabled={pendingIndex !== null} onClick={() => ask(i, text)}><span className={`ai-step-tag ai-step-${item.type}`}>{item.type}</span><span className="ai-step-text"><CommentaryText text={String(item.text ?? "")} segments={item.segments} /></span>{pendingIndex === i ? <span role="status" aria-label="Sending" className="inline-block size-4 shrink-0 animate-spin rounded-full border-2 border-border border-t-primary" /> : <ChevronRight size={16} aria-hidden="true"/>}</button>;
   })}</div>;
 }
 
@@ -198,7 +215,7 @@ function DatasetOverviewActions({ config, onPrefillChat }: { config: any; onPref
   const { profile, warnings, suggestions } = data;
   if (!(warnings.length > 0 || profile.readiness_reasoning || suggestions.length > 0)) return null;
   return <div className="ai-overview-actions">
-    {(warnings.length > 0 || profile.readiness_reasoning) && <section className="ai-surface ai-overview-action"><header><h3>Watch out for</h3><span className="ai-issues-count">{warnings.length} issues</span></header>{profile.readiness_reasoning && <p className="ai-overview-reason">{profile.readiness_reasoning}</p>}<ul>{warnings.map((item: string, i: number) => <li className="ai-issue-row" key={i}><AlertTriangle size={16}/><span>{item}</span></li>)}</ul></section>}
+    {(warnings.length > 0 || profile.readiness_reasoning) && <section className="ai-surface ai-overview-action"><header><h3>Watch out for</h3><span className="ai-issues-count">{warnings.length} issues</span></header>{profile.readiness_reasoning && <p className="ai-overview-reason"><CommentaryText text={profile.readiness_reasoning} segments={profile.readiness_reasoning_segments} /></p>}<ul>{warnings.map((item, i) => <li className="ai-issue-row" key={i}><AlertTriangle size={16}/><span><CommentaryText text={item.text} segments={item.segments} /></span></li>)}</ul></section>}
     {suggestions.length > 0 && <section className="ai-surface ai-overview-action"><header><h3>Suggested next steps</h3><span className="ai-overview-reason">Click to ask in chat</span></header><SuggestedStepList items={suggestions} onAsk={onPrefillChat} /></section>}
   </div>;
 }
@@ -218,37 +235,10 @@ function OverviewInsight({ slide }: { slide: Slide }) {
   const [overflow, setOverflow] = useState(false);
   const insights = slide.insights.filter((text) => text?.trim());
   const text = insights.length ? insights.map((text) => stripMarkdown(text.trim())).join("\n") : chartPoint(slide);
-  return <div className="ai-overview-insight" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}><p ref={(node) => { if (node && !expanded) { const next = node.scrollHeight > node.clientHeight + 1; if (next !== overflow) setOverflow(next); } }} className={expanded ? "" : "ai-insight-clamped"}>{text}</p>{(overflow || expanded) && <Button color="link-gray" className="ai-insight-more" onPress={() => setExpanded(!expanded)}>{expanded ? "Show less" : "Show more"}</Button>}</div>;
+  // A single insight keeps its segments; several are joined, so only the text can be shown.
+  const segments = insights.length === 1 ? slide.insightSegments : undefined;
+  return <div className="ai-overview-insight" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}><p ref={(node) => { if (node && !expanded) { const next = node.scrollHeight > node.clientHeight + 1; if (next !== overflow) setOverflow(next); } }} className={expanded ? "" : "ai-insight-clamped"}><CommentaryText text={text} segments={segments} renderText={stripMarkdown} /></p>{(overflow || expanded) && <Button color="link-gray" className="ai-insight-more" onPress={() => setExpanded(!expanded)}>{expanded ? "Show less" : "Show more"}</Button>}</div>;
 }
-
-function ColumnStatistics({ config }: { config: any }) {
-  const [showIds, setShowIds] = useState(false);
-  const source = Array.isArray(config?.column_stats) ? config.column_stats as ColumnStat[] : [];
-  if (!source.length) return null;
-  const highValue = new Set(Array.isArray(config?.profile_overview?.high_value_columns) ? config.profile_overview.high_value_columns : []);
-  const ordered = source.map((column, index) => ({ column, index })).sort((a, b) => Number(highValue.has(b.column.name)) - Number(highValue.has(a.column.name)) || a.index - b.index).map(({ column }) => column);
-  const hasIds = ordered.some((column) => String(column.role ?? "").toLowerCase() === "identifier");
-  const visible = showIds ? ordered : ordered.filter((column) => String(column.role ?? "").toLowerCase() !== "identifier");
-  const badgeColor = (value: ColumnStat["predictive_value"]) => value === "high" ? "success" : value === "medium" ? "gray" : "slate";
-
-  return (
-    <details className="group mt-3 rounded-lg border border-[var(--color-ai-line)] bg-[var(--color-ai-surface)]">
-      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3.5 py-3 text-[13px] font-semibold text-[var(--color-ai-heading)]">
-        Column statistics <ChevronDown className="size-4 text-[var(--color-ai-subtle)] transition-transform group-open:rotate-180" />
-      </summary>
-      <div className="border-t border-[var(--color-ai-line)] p-3.5">
-        {hasIds && <div className="mb-3"><Toggle slim size="sm" label="Show ID columns" isSelected={showIds} onChange={setShowIds} /></div>}
-        <div className="overflow-x-auto rounded-lg border border-[var(--color-ai-line)]">
-          <table className="w-full min-w-[900px] text-left text-xs">
-            <thead className="bg-[var(--color-ai-thead)] text-[var(--color-ai-subtle)]"><tr>{["Column", "Type", "Meaning", "Predictive value", "Missing %", "Distinct", "Summary"].map((heading) => <th key={heading} className="whitespace-nowrap px-3 py-2 font-medium">{heading}</th>)}</tr></thead>
-            <tbody>{visible.map((column, index) => <tr key={`${column.name}-${index}`} className="border-t border-[var(--color-ai-line)] text-[var(--color-ai-body)]"><td className="px-3 py-2 font-medium text-[var(--color-ai-heading)]">{column.name ?? "—"}</td><td className="px-3 py-2">{column.dtype ?? "—"}</td><td className="max-w-[220px] px-3 py-2">{column.meaning ?? ""}</td><td className="px-3 py-2">{column.predictive_value ? <Badge size="sm" color={badgeColor(column.predictive_value)}>{column.predictive_value}</Badge> : null}</td><td className="px-3 py-2">{formatStatNumber(column.missing_pct)}</td><td className="px-3 py-2">{formatStatNumber(column.n_unique)}</td><td className="max-w-[320px] px-3 py-2">{columnSummary(column)}</td></tr>)}</tbody>
-          </table>
-        </div>
-      </div>
-    </details>
-  );
-}
-
 
 function slugify(s: string) {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
@@ -333,8 +323,10 @@ function InsightCard({ slide, config, outputRows, samples, defaultView = "chart"
     return () => observer.disconnect();
   }, [plotNode, slide.type, chartId]);
   const takeaway = stripMarkdown(slide.headline || slide.subtitle || slide.insights[0] || "");
+  // The takeaway is marked as the model's when its source field carries segments.
+  const takeawaySegments = slide.headline ? slide.headlineSegments : slide.subtitle ? undefined : slide.insights.length === 1 ? slide.insightSegments : undefined;
   return <section {...avatar.bindChart(chartId)} className={"ai-chart-card ai-surface " + (avatar.isHighlighted(chartId) ? HIGHLIGHT_CLASS : "")}>
-    <div className="ai-card-heading"><div className="ai-chart-title"><h3>{slide.title}</h3>{takeaway && <div className="ai-takeaway"><p className={expanded ? "" : "line-clamp-2"}>{takeaway}</p>{takeaway.length > 100 && <Button color="link-gray" className="ai-more" onPress={() => setExpanded((value) => !value)}>{expanded ? "Less" : "More"}</Button>}</div>}</div>
+    <div className="ai-card-heading"><div className="ai-chart-title"><h3><CommentaryText text={slide.title} segments={slide.titleSegments} /></h3>{takeaway && <div className="ai-takeaway"><p className={expanded ? "" : "line-clamp-2"}><CommentaryText text={takeaway} segments={takeawaySegments} renderText={stripMarkdown} /></p>{takeaway.length > 100 && <Button color="link-gray" className="ai-more" onPress={() => setExpanded((value) => !value)}>{expanded ? "Less" : "More"}</Button>}</div>}</div>
       <div className="ai-card-tools"><div className="ai-view-toggle">{(['table', 'chart'] as const).map((mode) => <Button key={mode} color="tertiary" className={`ai-control ${view === mode ? 'ai-view-active' : ''}`} isDisabled={mode === 'table' && !tableRows?.length} onPress={() => setView(mode)}>{mode === 'table' ? 'Data table' : 'Chart'}</Button>)}</div><ExplainChartButton chartId={chartId} /></div>
     </div>
     <ChartScopeStrip dataset={config?.dataset} />
@@ -543,7 +535,8 @@ function AutoInsightsModalInner({ open, onOpenChange, config, status, datasetNam
   // Opening the Overview tab always starts at the top, at Dataset overview.
   useEffect(() => {
     if (!open || layout !== "grid") return;
-    overviewScrollRef.current?.scrollTo({ top: 0 });
+    // Optional call: jsdom (the component tests) has no Element.scrollTo.
+    overviewScrollRef.current?.scrollTo?.({ top: 0 });
   }, [open, layout, activeDatasetId]);
 
   useEffect(() => {
@@ -621,9 +614,9 @@ function AutoInsightsModalInner({ open, onOpenChange, config, status, datasetNam
                                 (lit ? HIGHLIGHT_CLASS : globalIdx === index ? "border-[#1565ef] ring-2 ring-[#1565ef]/25" : "border-[var(--color-ai-line)]")
                               }
                             >
-                              {slide.type !== "scatter" && <div className="ai-overview-chart-header"><Table className="size-4 shrink-0"/><span>{slide.title}</span><ExplainChartButton chartId={cid}/></div>}
+                              {slide.type !== "scatter" && <div className="ai-overview-chart-header"><Table className="size-4 shrink-0"/><span><CommentaryText text={slide.title} segments={slide.titleSegments} truncate /></span><ExplainChartButton chartId={cid}/></div>}
                               <div className="ai-overview-chart-body">
-                                <DynamicChart slide={slide} height={slide.type === "scatter" ? 320 : 290} chartKey={`${g.id}-${si}`} header={slide.type === "scatter" ? <div className="ai-overview-chart-header"><span>{slide.title}</span><ExplainChartButton chartId={cid}/></div> : undefined}/>
+                                <DynamicChart slide={slide} height={slide.type === "scatter" ? 320 : 290} chartKey={`${g.id}-${si}`} header={slide.type === "scatter" ? <div className="ai-overview-chart-header"><span><CommentaryText text={slide.title} segments={slide.titleSegments} truncate /></span><ExplainChartButton chartId={cid}/></div> : undefined}/>
                               </div>
                               <OverviewInsight slide={slide}/>
 

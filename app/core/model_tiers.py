@@ -187,9 +187,13 @@ def failures_for(model: str, provider: str) -> Tuple[TierUnavailable, ...]:
     return ()
 
 
-def stamp(result: Any, *, configured_model: str, answered_model: str, provider: str,
-          primary_provider: str = "openrouter") -> Any:
-    """Attach the record to *result* (an AIMessage) and log it. Returns *result*."""
+def answered_record(*, configured_model: str, answered_model: str, provider: str,
+                    primary_provider: str = "openrouter") -> dict:
+    """The record for a tier that answered in place of *configured_model*.
+
+    Built from the failures recorded in this chain only. Shared by :func:`stamp`
+    (the reply) and the agent trace (app/trace/recorder.py), so both say the same.
+    """
     failed = failures_for(configured_model, primary_provider)
     reason = failed[0].reason if failed else f"{configured_model} could not answer"
     record_ = {
@@ -202,6 +206,14 @@ def stamp(result: Any, *, configured_model: str, answered_model: str, provider: 
                           "reason": f.reason} for f in failed],
     }
     record_["note"] = f"{reason}; answered by {answered_model}"
+    return record_
+
+
+def stamp(result: Any, *, configured_model: str, answered_model: str, provider: str,
+          primary_provider: str = "openrouter") -> Any:
+    """Attach the record to *result* (an AIMessage) and log it. Returns *result*."""
+    record_ = answered_record(configured_model=configured_model, answered_model=answered_model,
+                              provider=provider, primary_provider=primary_provider)
     meta = getattr(result, "response_metadata", None)
     if isinstance(meta, dict):
         meta[ANSWERED_BY_KEY] = record_

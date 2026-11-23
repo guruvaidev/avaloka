@@ -1,0 +1,10 @@
+{
+  "question": "What is the typical revenue by region?",
+  "recipe": "describe",
+  "params": {
+    "measure": "revenue",
+    "dimension": "region"
+  },
+  "confidence": 1.0,
+  "source": "fixture"
+}

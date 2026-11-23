@@ -157,7 +157,8 @@ def registered_password(tmp_path, monkeypatch):
     import app.api.cloud_connections as cc
     import app.mcp_server.customer_dbs as cdb
 
-    monkeypatch.setenv("MCP_SERVICE_TOKEN", secrets.token_urlsafe(32))
+    token = secrets.token_urlsafe(32)
+    monkeypatch.setenv("MCP_SERVICE_TOKEN", token)
     # A private key, so a build that seals credentials can register (it refuses
     # without one); a build that does not seal ignores it.
     key = "uib12-" + secrets.token_hex(32)
@@ -170,6 +171,10 @@ def registered_password(tmp_path, monkeypatch):
     monkeypatch.setattr(mgr, "customers_file", str(path))
     monkeypatch.setattr(mgr, "customers", {})
     monkeypatch.setattr(cdb.httpx, "AsyncClient", _FakeAsyncClient)
+    # A leftover instance attribute (an earlier test's instance-level monkeypatch,
+    # undone by writing the bound method back) would shadow this class-level patch;
+    # it is pollution, not state, so it is dropped.
+    vars(mgr.db_manager).pop("test_database_connection", None)
     monkeypatch.setattr(
         cdb.DatabaseConnectionManager, "test_database_connection",
         staticmethod(lambda conn: {"success": True, "database": "sales", "table_count": 1, "version": "16"}),
@@ -177,7 +182,11 @@ def registered_password(tmp_path, monkeypatch):
     app = FastAPI()
     app.include_router(cdb.router)
     password = "pw-" + secrets.token_hex(12)
-    resp = TestClient(app).post("/customers/register", json={
+    # 1.7 registers only for a user: here the API service naming the signed-in user,
+    # as the connect modal's request reaches the onboarding API.
+    resp = TestClient(app).post("/customers/register", headers={
+        "X-Avaloka-Service-Token": token, "X-Avaloka-User": "user-1",
+    }, json={
         "customer_id": "uib12_cust", "customer_name": "uib12", "database_type": "postgresql",
         "host": "db.test.invalid", "port": 5432, "database_name": "sales",
         "username": "user-1", "password": password, "contact_email": "user-1@example.com",

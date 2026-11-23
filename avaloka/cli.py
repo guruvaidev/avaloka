@@ -15,17 +15,20 @@ to you. Local execution is free and keeps your data on your machine.
 from __future__ import annotations
 
 from pathlib import Path
+import json
 import uuid
 
 import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from avaloka import workload
 from avaloka.deploy import LEVELS, plan_deployment
 from avaloka.mission.budget import Budget, BudgetExceeded
 from avaloka.mission.context import ExecutionMode, MissionContext, MissionKind
+from avaloka.mission.economics import MANUAL_EFFORT_CAVEAT
 from avaloka.missions import (MissionResult, analyze_fireflies, run_analyze,
                               run_train, train_fireflies)
 from avaloka.persona import Avaloka
@@ -128,13 +131,46 @@ def _check_metric(metric: str | None) -> None:
     )
 
 
+def _from_catalog(data: str) -> str:
+    """``my.<name>`` / ``analysis:<id>`` -> the file the local catalog recorded for it."""
+    from avaloka.catalog import local as catalog_local
+    try:
+        _binding, path = catalog_local.resolve_reference(data)
+    except RuntimeError as exc:
+        raise _die(f"I couldn't use {data}: {exc}", fix="avaloka catalog list")
+    return str(path)
+
+
+def _register_source(local_path: str, wl, resolved) -> None:
+    """Record the analysed file in the local catalog, best-effort (avaloka/catalog/local.py)."""
+    if getattr(resolved, "kind", None) != "file":
+        return
+    try:
+        from avaloka.catalog import local as catalog_local
+        if not catalog_local.enabled():
+            return
+        catalog_local.register_local_file(
+            local_path, columns=_columns_of(local_path),
+            row_count=getattr(wl, "n_rows", None), row_count_estimated=bool(getattr(wl, "estimated", False)))
+    except Exception:  # noqa: BLE001  (the catalog never fails an analysis)
+        pass
+
+
 def _load_or_die(data: str):
-    """Resolve a dataset, turning every known failure into a usable sentence."""
+    """Resolve a dataset, turning every known failure into a usable sentence.
+
+    ``my.<name>``, ``my.<name>@<version>`` and ``analysis:<id>`` are catalog
+    references: the file the local catalog recorded is what gets analysed."""
     from avaloka.io import SourceError
     from avaloka.io.loader import UnusableDataset
+    from avaloka.catalog import local as catalog_local
 
+    if catalog_local.is_reference(data):
+        data = _from_catalog(data)
     try:
-        return _resolve(data)
+        local_path, wl, resolved = _resolve(data)
+        _register_source(local_path, wl, resolved)
+        return local_path, wl, resolved
     except (FileNotFoundError, SourceError) as exc:
         raise _die(
             f"I can't reach that dataset: {exc}",
@@ -145,7 +181,8 @@ def _load_or_die(data: str):
     except IsADirectoryError:
         raise _die(
             f"{data} is a directory, not a dataset.",
-            fix="Point me at a single CSV, TSV, Parquet or Excel file inside it.",
+            fix="Point me at a single CSV, TSV, Parquet or Excel file inside it, or at a "
+                "directory of part files (.parquet, .csv, .json, .jsonl, .xml, .orc or .avro).",
         )
     except PermissionError as exc:
         raise _die(f"I'm not allowed to read that file: {exc}")
@@ -189,8 +226,37 @@ def _mode(local: bool, execution: str | None) -> ExecutionMode:
         return ExecutionMode.LOCAL
 
 
-def _avaloka(quiet: bool, llm: bool) -> Avaloka | None:
-    return None if quiet else Avaloka(llm=llm)
+_LLM_HELP = ("Let Avaloka phrase things with a model: a local Ollama, Groq, OpenRouter, "
+             "OpenAI or Anthropic, whichever --llm-provider names or is configured first "
+             "(local first). Without it nothing leaves your machine.")
+_LLM_PROVIDER_HELP = ("local|groq|openrouter|openai|anthropic (env AVALOKA_LLM_PROVIDER). "
+                      "Implies --llm.")
+_LLM_MODEL_HELP = ("Model id for the provider (env AVALOKA_LLM_MODEL); default gemma4:e4b "
+                   "locally, openai/gpt-oss-120b on Groq and OpenRouter.")
+
+
+def _llm_flag(help: str = _LLM_HELP):
+    return typer.Option(False, "--llm", help=help)
+
+
+def _llm_provider_opt():
+    return typer.Option(None, "--llm-provider", help=_LLM_PROVIDER_HELP)
+
+
+def _llm_model_opt():
+    return typer.Option(None, "--llm-model", help=_LLM_MODEL_HELP)
+
+
+def _llm_notice(line: str) -> None:
+    # One line, always visible: which model is in use, or why none is.
+    console.print(Text(line, style="yellow" if line.startswith("LLM error") else "dim"))
+
+
+def _avaloka(quiet: bool, llm: bool, provider: str | None = None,
+             model: str | None = None) -> Avaloka | None:
+    if quiet:
+        return None
+    return Avaloka(llm=llm or bool(provider), provider=provider, model=model, notify=_llm_notice)
 
 
 def _resolve(data: str):
@@ -225,10 +291,10 @@ def _print_economics(result: MissionResult) -> None:
 
 
 def _print_fireflies(result: MissionResult) -> None:
-    t = Table(title="Avaloka clones activated (measured work units)")
+    t = Table(title="Avaloka clones activated (manual minutes are a heuristic estimate)")
     t.add_column("Clone / firefly", style="cyan")
     t.add_column("Replaces")
-    t.add_column("Manual min", justify="right")
+    t.add_column("Manual min (est.)", justify="right")
     t.add_column("Cost $", justify="right")
     for u in result.context.ledger.units:
         t.add_row(u.firefly, u.human_role, f"{u.manual_minutes:.0f}",
@@ -319,7 +385,8 @@ def _run_mission(ctx: MissionContext, fireflies: list[type], run_fn, ava: Avalok
                  wl: "workload.WorkloadPlan", quiet: bool) -> MissionResult:
     """Shared persona+swarm wrapper around a mission run."""
     if ava is not None:
-        console.print(ava.first_glance({"n_rows": wl.n_rows, "n_cols": "several"})
+        console.print(ava.first_glance({"n_rows": wl.n_rows, "n_cols": "several",
+                                        "estimated": wl.estimated})
                       if wl.n_rows else ava.greet())
         narrator = SwarmNarrator(console.print, voice=ava)
         narrator.announce(len(fireflies))
@@ -342,17 +409,43 @@ def _run_mission(ctx: MissionContext, fireflies: list[type], run_fn, ava: Avalok
     _finish(result, ava)
     if wl.recommend_batch and ctx.kind == MissionKind.ANALYZE:
         console.print(Panel(
-            f"[bold]Full-dataset option[/bold]\nThis was the sampled live read. For the exact "
-            f"answer over all {wl.n_rows:,} rows, run it as a Ray swarm:\n"
+            f"[bold]Full-dataset option[/bold]\n{_full_dataset_scope(ctx, wl)}, run it as a Ray swarm:\n"
             f"  [cyan]avaloka batch {ctx.data_source} --goal \"{ctx.goal}\"[/cyan]",
             border_style="magenta", expand=False))
     return result
 
 
+def _full_dataset_scope(ctx: MissionContext, wl: "workload.WorkloadPlan") -> str:
+    """What the full pass would cover, on a true basis.
+
+    The reader's count when it has one (the Data Scout's profile, which for
+    a workbook is the analysed sheet's rows, named, with the sheets left
+    out); the planner's byte-extrapolated figure only as an estimate. An
+    online_retail workbook was offered "the exact answer over all 181,115
+    rows" when its sheet held 541,910 and the workbook 1,067,371.
+    """
+    dataset = (ctx.blackboard.get("profile") or {}).get("dataset") or {}
+    counted = dataset.get("n_rows")
+    if counted is None:
+        return ("This was the sampled live read. For the exact answer over every row "
+                f"({workload.rows_phrase(wl.n_rows, wl.estimated)})")
+    sheets = (dataset.get("structure") or {}).get("sheets") or {}
+    sheet = sheets.get("analysed")
+    if sheet is None:
+        return f"This was the sampled live read. For the exact answer over all {int(counted):,} rows"
+    others = list(sheets.get("others") or [])
+    left = (f" ({len(others)} other sheet{'s' if len(others) != 1 else ''} not analysed: "
+            + ", ".join(f"'{o.get('name')}' with {int(o.get('rows') or 0):,} rows" for o in others)
+            + ")") if others else ""
+    return (f"This was the sampled live read of sheet '{sheet}'{left}. For the exact answer "
+            f"over all {int(counted):,} rows of sheet '{sheet}'")
+
+
 # --------------------------------------------------------------------------
 @app.command()
 def analyze(
-    data: str = typer.Argument(..., help="Path to a CSV or Parquet dataset."),
+    data: str = typer.Argument(..., help="Path to a CSV or Parquet dataset, or a catalog reference "
+                                         "(my.<name>, my.<name>@<version>, analysis:<id>)."),
     goal: str = typer.Option(..., "--goal", "-g", help="The decision this analysis must inform."),
     budget: float | None = typer.Option(None, "--budget", "-b", help="Hard cost ceiling (USD)."),
     output: Path | None = typer.Option(None, "--output", "-o",
@@ -362,19 +455,22 @@ def analyze(
     tier: str = typer.Option("community", "--tier"),
     hourly_rate: float = typer.Option(80.0, "--hourly-rate"),
     quiet: bool = typer.Option(False, "--quiet", help="Suppress Avaloka's voice (machine output only)."),
-    llm: bool = typer.Option(False, "--llm", help="Let Avaloka phrase things with Claude (needs ANTHROPIC_API_KEY)."),
+    llm: bool = _llm_flag(),
+    llm_provider: str | None = _llm_provider_opt(),
+    llm_model: str | None = _llm_model_opt(),
 ):
     """Turn a dataset and a question into a defensible analysis bundle."""
     output = _prepare_output(output or Path("./avaloka-analysis") / uuid.uuid4().hex[:12])
     data, wl, _resolved = _load_or_die(data)
 
-    ava = _avaloka(quiet, llm)
+    ava = _avaloka(quiet, llm, llm_provider, llm_model)
     if ava is not None:
         console.print(ava.greet())
         console.print(ava.workload_read(wl))
     else:
         console.print(Panel(f"[bold]Avaloka Analyze[/bold] · {goal}\n[dim]workload:[/dim] "
-                            f"{wl.lane.value} ({wl.n_rows:,} rows)", border_style="cyan"))
+                            f"{wl.lane.value} ({workload.rows_phrase(wl.n_rows, wl.estimated)})",
+                            border_style="cyan"))
 
     ctx = MissionContext(
         kind=MissionKind.ANALYZE, goal=goal, data_source=data, output_dir=output,
@@ -383,6 +479,10 @@ def analyze(
     ctx.blackboard["workload"] = wl.as_dict()
     # Where the data really came from: the mission only sees the local copy.
     ctx.blackboard["resolved_source"] = _resolved.as_dict()
+    ctx.blackboard["source_statistics"] = _resolved.detail.get("statistics", {})
+    # A database source's catalogue and statistics (no row values), size-capped:
+    # the connector contract's planner_metadata(), recorded with the plan.
+    ctx.blackboard["planner_metadata"] = _resolved.detail.get("planner_metadata", {})
 
     try:
         _run_mission(ctx, analyze_fireflies(), run_analyze, ava, wl, quiet)
@@ -401,13 +501,19 @@ def train(
     max_cost: float | None = typer.Option(None, "--max-cost"),
     latency: float | None = typer.Option(None, "--deployment-latency-ms"),
     deployable: bool = typer.Option(False, "--deployable/--no-deployable"),
+    ensemble: bool | None = typer.Option(
+        None, "--ensemble/--no-ensemble",
+        help="Also vote the panel as an ensemble (default: only when a --max-cost has "
+             "room for it; it roughly doubles training time)."),
     output: Path = typer.Option(Path("./avaloka-model"), "--output", "-o"),
     local: bool = typer.Option(True, "--local/--managed"),
     execution: str | None = typer.Option(None, "--execution"),
     tier: str = typer.Option("community", "--tier"),
     hourly_rate: float = typer.Option(80.0, "--hourly-rate"),
     quiet: bool = typer.Option(False, "--quiet"),
-    llm: bool = typer.Option(False, "--llm"),
+    llm: bool = _llm_flag(),
+    llm_provider: str | None = _llm_provider_opt(),
+    llm_model: str | None = _llm_model_opt(),
 ):
     """Train, validate and optionally package a model to predict one column."""
     _check_metric(metric)
@@ -415,22 +521,28 @@ def train(
     data, wl, _resolved = _load_or_die(data)
     _check_target(data, target)
 
-    ava = _avaloka(quiet, llm)
+    ava = _avaloka(quiet, llm, llm_provider, llm_model)
     if ava is not None:
         console.print(ava.greet())
         console.print(ava.workload_read(wl))
     else:
         console.print(Panel(f"[bold]Avaloka Predict[/bold] · target={target}\n[dim]workload:[/dim] "
-                            f"{wl.lane.value} ({wl.n_rows:,} rows)", border_style="cyan"))
+                            f"{wl.lane.value} ({workload.rows_phrase(wl.n_rows, wl.estimated)})",
+                            border_style="cyan"))
 
     ctx = MissionContext(
         kind=MissionKind.TRAIN, goal=goal or f"Predict '{target}'", data_source=data,
         output_dir=output, budget=Budget(limit_usd=max_cost), target=target,
         metric=metric, objective=objective, deployable=deployable, deployment_latency_ms=latency,
+        ensemble=ensemble,
         execution_mode=_mode(local, execution), tier=tier, loaded_hourly_rate=hourly_rate)
     ctx.blackboard["workload"] = wl.as_dict()
     # Where the data really came from: the mission only sees the local copy.
     ctx.blackboard["resolved_source"] = _resolved.as_dict()
+    ctx.blackboard["source_statistics"] = _resolved.detail.get("statistics", {})
+    # A database source's catalogue and statistics (no row values), size-capped:
+    # the connector contract's planner_metadata(), recorded with the plan.
+    ctx.blackboard["planner_metadata"] = _resolved.detail.get("planner_metadata", {})
 
     try:
         result = _run_mission(ctx, train_fireflies(deployable), run_train, ava, wl, quiet)
@@ -448,11 +560,14 @@ def train(
 @app.command()
 def chat(
     data: str | None = typer.Argument(None, help="Optional dataset to start from."),
-    llm: bool = typer.Option(False, "--llm", help="Use Claude for free-form conversation (needs ANTHROPIC_API_KEY)."),
+    llm: bool = _llm_flag(),
+    llm_provider: str | None = _llm_provider_opt(),
+    llm_model: str | None = _llm_model_opt(),
 ):
     """Ask questions about a dataset conversationally, one turn at a time."""
     from avaloka.chat import run_chat
-    run_chat(console, data=data, llm=llm)
+    run_chat(console, data=data, llm=llm or bool(llm_provider), provider=llm_provider,
+             model=llm_model, notify=_llm_notice)
 
 
 @app.command()
@@ -465,13 +580,15 @@ def batch(
     output: Path = typer.Option(Path("./avaloka-batch"), "--output", "-o"),
     apply: bool = typer.Option(False, "--apply", help="Actually submit the RayJob (kubernetes target)."),
     quiet: bool = typer.Option(False, "--quiet"),
-    llm: bool = typer.Option(False, "--llm"),
+    llm: bool = _llm_flag(),
+    llm_provider: str | None = _llm_provider_opt(),
+    llm_model: str | None = _llm_model_opt(),
 ):
     """Run the full (unsampled) analysis as an Apache Ray swarm; converge the result."""
     from avaloka import ray_batch
     from avaloka.serving import _have, _run
 
-    ava = _avaloka(quiet, llm)
+    ava = _avaloka(quiet, llm, llm_provider, llm_model)
     from avaloka.io import SourceError
     try:
         data, wl, _resolved = _resolve(data)
@@ -480,7 +597,8 @@ def batch(
         raise typer.Exit(code=1)
     if ava is not None:
         console.print(ava.greet())
-        console.print(ava.say(f"Batch mode. I'll split {wl.n_rows:,} rows into {partitions} "
+        console.print(ava.say(f"Batch mode. I'll split {workload.rows_phrase(wl.n_rows, wl.estimated)} "
+                              f"into {partitions} "
                               "partitions, send a clone to each, and converge the exact statistics."))
 
     out = output.expanduser(); out.mkdir(parents=True, exist_ok=True)
@@ -531,13 +649,15 @@ def infer(
     apply: bool = typer.Option(False, "--apply", help="Actually build the image and apply the manifest."),
     push: bool = typer.Option(False, "--push", help="docker push after build (needs --registry)."),
     quiet: bool = typer.Option(False, "--quiet"),
-    llm: bool = typer.Option(False, "--llm"),
+    llm: bool = _llm_flag(),
+    llm_provider: str | None = _llm_provider_opt(),
+    llm_model: str | None = _llm_model_opt(),
 ):
     """Stand up a REST inference API on Kubernetes from a trained MLflow model."""
     from avaloka import serving
     from avaloka.util import write_json
 
-    ava = _avaloka(quiet, llm)
+    ava = _avaloka(quiet, llm, llm_provider, llm_model)
     try:
         plan = serving.prepare(package, target=target, image=image, mlflow_uri=mlflow_uri, registry=registry)
     except (FileNotFoundError, ValueError) as exc:
@@ -620,7 +740,18 @@ def deploy(
 def coordinate(
     data: str = typer.Argument(..., help="Dataset URI: a path, sqlite:///db#table, s3://…, gs://…, az://…"),
     goal: str = typer.Option(..., "--goal", "-g", help="The decision the fleet must inform."),
-    workers: int = typer.Option(4, "--workers", "-w", help="Number of sub-Avalokas in the fleet."),
+    swarm: int | None = typer.Option(
+        None, "--swarm", "-s",
+        help="Number of Avaloka clones in the team. Not given: sized from the data (rows, bytes, "
+             "row groups or partitions; Professional and Enterprise), then capped by your edition. "
+             "Above the cap, the cap applies and one line says so.",
+    ),
+    workers: int | None = typer.Option(
+        None, "--workers", "-w", help="Alias of --swarm, kept for existing scripts.",
+    ),
+    max_parallel: int | None = typer.Option(
+        None, "--max-parallel", help="Maximum concurrent clones (defaults to --swarm)."
+    ),
     kind: str = typer.Option("analyze", "--kind", help="analyze|train."),
     target: str | None = typer.Option(None, "--target", "-t", help="Target column (train)."),
     metric: str | None = typer.Option(None, "--metric", "-m"),
@@ -628,25 +759,89 @@ def coordinate(
     budget: float | None = typer.Option(None, "--budget", "-b", help="Per-sub-Avaloka cost ceiling (USD)."),
     output: Path = typer.Option(Path("./avaloka-fleet"), "--output", "-o"),
     quiet: bool = typer.Option(False, "--quiet"),
-    llm: bool = typer.Option(False, "--llm"),
+    llm: bool = _llm_flag(),
+    llm_provider: str | None = _llm_provider_opt(),
+    llm_model: str | None = _llm_model_opt(),
+    verbose: bool = typer.Option(
+        False, "--verbose", "-v",
+        help="Narrate the team's progress as it happens: the brief, the shards, each clone "
+             "leaving and returning, the merge.",
+    ),
+    debug: bool = typer.Option(
+        False, "--debug",
+        help="Everything --verbose says, plus every specialist step each clone ran and what "
+             "she found. Local output only; it may show your column names.",
+    ),
 ):
     """Multi-Avaloka — one main Avaloka fans a fleet of self-clones across the same
     dataset (each runs its own swarm on a shard) and converges one answer.
 
+    The clones' answers to the goal are merged from their sufficient statistics
+    (sums and counts add, means are weighted by rows), each clone's share is
+    cited by its row range, and a figure that cannot be merged exactly (a
+    median) is labelled approximate. The answer is printed and written to
+    <output>/goal_analysis.json and <output>/executive_report.md.
+
     The source may live anywhere: a local file, a database table/query or cloud
     object storage — it's resolved to a local file before the fleet is dispatched.
+
+    Every clone's work is traced separately: <output>/swarm_trace.json holds one
+    record per clone step (what it received, each firefly's output and cost, what
+    it returned, whether the merge selected it) and <output>/swarm_trace.jsonl
+    streams the same records live, one per line, so another process can tail it.
+
+    Three levels of narration. Default: results only. -v: the team's story —
+    who took which shard and what each clone came back with. --debug: every
+    specialist step inside every clone, with its own one-line output. Every
+    sentence is produced from a trace record, so what is printed is what ran.
     """
     from avaloka.coordinator import MainAvaloka
     from avaloka.io import SourceError
     from avaloka.mission.context import MissionKind
+    from avaloka.swarm_limits import limits_from_env
+    from avaloka.swarm_narration import DEBUG, QUIET, VERBOSE, SwarmNarrative
+    from avaloka.swarm_trace import SwarmTraceRecorder
+    from avaloka.util import _default
 
-    ava = _avaloka(quiet, llm)
+    limits = limits_from_env()
+    if swarm is not None and workers is not None and swarm != workers:
+        raise typer.BadParameter(
+            f"--swarm {swarm} and --workers {workers} disagree; pass one of them",
+            param_hint="--swarm")
+    workers = swarm if swarm is not None else workers
+    # ``workers`` stays None when not asked for: the coordinator sizes the
+    # fleet from the data and narrates the reason ("sizing" below); the
+    # edition cap is applied after that and announced, never silently.
+    level = DEBUG if debug else (VERBOSE if verbose else QUIET)
+
+    ava = _avaloka(quiet, llm, llm_provider, llm_model)
+    kind = kind.lower().strip()
+    if kind not in {"analyze", "train"}:
+        raise typer.BadParameter("must be 'analyze' or 'train'", param_hint="--kind")
+    if kind == "train" and not target:
+        raise typer.BadParameter("is required when --kind train", param_hint="--target")
+    if workers is not None and workers < 1:
+        raise typer.BadParameter("must be at least 1", param_hint="--swarm")
+    if max_parallel is not None and max_parallel < 1:
+        raise typer.BadParameter("must be at least 1", param_hint="--max-parallel")
     mk = MissionKind.TRAIN if kind == "train" else MissionKind.ANALYZE
 
     def on_progress(event: str, message: str) -> None:
-        if quiet:
+        if event == "limit":
+            # Shown even with --quiet: a capped request must never look like
+            # the fleet the user asked for. This is the one sentence about the
+            # cap; the narration states the effective size but does not nag.
+            console.print(f"[yellow]{message}[/yellow]")
             return
-        if event == "announce":
+        if quiet or level > QUIET:
+            # Narrated runs tell the same events from the trace records, in
+            # full sentences; the persona's one-liners would say them twice.
+            return
+        if event == "sizing":
+            # The fleet was sized from the data; say how, before the cap.
+            console.print(ava.say(f"I sized the fleet from the data — {message}.") if ava
+                          else f"[magenta]Fleet[/magenta] sized from the data — {message}")
+        elif event == "announce":
             console.print(ava.say(f"Cloning myself into {message} sub-Avalokas — each takes a shard "
                                   "of the same data and runs her own swarm.") if ava
                           else f"[magenta]Fleet[/magenta] dispatching {message} sub-Avalokas")
@@ -660,14 +855,36 @@ def coordinate(
 
     if ava is not None:
         console.print(ava.greet())
+    # The trace streams to swarm_trace.jsonl as it is recorded (flushed per
+    # record, so a reader can tail it); swarm_trace.json is written at the end.
+    out_dir = output.expanduser()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    live = open(out_dir / "swarm_trace.jsonl", "a", encoding="utf-8")
+    # The narration reads the very records the file gets, as they are
+    # appended, so a printed sentence and a traced record cannot disagree.
+    story = SwarmNarrative(level)
+
+    def stream(record: dict) -> None:
+        live.write(json.dumps(record, default=_default) + "\n")
+        live.flush()
+        for line in story.feed(record):
+            console.print(Text.assemble(("  › ", "cyan"), line), soft_wrap=True)
+
+    recorder = SwarmTraceRecorder(sink=stream)
     try:
-        main = MainAvaloka()
-        cr = main.coordinate(data, goal=goal, output_dir=output.expanduser(), workers=workers,
+        main = MainAvaloka(swarm_limits=limits)
+        cr = main.coordinate(data, goal=goal, output_dir=out_dir, workers=workers,
                              kind=mk, target=target, metric=metric, deployable=deployable,
-                             budget=budget, on_progress=on_progress)
+                             budget=budget, max_parallel=max_parallel, on_progress=on_progress,
+                             recorder=recorder)
     except (FileNotFoundError, SourceError) as exc:
         console.print(f"[red]I can't reach that source:[/red] {exc}")
         raise typer.Exit(code=1)
+    except ValueError as exc:
+        console.print(f"[red]Invalid swarm request:[/red] {exc}")
+        raise typer.Exit(code=2)
+    finally:
+        live.close()
 
     t = Table(title=f"Converged full-dataset profile ({cr.workers} sub-Avalokas, {cr.n_rows:,} rows)")
     t.add_column("Column", style="cyan"); t.add_column("Role"); t.add_column("Missing%", justify="right")
@@ -682,23 +899,67 @@ def coordinate(
 
     s = Table(title="Fleet (each sub-Avaloka ran her own firefly swarm)")
     s.add_column("Sub-Avaloka", style="cyan"); s.add_column("Rows", justify="right")
-    s.add_column("Verdict"); s.add_column("Manual min", justify="right")
+    s.add_column("Verdict"); s.add_column("Manual min (est.)", justify="right")
     for sh in cr.shards:
         s.add_row(f"Ava-{sh.shard_id:02d}", f"{sh.n_rows:,}", str(sh.verdict or "—"),
                   f"{sh.manual_minutes:.0f}")
     console.print(s)
 
+    answer = cr.answer or {}
+    if answer.get("headline"):
+        # The answer to the goal, merged from the clones' shares of it.
+        console.print("\n[bold]Answer[/bold]")
+        console.print(Text(answer["headline"]), soft_wrap=True)
+        for c in answer.get("contributions") or []:
+            console.print(Text("  · " + c["finding"]), soft_wrap=True)
+        for a in answer.get("approximate") or []:
+            console.print(Text(f"  Approximate — {a['statistic']}: {a['reason']}."), style="yellow",
+                          soft_wrap=True)
     colour = {"pass": "green", "warn": "yellow", "fail": "red"}.get(cr.verdict, "white")
     console.print(f"\nConverged verdict: [{colour}]{cr.verdict.upper()}[/{colour}]  "
                   f"(max safe deployment level [bold]{cr.max_safe_deployment_level}/4[/bold])")
+    if answer.get("verdict_cap"):
+        console.print(Text(answer["verdict_cap"]), style="yellow", soft_wrap=True)
+    console.print(_execution_line(cr))
     if cr.selected_model:
         m = cr.selected_model
         console.print(f"Selected model: [bold]{m['selected']}[/bold] "
                       f"({m['metric']} {m['score']:.4f}, from shard {m['from_shard']})")
     econ = cr.economics
-    console.print(f"Fleet effort replaced: [bold]{econ.estimated_manual_effort_hours:.1f}h[/bold] · "
-                  f"multiplier [bold]{econ.economic_multiplier:.1f}x[/bold]")
+    console.print(f"Fleet manual effort: [bold]{econ.estimated_manual_effort_hours:.1f}h[/bold] "
+                  f"({MANUAL_EFFORT_CAVEAT}) · multiplier [bold]{econ.economic_multiplier:.1f}x[/bold]")
     console.print(f"\n[bold green]Fleet deliverables →[/bold green] {output}")
+    console.print(f"Answer: {output / 'goal_analysis.json'} · report: {output / 'executive_report.md'}")
+    console.print(f"Swarm trace: {cr.trace['records']} records, one episode per clone → "
+                  f"{output / cr.trace['path']}")
+
+
+def _execution_line(cr) -> str:
+    """The fleet's Execution line: what the answer used, then what profiling used.
+
+    The shard missions profile a working frame, which on a big shard is a
+    sample, while the answer is merged from every row of each shard. One
+    line read "100,000/4,000,000 rows in the shard missions' working frames
+    · 2 sampled shards" directly under an every-row answer, so each part
+    now names its own basis.
+    """
+    parts = [f"Execution: [bold]{cr.execution['parallelism']} concurrent sub-Avalokas[/bold]"]
+    answer = cr.answer or {}
+    shards = len(cr.shards)
+    of_shards = f"{shards} shard{'s' if shards != 1 else ''}"
+    if answer.get("basis") and not answer.get("sampled"):
+        parts.append(f"answer: every row of {of_shards} ({cr.n_rows:,} rows)")
+    elif answer.get("sampled"):
+        parts.append("answer: estimated from samples (see above)")
+    sampled = [sh for sh in cr.shards if sh.sampling.get("sampled")]
+    if sampled:
+        sizes = sorted({int(sh.sampling.get("n_working_rows") or 0) for sh in sampled})
+        each = f"{sizes[0]:,}" if len(sizes) == 1 else f"{sizes[0]:,} to {sizes[-1]:,}"
+        which = "per shard" if len(sampled) == shards else f"in {len(sampled)} of {of_shards}"
+        parts.append(f"profiling: samples of {each} rows {which}")
+    else:
+        parts.append("profiling: every row")
+    return " · ".join(parts)
 
 
 # ``benchmark`` is a sub-app rather than a plain command so that ``serve`` can
@@ -706,6 +967,10 @@ def coordinate(
 # ``avaloka benchmark serve`` is where someone would look for that. The
 # callback runs the suite when no subcommand is given, so plain
 # ``avaloka benchmark`` keeps working exactly as before.
+from avaloka.catalog.cli import catalog_app  # noqa: E402  (typer sub-app; the store is imported lazily)
+
+app.add_typer(catalog_app, name="catalog")
+
 benchmark_app = typer.Typer(
     help="Run the benchmark against this CLI, or serve its scorecard.",
     invoke_without_command=True)
@@ -717,7 +982,8 @@ def benchmark(
     ctx: typer.Context,
     family: str | None = typer.Option(
         None, "--family",
-        help="data_engineering|data_science|format_comprehension|conversational_scorers."),
+        help="data_engineering|data_science|format_comprehension|conversational_scorers|"
+             "conversational_product."),
     kaggle: bool = typer.Option(False, "--kaggle", help="Include Kaggle-dataset tasks (if downloaded)."),
     edgar: bool = typer.Option(False, "--edgar",
                                help="Include the real SEC EDGAR filing task (network; "
@@ -746,10 +1012,11 @@ def benchmark(
     console.print(f"Running [bold]{len(tasks)}[/bold] benchmark tasks → [dim]{base}[/dim]")
     card = BenchmarkRunner(base, verbose=False, edgar=edgar).run(tasks)
 
-    if family in (None, "conversational_scorers"):
+    if family in (None, "conversational_scorers", "conversational_product"):
         from avaloka.benchmark.conversational import conversational_results
         for result in conversational_results(live=live):
-            card.add(result)
+            if family in (None, result.family):
+                card.add(result)
 
     t = Table(title="Avaloka benchmark scorecard")
     t.add_column("Task", style="cyan"); t.add_column("Source"); t.add_column("Score", justify="right")
@@ -840,8 +1107,12 @@ def main() -> None:
             console.print(f"[red]That dataset isn't something I can analyse.[/red]")
             console.print(f"[dim]{exc}[/dim]")
         else:
-            name = type(exc).__name__
-            console.print(f"[red]I hit a problem I couldn't recover from:[/red] {name}: {exc}")
+            # The exception is for the debug log (and AVALOKA_TRACEBACK=1), not
+            # the user's screen: its text can carry values from the data.
+            import logging
+
+            logging.getLogger("avaloka.cli").debug("unrecovered error", exc_info=exc)
+            console.print("[red]I hit a problem I couldn't recover from.[/red]")
             console.print("[dim]If the file has ragged rows, mixed delimiters or an unusual "
                           "encoding, fixing the export is usually the quickest path. "
                           "Run again with AVALOKA_TRACEBACK=1 for the full trace.[/dim]")

@@ -23,12 +23,23 @@ trainer, visualizer — samples the data, plans the analysis, writes and validat
 the Python, runs it on your laptop or a Ray cluster, trains and serves a model
 if you need one, and records every artifact along the way.
 
+*Our thanks to [Martin Kleppmann](https://github.com/ept) for
+[Designing Data-Intensive Applications](https://dataintensive.net/), and to
+[the others this rests on](docs/ACKNOWLEDGEMENTS.md).*
+
 An instrument is only as good as its calibration, so three of those agents
 exist to check the work of the others. Avaloka refuses to train on leaked data,
 makes every model beat a trivial baseline, and checks the prose it writes
-against the numbers it computed. Where the evidence is thin, it
-[says so transparently](docs/test-reports/three-pillar-coverage.md), and we
-constantly and consistently improve the data science agents.
+against the numbers it computed. Where the evidence is thin,
+[it says so](docs/test-reports/three-pillar-coverage.md).
+
+**Avaloka 2.0 makes the swarm public.** Avaloka now clones herself: each copy
+works a shard of the same data with the whole team, and the main Avaloka merges
+what they found into one answer. The swarm, the workload plan that sizes every
+job before it starts, and adaptive sampling are one mechanism, not three
+features. The result is a virtual data science team that understands your
+data and answers in plain language, whether the question comes from an analyst
+or a CEO — and that shows its work. [How it fits together](#20-the-swarm-goes-public).
 
 ## What makes Avaloka different
 
@@ -63,7 +74,7 @@ constantly and consistently improve the data science agents.
 - **A laptop is enough.** The CLI runs a statistics-grounded analysis on your
   own machine, fully offline.
 
-🚀 **[Quickstart](#quickstart)** · 📦 **[Install Guide](docs/INSTALL.md)** · 📖 **[Docs](docs/DOCS_MAP.md)** · 📊 **[Benchmarks](docs/benchmarks.md)** · ✍️ **[Blog](https://avaloka.ai/blog)**
+🚀 **[Quickstart](#quickstart)** · 📦 **[Install Guide](docs/INSTALL.md)** · 📖 **[Docs](docs/DOCS_MAP.md)** · 📊 **[Benchmarks](docs/benchmarks/2.0-vs-1.0.md)** · ✍️ **[Blog](https://avaloka.ai/blog)**
 
 ---
 
@@ -102,28 +113,83 @@ Then try the other commands:
 ```bash
 avaloka train app/sample_data/yellow_tripdata_2015-01_dataset_50k.csv --target payment_type   # ~2 min
 avaloka chat  app/sample_data/healthcare_dataset.csv     # numbered next steps; answer with a number
-avaloka coordinate app/sample_data/healthcare_dataset.csv --workers 2 \
-        --goal "average billing amount by medical condition"   # two copies of Avaloka, one answer
+avaloka coordinate app/sample_data/healthcare_dataset.csv --swarm 2 --debug \
+        --goal "average billing amount by medical condition"   # two clones, one answer, and the team's log
 ```
 
 `train` fits several candidate models, checks the winner beats a trivial
 baseline, and writes a validated, deployable model to `avaloka-model/`.
 `coordinate` is the swarm: Avaloka clones herself, each copy works half of the
 data with its own agents, and the main Avaloka merges what they found into one
-profile and one verdict (`avaloka-fleet/coordination.json`). Your own files
-work the same way — CSV, TSV, Parquet, Excel, JSON, XML, ORC and Avro.
+profile and one verdict (`avaloka-fleet/coordination.json`). `--debug` tells
+you, in plain language, every step the team took — each sentence comes from a
+record in `avaloka-fleet/swarm_trace.json`. Above your edition's cap the run
+proceeds at the cap and says so once. Your own files work the same way — CSV,
+TSV, Parquet, Excel, JSON, XML, ORC and Avro. Every command, with worked
+examples: [the CLI guide](docs/cli-user-guide.html).
 
 > **Your data stays on your machine.** Everything above runs locally, with no
-> model and no key. Add a model only when you want conversation and richer
-> narration, and pick any provider, or a local one: see
+> model and no key. Add a model only when you want the conversational planner
+> and richer narration, and pick any provider, or a local one: see
 > [Bring your own model](#bring-your-own-model).
 
 **Want the full platform** — the web UI, the API, Ray and Kubernetes? Follow the
 [Install Guide](docs/INSTALL.md); it also covers
 [running completely offline](docs/INSTALL.md#running-avaloka-completely-offline).
+This is Avaloka 2.0.0: `avaloka version` prints `avaloka 2.0.0`, the API's
+`GET /version` returns `2.0.0`, and the container images are published as
+`ghcr.io/guruvaidev/avaloka-{api,ui,ray,functions}:2.0` by the first build of
+the 2.0 line (`:main` until then, which is also the Helm default). Release
+notes: [docs/releases/2.0.md](docs/releases/2.0.md).
 If something does not work, run `python scripts/doctor.py` first, then see
 [what goes wrong on a first run](docs/INSTALL.md#first-run-what-to-expect-and-what-goes-wrong).
 The full CLI reference is [README_CLI.md](README_CLI.md).
+
+---
+
+## 2.0: the swarm goes public
+
+Before Avaloka writes a line of analysis she decides how to work the data.
+Three decisions, made in order, from measurements rather than guesses:
+
+1. **The workload plan sizes the job.** Rows, bytes and the source's own
+   statistics choose a lane: run it live, run a sample live and offer the full
+   pass, or fan out as a batch on Ray. The lane is stated, with its reason,
+   before anything runs (`workload.json`).
+2. **Adaptive sampling decides whether to sample at all.** Small data is never
+   sampled. When sampling pays, the Sampling Specialist draws a stratified
+   sample that still tells the truth about the whole, and records the decision
+   as an assumption you can read.
+3. **The workload optimizer plans the scan from statistics.** File format,
+   partitions, indexes and the profile's value counts give an estimated filter
+   factor for every predicate. From those the optimizer writes a plan: the
+   predicate order, the columns worth projecting, the filters the source could
+   push down, the strategy — partition-pruned, index-filtered or projected
+   scan — and the rows it expects to touch (`workload_optimization.json`).
+   In 2.0 the plan is recorded beside the results and reported; the analysis
+   does not yet execute it. Executing it, and measuring the gain against the
+   recorded estimate, is the next step.
+
+The swarm is what makes those decisions pay at scale. The main Avaloka shards
+the data and dispatches clones; each clone is a full Avaloka — scout, sampler,
+optimizer, engineer, feature engineer, planner, validator, reporter — on its
+shard. Convergence is honest rather than theatrical: profiles merge *exactly*
+from sufficient statistics, so the swarm's profile equals a single pass over
+the whole; verdicts merge *conservatively*, so one failing shard fails the
+fleet; and for training the shard model with the best honest score wins. The
+open-source edition runs two clones per mission, sized for a laptop;
+Professional sixteen; Enterprise without limit ([Editions](#editions)).
+
+And you can watch it. In every edition Avaloka narrates the team's work in
+the chat as it happens — who she dispatched, what each copy found, how she
+merged it. In Professional and Enterprise, every clone's steps, outputs and
+hand-offs are also recorded as separately addressable records and served by a
+local API, so the live swarm page shows the copies at work as they run and the
+same record can later train the agents themselves. The planner graph shows the
+operations that were actually executed on your prompt — the load, filters,
+group-bys, joins, aggregates, training and evaluation, with the columns and
+metrics involved — not a generic plan. Design notes:
+[Agent trace](docs/design/AGENT_TRACE.md) · [Swarm demo](docs/design/SWARM_DEMO.md).
 
 ---
 
@@ -166,7 +232,7 @@ Details and how to change them: [docs/privacy-and-egress.md](docs/privacy-and-eg
 | OpenRouter (**the default**: gpt-oss-120b, Luna as the higher tier) | `openrouter` | `OPENROUTER_API_KEY` |
 | Your own hardware (vLLM, Ollama) | `local` | `INFERENCE_LOCAL_BASE_URL` |
 
-The quickstart above needs no model at all. In 1.0.0, the CLI's `--llm` option
+The quickstart above needs no model at all. In 1.0, the CLI's `--llm` option
 uses Claude (`ANTHROPIC_API_KEY`). In 2.0, the CLI takes the same choice of
 providers as the platform.
 
@@ -205,17 +271,18 @@ delegates to.
 | | Agent | What it owns |
 | --- | --- | --- |
 | **Lead** | Planner | Converses, plans, routes — keep planning, provision, code, train, schedule, execute |
-| **Look** | Sampling · Profiling | Samples and per-column stats; infers the domain, ranks predictive power, flags quality |
+| **Look** | Sampling · Profiling · Workload Optimizer | Samples and per-column stats; the lane, the sample and the scan plan, from statistics |
 | **Write** | Coder | Numbered pseudocode first, then Python that follows it |
 | **Check** | Validator | Three layers — syntax, schema-aware static, logical — before anything runs |
 | **Run** | Execution | Locally, as a Kubernetes Job, or on a Ray cluster |
 | **Move** | Data Transfer | Daft ETL across CSV, Parquet, Avro, Delta, Iceberg, JSON, XML, Excel |
-| **Train** | Model Training | PyTorch, scikit-learn, ONNX and MLflow; distributed on Ray, with a model registry |
+| **Train** | Model Training · Feature Engineer | PyTorch, scikit-learn, ONNX and MLflow; distributed on Ray, with a model registry |
 | **Show** | Visualization | Charts and a report from the results |
 | **Judge** | Integrity · Evaluation · Claim Verifier | The evidence layer, below |
 
 The full roster — Planner Graph, Summarizer, Scheduler, Infrastructure, the
-conversational layer — is in [Architecture §2](docs/architecture.md).
+statistician, experimenter and conformal calibrator, the conversational
+layer — is in [Architecture §2](docs/architecture.md).
 
 ### The evidence layer
 
@@ -235,9 +302,73 @@ machinery.
 
 ---
 
-## What's new in 1.0.0
+## What's new in 2.0
 
-1.0.0 is about **reading real-world data correctly, and being honest when it
+2.0 is the swarm, and everything that lets you see it work. The full list is
+in the [CHANGELOG](CHANGELOG.md); the stories behind it are on the
+[blog](https://avaloka.ai/blog).
+
+- **The swarm, in every edition.** `avaloka coordinate` clones Avaloka across
+  shards of one dataset and converges one answer. Open source runs two clones
+  per mission; the cap is stated in code and announced, never silent.
+- **Workload-based optimization.** A workload optimizer plans every scan from
+  the source's statistics — format, partitions, indexes, value counts — and
+  writes the plan beside the results. Recorded and reported in 2.0, not yet
+  applied: the speedups it estimates are ceilings until the plan is executed.
+- **Specialists for statistics.** A feature engineer runs in every mission;
+  a statistician, an experimenter and a conformal calibrator join when the
+  question calls for them, so a run explains its features and its
+  uncertainty, not only its score.
+- **An agent trace for every turn.** Each step records what the agent decided
+  and why, what it calculated and on which data, which model it called and
+  what that cost, and what it handed to the next agent — served by
+  `GET /threads/{id}/trace`.
+- **A planner graph of what actually ran.** Built from the executed code, with
+  the columns on every operation; the agents and checks are one toggle away.
+- **A per-clone swarm API and a live swarm page** (Professional and
+  Enterprise). Every clone's dispatch, steps, return and the merge are
+  separately addressable records, with an episode view ready for
+  reinforcement learning; the free editions get the same story told in the
+  chat. Telemetry that leaves the machine carries ids, timings and outcomes
+  only: never your data, your column names or your file names. Memory
+  embeddings are computed locally by default, by a model bundled in the
+  image. Opting in to OpenAI embeddings (`EMBEDDING_PROVIDER=openai` plus
+  `EMBEDDING_OPENAI_API_KEY`) sends memory text, including table and column
+  names, to OpenAI; `OPENAI_API_KEY` alone never does.
+- **A conversation that adapts.** Avaloka infers whether she is talking to a
+  novice, a practitioner or an expert and sizes her explanations and options
+  to match.
+- **Instant Analysis and the Analysis Recipe Library.** One question about an
+  uploaded or sample dataset returns verified findings, an interactive report
+  and a notebook that reproduces it. Ten recipes, from profile and trend to
+  regression, anomalies, cohort retention and A/B tests, each run on a stated
+  budget of rows, bytes, memory and time; Outcome Reports carry the
+  data-quality checks, the recipe and the engine versions behind each finding.
+- **Replanning on execution error.** A failed run is diagnosed, the data or
+  the code repaired and run again, and the recovery recorded in the run's
+  story; a correction from you re-plans and states the reason.
+- **A personal dataset catalog**, in chat (`use my.sales@2`) and on the
+  command line, with versions and lineage for every dataset an analysis
+  touches.
+- **Generated code in an isolated executor**, with no network egress, no
+  secrets and no route to your databases.
+- **Secure by default.** MLflow requires basic auth and Ray token auth,
+  generated into the release Secret, and third-party usage beacons are off
+  on every deploy surface.
+- **Cross-validation with confusion matrices**, model families for training,
+  a local-first benchmark harness with adaptive-sampling, swarm-ablation and
+  reliability tracks, and a developer guide with an SDK reference.
+
+**Coming next:** JSON Lines and NDJSON with nested fields flattened into
+stable dotted columns; MongoDB as a read-only source; documents, images and
+video as uploads. In development, not in this release; follow the
+[blog](https://avaloka.ai/blog).
+
+---
+
+## What's in 1.0
+
+1.0 is about **reading real-world data correctly, and being honest when it
 can't.** The full list is in the [CHANGELOG](CHANGELOG.md); the stories behind
 it are on the [blog](https://avaloka.ai/blog).
 
@@ -275,6 +406,23 @@ it are on the [blog](https://avaloka.ai/blog).
   database connection strings stored there. See the advisory in
   [SECURITY.md](SECURITY.md).
 
+## How to read an answer
+
+Avaloka's explanation can be wrong. The model writes the words; the figures
+come from code that ran on your data, and Avaloka checks the figures in the
+reply against what that code computed.
+
+- **A figure it cannot confirm is held back**, and the reply says so ("I've
+  held back N statements…" with the reason).
+- **Anything the model wrote is marked "commentary — not checked"** (shown
+  muted and labelled in the web app, dimmed in the CLI, and carried as
+  `reply_segments` in the API). Treat it as the model's reading, not as a
+  verified finding. Text written by code from the data — scope lines, the
+  data notes on upload cards, counts and statistics — is shown plain.
+- **Each answer computed from your data comes with the table it was computed
+  from**, in the analysis workspace (the Output view, with Download CSV), so you
+  can check any figure against the rows yourself.
+
 ## What is proven, and where it is thin
 
 We would rather publish the gaps than claim three pillars and evidence one.
@@ -284,21 +432,56 @@ Everything in this table is something you can run yourself.
 | --- | --- | --- |
 | **It installs cleanly** | No compiler and no API key needed; checked on a bare `python:3.12-slim` image | `python scripts/doctor.py` |
 | **The code is tested** | The hermetic test gate runs on every pull request, on Python 3.11 and 3.12, with no network and no services | `./scripts/ci.sh --fast` |
-| **Answers are graded** | Deterministic benchmark, no LLM: **39/50** pass. The 11 that fail are declared [known defects](avaloka/benchmark/known_defects.py), and any *new* failure fails CI | `python -m avaloka.benchmark run` |
+| **Answers are graded** | A deterministic benchmark with no LLM in the loop. Every failing task is a declared [known defect](avaloka/benchmark/known_defects.py), and any *new* failure fails CI | `python -m avaloka.benchmark run` |
+| **The harness beats the model alone** | On [DataAgentBench](docs/benchmarks/2.0-vs-1.0.md#51-dab-headline) (54 queries, 1 trial, hints off, official validators), 2.0 against the same model alone, one shot: Claude Haiku 5.5 **29/54 = 0.54** vs 14/54 = 0.26; gpt-oss-120b on Groq **12/54 = 0.22** vs 6/54 = 0.11. The 1.0 baseline (`f772b0fb`) was not measured: 1.0 has no agent for this task. Error counts and spend are in [the table below](#the-dataagentbench-headline) | `python -m benchmarks.run run dab --allow-cloud --trials 1`, with `AVALOKA_DAB_AGENT_CMD`, `AVALOKA_DAB_MODEL`, `AVALOKA_DAB_INPUT_USD_PER_MTOK` and `AVALOKA_DAB_OUTPUT_USD_PER_MTOK` set ([setup](benchmarks/external/dab/README.md)); the command alone does not reproduce the run |
+| **The swarm runs on a laptop** | Two clones on a clean install with no key and no network; the merged profile equals a single pass over the whole dataset | `avaloka coordinate <file> --workers 2 --goal "..."` |
 | **The evidence layer works** | 16 cases — leakage, duplicate splits, identifier-like features, the mandatory baseline, invented numbers, the scorer's own resistance to gaming — executed against a live deployment, mostly passing | [coverage report](docs/test-reports/three-pillar-coverage.md) |
 | **Lineage is real, but thinly tested** | 2 cases pass: ancestry recorded across derivations, and PII located *through* lineage rather than by re-scanning. The store exists; the coverage is 2 cases, not 20 | [coverage report](docs/test-reports/three-pillar-coverage.md) |
 | **Memory persists** | Recall survives a pod restart (`3.4s` cold, `0.6s` warm). It carries context forward; we do not yet claim it makes analyses measurably better | [coverage report](docs/test-reports/three-pillar-coverage.md) |
 
 The honest summary: Avaloka today is a **strong harness, a real lineage graph,
-and a working learning loop whose value is still ahead of it**. The
-[test reports](docs/test-reports/) hold the per-case evidence for each row,
-including which cases are blocked and on what.
+a swarm whose convergence is exact by construction, and a working learning
+loop whose value is still ahead of it**. The [test reports](docs/test-reports/)
+hold the per-case evidence for each row, including which cases are blocked and
+on what.
 
 **The benchmark number is a floor, not a leaderboard.** It scored 1.00 before
 *and* after five real defects were fixed, because no task carried the shape
-that triggers them. What it does **not** measure is in
-[docs/benchmarks.md](docs/benchmarks.md); no external-benchmark harness is
-committed to this tree yet.
+that triggers them. The current scorecard, and what it does **not** measure,
+is in [docs/benchmarks.md](docs/benchmarks.md).
+
+### The DataAgentBench headline
+
+From [§5.1 of the 2.0 vs 1.0 report](docs/benchmarks/2.0-vs-1.0.md#51-dab-headline): one trial per
+query, hints off, the benchmark's own validators. **1.0 = `f772b0fb`, not
+measured on DAB**: 1.0 has no natural-language multi-database agent, so the
+capability is absent. Every row is 2.0 against the same model alone, never
+2.0 against 1.0.
+
+| Model | n | 2.0 harness | Model alone (one shot) | 1.0 (`f772b0fb`) | All-errored, 2.0 / alone | Provider errors, 2.0 / alone | Spend, 2.0 / alone |
+| --- | ---: | --- | --- | --- | ---: | --- | --- |
+| Claude Haiku 5.5 via OpenRouter (a published baseline row, not a test-bench dependency) | 54 | **29/54 = 0.54** (95% CI 0.41–0.66) | 14/54 = 0.26 (0.16–0.39) | not measured | 7 / 4 | 0 / 0 | $3.95 / $0.07 (Haiku's 100k+ prompt-token tier; logged $1.88 at the flat rate, [corrected 2026-10-31](docs/benchmarks/2.0-vs-1.0.md#71-cost-correction-2026-10-31)) |
+| gpt-oss-120b on Groq (test-bench model) | 54 | **12/54 = 0.22** (0.13–0.35) | 6/54 = 0.11 (0.05–0.22) | not measured | 19 / 11 | 7 after the once-only retry (6 `tool_use_failed`, 1 `context_length_exceeded`) / 0 | $2.05 / $0.06 |
+| Gemini Argon, 12-query subset | 12 | **6/12 = 0.50** (0.25–0.75) | 2/12 on the same 12 | not measured | 3 / — | 0 / — | $11.30 (proxy price) / — |
+| gemma4:e4b, local, 12-query subset | 12 | **1/12 = 0.08** (0.01–0.35) | 2/12 on the same 12 | not measured | 3 / — | 0 / — | $0 (local) |
+
+The harness adds 15 queries (+0.28) on Haiku 5.5 and 6 queries (+0.11) on
+gpt-oss-120b. That is two models, one trial each, not what the harness scores
+on every model. Argon and gemma4:e4b were run under 2.0 only on the 12-query
+subset, one query per dataset. Their model-alone runs covered all 54 queries:
+Argon 12/54 = 0.22 with 18 all-errored ($1.00), gemma4:e4b 2/54 = 0.04 with 13
+all-errored ($0). On gpt-oss-120b, setting the 7 provider errors aside gives
+12/47 = 0.26 on answered queries. The other 12 all-errored queries are the
+agent's own give-ups and count as wrong.
+
+Each cell's record under [benchmarks/results/2.0/](benchmarks/results/2.0/)
+carries its model ids, commit, timestamps and observed cost, and the run logs
+carry the spend. The records do not store the command line; the command shape
+and the environment it needs are in the report (§3) and the
+[DAB setup](benchmarks/external/dab/README.md). The commit in the DAB records,
+`a90fa8af`, is the tree at the retry pass that rewrote them. The trials ran
+earlier, and on `avaloka/` and `app/` that tree is identical to integration/2.0
+at `8bd7e5d0`. A figure without a record is not printed here.
 
 **The gate** is `pytest -m "not cluster and not cloud and not integration"`:
 unit and contract tests, no API key, no services, so a contributor or a fork
@@ -308,13 +491,15 @@ need Redis, a server and cloud credentials and sit outside it
 local model server on their own cadence, so a provider outage cannot redden a
 pull request.
 
-**Known limitations in 1.0.0:**
+**Known limitations:**
 
 - In a multi-sheet workbook, the upload path reads the longest sheet, not
   necessarily the one your question is about. Upload that sheet on its own for now.
 - The CLI's spreadsheet reader handles fewer layouts than the upload path.
+- The swarm runs its clones as threads on one machine in every edition; no
+  edition fans clones out across a cluster yet.
 
-Both are tracked in the [CHANGELOG](CHANGELOG.md).
+All three are tracked in the [CHANGELOG](CHANGELOG.md).
 
 ---
 
@@ -324,7 +509,7 @@ Both are tracked in the [CHANGELOG](CHANGELOG.md).
 | --- | --- |
 | **On your laptop** | The [Quickstart](#quickstart) above. |
 | **On your own cluster, fully offline** | [Install Guide → Running completely offline](docs/INSTALL.md#running-avaloka-completely-offline): a local model server, the embedding model baked into the image, and storage, memory and auth deployed by the Helm chart. Nothing calls home, and a `--network none` check lets you prove it rather than trust it. |
-| **In your cloud, provisioned by Avaloka** | The Professional and Enterprise editions ([avaloka.ai](https://avaloka.ai)) run in your own cloud, on your billing, and provision and autoscale the clusters there for you. Enterprise adds team workspaces, the cloud scheduler and connections to your own clusters. |
+| **Let us run it** | [avaloka.ai](https://avaloka.ai) hosts the Professional and Enterprise editions with auto-scaling compute — nothing to stand up. Enterprise adds team workspaces, the cloud scheduler and connections to your own clusters. |
 
 The open-source edition is not a limited trial of the commercial ones. It is the
 same engine on your own hardware, and it stays useful with no account, no key
@@ -337,7 +522,8 @@ and no network.
 Avaloka is an orchestration layer, not a reimplementation. Compute, storage,
 vector search, experiment tracking and the database are done by projects that
 were load-bearing in production long before Avaloka existed. What Avaloka adds
-is the agent team, the evidence layer and the conversation.
+is the agent team, the evidence layer and the conversation — and deliberately
+not a homegrown substitute for any of these.
 
 | Layer | Built on |
 | --- | --- |
@@ -371,6 +557,9 @@ speed that makes the planner feel like a conversation rather than a batch job.
 | Runs on | your infrastructure | Avaloka cloud | your cloud, your billing | your cloud, your billing |
 | Analysis, codegen, visualization | ● | ● | ● | ● |
 | Export the generated code | ● | ● | ● | ● |
+| Swarm: clones per mission | **2** | 2 | 16 | unlimited |
+| Swarm narrated in the chat | ● | ● | ● | ● |
+| Live swarm page and per-clone trace API | ○ | ○ | ● | ● |
 | Ray, scheduler, batch jobs | **●** | ○ | ● | ● |
 | Model training, registry, inference serving | **●** | ○ | ● | ● |
 | Cloud / database connectors | ○ | ○ | ● | ● |
@@ -379,7 +568,9 @@ speed that makes the planner feel like a conversation rather than a batch job.
 
 The open-source edition is sized for a laptop or a small self-managed cluster.
 That is the target, it is what gets tested, and it is what the capability
-matrix grants.
+matrix grants. The swarm's clone count is the one preview limit, and it is
+written in open code (`avaloka/swarm_limits.py`): a self-hoster can read it
+and, under Apache 2.0, change it.
 
 | | |
 | --- | --- |
@@ -401,56 +592,19 @@ each boundary is enforced in code: [docs/EDITIONS.md](docs/EDITIONS.md).
 | --- | --- |
 | ✍️ **[Blog](https://avaloka.ai/blog)** | Release notes, design stories and what we are building next |
 | 📦 **[Install Guide](docs/INSTALL.md)** | Laptop, Kubernetes, offline and air-gapped installs |
-| 💻 [CLI Guide](README_CLI.md) | Every `avaloka` command, and what each error means |
+| 💻 [CLI Guide](docs/cli-user-guide.html) · [README_CLI.md](README_CLI.md) | Every `avaloka` command with worked examples, and what each error means |
 | 🧰 [Developer Guide & SDK](docs/guide/index.html) | Build on Avaloka from Python; every example comes from a real run |
 | 🚶 [User Guide](docs/USER_GUIDE.md) | Sign in, upload, ask, connect a database, train a model |
 | 🗺️ [Architecture](docs/architecture.md) | The agent team, the request lifecycle, and why each dependency exists |
+| 🔍 [Agent trace](docs/design/AGENT_TRACE.md) · [Swarm demo](docs/design/SWARM_DEMO.md) | What every agent and every clone recorded, and how to watch a swarm run |
 | ☸️ [Deployment](docs/deployment.md) | Helm, Ray/KubeRay, storage classes |
-| 📊 [Benchmarks](docs/benchmarks.md) · [Reliability](docs/test-reports/1.6-reliability-measurements.md) | What was measured, and what it does not cover |
+| 📊 [Benchmarks: 2.0 vs 1.0](docs/benchmarks/2.0-vs-1.0.md) · [Scorecard](docs/benchmarks.md) · [Reliability](docs/test-reports/1.6-reliability-measurements.md) | What was measured, and what it does not cover |
 | 💰 [Model Routing & Cost](docs/model-routing-cost.md) | What each agent costs per turn, and which model is worth upgrading |
 | 📄 [Research](docs/research/) | The paper behind the system |
 
 Every document, and who it is for: [docs/DOCS_MAP.md](docs/DOCS_MAP.md).
 
 ---
-
-## Coming in 2.0
-
-Avaloka 2.0 is the next open-source release. Everything below is in the
-open-source edition; follow the [blog](https://avaloka.ai/blog) for the launch.
-
-- **The swarm, in every edition.** `avaloka coordinate` clones Avaloka across
-  shards of one dataset and converges one answer: profiles merge exactly,
-  verdicts merge conservatively, and the work is narrated in the chat as it
-  happens. Open source runs two clones per mission, a limit written in open
-  code.
-- **Instant Analysis and the Analysis Recipe Library.** Ask one question of an
-  uploaded or sample dataset and get verified findings, an interactive report
-  and a notebook that reproduces it. Ten recipes, from profile and trend to
-  regression, anomalies, cohort retention and A/B tests, each on a stated
-  budget of rows, bytes, memory and time.
-- **Outcome Reports with source-data checks**, carrying the data-quality
-  checks, the recipe and the engine versions behind every finding.
-- **Workload planning from statistics.** Every job is sized from rows, bytes
-  and the source's own statistics, assigned a live, sampled or Ray-batch lane
-  with its reason, and given a scan plan recorded beside the results.
-- **Statistical specialists.** A feature engineer in every mission, and a
-  statistician, an experimenter and a conformal calibrator when the question
-  calls for them.
-- **An agent trace for every turn, and a planner graph of what actually ran**,
-  built from the executed operations with the columns on each one.
-- **Replanning on execution error.** A failed run is diagnosed, the data or
-  the code repaired, and the recovery recorded; a correction from you re-plans
-  and says why.
-- **A personal dataset catalog**, in chat (`use my.sales@2`) and on the command
-  line, with versions and lineage for every dataset an analysis touches.
-- **Generated code in an isolated executor**, with no route to your databases
-  or the internet and none of the server's secrets.
-- **Cross-validation with confusion matrices** and model families for training.
-- **Answers pitched to whoever is asking**, from a novice to an expert, and
-  memory scoped to the conversation it came from.
-- **Secure by default:** MLflow and Ray require authentication, and
-  third-party usage beacons are off on every deploy surface.
 
 ## Contributing
 

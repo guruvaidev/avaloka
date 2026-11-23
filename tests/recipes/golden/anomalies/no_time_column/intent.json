@@ -1,0 +1,9 @@
+{
+  "question": "Which weights are unusual?",
+  "recipe": "anomalies",
+  "params": {
+    "measure": "weight"
+  },
+  "confidence": 1.0,
+  "source": "fixture"
+}

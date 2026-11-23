@@ -18,6 +18,24 @@ reasons, enumerated by :class:`GateReason`:
 
 A gate that is neither COST nor COMMERCIAL is a nag. Do not add one.
 
+Separately from gates, one capability carries a declared PREVIEW LIMIT: the
+swarm ships in every edition, but its fan-out is capped at 2 clones per
+mission on the open-source and Free editions (16 Professional, unlimited
+Enterprise). That is an owner decision, applied to self-hosted installs too,
+and documented as its own category in docs/EDITIONS.md rather than filed as
+COST or COMMERCIAL. The number lives in avaloka/swarm_limits.py; see
+swarm_limits() below. Add no other limit without declaring it the same way.
+
+The swarm *console* is a different thing from the swarm. The console is the
+live /swarm page and the swarm/trace API routes behind it (missions, records,
+clones, episodes, telemetry, the thread trace, agent metrics). The swarm runs
+in every edition; the console is a Professional and Enterprise feature, gated
+COMMERCIAL by owner decision (2026-10-18). Open-source and Free editions get
+the same mission told back in the chat instead (avaloka.swarm_narration), so
+nothing a clone found is withheld — only the live window onto it. See
+swarm_console_gate() below; the API dependency that applies it lives in
+app/api/swarm_gate.py.
+
 Two invariants follow, and both are enforced by tests:
 
 1. A self-hosted deployment never reports a capability "locked" for a
@@ -34,11 +52,17 @@ import os
 import threading
 from dataclasses import dataclass, fields, replace
 from enum import Enum
-from typing import Dict, Literal
+from typing import Dict, Literal, Mapping, Optional
+
+logger = logging.getLogger(__name__)
 
 Deployment = Literal["self_hosted", "avaloka_hosted"]
-#: What AVALOKA_DEPLOYMENT declares, see :func:`declared_deployment`.
-DeclaredDeployment = Literal["hosted", "self_hosted", "undeclared"]
+#: What the deployment says it is. ``undeclared`` is neither value set: unset,
+#: empty, or a word this build does not know.
+DeploymentState = Literal["hosted", "self_hosted", "undeclared"]
+DEPLOYMENT_ENV = "AVALOKA_DEPLOYMENT"
+#: 1.6 name of the same three states; declared_deployment() returns it.
+DeclaredDeployment = DeploymentState
 Edition = Literal["oss", "free", "professional", "enterprise"]
 
 DEPLOYMENTS: tuple[Deployment, ...] = ("self_hosted", "avaloka_hosted")
@@ -102,10 +126,19 @@ class Capabilities:
     comment_on_analysis: bool = False
     notifications: bool = False
 
-    # Advanced reasoning. Present on the develop-1.7 line only: develop-1.6
-    # ships no swarm code at all, which is what lets it release as the
-    # open-source edition while swarm is held for its own launch.
+    # Swarm: a mission clones Avaloka into sub-Avalokas that work the data in
+    # parallel. Open in every edition; how many clones a mission may dispatch
+    # is a limit, not a gate. See swarm_limits() below.
     swarm_intelligence: bool = False
+
+    # The dataset catalog (docs/design/1.7-DATA-PLATFORM.md part C). The
+    # personal catalog -- every dataset this user's analyses touched, with
+    # schema versions, reuse and delete -- is open in every edition.
+    # Project and organisation visibility, stewards, access requests and the
+    # audit trail are the shared catalog, which joins the Collaboration line
+    # beside share_analysis and is Enterprise only (owner ruling 2026-11-01).
+    dataset_catalog: bool = False
+    shared_catalog: bool = False
 
     # Machine learning.
     ml_training: bool = False
@@ -145,7 +178,11 @@ GATE_REASON: Dict[str, GateReason] = {
     "share_analysis": GateReason.COMMERCIAL,
     "comment_on_analysis": GateReason.COMMERCIAL,
     "notifications": GateReason.COMMERCIAL,
-    "swarm_intelligence": GateReason.COMMERCIAL,
+    # OPEN: the swarm ships in the published tree. Its fan-out is limited per
+    # edition by swarm_limits(), which states that limit rather than hiding it.
+    "swarm_intelligence": GateReason.OPEN,
+    "dataset_catalog": GateReason.OPEN,
+    "shared_catalog": GateReason.COMMERCIAL,
     # COST, not COMMERCIAL: the MTA code ships here and a self-hosted operator
     # runs it on their own hardware. What a *hosted* plan may spend on training
     # compute is what the gate governs.
@@ -163,6 +200,9 @@ CAPABILITY_STATUS: Dict[str, CapabilityStatus] = {
     "local_execution": "shipped",
     "file_connectors": "shipped",
     "auto_insights": "shipped",
+    # 1.7: the personal dataset catalog (#753) and the Enterprise shared catalog.
+    "dataset_catalog": "shipped",
+    "shared_catalog": "shipped",
     "ray_distributed": "shipped",
     "entire_dataset": "shipped",
     "scheduler": "shipped",
@@ -177,8 +217,8 @@ CAPABILITY_STATUS: Dict[str, CapabilityStatus] = {
     "share_analysis": "shipped",
     "comment_on_analysis": "shipped",
     "notifications": "shipped",
-    # develop-1.6 ships no swarm code (see Capabilities); it lands on 1.7.
-    "swarm_intelligence": "coming",
+    # The swarm shipped with 2.0 (avaloka coordinate; see Capabilities).
+    "swarm_intelligence": "shipped",
     "ml_training": "shipped",
     "ml_inference": "shipped",
     # Owner ruling 2026-11-02: Enterprise is entitled to SSO and the audit log,
@@ -206,6 +246,8 @@ OSS_CAPABILITIES = Capabilities(
     # not provision — that is cloud_provisioning + scheduled_delivery, below.
     ml_training=True,
     ml_inference=True,
+    swarm_intelligence=True,
+    dataset_catalog=True,
 )
 
 #: Hosted entitlements. These are COST gates: Avaloka operates the compute, so
@@ -217,6 +259,8 @@ _HOSTED: Dict[Edition, Capabilities] = {
         export_generated_code=True,
         local_execution=True,
         file_connectors=True,
+        swarm_intelligence=True,
+        dataset_catalog=True,
         auto_insights=True,
     ),
     "free": Capabilities(
@@ -224,6 +268,9 @@ _HOSTED: Dict[Edition, Capabilities] = {
         export_generated_code=True,
         local_execution=True,
         file_connectors=True,
+        # Swarm at the preview limit (swarm_limits): two clones, locally.
+        swarm_intelligence=True,
+        dataset_catalog=True,
         auto_insights=True,
         # No scheduler and no batch jobs: Avaloka pays for every cycle a free
         # hosted user would schedule. This is the COST line, not a value line.
@@ -255,6 +302,7 @@ _HOSTED: Dict[Edition, Capabilities] = {
         comment_on_analysis=True,
         notifications=True,
         swarm_intelligence=True,
+        dataset_catalog=True,
         ml_training=True,
         ml_inference=True,
     ),
@@ -281,6 +329,8 @@ _HOSTED: Dict[Edition, Capabilities] = {
         comment_on_analysis=True,
         notifications=True,
         swarm_intelligence=True,
+        dataset_catalog=True,
+        shared_catalog=True,
         ml_training=True,
         ml_inference=True,
         sso_audit=True,
@@ -288,14 +338,61 @@ _HOSTED: Dict[Edition, Capabilities] = {
 }
 
 
+def _declared(value: Optional[str]) -> DeploymentState:
+    candidate = (value or "").strip().lower().replace("-", "_")
+    if candidate == "avaloka_hosted":
+        return "hosted"
+    if candidate == "self_hosted":
+        return "self_hosted"
+    return "undeclared"
+
+
+_undeclared_warned = False
+_undeclared_lock = threading.Lock()
+
+
+def _warn_undeclared(value: Optional[str]) -> None:
+    global _undeclared_warned
+    with _undeclared_lock:
+        if _undeclared_warned:
+            return
+        _undeclared_warned = True
+    # Only whether the variable is set: its value is operator configuration, and
+    # nothing about any user or their data belongs in this line.
+    how = "not set" if not (value or "").strip() else "set to a value this build does not know"
+    logger.warning(
+        "[deployment] %s is %s, so this deployment is undeclared; set it to self_hosted or "
+        "avaloka_hosted. Until it is, each check keeps its own default: billing and plan "
+        "limits treat this deployment as hosted, while editions, local auth and the API "
+        "docs treat it as self-hosted.",
+        DEPLOYMENT_ENV, how,
+    )
+
+
+def deployment_state(env: Optional[Mapping[str, str]] = None) -> DeploymentState:
+    """The ONE reading of ``AVALOKA_DEPLOYMENT``: hosted, self_hosted or undeclared.
+
+    Every hosted/self-hosted decision reads this (billing in
+    app/core/plan_limits.py, the API docs and whoami gate in app/api/server.py,
+    local auth). ``undeclared`` is not a third kind of deployment: each caller
+    keeps the default it had before the value could be declared, and the first
+    undeclared reading in a process logs one warning saying so.
+    """
+    raw = (os.environ if env is None else env).get(DEPLOYMENT_ENV)
+    state = _declared(raw)
+    if state == "undeclared":
+        _warn_undeclared(raw)
+    return state
+
+
 def normalize_deployment(value: str | None) -> Deployment:
     """Unknown values resolve to ``self_hosted``.
 
     Defaulting to self-hosted is the safe direction: it never grants a hosted
     entitlement, and it never charges anyone for compute they did not ask for.
+    Parsed exactly as deployment_state() parses the variable.
     """
-    candidate = (value or "").strip().lower().replace("-", "_")
-    return candidate if candidate in DEPLOYMENTS else "self_hosted"  # type: ignore[return-value]
+    return "avaloka_hosted" if _declared(value) == "hosted" else "self_hosted"
 
 
 def deployment_from_env() -> Deployment:
@@ -308,42 +405,15 @@ def deployment_from_env() -> Deployment:
     return "avaloka_hosted" if declared_deployment() == "hosted" else "self_hosted"
 
 
-_logger = logging.getLogger(__name__)
-_undeclared_warned = False
-_undeclared_lock = threading.Lock()
-
-
 def declared_deployment() -> DeclaredDeployment:
-    """What ``AVALOKA_DEPLOYMENT`` declares: ``hosted`` (``avaloka_hosted``),
-    ``self_hosted``, or ``undeclared`` when it is unset or unrecognised.
+    """1.6's name for :func:`deployment_state`: ``hosted`` (``avaloka_hosted``),
+    ``self_hosted``, or ``undeclared`` when the variable is unset or unrecognised.
 
-    The one deployment signal. The plan gates (plan_gate.check_feature), the
-    billing switch (plan_limits._billing_disabled) and the plan-lookup fail
-    mode all read it. Undeclared keeps the behaviour from before the signal
-    existed: the gates treat it as self-hosted, billing as billed. The first
-    undeclared read in a process logs a warning, once.
+    The plan gates (plan_gate.check_feature), the billing switch
+    (plan_limits._billing_disabled) and the plan-lookup fail mode read it. One
+    reading, one warning per process, and the warning never repeats the value.
     """
-    candidate = (os.getenv("AVALOKA_DEPLOYMENT") or "").strip().lower().replace("-", "_")
-    if candidate == "avaloka_hosted":
-        return "hosted"
-    if candidate == "self_hosted":
-        return "self_hosted"
-    _warn_undeclared(candidate)
-    return "undeclared"
-
-
-def _warn_undeclared(value: str) -> None:
-    global _undeclared_warned
-    with _undeclared_lock:
-        if _undeclared_warned:
-            return
-        _undeclared_warned = True
-    _logger.warning(
-        "[editions] AVALOKA_DEPLOYMENT is %s; this deployment is undeclared, so plan "
-        "gates treat it as self-hosted and billing treats it as billed. Set "
-        "AVALOKA_DEPLOYMENT=self_hosted or avaloka_hosted.",
-        repr(value) if value else "unset",
-    )
+    return deployment_state()
 
 
 def normalize_edition(value: str | None) -> Edition:
@@ -433,3 +503,42 @@ def _sold_on(capability: str) -> str:
     """The paid editions that grant ``capability``, e.g. "Professional and Enterprise"."""
     paid = [e.title() for e in ("professional", "enterprise") if getattr(_HOSTED[e], capability)]
     return " and ".join(paid) or "Enterprise"
+
+
+def swarm_limits(edition: str | None = None, *, has_commercial_build: bool | None = None):
+    """How wide a swarm may fan out for ``edition`` in this build.
+
+    The table lives in :mod:`avaloka.swarm_limits` so the standalone CLI, which
+    never imports ``app``, enforces the same numbers the API reports. Like
+    :func:`resolve_capabilities`, it follows installed code: without the
+    commercial package every edition gets the open-source preview.
+    """
+    from avaloka.swarm_limits import limits_for
+
+    commercial = commercial_build() if has_commercial_build is None else has_commercial_build
+    return limits_for(edition, has_commercial_build=commercial)
+
+
+#: Editions whose callers may open the swarm console (the live /swarm page and
+#: the swarm/trace routes). Everyone else gets the chat summary.
+SWARM_CONSOLE_EDITIONS: tuple[Edition, ...] = ("professional", "enterprise")
+
+
+def swarm_console_gate(edition: str | None) -> GateReason:
+    """Why the swarm console is, or is not, open to ``edition``.
+
+    OPEN on Professional and Enterprise, COMMERCIAL everywhere else — including
+    an ``oss`` install, where the chat carries the mission summary instead.
+    Unlike :func:`resolve_capabilities` this follows the edition alone, not the
+    installed code: the console's code *is* in the published tree, and what the
+    gate protects is the live view, not an import.
+    """
+    return GateReason.OPEN if normalize_edition(edition) in SWARM_CONSOLE_EDITIONS else GateReason.COMMERCIAL
+
+
+def explain_swarm_console(edition: str | None) -> str:
+    """The one line a gated caller reads. Never nags an edition that has it."""
+    if swarm_console_gate(edition) is GateReason.OPEN:
+        return "The live swarm console is available on this edition."
+    return ("The live swarm console is available in Avaloka Professional and Enterprise. "
+            "Your swarm still runs here, and Avaloka tells you what the team did in the chat.")

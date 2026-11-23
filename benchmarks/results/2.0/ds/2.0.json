@@ -1,0 +1,830 @@
+{
+  "schema_version": 1,
+  "commit": "77d7d28e76859b94ea80b77d81526da1808b15bc",
+  "generated_at": "2026-10-18T06:28:23+00:00",
+  "overall_score": 1.0,
+  "n_runs": 11,
+  "n_passed": 11,
+  "by_family": {
+    "data_science": 1.0
+  },
+  "by_category": {
+    "assertion": {
+      "passed": 78,
+      "total": 78
+    },
+    "guard": {
+      "passed": 0,
+      "total": 0
+    }
+  },
+  "results": [
+    {
+      "task": "ds_classification_churn",
+      "family": "data_science",
+      "kind": "train",
+      "source_scheme": "file",
+      "score": 1.0,
+      "passed": true,
+      "error": null,
+      "artifacts_dir": "/out/bundles_2.0/ds_classification_churn/file/mission",
+      "duration_s": 4.842,
+      "by_category": {
+        "assertion": {
+          "passed": 9,
+          "total": 9
+        },
+        "guard": {
+          "passed": 0,
+          "total": 0
+        }
+      },
+      "checks": [
+        {
+          "name": "transformation_reproducible",
+          "passed": true,
+          "detail": "transformed_dataset.parquet exists with 1500 rows",
+          "weight": 1.0,
+          "category": "assertion"
+        },
+        {
+          "name": "firefly_active[data_scout]",
+          "passed": true,
+          "detail": "'data_scout' activated",
+          "weight": 1.0,
+          "category": "assertion"
+        },
+        {
+          "name": "firefly_active[model_scientist]",
+          "passed": true,
+          "detail": "'model_scientist' activated",
+          "weight": 1.0,
+          "category": "assertion"
+        },
+        {
+          "name": "firefly_active[validator]",
+          "passed": true,
+          "detail": "'validator' activated",
+          "weight": 1.0,
+          "category": "assertion"
+        },
+        {
+          "name": "firefly_active[finops]",
+          "passed": true,
+          "detail": "'finops' activated",
+          "weight": 1.0,
+          "category": "assertion"
+        },
+        {
+          "name": "firefly_active[ml_engineer]",
+          "passed": true,
+          "detail": "'ml_engineer' activated",
+          "weight": 1.0,
+          "category": "assertion"
+        },
+        {
+          "name": "economics_sane",
+          "passed": true,
+          "detail": "multiplier=11.1, manual_hours=24.3",
+          "weight": 1.0,
+          "category": "assertion"
+        },
+        {
+          "name": "model_min_score",
+          "passed": true,
+          "detail": "roc_auc=0.8054 vs floor 0.6",
+          "weight": 2.0,
+          "category": "assertion"
+        },
+        {
+          "name": "beats_baseline",
+          "passed": true,
+          "detail": "roc_auc: model=0.8054, baseline=0.5000, gain=+0.3054 >= 0.05",
+          "weight": 2.0,
+          "category": "assertion"
+        }
+      ]
+    },
+    {
+      "task": "ds_classification_churn",
+      "family": "data_science",
+      "kind": "train",
+      "source_scheme": "sqlite",
+      "score": 1.0,
+      "passed": true,
+      "error": null,
+      "artifacts_dir": "/out/bundles_2.0/ds_classification_churn/sqlite/mission",
+      "duration_s": 5.983,
+      "by_category": {
+        "assertion": {
+          "passed": 9,
+          "total": 9
+        },
+        "guard": {
+          "passed": 0,
+          "total": 0
+        }
+      },
+      "checks": [
+        {
+          "name": "transformation_reproducible",
+          "passed": true,
+          "detail": "transformed_dataset.parquet exists with 1500 rows",
+          "weight": 1.0,
+          "category": "assertion"
+        },
+        {
+          "name": "firefly_active[data_scout]",
+          "passed": true,
+          "detail": "'data_scout' activated",
+          "weight": 1.0,
+          "category": "assertion"
+        },
+        {
+          "name": "firefly_active[model_scientist]",
+          "passed": true,
+          "detail": "'model_scientist' activated",
+          "weight": 1.0,
+          "category": "assertion"
+        },
+        {
+          "name": "firefly_active[validator]",
+          "passed": true,
+          "detail": "'validator' activated",
+          "weight": 1.0,
+          "category": "assertion"
+        },
+        {
+          "name": "firefly_active[finops]",
+          "passed": true,
+          "detail": "'finops' activated",
+          "weight": 1.0,
+          "category": "assertion"
+        },
+        {
+          "name": "firefly_active[ml_engineer]",
+          "passed": true,
+          "detail": "'ml_engineer' activated",
+          "weight": 1.0,
+          "category": "assertion"
+        },
+        {
+          "name": "economics_sane",
+          "passed": true,
+          "detail": "multiplier=11.1, manual_hours=24.3",
+          "weight": 1.0,
+          "category": "assertion"
+        },
+        {
+          "name": "model_min_score",
+          "passed": true,
+          "detail": "roc_auc=0.8054 vs floor 0.6",
+          "weight": 2.0,
+          "category": "assertion"
+        },
+        {
+          "name": "beats_baseline",
+          "passed": true,
+          "detail": "roc_auc: model=0.8054, baseline=0.5000, gain=+0.3054 >= 0.05",
+          "weight": 2.0,
+          "category": "assertion"
+        }
+      ]
+    },
+    {
+      "task": "ds_regression_housing",
+      "family": "data_science",
+      "kind": "train",
+      "source_scheme": "file",
+      "score": 1.0,
+      "passed": true,
+      "error": null,
+      "artifacts_dir": "/out/bundles_2.0/ds_regression_housing/file/mission",
+      "duration_s": 3.537,
+      "by_category": {
+        "assertion": {
+          "passed": 9,
+          "total": 9
+        },
+        "guard": {
+          "passed": 0,
+          "total": 0
+        }
+      },
+      "checks": [
+        {
+          "name": "role[location]",
+          "passed": true,
+          "detail": "inferred 'categorical', expected 'categorical'",
+          "weight": 1.0,
+          "category": "assertion"
+        },
+        {
+          "name": "role[area_sqft]",
+          "passed": true,
+          "detail": "inferred 'numeric', expected 'numeric'",
+          "weight": 1.0,
+          "category": "assertion"
+        },
+        {
+          "name": "transformation_reproducible",
+          "passed": true,
+          "detail": "transformed_dataset.parquet exists with 1200 rows",
+          "weight": 1.0,
+          "category": "assertion"
+        },
+        {
+          "name": "firefly_active[model_scientist]",
+          "passed": true,
+          "detail": "'model_scientist' activated",
+          "weight": 1.0,
+          "category": "assertion"
+        },
+        {
+          "name": "firefly_active[validator]",
+          "passed": true,
+          "detail": "'validator' activated",
+          "weight": 1.0,
+          "category": "assertion"
+        },
+        {
+          "name": "firefly_dormant[ml_engineer]",
+          "passed": true,
+          "detail": "'ml_engineer' correctly dormant",
+          "weight": 1.0,
+          "category": "assertion"
+        },
+        {
+          "name": "economics_sane",
+          "passed": true,
+          "detail": "multiplier=11.1, manual_hours=18.0",
+          "weight": 1.0,
+          "category": "assertion"
+        },
+        {
+          "name": "model_min_score",
+          "passed": true,
+          "detail": "r2=0.9095 vs floor 0.55",
+          "weight": 2.0,
+          "category": "assertion"
+        },
+        {
+          "name": "beats_baseline",
+          "passed": true,
+          "detail": "r2: model=0.9095, baseline=-0.0024, gain=+0.9120 >= 0.4",
+          "weight": 2.0,
+          "category": "assertion"
+        }
+      ]
+    },
+    {
+      "task": "ds_leakage_detection",
+      "family": "data_science",
+      "kind": "train",
+      "source_scheme": "file",
+      "score": 1.0,
+      "passed": true,
+      "error": null,
+      "artifacts_dir": "/out/bundles_2.0/ds_leakage_detection/file/mission",
+      "duration_s": 5.376,
+      "by_category": {
+        "assertion": {
+          "passed": 6,
+          "total": 6
+        },
+        "guard": {
+          "passed": 0,
+          "total": 0
+        }
+      },
+      "checks": [
+        {
+          "name": "transformation_reproducible",
+          "passed": true,
+          "detail": "transformed_dataset.parquet exists with 800 rows",
+          "weight": 1.0,
+          "category": "assertion"
+        },
+        {
+          "name": "leakage[leak_score]",
+          "passed": true,
+          "detail": "'leak_score' flagged; leaks=['leak_score', 'outcome_label']",
+          "weight": 2.0,
+          "category": "assertion"
+        },
+        {
+          "name": "leakage[outcome_label]",
+          "passed": true,
+          "detail": "'outcome_label' flagged; leaks=['leak_score', 'outcome_label']",
+          "weight": 2.0,
+          "category": "assertion"
+        },
+        {
+          "name": "verdict",
+          "passed": true,
+          "detail": "verdict 'fail', expected 'fail'",
+          "weight": 2.0,
+          "category": "assertion"
+        },
+        {
+          "name": "max_safe_deployment_level",
+          "passed": true,
+          "detail": "validator cap 1, expected 1",
+          "weight": 2.0,
+          "category": "assertion"
+        },
+        {
+          "name": "economics_sane",
+          "passed": true,
+          "detail": "multiplier=11.1, manual_hours=18.3",
+          "weight": 1.0,
+          "category": "assertion"
+        }
+      ]
+    },
+    {
+      "task": "ds_temporal_split_on_time_ordered_data",
+      "family": "data_science",
+      "kind": "train",
+      "source_scheme": "file",
+      "score": 1.0,
+      "passed": true,
+      "error": null,
+      "artifacts_dir": "/out/bundles_2.0/ds_temporal_split_on_time_ordered_data/file/mission",
+      "duration_s": 2.763,
+      "by_category": {
+        "assertion": {
+          "passed": 8,
+          "total": 8
+        },
+        "guard": {
+          "passed": 0,
+          "total": 0
+        }
+      },
+      "checks": [
+        {
+          "name": "role[order_date]",
+          "passed": true,
+          "detail": "inferred 'datetime', expected 'datetime'",
+          "weight": 1.0,
+          "category": "assertion"
+        },
+        {
+          "name": "transformation_reproducible",
+          "passed": true,
+          "detail": "transformed_dataset.parquet exists with 900 rows",
+          "weight": 1.0,
+          "category": "assertion"
+        },
+        {
+          "name": "economics_sane",
+          "passed": true,
+          "detail": "multiplier=11.1, manual_hours=17.7",
+          "weight": 1.0,
+          "category": "assertion"
+        },
+        {
+          "name": "plan_task",
+          "passed": true,
+          "detail": "task 'regression', expected 'regression'",
+          "weight": 2.0,
+          "category": "assertion"
+        },
+        {
+          "name": "plan_split",
+          "passed": true,
+          "detail": "split 'time_based_holdout', expected 'time_based_holdout'",
+          "weight": 2.0,
+          "category": "assertion"
+        },
+        {
+          "name": "temporal_split_performed",
+          "passed": true,
+          "detail": "train ends 2024-12-20 00:00:00, test starts 2024-12-21 00:00:00",
+          "weight": 3.0,
+          "category": "assertion"
+        },
+        {
+          "name": "baseline_reported",
+          "passed": true,
+          "detail": "baseline_score=184.8244977578919 (mean)",
+          "weight": 2.0,
+          "category": "assertion"
+        },
+        {
+          "name": "beats_baseline",
+          "passed": true,
+          "detail": "beats_baseline=True, expected True",
+          "weight": 3.0,
+          "category": "assertion"
+        }
+      ]
+    },
+    {
+      "task": "ds_constant_column_does_not_break_training",
+      "family": "data_science",
+      "kind": "train",
+      "source_scheme": "file",
+      "score": 1.0,
+      "passed": true,
+      "error": null,
+      "artifacts_dir": "/out/bundles_2.0/ds_constant_column_does_not_break_training/file/mission",
+      "duration_s": 3.319,
+      "by_category": {
+        "assertion": {
+          "passed": 6,
+          "total": 6
+        },
+        "guard": {
+          "passed": 0,
+          "total": 0
+        }
+      },
+      "checks": [
+        {
+          "name": "role[country]",
+          "passed": true,
+          "detail": "inferred 'constant', expected 'constant'",
+          "weight": 1.0,
+          "category": "assertion"
+        },
+        {
+          "name": "role[row_id]",
+          "passed": true,
+          "detail": "inferred 'id', expected 'id'",
+          "weight": 1.0,
+          "category": "assertion"
+        },
+        {
+          "name": "quality[constant_columns:country]",
+          "passed": true,
+          "detail": "'country' in constant_columns=['country']",
+          "weight": 1.0,
+          "category": "assertion"
+        },
+        {
+          "name": "transformation_reproducible",
+          "passed": true,
+          "detail": "transformed_dataset.parquet exists with 700 rows",
+          "weight": 1.0,
+          "category": "assertion"
+        },
+        {
+          "name": "economics_sane",
+          "passed": true,
+          "detail": "multiplier=11.1, manual_hours=18.3",
+          "weight": 1.0,
+          "category": "assertion"
+        },
+        {
+          "name": "baseline_reported",
+          "passed": true,
+          "detail": "baseline_score=0.5 (prior)",
+          "weight": 2.0,
+          "category": "assertion"
+        }
+      ]
+    },
+    {
+      "task": "ds_continuous_features_reach_the_model",
+      "family": "data_science",
+      "kind": "train",
+      "source_scheme": "file",
+      "score": 1.0,
+      "passed": true,
+      "error": null,
+      "artifacts_dir": "/out/bundles_2.0/ds_continuous_features_reach_the_model/file/mission",
+      "duration_s": 2.085,
+      "by_category": {
+        "assertion": {
+          "passed": 6,
+          "total": 6
+        },
+        "guard": {
+          "passed": 0,
+          "total": 0
+        }
+      },
+      "checks": [
+        {
+          "name": "transformation_reproducible",
+          "passed": true,
+          "detail": "transformed_dataset.parquet exists with 800 rows",
+          "weight": 1.0,
+          "category": "assertion"
+        },
+        {
+          "name": "economics_sane",
+          "passed": true,
+          "detail": "multiplier=11.1, manual_hours=17.4",
+          "weight": 1.0,
+          "category": "assertion"
+        },
+        {
+          "name": "baseline_reported",
+          "passed": true,
+          "detail": "baseline_score=51.37862108599618 (mean)",
+          "weight": 2.0,
+          "category": "assertion"
+        },
+        {
+          "name": "beats_baseline",
+          "passed": true,
+          "detail": "beats_baseline=True, expected True",
+          "weight": 3.0,
+          "category": "assertion"
+        },
+        {
+          "name": "feature_used[latency_ms]",
+          "passed": true,
+          "detail": "latency_ms kept (model saw: ['cpu_load', 'latency_ms'])",
+          "weight": 2.0,
+          "category": "assertion"
+        },
+        {
+          "name": "feature_used[cpu_load]",
+          "passed": true,
+          "detail": "cpu_load kept (model saw: ['cpu_load', 'latency_ms'])",
+          "weight": 2.0,
+          "category": "assertion"
+        }
+      ]
+    },
+    {
+      "task": "ds_no_signal_is_reported_as_no_signal",
+      "family": "data_science",
+      "kind": "train",
+      "source_scheme": "file",
+      "score": 1.0,
+      "passed": true,
+      "error": null,
+      "artifacts_dir": "/out/bundles_2.0/ds_no_signal_is_reported_as_no_signal/file/mission",
+      "duration_s": 3.54,
+      "by_category": {
+        "assertion": {
+          "passed": 6,
+          "total": 6
+        },
+        "guard": {
+          "passed": 0,
+          "total": 0
+        }
+      },
+      "checks": [
+        {
+          "name": "transformation_reproducible",
+          "passed": true,
+          "detail": "transformed_dataset.parquet exists with 800 rows",
+          "weight": 1.0,
+          "category": "assertion"
+        },
+        {
+          "name": "verdict",
+          "passed": true,
+          "detail": "verdict 'fail', expected 'fail'",
+          "weight": 2.0,
+          "category": "assertion"
+        },
+        {
+          "name": "max_safe_deployment_level",
+          "passed": true,
+          "detail": "validator cap 1, expected 1",
+          "weight": 2.0,
+          "category": "assertion"
+        },
+        {
+          "name": "economics_sane",
+          "passed": true,
+          "detail": "multiplier=11.1, manual_hours=17.7",
+          "weight": 1.0,
+          "category": "assertion"
+        },
+        {
+          "name": "baseline_reported",
+          "passed": true,
+          "detail": "baseline_score=0.5 (prior)",
+          "weight": 2.0,
+          "category": "assertion"
+        },
+        {
+          "name": "beats_baseline",
+          "passed": true,
+          "detail": "beats_baseline=False, expected False",
+          "weight": 3.0,
+          "category": "assertion"
+        }
+      ]
+    },
+    {
+      "task": "ds_analysis_gating_and_swarm",
+      "family": "data_science",
+      "kind": "analyze",
+      "source_scheme": "file",
+      "score": 1.0,
+      "passed": true,
+      "error": null,
+      "artifacts_dir": "/out/bundles_2.0/ds_analysis_gating_and_swarm/file/mission",
+      "duration_s": 0.136,
+      "by_category": {
+        "assertion": {
+          "passed": 10,
+          "total": 10
+        },
+        "guard": {
+          "passed": 0,
+          "total": 0
+        }
+      },
+      "checks": [
+        {
+          "name": "transformation_reproducible",
+          "passed": true,
+          "detail": "transformed_dataset.parquet exists with 1500 rows",
+          "weight": 1.0,
+          "category": "assertion"
+        },
+        {
+          "name": "max_safe_deployment_level",
+          "passed": true,
+          "detail": "validator cap 1, expected 1",
+          "weight": 2.0,
+          "category": "assertion"
+        },
+        {
+          "name": "firefly_active[data_scout]",
+          "passed": true,
+          "detail": "'data_scout' activated",
+          "weight": 1.0,
+          "category": "assertion"
+        },
+        {
+          "name": "firefly_active[sampling_specialist]",
+          "passed": true,
+          "detail": "'sampling_specialist' activated",
+          "weight": 1.0,
+          "category": "assertion"
+        },
+        {
+          "name": "firefly_active[analysis_planner]",
+          "passed": true,
+          "detail": "'analysis_planner' activated",
+          "weight": 1.0,
+          "category": "assertion"
+        },
+        {
+          "name": "firefly_active[validator]",
+          "passed": true,
+          "detail": "'validator' activated",
+          "weight": 1.0,
+          "category": "assertion"
+        },
+        {
+          "name": "firefly_active[reporter]",
+          "passed": true,
+          "detail": "'reporter' activated",
+          "weight": 1.0,
+          "category": "assertion"
+        },
+        {
+          "name": "firefly_dormant[model_scientist]",
+          "passed": true,
+          "detail": "'model_scientist' correctly dormant",
+          "weight": 1.0,
+          "category": "assertion"
+        },
+        {
+          "name": "firefly_dormant[ml_engineer]",
+          "passed": true,
+          "detail": "'ml_engineer' correctly dormant",
+          "weight": 1.0,
+          "category": "assertion"
+        },
+        {
+          "name": "economics_sane",
+          "passed": true,
+          "detail": "multiplier=11.2, manual_hours=10.05",
+          "weight": 1.0,
+          "category": "assertion"
+        }
+      ]
+    },
+    {
+      "task": "ds_analysis_gating_and_swarm",
+      "family": "data_science",
+      "kind": "analyze+coordinate",
+      "source_scheme": "fleet",
+      "score": 1.0,
+      "passed": true,
+      "error": null,
+      "artifacts_dir": "/out/bundles_2.0/ds_analysis_gating_and_swarm/coordinate",
+      "duration_s": 0.216,
+      "by_category": {
+        "assertion": {
+          "passed": 6,
+          "total": 6
+        },
+        "guard": {
+          "passed": 0,
+          "total": 0
+        }
+      },
+      "checks": [
+        {
+          "name": "converged_n_rows",
+          "passed": true,
+          "detail": "converged 1500 vs 1500",
+          "weight": 2.0,
+          "category": "assertion"
+        },
+        {
+          "name": "converge[tenure]",
+          "passed": true,
+          "detail": "mean 36.517333~36.517333, min 1.0~1.0, max 71.0~71.0",
+          "weight": 2.0,
+          "category": "assertion"
+        },
+        {
+          "name": "converge[monthly_charges]",
+          "passed": true,
+          "detail": "mean 69.929980~69.929980, min 15.0~15.0, max 129.76~129.76",
+          "weight": 2.0,
+          "category": "assertion"
+        },
+        {
+          "name": "converge[support_tickets]",
+          "passed": true,
+          "detail": "mean 1.459333~1.459333, min 0.0~0.0, max 6.0~6.0",
+          "weight": 2.0,
+          "category": "assertion"
+        },
+        {
+          "name": "coordination_workers",
+          "passed": true,
+          "detail": "dispatched 2 sub-Avalokas (Swarm limited to 2 clones on the free open-source edition: you asked for 4, so 2 will run.)",
+          "weight": 1.0,
+          "category": "assertion"
+        },
+        {
+          "name": "coordination_verdict",
+          "passed": true,
+          "detail": "converged verdict 'pass'",
+          "weight": 1.0,
+          "category": "assertion"
+        }
+      ]
+    },
+    {
+      "task": "ds_unresolved_metric_is_not_answered",
+      "family": "data_science",
+      "kind": "analyze",
+      "source_scheme": "file",
+      "score": 1.0,
+      "passed": true,
+      "error": null,
+      "artifacts_dir": "/out/bundles_2.0/ds_unresolved_metric_is_not_answered/file/mission",
+      "duration_s": 0.564,
+      "by_category": {
+        "assertion": {
+          "passed": 3,
+          "total": 3
+        },
+        "guard": {
+          "passed": 0,
+          "total": 0
+        }
+      },
+      "checks": [
+        {
+          "name": "transformation_reproducible",
+          "passed": true,
+          "detail": "transformed_dataset.parquet exists with 3 rows",
+          "weight": 1.0,
+          "category": "assertion"
+        },
+        {
+          "name": "economics_sane",
+          "passed": true,
+          "detail": "multiplier=11.2, manual_hours=9.15",
+          "weight": 1.0,
+          "category": "assertion"
+        },
+        {
+          "name": "goal_status",
+          "passed": true,
+          "detail": "status 'limited', expected 'limited' (kind='group_comparison', value_column=None, aggregation=None)",
+          "weight": 2.0,
+          "category": "assertion"
+        }
+      ]
+    }
+  ],
+  "gate": {
+    "ok": true,
+    "new_failures": [],
+    "known_failing": [],
+    "listed_but_passing": [],
+    "declared_in": "avaloka/benchmark/known_defects.py",
+    "strict": false
+  }
+}

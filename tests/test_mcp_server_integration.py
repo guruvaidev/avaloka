@@ -174,7 +174,10 @@ class MultiDatabaseIntegrationTest:
         async with httpx.AsyncClient() as client:
             url = f"http://localhost:{self.onboarding_port}/customers/register"
             logger.info(f"POST {url}")
-            response = await client.post(url, json=config, timeout=30.0)
+            # Registration is per user: sign as one, with this deployment's key.
+            from app.mcp_server.client import user_headers
+            response = await client.post(url, json=config, timeout=30.0,
+                                         headers=user_headers("integration-test-user"))
 
             if response.status_code != 200:
                 logger.warning(f"{db_type.upper()} registration failed: {response.text}")
@@ -323,7 +326,8 @@ class MultiDatabaseIntegrationTest:
             for db_type, customer_info in self.registered_customers.items():
                 url = f"http://localhost:{self.onboarding_port}/customers/{customer_info['customer_id']}/status"
                 logger.info(f"GET {url}")
-                response = await client.get(url)
+                response = await client.get(
+                    url, headers={"Authorization": f"Bearer {customer_info['api_key']}"})
 
                 if response.status_code == 200:
                     result = response.json()

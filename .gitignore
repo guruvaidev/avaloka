@@ -67,6 +67,10 @@ env_bak
 # "*.env" above only matches names ENDING in .env, so this needs its own entry.
 .env.local
 !.env.example
+# scripts/quickstart.sh generates the laptop stack's secrets here on first run
+# (DB_ENCRYPTION_KEY, the local-auth JWT secret and password, the Postgres
+# password). "*.env" does not match it, so it needs its own entry.
+.env.quickstart
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -80,6 +84,7 @@ __pycache__/
 agents-env/
 env/
 .venv/
+.venv-langgraph-server/
 venv/
 venvt/
 
@@ -125,8 +130,12 @@ htmlcov/
 # Local development artifacts
 prototype_v0.1/
 *.csv
+# ...but the /instant sample datasets are served from the UI's public assets.
+!ui/public/samples/*.csv
 # ...but bundled CLI example datasets must ship with the package.
 !avaloka/examples/*.csv
+# ...and so must the outcome map lookups (SHA256SUMS lists them; geo.py opens them).
+!avaloka/outcomes/assets/*.csv
 # ...and the published 1.6 traceability matrix (generated, public-safe; guarded by
 # tests/release_1_6/test_traceability_public_safe.py).
 !docs/test-reports/*.csv
@@ -169,6 +178,12 @@ pipeline_runs/
 .env.backup
 volumes/
 
+# External benchmark checkouts and generated leaderboard artifacts
+.benchmarks/
+benchmarks/results/**
+!benchmarks/results/.gitignore
+!benchmarks/results/.gitkeep
+
 # Internal engineering task spec — kept local, not part of the public repo
 test_plan.md
 
@@ -209,10 +224,23 @@ ui/.lovable/
 # oss/manifest.yaml exclusion in place, which is what stops it being published.
 .claude/
 
+# The format fixtures are committed on purpose; *.csv above would swallow them.
+!tests/fixtures/formats/*.csv
+!tests/fixtures/formats/sales_csv_parts/
+!tests/fixtures/formats/sales_csv_parts/*.csv
+
+# The null-word fixtures are committed on purpose; *.csv above would swallow them.
+!tests/fixtures/null_words/*.csv
+
+# The two-frame join fixtures are committed on purpose; *.csv above would swallow them.
+!tests/fixtures/join_two_frames/*.csv
+
 # Written beside .env while generated secrets are saved (app/core/provisioning.py).
 .env.lock
 .env.tmp
 
+# The master test plan source is committed on purpose; *.csv above would swallow it.
+!docs/test-plan/*.csv
 # local DB backups and diagnostic output
 backup_public_schema_*.sql
 local_db_report.txt

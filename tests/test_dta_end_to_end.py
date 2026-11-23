@@ -999,6 +999,12 @@ DEST_ALIAS = "e2e_warehouse_dest"
 # ==========================================
 # CUSTOM TERMINAL LOGGER  (mirrors the reference harness)
 # ==========================================
+try:  # tests/ as a package, or tests/ on sys.path
+    from tests.dta_confirm import run_confirmed
+except ImportError:  # pragma: no cover
+    from dta_confirm import run_confirmed
+
+
 class LoggerTee:
     """Duplicates sys.stdout/sys.stderr to both the terminal and a log file."""
 
@@ -1171,7 +1177,7 @@ def run_single_transfer(test):
         dest_table=dest_table,  # named table wins over any registered default
     )
     try:
-        planner_msg = _handle_initiate_transfer(state, params)
+        planner_msg = run_confirmed(state, params)
     except Exception as e:
         print(f"❌ [{test_name}] PLANNER CRASHED: {e}")
         return "ERROR (Planner)"

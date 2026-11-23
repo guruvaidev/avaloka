@@ -1,6 +1,8 @@
 import time
 import requests
 
+from app.infra.ray_auth import auth_headers
+
 
 def submit_ray_job(
     dashboard_url: str,
@@ -15,7 +17,7 @@ def submit_ray_job(
     retries = 0
     while retries < max_retries:
         try:
-            r = requests.post(f"{base_url}/api/jobs/", json=payload, timeout=30)
+            r = requests.post(f"{base_url}/api/jobs/", json=payload, headers=auth_headers(), timeout=30)
             r.raise_for_status()
 
             job_data = r.json()

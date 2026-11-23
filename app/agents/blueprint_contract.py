@@ -383,6 +383,414 @@ def is_placeholder_column(name: str) -> bool:
     return bool(_PLACEHOLDER_RE.search(str(name)))
 
 
+# --- where an exact row count comes from ---------------------------------------
+#
+# The blueprint model writes ``row_relation: exactly n`` itself, and it can
+# invent n: rc11 p1 ("what are the strongest predictors of stroke?") declared
+# n=11 because its source_columns held 11 names -- the target ``stroke``
+# included -- and the correct 10-predictor answer was HARD-rejected. A count
+# is therefore enforced only when one of the sources below reproduces it.
+
+COUNT_SOURCES = ("data", "question", "plan_columns")
+
+_NUMBER_WORDS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
+    "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "fifteen": 15,
+    "twenty": 20, "fifty": 50, "hundred": 100,
+}
+_NUM = r"(\d{1,4}|" + "|".join(_NUMBER_WORDS) + r")"
+_SUPERLATIVE = (r"(?:most|least|highest|lowest|largest|smallest|biggest|best|worst|"
+                r"top|bottom|strongest|weakest|longest|shortest|oldest|newest|youngest|"
+                r"cheapest|busiest|common|frequent|popular|expensive|important)")
+_QUESTION_COUNT_RES = (
+    # "top 5", "first ten", "bottom 3"
+    re.compile(r"\b(?:top|bottom|first|last)\s+" + _NUM + r"\b", re.IGNORECASE),
+    # "5 most common", "three highest", "10 strongest"
+    re.compile(r"\b" + _NUM + r"\s+" + _SUPERLATIVE + r"\b", re.IGNORECASE),
+)
+
+def is_identifier_column(name: str, frame: Any = None) -> bool:
+    """Is *name* a row identifier? #573's ``IDENTIFIER_RULE``
+    (``avaloka.goal_analysis.is_identifier_column``) judged on the input
+    frame's values; one rule for the ranking, the verifier and this contract.
+
+    The rule reads values, so a column absent from the frame is not judged
+    and is not treated as an identifier.
+    """
+    actual = _resolve(frame.columns, name) if frame is not None and len(frame) else None
+    if actual is None:
+        return False
+    from avaloka.goal_analysis import is_identifier_column as _rule  # local: pandas-free import
+
+    return bool(_rule(str(actual), frame[actual]))
+
+
+def question_counts(question: str) -> List[int]:
+    """Row counts the question itself states: "top 5", "three highest"."""
+    found: List[int] = []
+    for pattern in _QUESTION_COUNT_RES:
+        for raw in pattern.findall(question or ""):
+            n = int(raw) if raw.isdigit() else _NUMBER_WORDS[raw.lower()]
+            if n > 0 and n not in found:
+                found.append(n)
+    return found
+
+
+def question_targets(contract: "BlueprintContract", question: str) -> List[str]:
+    """source_columns the question names -- the outcome of "predictors of stroke"."""
+    text = " " + re.sub(r"[^a-z0-9]+", " ", (question or "").lower()) + " "
+    targets = []
+    for col in contract.source_columns:
+        spaced = re.sub(r"[^a-z0-9]+", " ", str(col).lower()).strip()
+        if spaced and f" {spaced} " in text:
+            targets.append(col)
+    return targets
+
+
+@dataclass(frozen=True)
+class RowCountDecision:
+    """Why an ``exactly n`` count is HARD or ADVISORY.
+
+    ``source`` is the first of :data:`COUNT_SOURCES` whose derived count equals
+    n, or ``"model"`` when none does. ``derived`` holds every count that could
+    be derived, by source, so a trace shows what n was compared against.
+    """
+
+    n: int
+    source: str
+    derived: Dict[str, Any] = field(default_factory=dict)
+    #: False when the input frame is not the rows the result was computed on,
+    #: so no count was derived from it (see :func:`code_reads_own_data`).
+    data_checked: bool = True
+    #: What the ``data`` source was, in words: "100-row validation sample"
+    #: when the input frame is the validator's sample (see :func:`data_label`).
+    data_label: str = "data"
+
+    @property
+    def hard(self) -> bool:
+        return self.source != "model"
+
+    def _name(self, source: str) -> str:
+        return self.data_label if source == "data" else source.replace("_", " ")
+
+    def describe(self) -> str:
+        if self.hard:
+            return f"derived from the {self._name(self.source)}"
+        if not self.data_checked:
+            prefix = "the validation sample is not the result's only input, so no count was taken from it; "
+            if not self.derived:
+                return prefix + "nothing in the question or the plan's columns gives a count"
+        else:
+            prefix = ""
+            if not self.derived:
+                return f"nothing in the {self.data_label}, the question or the plan's columns gives a count"
+        shown = ", ".join(f"{'the ' if k == 'data' else ''}{self._name(k)} gives {v}"
+                          for k, v in self.derived.items())
+        return f"{prefix}none of the derivable counts matches: {shown}"
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {"n": self.n, "source": self.source, "hard": self.hard, "derived": dict(self.derived),
+                "data_checked": self.data_checked}
+
+
+def exact_count_decision(contract: "BlueprintContract", source: Any,
+                         question: str = "", *, observed: bool = True,
+                         label: str = "data") -> RowCountDecision:
+    """Decide whether the contract's ``exactly n`` is derivable.
+
+    n is **derivable** -- and so enforced HARD -- when it equals a count
+    computed deterministically, with no model in the loop, from one of:
+
+    * ``data``: the number of distinct value combinations, in the input frame,
+      of the plan's group-by columns (``row_relation.group_by``; failing that,
+      its key columns -- ``unique_key`` or role ``key`` -- that exist in the
+      input);
+    * ``question``: a count the question states, "top 5" / "first ten" /
+      "3 highest" (:func:`question_counts`);
+    * ``plan_columns``: the number of the plan's ``source_columns`` once the
+      target and the identifier columns are removed. The target is a source
+      column the question names (:func:`question_targets`); when the question
+      names none, the list's membership is unknown and nothing is derived.
+
+    Any other n was invented by the blueprint model and is ADVISORY.
+
+    ``observed=False`` says *source* is not the rows the result was computed
+    on (the code read its own data): no ``data`` count is taken from it.
+    """
+    n = contract.row_relation.n
+    derived: Dict[str, Any] = {}
+    have_source = source is not None and hasattr(source, "columns") and len(source)
+
+    keys = list(contract.row_relation.group_by)
+    if not keys:
+        keys = list(contract.unique_key) or [c.name for c in contract.result_columns if c.role == "key"]
+    if have_source and keys and observed:
+        resolved = [_resolve(source.columns, k) for k in keys]
+        if all(r is not None for r in resolved):
+            derived["data"] = int(source[list(resolved)].drop_duplicates().shape[0])
+
+    counts = question_counts(question)
+    if counts:
+        derived["question"] = counts if len(counts) > 1 else counts[0]
+
+    targets = question_targets(contract, question)
+    if targets:
+        frame = source if have_source else None
+        kept = [c for c in contract.source_columns
+                if c not in targets and not is_identifier_column(c, frame)]
+        derived["plan_columns"] = len(kept)
+
+    for name in COUNT_SOURCES:
+        value = derived.get(name)
+        if value == n or (isinstance(value, list) and n in value):
+            return RowCountDecision(n=n, source=name, derived=derived, data_checked=observed,
+                                    data_label=label)
+    return RowCountDecision(n=n, source="model", derived=derived, data_checked=observed, data_label=label)
+
+
+# --- where a min/max bound comes from ------------------------------------------
+#
+# The same failure as the invented exact count, on a column's range: rc16's
+# taxi turn ("What is the average fare_amount by payment_type?") declared
+# ``average_fare_amount`` min 0.0. Taxi fares include refunds and adjustments,
+# so a payment type's mean was -1.52 and a correct result was HARD-rejected in
+# every run. A bound is therefore enforced only when a deterministic fact
+# guarantees that a correct result already satisfies it.
+
+BOUND_SOURCES = ("data", "domain", "question")
+
+#: Aggregations whose value lies within the source column's observed range.
+_WITHIN_RANGE_AGGS = frozenset({"mean", "avg", "average", "median", "min", "minimum", "max",
+                                "maximum", "mode", "first", "last", "typical"})
+_SUM_AGGS = frozenset({"sum", "total"})
+_COUNT_TOKENS = frozenset({"count", "counts", "cnt", "num", "number", "rows", "size",
+                           "frequency", "freq", "nunique", "distinct", "unique"})
+_SPREAD_TOKENS = frozenset({"std", "stdev", "stddev", "variance", "var", "iqr", "range"})
+_FRACTION_TOKENS = frozenset({"rate", "ratio", "proportion", "share", "fraction",
+                              "probability", "prob"})
+_PERCENT_TOKENS = frozenset({"percent", "percentage", "pct"})
+#: A rate *of change* can be negative or exceed 1; these tokens void the
+#: fraction/percent domain facts.
+_CHANGE_TOKENS = frozenset({"change", "growth", "delta", "diff", "difference", "lift",
+                            "return", "yoy", "mom", "increase", "decrease", "z", "zscore"})
+#: Words too generic to tie a question's qualifier to a column.
+_GENERIC_TOKENS = frozenset({"amount", "value", "values", "total", "avg", "average", "mean",
+                             "sum", "count", "number", "the", "of", "per", "by"})
+
+_QNUM = r"(-?\d+(?:\.\d+)?)"
+_QUESTION_BOUND_RES = (
+    ("min", re.compile(r"\b(?:only\s+)?(?:positive|non-?negative|nonnegative)\b", re.IGNORECASE), 0.0),
+    ("min", re.compile(r"(?:\bat\s+least|\bno\s+less\s+than|\bgreater\s+than|\bmore\s+than|\babove|"
+                       r"\bover|\bexceeding|>=|>)\s*\$?" + _QNUM, re.IGNORECASE), None),
+    ("max", re.compile(r"(?:\bat\s+most|\bno\s+more\s+than|\bless\s+than|\bunder|\bbelow|"
+                       r"\bnot\s+exceeding|<=|<)\s*\$?" + _QNUM, re.IGNORECASE), None),
+    ("between", re.compile(r"\bbetween\s+\$?" + _QNUM + r"\s+and\s+\$?" + _QNUM, re.IGNORECASE), None),
+)
+
+
+def _tokens(name: Any) -> set:
+    return {t.lower() for t in re.findall(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|\d+", str(name))}
+
+
+def _singular(word: str) -> str:
+    return word[:-1] if len(word) > 3 and word.endswith("s") and not word.endswith("ss") else word
+
+
+def _referenced_source_columns(name: str, contract: "BlueprintContract", source: Any) -> List[str]:
+    """Source columns a result column is computed from, read off its name:
+    ``average_fare_amount`` -> ``fare_amount``. Exact matches win."""
+    candidates = list(contract.source_columns)
+    if source is not None and hasattr(source, "columns"):
+        candidates += [str(c) for c in source.columns if str(c) not in candidates]
+    want = _norm(name)
+    exact = [c for c in candidates if _norm(c) == want]
+    if exact:
+        return exact[:1]
+    return [c for c in candidates if len(_norm(c)) >= 3 and _norm(c) in want]
+
+
+def _data_interval(spec: ColumnSpec, contract: "BlueprintContract",
+                   source: Any) -> Optional[Tuple[Optional[float], Optional[float]]]:
+    """The range a correct value must lie in, from the input's observed values
+    under the aggregation the column's name states."""
+    import pandas as pd
+
+    if source is None or not hasattr(source, "columns") or not len(source):
+        return None
+    tokens = _tokens(spec.name)
+    refs = _referenced_source_columns(spec.name, contract, source)
+    if len(refs) != 1:
+        return None
+    actual = _resolve(source.columns, refs[0])
+    if actual is None:
+        return None
+    values = pd.to_numeric(source[actual], errors="coerce").dropna()
+    if not len(values):
+        return None
+    lo, hi = float(values.min()), float(values.max())
+    same_column = _norm(refs[0]) == _norm(spec.name)
+    if tokens & _WITHIN_RANGE_AGGS or (same_column and contract.result_kind == "subset"):
+        return lo, hi
+    if tokens & _SUM_AGGS:
+        return (0.0 if lo >= 0 else None), (0.0 if hi <= 0 else None)
+    return None
+
+
+def _domain_interval(spec: ColumnSpec) -> Optional[Tuple[Optional[float], Optional[float]]]:
+    """Range facts that hold for any data: a count or a spread is >= 0, a
+    rate or share is in [0, 1], a percentage in [0, 100]."""
+    tokens = _tokens(spec.name)
+    if tokens & _CHANGE_TOKENS:
+        return None
+    if tokens & _PERCENT_TOKENS:
+        return 0.0, 100.0
+    if tokens & _FRACTION_TOKENS:
+        return 0.0, 1.0
+    if tokens & (_COUNT_TOKENS | _SPREAD_TOKENS) or (tokens and tokens <= {"n"}):
+        return 0.0, None
+    return None
+
+
+def question_bounds(question: str, words: set) -> Tuple[Optional[float], Optional[float]]:
+    """Bounds the question states about a column named by one of *words*:
+    "only positive fares", "fares of at least 5", "between 10 and 20".
+
+    A qualifier counts only when one of *words* (singularised) is within four
+    words of it, so "trips over 5 miles" bounds distance, not the fare.
+    """
+    if not question or not words:
+        return None, None
+    lo: Optional[float] = None
+    hi: Optional[float] = None
+    for side, pattern, fixed in _QUESTION_BOUND_RES:
+        for m in pattern.finditer(question):
+            before = re.findall(r"[a-z0-9]+", question[:m.start()].lower())[-4:]
+            after = re.findall(r"[a-z]+", question[m.end():].lower())[:4]
+            if not {_singular(w) for w in before + after} & words:
+                continue
+            if side == "between":
+                a, b = sorted((float(m.group(1)), float(m.group(2))))
+                lo = a if lo is None else max(lo, a)
+                hi = b if hi is None else min(hi, b)
+            elif side == "min":
+                v = fixed if fixed is not None else float(m.group(1))
+                lo = v if lo is None else max(lo, v)
+            else:
+                v = float(m.group(1))
+                hi = v if hi is None else min(hi, v)
+    return lo, hi
+
+
+def _column_words(spec: ColumnSpec, contract: "BlueprintContract", source: Any) -> set:
+    words = set()
+    for name in [spec.name] + _referenced_source_columns(spec.name, contract, source):
+        words |= {_singular(t) for t in _tokens(name) if len(t) >= 3}
+    return words - _GENERIC_TOKENS
+
+
+@dataclass(frozen=True)
+class BoundDecision:
+    """Why one declared min/max bound is HARD or ADVISORY.
+
+    ``source`` is the first of :data:`BOUND_SOURCES` whose derived range
+    implies the bound, or ``"model"`` when none does. ``derived`` holds every
+    range that could be derived, by source, as ``[lo, hi]`` with ``None`` for
+    an unknown side.
+    """
+
+    column: str
+    side: str  # "min" or "max"
+    value: float
+    source: str
+    derived: Dict[str, Any] = field(default_factory=dict)
+    #: False when the input frame is not the rows the result was computed on,
+    #: so no range was derived from it (see :func:`code_reads_own_data`).
+    data_checked: bool = True
+    #: What the ``data`` source was, in words: "100-row validation sample"
+    #: when the input frame is the validator's sample (see :func:`data_label`).
+    #: "data gives [-27.5, 94.0]" was the sample's range; the full taxi file
+    #: spans [-404.1, 1616.5] (rc18c).
+    data_label: str = "data"
+
+    @property
+    def hard(self) -> bool:
+        return self.source != "model"
+
+    def describe(self) -> str:
+        if self.hard:
+            return f"derived from the {self.data_label if self.source == 'data' else self.source}"
+        if not self.data_checked:
+            prefix = "the validation sample is not the result's only input, so no range was taken from it; "
+            if not self.derived:
+                return prefix + "nothing in the column's domain or the question gives a range"
+        else:
+            prefix = ""
+            if not self.derived:
+                return f"nothing in the {self.data_label}, the column's domain or the question gives a range"
+        shown = ", ".join(f"the {self.data_label} gives {v}" if k == "data" else f"{k} gives {v}"
+                          for k, v in self.derived.items())
+        return f"{prefix}no derivable range implies it: {shown}"
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {"column": self.column, "side": self.side, "value": self.value,
+                "source": self.source, "hard": self.hard, "derived": dict(self.derived),
+                "data_checked": self.data_checked}
+
+
+def bound_decision(spec: ColumnSpec, side: str, contract: "BlueprintContract", source: Any,
+                   question: str = "", *, observed: bool = True, label: str = "data") -> BoundDecision:
+    """Decide whether a declared ``min`` / ``max`` on *spec* is derivable.
+
+    A bound is **derivable** -- and so enforced HARD -- when a range computed
+    deterministically, with no model in the loop, *implies* it (a derived
+    lower bound L backs a declared min b when L >= b; a derived upper bound H
+    backs a declared max b when H <= b), so a correct result cannot violate
+    it. The ranges come from:
+
+    * ``data``: the observed [min, max] of the source column the result
+      column's name refers to, under the aggregation the name states. A mean,
+      median, min, max (and a subset's own column) lies within that range; a
+      sum is >= 0 only when every value is, and <= 0 only when every value is.
+      A mean of a column with negative values can be negative.
+    * ``domain``: facts that hold for any data. A count or a spread
+      (std/variance) is >= 0; a rate, ratio, share or proportion is in
+      [0, 1]; a percentage in [0, 100]. A name that says change/growth/delta
+      voids these.
+    * ``question``: a bound the question states about that column ("only
+      positive fares", "at least 5", "between 10 and 20";
+      :func:`question_bounds`).
+
+    Any other bound was invented by the blueprint model and is ADVISORY.
+
+    ``observed=False`` says *source* is not the rows the result was computed
+    on (the code read its own data): no ``data`` range is taken from it. A
+    sample whose Quantity was all positive "derived" a min of 0 for a sum the
+    full file, returns included, took to -366 (rc18b messy_xlsx).
+    """
+    value = float(spec.min if side == "min" else spec.max)
+    derived: Dict[str, Any] = {}
+    data = _data_interval(spec, contract, source) if observed else None
+    if data is not None:
+        derived["data"] = list(data)
+    domain = _domain_interval(spec)
+    if domain is not None:
+        derived["domain"] = list(domain)
+    q = question_bounds(question, _column_words(spec, contract, source))
+    if q != (None, None):
+        derived["question"] = list(q)
+
+    for name in BOUND_SOURCES:
+        rng = derived.get(name)
+        if not rng:
+            continue
+        lo, hi = rng
+        if side == "min" and lo is not None and lo >= value - 1e-9:
+            return BoundDecision(spec.name, side, value, name, derived, observed, label)
+        if side == "max" and hi is not None and hi <= value + 1e-9:
+            return BoundDecision(spec.name, side, value, name, derived, observed, label)
+    return BoundDecision(spec.name, side, value, "model", derived, observed, label)
+
+
 def _resolve(result_columns: Any, wanted: str) -> Optional[str]:
     """Match a contract column name to an actual result column.
 
@@ -396,10 +804,25 @@ def _resolve(result_columns: Any, wanted: str) -> Optional[str]:
     return norm.get(_norm(wanted))
 
 
-# Ported verbatim from integration/2.0 @ 360ba64f ("fix(contract): compare the
-# result only with the rows it came from"). In 1.6 the Ray/scheduled output
-# contract (app/agents/output_contract.py) uses it to compare a result's group
-# keys with a reference computed on the rows main(df) was given.
+@dataclass
+class ContractReport:
+    """What a contract check decided.
+
+    ``violations`` are HARD: they send the code back for repair.
+    ``advisories`` are postconditions the plan stated but could not back up --
+    logged and recorded, never a rejection. ``row_count`` and ``bounds``
+    record where an ``exactly n`` count and each min/max bound came from, so a
+    trace shows why each was or was not enforced.
+    """
+
+    violations: List[Violation] = field(default_factory=list)
+    advisories: List[Violation] = field(default_factory=list)
+    row_count: Optional[RowCountDecision] = None
+    #: One entry per declared min/max bound: where it came from (see
+    #: :func:`bound_decision`).
+    bounds: List[BoundDecision] = field(default_factory=list)
+
+
 # --- whether the input frame is what the result was computed on ---------------
 #
 # The validator checks the result of a SAMPLE run: ``main(df)`` is called on the
@@ -490,25 +913,64 @@ def _foreign_group_keys(result: Any, resolved: List[str], source: Any, src_resol
     return len(keys(result, resolved) - keys(source, src_resolved))
 
 
-def check_contract(contract: BlueprintContract, result: Any, source: Any) -> List[Violation]:
+def check_contract(contract: BlueprintContract, result: Any, source: Any,
+                   *, question: str = "") -> List[Violation]:
     """Check an executed result frame against the blueprint's contract.
 
     ``result`` and ``source`` are pandas DataFrames. Returns the list of
-    violated postconditions -- empty means the code satisfied the plan it was
-    written from.
+    violated (HARD) postconditions -- empty means the code satisfied the plan
+    it was written from. :func:`evaluate_contract` also returns the advisories.
+    """
+    return evaluate_contract(contract, result, source, question=question).violations
+
+
+def evaluate_contract(contract: BlueprintContract, result: Any, source: Any,
+                      *, question: str = "", source_is_input: bool = True,
+                      source_is_sample: bool = False) -> ContractReport:
+    """:func:`check_contract`, with advisories and the row-count and bound decisions.
+
+    ``source_is_input=False`` says *source* is not the rows the result was
+    computed on (:func:`code_reads_own_data`). Every check that compares the
+    result with *source* -- its row count, its group count, a range or count
+    derived from its values -- is then skipped and recorded as an advisory;
+    checks of the result alone (columns, dtypes, duplicate group keys, a
+    unique key, a scalar) still run.
+
+    ``source_is_sample=True`` says *source* is the validator's sample, not the
+    dataset: a range or count taken from it, and a value of the result
+    computed on it, are then named as the sample's in every sentence.
     """
     import pandas as pd  # local: keeps this module importable without pandas
 
-    violations: List[Violation] = []
+    report = ContractReport()
+    violations = report.violations
     if result is None:
-        return [Violation("result", "the code did not return a DataFrame")]
+        violations.append(Violation("result", "the code did not return a DataFrame"))
+        return report
     if isinstance(result, pd.Series):
         result = result.to_frame()
     if not isinstance(result, pd.DataFrame):
-        return [Violation("result", f"expected a DataFrame, got {type(result).__name__}")]
+        violations.append(Violation("result", f"expected a DataFrame, got {type(result).__name__}"))
+        return report
 
     n_res = len(result)
     n_src = len(source) if source is not None else None
+    sampled = source_is_sample and source is not None
+    label = f"{n_src}-row validation sample" if sampled else "data"
+    # The result's own values are the sample run's only when it ran on the sample.
+    has = "the result on the validation sample has" if sampled and source_is_input else "has"
+    the_input = f"the {label}" if sampled else "the input"
+    if source is not None and not source_is_input:
+        # Recorded only where a comparison is skipped; a range or count not
+        # taken from the sample says so in its own decision.
+        if contract.row_relation.type in ("one_per_group", "same_as_input", "fewer_than_input"):
+            report.advisories.append(Violation(
+                "input_not_compared",
+                f"data beyond the {n_src}-row validation sample reaches the result (the code loads "
+                "data itself or takes more than one frame), so the result's row count was not "
+                "compared with the sample's",
+            ))
+        n_src = None
 
     # --- declared columns must exist, with the declared kind of values ---
     for spec in contract.result_columns:
@@ -547,16 +1009,31 @@ def check_contract(contract: BlueprintContract, result: Any, source: Any) -> Lis
         if pd.api.types.is_numeric_dtype(series):
             s = series.dropna()
             if len(s):
-                if spec.min is not None and float(s.min()) < spec.min - 1e-9:
-                    violations.append(Violation(
-                        "out_of_range",
-                        f"{actual!r} declared min {spec.min} but has {float(s.min())}",
-                    ))
-                if spec.max is not None and float(s.max()) > spec.max + 1e-9:
-                    violations.append(Violation(
-                        "out_of_range",
-                        f"{actual!r} declared max {spec.max} but has {float(s.max())}",
-                    ))
+                # Only a bound a deterministic fact backs is HARD; see
+                # bound_decision for what "derivable" means.
+                for side, declared in (("min", spec.min), ("max", spec.max)):
+                    if declared is None:
+                        continue
+                    observed = float(s.min()) if side == "min" else float(s.max())
+                    broken = (observed < declared - 1e-9) if side == "min" else (observed > declared + 1e-9)
+                    decision = bound_decision(spec, side, contract, source, question,
+                                              observed=source_is_input, label=label)
+                    report.bounds.append(decision)
+                    if not broken:
+                        continue
+                    if decision.hard:
+                        violations.append(Violation(
+                            "out_of_range",
+                            f"{actual!r} declared {side} {declared} but {has} {observed} "
+                            f"({decision.describe()})",
+                        ))
+                    else:
+                        advisory = Violation(
+                            "unverified_range",
+                            f"{actual!r} declared {side} {declared}, a bound the plan did not "
+                            f"derive ({decision.describe()}); {has} {observed}. Advisory only.")
+                        report.advisories.append(advisory)
+                        logger.warning("Blueprint contract advisory: %s", advisory.detail)
 
     # --- row-count relation: the deterministic form of the aggregation rule ---
     rel = contract.row_relation
@@ -585,29 +1062,63 @@ def check_contract(contract: BlueprintContract, result: Any, source: Any) -> Lis
             # returned the raw rows" -- a false rejection that trains the coder
             # to rewrite working code. Comparing to the DISTINCT GROUP COUNT is
             # correct at any sample size.
+            #
+            # The yardstick holds only when the result was computed on these
+            # rows. When the code read its own data (source_is_input False) or
+            # the result holds group keys the input does not, it was not, and
+            # the comparison is skipped: "the input holds 73 distinct group(s)"
+            # said of a 100-row sample, against a result built from two full
+            # files, was false (rc18b). The duplicate-key check above is valid
+            # at any size and still runs.
             src_groups: Optional[int] = None
-            if source is not None and len(source):
+            if source is not None and len(source) and source_is_input:
                 src_resolved = [_resolve(source.columns, g) for g in rel.group_by]
                 if all(r is not None for r in src_resolved):
-                    src_groups = int(source[list(src_resolved)].drop_duplicates().shape[0])
+                    foreign = _foreign_group_keys(result, resolved, source, src_resolved)
+                    if foreign:
+                        n_src = None          # the fallback below compares the same frames
+                        report.advisories.append(Violation(
+                            "input_not_compared",
+                            f"the result holds {foreign} {list(rel.group_by)} key(s) that the "
+                            f"{len(source)}-row validation sample does not (the code read other "
+                            "rows or rewrote the keys), so its row count was not compared with "
+                            "the sample's group count",
+                        ))
+                    else:
+                        src_groups = int(source[list(src_resolved)].drop_duplicates().shape[0])
 
             if src_groups is not None:
                 if n_res > src_groups:
                     violations.append(Violation(
                         "not_aggregated",
-                        f"the plan promised one row per {list(rel.group_by)}; the input "
+                        f"the plan promised one row per {list(rel.group_by)}; {the_input} "
                         f"holds {src_groups} distinct group(s) but {n_res} rows were "
                         "returned, so the result is not one row per group",
                     ))
             elif n_src is not None and n_res >= n_src:
                 # The group columns are not visible in the input (they were
-                # derived), so fall back to the row-count comparison.
-                violations.append(Violation(
-                    "not_aggregated",
-                    f"the plan promised one row per {list(rel.group_by)} but the result "
-                    f"has {n_res} rows against {n_src} input rows -- the raw rows were "
-                    "returned instead of the aggregate",
-                ))
+                # derived), so only the row count is left -- and it says little.
+                # A result with MORE rows than the input cannot be its raw
+                # rows: one row per token split out of 100 recipe names is 174
+                # rows, and was refused as "the raw rows were returned"
+                # (rc18c). Exactly the input's row count is the one count that
+                # shows no aggregation; anything above it cannot be judged.
+                if n_res == n_src:
+                    carries = all(_resolve(result.columns, c) is not None for c in source.columns)
+                    violations.append(Violation(
+                        "not_aggregated",
+                        f"the plan promised one row per {list(rel.group_by)}, a column {the_input} "
+                        f"does not hold, but the result has exactly as many rows as {the_input} "
+                        f"({n_res})" + (f" and all {len(source.columns)} of its columns" if carries else "")
+                        + ": no aggregation shows in the row count",
+                    ))
+                else:
+                    report.advisories.append(Violation(
+                        "aggregation_not_judged",
+                        f"the plan groups by {list(rel.group_by)}, which {the_input} does not hold, "
+                        f"and the result has {n_res} rows from {n_src} input rows; from the row "
+                        "count alone it cannot be told whether the rows were aggregated",
+                    ))
     elif rel.type == "same_as_input" and n_src is not None and n_res != n_src:
         violations.append(Violation(
             "row_count_changed",
@@ -623,9 +1134,24 @@ def check_contract(contract: BlueprintContract, result: Any, source: Any) -> Lis
     elif rel.type == "at_most" and rel.n is not None and n_res > rel.n:
         violations.append(Violation(
             "too_many_rows", f"the plan promised at most {rel.n} rows; got {n_res}"))
-    elif rel.type == "exactly" and rel.n is not None and n_res != rel.n:
-        violations.append(Violation(
-            "wrong_row_count", f"the plan promised exactly {rel.n} rows; got {n_res}"))
+    elif rel.type == "exactly" and rel.n is not None:
+        # Only a count the plan can back up is a HARD postcondition; see
+        # exact_count_decision for what "derivable" means.
+        decision = exact_count_decision(contract, source, question, observed=source_is_input,
+                                        label=label)
+        report.row_count = decision
+        if n_res != rel.n:
+            if decision.hard:
+                violations.append(Violation(
+                    "wrong_row_count",
+                    f"the plan promised exactly {rel.n} rows ({decision.describe()}); got {n_res}"))
+            else:
+                advisory = Violation(
+                    "unverified_row_count",
+                    f"the plan stated exactly {rel.n} rows, a count it did not derive "
+                    f"({decision.describe()}); got {n_res}. Advisory only.")
+                report.advisories.append(advisory)
+                logger.warning("Blueprint contract advisory: %s", advisory.detail)
 
     if contract.result_kind == "scalar" and n_res != 1:
         violations.append(Violation(
@@ -655,7 +1181,7 @@ def check_contract(contract: BlueprintContract, result: Any, source: Any) -> Lis
                     f"{actual!r} was declared non-null but has {n_null} missing values",
                 ))
 
-    return violations
+    return report
 
 
 def format_violations(violations: List[Violation], contract: BlueprintContract) -> str:

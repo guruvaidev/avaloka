@@ -72,7 +72,8 @@ def test_end_route_goes_to_verify_claims(monkeypatch):
     monkeypatch.setattr(workflow, "StateGraph", _RecordingGraph)
     graph = workflow.build_graph()
     path, path_map = graph.conditional["plan_etl"]
-    assert path is workflow.route_planner_output
+    # 1.7 wraps the router in traced_router (the agent trace records which
+    # signals decided the route), so the edge is checked by what it does.
     assert path_map["end"] == "verify_claims"
     assert path_map[path(_router_state(is_dta_request=True))] == "verify_claims"
 

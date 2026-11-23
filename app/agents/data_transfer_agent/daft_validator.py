@@ -33,13 +33,19 @@ STRICT_LOGIC_ENV = "AVALOKA_STRICT_LOGIC_VALIDATION"
 #: was designed to use. The degradation was silent and the quality loss
 #: invisible.
 #:
-#: It now defaults to the MinIO/S3 object store this stack already deploys, and
-#: is overridable. Both s3:// and gs:// are honoured so an existing cloud
-#: deployment can keep pointing at its own bucket.
-SYSDOCS_PATH = os.getenv(
-    "AVALOKA_SYSDOCS_PATH",
-    f"s3://{os.getenv('AVALOKA_ARTIFACT_BUCKET', 'avaloka')}/dta_md_files/sysdocs_markdown",
-)
+#: It then defaulted to s3://<AVALOKA_ARTIFACT_BUCKET>/dta_md_files/... on the
+#: stack's own object store. That default was itself an unrequested egress: a
+#: deployment with no object store (the quickstart) built an S3 client with no
+#: credentials, and botocore's provider chain probed the cloud instance-metadata
+#: service (169.254.169.254) for some on every transfer -- on a cloud VM that
+#: picks up the instance's role and lists a bucket nobody configured.
+#:
+#: So there is no default. Unset (or empty) means "no sysdocs": nothing is
+#: contacted and one plain log line says so. Set AVALOKA_SYSDOCS_PATH (or its
+#: alias AVALOKA_SYSDOCS_URI) to an s3:// or gs:// prefix to load them.
+SYSDOCS_PATH = (
+    os.getenv("AVALOKA_SYSDOCS_PATH") or os.getenv("AVALOKA_SYSDOCS_URI") or ""
+).strip()
 #: Kept as an alias so any out-of-tree caller importing the old name still works.
 SYSDOCS_GCS_PATH = SYSDOCS_PATH
 SUPPORTED_DOC_EXTENSIONS = (".md", ".txt")
@@ -152,6 +158,11 @@ def load_sysdocs_from_gcs() -> dict[str, str]:
     On failure, logs a warning and returns an empty dict so callers can
     degrade gracefully.
     """
+    if not SYSDOCS_PATH:
+        logger.info(
+            "Sysdocs are not configured (AVALOKA_SYSDOCS_PATH unset); logical "
+            "validation will run without them and no object store is contacted.")
+        return {}
     try:
         fs, bucket_path = _build_sysdocs_filesystem()
         if fs is None:

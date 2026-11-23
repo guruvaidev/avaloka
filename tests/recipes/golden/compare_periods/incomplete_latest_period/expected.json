@@ -1,0 +1,56 @@
+{
+  "recipe": "compare_periods",
+  "version_major": 1,
+  "verdict": "qualified",
+  "reason": null,
+  "figures": [
+    {
+      "id": "/windows/current/value",
+      "value": 4912.38,
+      "decimals": 2,
+      "unit": "currency"
+    },
+    {
+      "id": "/windows/previous/value",
+      "value": 5478.05,
+      "decimals": 2,
+      "unit": "currency"
+    },
+    {
+      "id": "/change/absolute",
+      "value": -565.67,
+      "decimals": 2,
+      "unit": "currency"
+    },
+    {
+      "id": "/change/relative",
+      "value": -10.3,
+      "decimals": 1,
+      "unit": "percent"
+    },
+    {
+      "id": "/rows/duplicates",
+      "value": 0.0,
+      "decimals": 0,
+      "unit": "count"
+    },
+    {
+      "id": "/latest_period/days_seen",
+      "value": 20.0,
+      "decimals": 0,
+      "unit": "count"
+    }
+  ],
+  "caveats": [
+    "data_quality"
+  ],
+  "must_not_say": [
+    "cause",
+    "causes",
+    "drives",
+    "because",
+    "effect of",
+    "leads to"
+  ],
+  "note": "pandas: revenue summed per calendar month (to_period('M')); current=2024-05, previous=2024-04; June 2024 holds 20 days so it is excluded and the windows shift back; relative change = change / |previous| in percent."
+}

@@ -158,7 +158,8 @@ def test_poll_does_not_leak_another_users_turn(monkeypatch, mem, redis_down):
 
 def test_poll_superseded_by_a_newer_turn(as_user, mem, redis_down):
     server._remember_pending_turn(THREAD, USER, server._pending_turn_running("turn-2"))
-    assert poll("turn-1") == {"status": "superseded"}
+    # Names the turn that replaced it, so the client shows that turn's result.
+    assert poll("turn-1") == {"status": "superseded", "superseded_by": "turn-2"}
 
 
 def test_poll_error_has_a_default_message(as_user, mem, redis_down):

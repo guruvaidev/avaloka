@@ -1,0 +1,14 @@
+{
+  "recipe": "trend",
+  "version_major": 1,
+  "verdict": "refuse",
+  "reason": "insufficient_periods",
+  "figures": [],
+  "caveats": [],
+  "must_not_say": [
+    "causes",
+    "drives",
+    "because",
+    "proves"
+  ]
+}

@@ -1,0 +1,7 @@
+customer_id,region,signup_year,segment
+1,East,2020,consumer
+2,West,2021,smb
+3,North,2019,enterprise
+4,South,2022,consumer
+5,East,2020,smb
+6,West,2018,enterprise

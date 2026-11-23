@@ -9,10 +9,12 @@ from dateutil.relativedelta import relativedelta
 from celery.schedules import crontab
 from celery.result import AsyncResult
 from langchain_core.messages import AIMessage
+from app.api import reply_segments as _rs
 from tabulate import tabulate
 
 from app.graph.etl_state import ETLState
-from app.core.celery_app import celery_app, AvalokaScheduler, AvalokaEntry
+from app.core.celery_app import (celery_app, AvalokaScheduler, AvalokaEntry,
+                                  _run_status_from_final, scheduled_failure_message)
 from app.core import celery_results
 from app.core.task_metadata import scheduled_task_metadata
 from app.utils import convert_message_objects_to_dicts, convert_message_dicts_to_objects
@@ -59,10 +61,13 @@ def _celery_options_for_schedule(schedule_data: dict, execution_mode: str | None
     return {}
 
 
-# Local dev has no Celery worker. When set to "1", one-shot "run now" jobs
-# execute in-process instead of being refused. Keep it off in production:
-# there, a missing worker is an outage, not a reason to run a long Ray job
-# inside an HTTP request.
+# Local dev has no Celery worker. With AVALOKA_RUN_INLINE_WITHOUT_WORKER=1 a
+# one-shot "run now" job executes in this process instead of being refused. A
+# *training* still never runs inside the chat turn: it runs on a daemon thread
+# of this process and the turn returns at once (the ml_jobs row and the
+# pending-turn poll report the outcome, as they would with a worker); an
+# analysis runs inline. Keep it off in production: there a missing worker is
+# an outage, not a reason to run a long Ray job inside an HTTP request.
 _RUN_INLINE_WITHOUT_WORKER = os.getenv("AVALOKA_RUN_INLINE_WITHOUT_WORKER", "0") == "1"
 
 
@@ -93,11 +98,16 @@ def _prepare_celery_state(state: ETLState) -> ETLState:
 def _run_now_inline(state: ETLState) -> ETLState:
     """Run a one-shot job in this process when no Celery worker exists."""
     # Calling a Celery task directly runs it in-process.
-    from app.core.celery_app import _run_status_from_final, agent_task
+    from app.core.celery_app import agent_task
 
     result: ETLState = agent_task(_prepare_celery_state(state))
     msgs = convert_message_dicts_to_objects(result.get("messages") or [])
-    reply = msgs[-1].content if msgs else "The analysis finished."
+    if msgs:
+        # The run's own reply keeps the provenance it was written with (a
+        # model's is commentary).
+        reply = _rs.tag(AIMessage(content=msgs[-1].content), _rs.of_message(msgs[-1]))
+    else:
+        reply = _rs.plain_message(content="The analysis finished.")
     # Present output only for a run that succeeded. A failed run, or one the
     # output contract refused, has no table of its own: output_file_data is None
     # and output_location is whatever the session carried in (an earlier turn's
@@ -106,7 +116,7 @@ def _run_now_inline(state: ETLState) -> ETLState:
     status, _error = _run_status_from_final(result, task_type="execute")
     ok = status == "success"
     state.update(
-        messages=state["messages"] + [AIMessage(content=reply)],
+        messages=state["messages"] + [reply],
         output_location=result.get("output_location") if ok else None,
         output_file_data=result.get("output_file_data") if ok else None,
     )
@@ -210,7 +220,7 @@ def handle_task_info(state: ETLState):
         entry = AvalokaEntry.from_key(key, celery_app)
     except Exception as e:
         logger.error(f"Task {task_id} couldnt be found", exc_info=e)
-        state.update(messages=state["messages"] + [AIMessage(content=f"Task {task_id} couldnt be found")])
+        state.update(messages=state["messages"] + [_rs.plain_message(content=f"Task {task_id} couldnt be found")])
         return state
 
     last_run_at = AvalokaScheduler.get_last_run_at(task_id)
@@ -234,7 +244,7 @@ def handle_task_info(state: ETLState):
         message_append.append(f". The schedule is {entry.schedule}")
 
 
-    message = AIMessage(
+    message = _rs.plain_message(
         content=f"The task {task_id} has run a {entry.total_run_count} times" + "".join(message_append)
     )
     
@@ -254,7 +264,7 @@ def _finished_run(celery_task_id: str, result) -> dict:
         run_result = run.get("result") or {}
         msgs = celery_results.assistant_messages_from_logs(run_result.get("logs"))
         return {
-            "reply": msgs[-1]["content"] if msgs else "",
+            "last": AIMessage(content=msgs[-1]["content"]) if msgs else None,
             "output_location": result.get("output_location"),
             "output_file_data": celery_results.output_file_data_from_rows(
                 run_result.get("output_json"), result.get("output_location")),
@@ -262,14 +272,14 @@ def _finished_run(celery_task_id: str, result) -> dict:
         }
     msgs = convert_message_dicts_to_objects(result.get("messages") or [])
     return {
-        "reply": msgs[-1].content if msgs else "",
+        "last": msgs[-1] if msgs else None,
         "output_location": result.get("output_location"),
         "output_file_data": result.get("output_file_data"),
         "statistics": result.get("task_run_statistics") or {},
     }
 
 
-def _not_finished_message(celery_task_id: str, task_state: str, running: str) -> str:
+def _not_finished_message(celery_task_id: str, running: str) -> str:
     """``running`` unless the durable run record says the run is over.
 
     A result that is no longer stored reads as PENDING, which is not "running".
@@ -295,36 +305,87 @@ def handle_task_result(state: ETLState):
         entry = AvalokaEntry.from_key(key, celery_app)
     except Exception as e:
         logger.error(f"Task {task_id} couldnt be found", exc_info=e)
-        state.update(messages=state["messages"] + [AIMessage(content=f"Task {task_id} couldn't be found")])
+        state.update(messages=state["messages"] + [_rs.plain_message(content=f"Task {task_id} couldn't be found")])
         return state
 
     celery_task_ids = AvalokaScheduler.get_task_ids(task_id)
-    if result_index < 0 or result_index >= len(celery_task_ids):
-        state.update(messages=state["messages"] + [AIMessage(f"Couldn't find the result for the {task_id}")])
+    if not celery_task_ids:
+        state.update(messages=state["messages"] + [_rs.plain_message(f"Task {task_id} hasn't run yet")])
+    elif result_index < 0 or result_index >= len(celery_task_ids):
+        state.update(messages=state["messages"] + [_rs.plain_message(f"Couldn't find the result for the {task_id}")])
     else:
         celery_task_id = celery_task_ids[result_index]
         logger.info(f"Found celery task {celery_task_id} for {task_id}")
         task = AsyncResult(celery_task_id, app=celery_app)
         base_message = f"Results for task {task_id} run #{result_index + 1}:\n"
+        failed_text = _failed_run_text(task, _entry_task_type(entry))
+        if failed_text:
+            state.update(messages=state["messages"] + [_rs.plain_message(content=f"{base_message}{failed_text}")])
+            return state
         if task.state == "SUCCESS":
             run = _finished_run(celery_task_id, task.result)
-            message = f"\n\n{run['reply']}" if run["reply"] else ""
+            head = f"{base_message}The task ran successfully"
+            if run["last"] is not None:
+                # The run's own reply keeps the provenance it was written
+                # with (a model's is commentary); only the frame is plain.
+                said = _rs.tag(AIMessage(content=head + "\n\n" + run["last"].content),
+                               _rs.join(_rs.plain(head + "\n\n"), _rs.of_message(run["last"])))
+            else:
+                said = _rs.plain_message(head)
             state.update(
-                messages=state["messages"] + [AIMessage(f"{base_message}The task ran successfully{message}")],
+                messages=state["messages"] + [said],
                 output_location=run["output_location"],
                 output_file_data=run["output_file_data"],
             )
             return state
         if task.state == "FAILURE":
-            message = AIMessage(content=f"{base_message}The latest task failed to execute. Traceback:\n{task.traceback}")
+            message = _rs.plain_message(content=f"{base_message}The latest task failed to execute. Traceback:\n{task.traceback}")
         elif task.state == "REVOKED":
-            message = AIMessage(content=f"{base_message}The latest task failed to execute was cancelled")
+            message = _rs.plain_message(content=f"{base_message}The latest task failed to execute was cancelled")
         else:
             logger.info(f"Task with id {task_id} is currently {task.state}")
-            message = AIMessage(content=base_message + _not_finished_message(
-                celery_task_id, task.state, f"Task with id {task_id} is currently running"))
+            message = _rs.plain_message(content=base_message + _not_finished_message(
+                celery_task_id, f"Task with id {task_id} is currently running"))
         state.update(messages=state["messages"] + [message])
     return state
+
+def _failed_run_text(task, task_type: str):
+    """Plain words for a run that failed or did nothing, or None if it worked.
+
+    Celery SUCCESS only means the task returned; the final state says whether
+    the run did its work (celery_app._run_status_from_final decides, once).
+    """
+    if task.state == "FAILURE":
+        result = getattr(task, "result", None)
+        if type(result).__name__ == "ScheduledRunFailed":
+            if str(result):
+                return str(result)
+            # Loaded back from the durable store, which keeps the class only:
+            # the plain-words message is the run record's error.
+            run = celery_results.load_scheduled_run(getattr(task, "id", None)) or {}
+            return str(run.get("error") or "") or None
+        return None
+    if task.state != "SUCCESS":
+        return None
+    final = task.result
+    if celery_results.is_summary(final):
+        # A failed run is stored as FAILURE (ScheduledRunFailed); SUCCESS is success.
+        return None
+    status, error = _run_status_from_final(final, task_type=task_type)
+    if status == "failure":
+        return scheduled_failure_message(final if isinstance(final, dict) else {}, task_type, error)
+    return None
+
+
+def _entry_task_type(entry) -> str:
+    try:
+        args = getattr(entry, "args", None) or []
+        if args and isinstance(args[0], dict):
+            return str((args[0].get("task_schedule") or {}).get("task_type") or "execute")
+    except Exception:
+        pass
+    return "execute"
+
 
 def handle_task_status(state: ETLState):
     task_id = state["task_operation"]["task_id"]
@@ -334,7 +395,7 @@ def handle_task_status(state: ETLState):
         entry = AvalokaEntry.from_key(key, celery_app)
     except Exception as e:
         logger.error(f"Task {task_id} couldnt be found", exc_info=e)
-        state.update(messages=state["messages"] + [AIMessage(content=f"Task {task_id} couldn't be found")])
+        state.update(messages=state["messages"] + [_rs.plain_message(content=f"Task {task_id} couldn't be found")])
         return state
 
     celery_task_id = AvalokaScheduler.get_last_run_task_id(task_id)
@@ -345,11 +406,16 @@ def handle_task_status(state: ETLState):
     has_more_runs = is_unlimited or (entry.max_runs - entry.total_run_count) > 0
     if celery_task_id is None:
         state.update(
-            messages=state["messages"] + [AIMessage(content=f"The task is scheduled to run at {due_at} UTC. There are {remaining_str} runs remaining for a total of {total_str} runs")],
+            messages=state["messages"] + [_rs.plain_message(content=f"The task is scheduled to run at {due_at} UTC. There are {remaining_str} runs remaining for a total of {total_str} runs")],
         )
     else:
         logger.info(f"Found celery task {celery_task_id} for {task_id}")
         task = AsyncResult(celery_task_id, app=celery_app)
+        failed_text = _failed_run_text(task, _entry_task_type(entry))
+        if failed_text:
+            again = f" The task is scheduled to run again at {due_at} UTC." if has_more_runs else ""
+            state.update(messages=state["messages"] + [_rs.plain_message(content=f"The latest run failed. {failed_text}{again}")])
+            return state
         if task.state == "SUCCESS":
             run = _finished_run(celery_task_id, task.result)
             message = f"The task is scheduled to run again at {due_at} UTC" if has_more_runs else ""
@@ -362,7 +428,7 @@ def handle_task_status(state: ETLState):
                 )
             saved = f"The output is saved to {run['output_location']}. " if run["output_location"] else ""
             state.update(
-                messages=state["messages"] + [AIMessage(
+                messages=state["messages"] + [_rs.plain_message(
                     "The task ran successfully. "
                     + timing
                     + saved
@@ -375,13 +441,13 @@ def handle_task_status(state: ETLState):
             return state
 
         if task.state == "FAILURE":
-            message = AIMessage(content=f"The latest task failed to execute. Traceback:\n{task.traceback}")
+            message = _rs.plain_message(content=f"The latest task failed to execute. Traceback:\n{task.traceback}")
         elif task.state == "REVOKED":
-            message = AIMessage(content=f"The latest task failed to execute was cancelled")
+            message = _rs.plain_message(content=f"The latest task failed to execute was cancelled")
         else:
             logger.info(f"Task with id {task_id} is currently {task.state}")
-            finished = _not_finished_message(celery_task_id, task.state, "")
-            message = AIMessage(content=finished) if finished else AIMessage(content=f"Task with id {task_id} is currently running. The task started at {entry.last_run_at.astimezone(datetime.timezone.utc).strftime('%B %d, %Y %I:%M %p')} UTC. There are {remaining_str} runs remaining for a total of {total_str} runs")
+            finished = _not_finished_message(celery_task_id, "")
+            message = _rs.plain_message(content=finished) if finished else _rs.plain_message(content=f"Task with id {task_id} is currently running. The task started at {entry.last_run_at.astimezone(datetime.timezone.utc).strftime('%B %d, %Y %I:%M %p')} UTC. There are {remaining_str} runs remaining for a total of {total_str} runs")
         state.update(messages=state["messages"] + [message])
     return state
 
@@ -389,7 +455,7 @@ def handle_task_list(state: ETLState):
     task_ids = state.get("task_list", [])
     if not task_ids:
         state.update(
-            messages=state["messages"] + [AIMessage(content=f"There are no current tasks")]
+            messages=state["messages"] + [_rs.plain_message(content=f"There are no current tasks")]
         )
         return state
 
@@ -404,7 +470,7 @@ def handle_task_list(state: ETLState):
 
     if not entries:
         state.update(
-            messages=state["messages"] + [AIMessage(content=f"There are no current tasks")]
+            messages=state["messages"] + [_rs.plain_message(content=f"There are no current tasks")]
         )
         return state
 
@@ -465,7 +531,7 @@ def handle_task_list(state: ETLState):
         "Schedule"
     ]
     state.update(
-        messages=state["messages"] + [AIMessage(content=str(tabulate(data, headers=headers, tablefmt="pipe")))]
+        messages=state["messages"] + [_rs.plain_message(content=str(tabulate(data, headers=headers, tablefmt="pipe")))]
     )
     return state
 
@@ -478,7 +544,7 @@ def _cancel_training_job_if_any(task_id: str, state: ETLState) -> bool:
         return False
     if job is None:
         return False
-    state.update(messages=state["messages"] + [AIMessage(
+    state.update(messages=state["messages"] + [_rs.plain_message(
         content=f"Training job {job.id[:8]} is cancelled." if job.status == "cancelled"
         else f"Training job {job.id[:8]} had already finished ({job.status}).")])
     return True
@@ -494,10 +560,10 @@ def handle_task_cancel(state: ETLState):
         entry = AvalokaEntry.from_key(key, celery_app)
     except Exception as e:
         logger.exception(f"Failed to cancel task", exc_info=e)
-        message = AIMessage(content=f"Task {task_id} doesn't exist")
+        message = _rs.plain_message(content=f"Task {task_id} doesn't exist")
     else:
         entry.delete()
-        message = AIMessage(content=f"Task with id {task_id} has been cancelled")
+        message = _rs.plain_message(content=f"Task with id {task_id} has been cancelled")
     
     task_list = state.get("task_list") or []
     if task_id in task_list:
@@ -551,7 +617,7 @@ def handle_task_scheduling(state: ETLState) -> None:
     logger.info(f"Schedule: {entry.schedule}")
 
     state.update(
-        messages=state["messages"] + [AIMessage(content=f"{task_metadata['scheduled_message']} The task id is {entry.name}.")],
+        messages=state["messages"] + [_rs.plain_message(content=f"{task_metadata['scheduled_message']} The task id is {entry.name}.")],
         task_list=[*(state.get("task_list") or []), entry.name],
         task_info={
             "task_id": entry.name,
@@ -575,9 +641,9 @@ def task_scheduler_node(state: ETLState) -> None:
             logger.warning("No Celery worker; running training in a background thread "
                            "(AVALOKA_RUN_INLINE_WITHOUT_WORKER=1).")
             _run_training_in_background(state)
-            state.update(messages=state["messages"] + [AIMessage(
-                content="Model training has started in the background (dev mode, no worker). "
-                        "The result will appear in the Inference panel when it finishes.")])
+            state.update(messages=state["messages"] + [_rs.plain_message(content=(
+                "Model training has started in the background (dev mode, no worker). "
+                "The result will appear in the Inference panel when it finishes."))])
             return _cleared(state)
         if run_now and _RUN_INLINE_WITHOUT_WORKER and schedule_data.get("task_type") != "training":
             logger.warning("No Celery worker; running one-shot job inline (AVALOKA_RUN_INLINE_WITHOUT_WORKER=1).")
@@ -585,10 +651,13 @@ def task_scheduler_node(state: ETLState) -> None:
                 state = _run_now_inline(state)
             except Exception as exc:
                 logger.exception("Inline run failed")
-                state.update(messages=state["messages"] + [AIMessage(
+                state.update(messages=state["messages"] + [_rs.plain_message(
                     content=f"The analysis couldn't run: {exc}")])
             return _cleared(state)
 
+        # A raised ConnectionRefusedError surfaced to the user as a bare HTTP
+        # 500. No worker means scheduling is unavailable, not that the request
+        # was invalid -- say so and leave the session usable.
         if run_now:
             logger.warning("Run-now job needs a Celery worker and none is running.")
             content = (
@@ -601,9 +670,10 @@ def task_scheduler_node(state: ETLState) -> None:
             content = (
                 "Scheduling isn't available in this deployment — no task worker "
                 "(Celery) is running, so I can't create or manage scheduled jobs "
-                "right now."
+                "right now. The analysis itself still works; ask me to run it "
+                "immediately instead."
             )
-        state.update(messages=state["messages"] + [AIMessage(content=content)])
+        state.update(messages=state["messages"] + [_rs.plain_message(content=content)])
         return _cleared(state)
 
     
@@ -625,7 +695,7 @@ def task_scheduler_node(state: ETLState) -> None:
             state = handle_task_cancel(state)
 
         else:
-            state.update(messages=state["messages"] + [AIMessage(content="Failed to handle the task.")])
+            state.update(messages=state["messages"] + [_rs.plain_message(content="Failed to handle the task.")])
 
         return _cleared(state)
 

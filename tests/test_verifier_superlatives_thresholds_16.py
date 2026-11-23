@@ -68,7 +68,9 @@ def _flags(claim, rows):
     Through the public ``verify_claims``, so a tree without these checks fails
     these tests on their assertions, not on an import."""
     report = verify_claims(claim, {"execution_output": rows})
-    assert report.claims_checked == 1, claim
+    # 1.7 counts only the claims a check judged (claims_checked); a skipped
+    # claim is still seen.
+    assert report.claims_seen == 1, claim
     return next((f for f in report.findings if f.verdict is Verdict.CONTRADICTED), None)
 
 
@@ -107,8 +109,8 @@ def test_demo_lowest_average_is_not_autos_and_vehicles(gap):
     assert found and found[0]["check"] == "superlative_contradicted", out["verification_report"]["findings"]
     assert found[0]["verdict"] == "contradicted"
     assert out["verification_safe_to_present"] is False
-    assert found[0]["detail"] == ("names Autos & Vehicles as the lowest by average_subscribers (17,850,000), "
-                                  "but Travel & Events is lower at 12,500,000 in the computed result")
+    assert found[0]["detail"] == ("Autos & Vehicles's average_subscribers (17,850,000) is not the lowest: "
+                                  "Travel & Events has 12,500,000")        # 1.7's wording (claim_extremes)
 
 
 @pytest.mark.parametrize("gap", GAPS, ids=["nnbsp", "space", "none"])
@@ -293,7 +295,13 @@ def test_columns_that_disagree_are_skipped_but_a_measure_word_resolves_them():
 
 
 def test_results_that_are_not_one_row_per_group_are_skipped():
+    # 1.7's rule (claim_extremes, as in the _2x twin of this test): a label that
+    # names several rows -- Alpha in two regions, or in two years -- is
+    # ambiguous and skipped. A label that names one row is judged, even beside
+    # a second label column (1.6 skipped those too).
     two_labels = [{"region": "North", "category": "Alpha", "v": 1.0},
+                  {"region": "North", "category": "Beta", "v": 3.0},
+                  {"region": "South", "category": "Alpha", "v": 5.0},
                   {"region": "South", "category": "Beta", "v": 2.0}]
     repeated = [{"category": "Alpha", "year": 2020, "v": 1.0}, {"category": "Alpha", "year": 2021, "v": 5.0},
                 {"category": "Beta", "year": 2020, "v": 3.0}]

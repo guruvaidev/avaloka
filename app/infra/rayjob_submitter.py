@@ -5,7 +5,7 @@ import logging
 import time
 from typing import Any, Dict, Optional
 
-from app.infra.k8s_secrets import create_cloud_secret, kubectl_delete_secret
+from app.infra.k8s_secrets import cloud_secret_env
 from app.infra.rayjob_renderer import render_rayjob_yaml_from_file
 from app.infra.ray_job_runner import run_rayjob_from_yaml
 from app.api.cloud_connections import get_cloud_connection
@@ -121,44 +121,28 @@ async def submit_ray_job(
 
     creds = _build_creds(provider, conn)
 
-    # 2) create k8s secret
-    secret_name = create_cloud_secret(
-        namespace=ray_ns,
-        provider=provider,
-        creds=creds,
-        dataset_id=dataset_id,
+    # 2) The job's own Secret, the way the analysis path does it
+    #    (execution_agent): the runner creates <rayjob>-env owned by the RayJob,
+    #    with this connection's keys and -- when RAY_AUTH_MODE=token -- the Ray
+    #    auth token the job's pods and authOptions read; it deletes it after.
+    rayjob_name = f"rayjob-{dataset_id[:8]}-{int(time.time())}"
+    secret_name = f"{rayjob_name}-env"
+    secret_env = cloud_secret_env(provider, creds)
+
+    yaml_text = render_rayjob_yaml_from_file(
+        template_path,
+        rayjob_name=rayjob_name,
+        ray_namespace=ray_ns,
+        data_source_uri=data_source_uri,
+        cloud_secret_name=secret_name,
     )
-
-    try:
-        # 3) unique RayJob name per run
-        rayjob_name = f"rayjob-{dataset_id[:8]}-{int(time.time())}"
-
-        # 4) render YAML with secret name + unique job name
-        yaml_text = render_rayjob_yaml_from_file(
-            template_path,
-            rayjob_name=rayjob_name,
-            ray_namespace=ray_ns,
-            data_source_uri=data_source_uri,
-            cloud_secret_name=secret_name,
-        )
-
-        # 5) apply + wait + logs
-        # (Works whether runner accepts rayjob_name or not)
-        try:
-            return run_rayjob_from_yaml(
-                yaml_text,
-                namespace=ray_ns,
-                rayjob_name=rayjob_name,
-            )
-        except TypeError:
-            return run_rayjob_from_yaml(
-                yaml_text,
-                namespace=ray_ns,
-            )
-
-    finally:
-        # 6) always cleanup secret
-        kubectl_delete_secret(secret_name, ray_ns)
+    return run_rayjob_from_yaml(
+        yaml_text,
+        namespace=ray_ns,
+        rayjob_name=rayjob_name,
+        secret_env=secret_env,
+        secret_name=secret_name,
+    )
 
 
 def submit_ray_job_sync(**kwargs):

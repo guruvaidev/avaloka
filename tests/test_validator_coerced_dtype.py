@@ -9,10 +9,6 @@ and (b) the database-table path typed every column "string" although the
 query returns ``stroke`` as an integer. After two HARD blocks the deterministic
 stub answered a different question: it filtered ``bmi == 'None'`` and summed
 ``id``, dropping the stroke filter.
-
-Ported from 2.0 #571 (parts 1 and 2: the coercion-aware check and the typed
-database schema). Part 3, the blueprint-contract refusal in the coder's stub
-fallback, depends on 2.0's contract and is not part of this hotfix.
 """
 
 from __future__ import annotations
@@ -195,3 +191,65 @@ def test_db_ddl_maps_pandas_dtypes():
     from app.api.helpers import _ddl_from_schema
     ddl = _ddl_from_schema("t", {"stroke": "int64", "age": "float64", "g": "string"})
     assert '"stroke" INTEGER' in ddl and '"age" DOUBLE' in ddl and '"g" TEXT' in ddl, ddl
+
+
+# ---- D2.3: the fallback after HARD blocks does not answer a different question ----
+
+RC9_PLAN = (
+    "Assumption: 'had a stroke' means stroke == 1. Steps: convert age and stroke to "
+    "numeric; keep only rows where stroke == 1 and age is not null; compute the "
+    "average age as avg_age."
+)
+RC9_CONTRACT = {
+    "result_kind": "scalar", "source_columns": ["age", "stroke"],
+    "result_columns": [{"name": "avg_age", "role": "metric", "dtype": "numeric", "min": 0.0}],
+    "row_relation": {"type": "exactly", "n": 1}, "unique_key": [], "not_null": ["avg_age"],
+}
+RC9_PREVIEW = [
+    {"id": 9046, "gender": "Male", "age": 67.0, "bmi": 36.6, "stroke": 1},
+    {"id": 51676, "gender": "Female", "age": 61.0, "bmi": "None", "stroke": 1},
+    {"id": 31112, "gender": "Male", "age": 80.0, "bmi": 32.5, "stroke": 0},
+]
+
+
+def _hard_failed_state(contract):
+    return {
+        "plan": RC9_PLAN,
+        "user_prompt": "What is the average age of patients who had a stroke?",
+        "schema": {c: "string" for c in ("id", "gender", "age", "bmi", "stroke")},
+        "sample_data": RC9_PREVIEW,
+        "uploaded_csv_preview": RC9_PREVIEW,
+        "data_source_location": "input.csv",
+        "output_location": "output.csv",
+        "retry_count": 2,
+        "static_semantic_error": True,
+        "code_validation_feedback": "SemanticError on line 8: Column 'stroke' is typed as string ...",
+        "coder_contract": contract,
+        "messages": [],
+    }
+
+
+@pytest.fixture
+def coder_with_llm(monkeypatch):
+    # The HARD-failure fallback is the configured-LLM path; with no LLM at all
+    # the coder goes straight to the stub before any validation has happened.
+    from unittest.mock import MagicMock
+    import app.agents.coder as coder
+    monkeypatch.setattr(coder, "coder_llm", MagicMock(side_effect=AssertionError("no LLM call")))
+    return coder
+
+
+def test_the_fallback_says_it_cannot_use_the_filter_column_instead_of_answering(coder_with_llm):
+    coder_node = coder_with_llm.coder_node
+    out = coder_node(_hard_failed_state(RC9_CONTRACT))
+    reason = out.get("coder_blocked_reason") or ""
+    assert "`stroke`" in reason, out.get("generated_code")
+    assert "haven't answered" in reason
+    assert "stroke" not in (out.get("generated_code") or ""), out.get("generated_code")
+
+
+def test_the_fallback_without_a_contract_still_runs_the_stub(coder_with_llm):
+    coder_node = coder_with_llm.coder_node
+    out = coder_node(_hard_failed_state(None))
+    assert not out.get("coder_blocked_reason")
+    assert "def main(df)" in out["generated_code"]

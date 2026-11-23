@@ -7,7 +7,7 @@
 Understanding analyst experience: funnels, retention, where people get stuck,
 what they retry. It records what an analyst *did* and the question they *asked*.
 
-This is a different purpose from the Hindsight decision layer, which
+This is a different purpose from the Hindsight decision layer (PR #423), which
 deliberately collects no question text. Neither design justifies the other.
 The question is recorded inside the deployment only; it is never exported.
 
@@ -152,7 +152,7 @@ MAJOR step.
 
 | Version | What it is |
 | --- | --- |
-| 1.0 | The version module alone. No event shape was published under it. |
+| 1.0 | The version module alone (PR #426). No event shape was published under it. |
 | 1.1 | The first product-analytics schema. Exported representation: behavioural fields, no question text. |
 
 **A decision, not an oversight.** Earlier commits on this branch defined 1.1
@@ -177,7 +177,7 @@ next section for `actor_id`.
 
 ## Identity: a documented control is relaxed here, and what compensates
 
-**The control.** `avaloka/telemetry/allowlist.py` refuses
+**The control.** `avaloka/telemetry/allowlist.py` (PR #329) refuses
 `mission_id`, `conversation_id` and `thread_id` because "a stable identifier
 that survives a restart links a user's activity across sessions — which is what
 makes an anonymous dataset re-identifiable." The Hindsight spec's weekly HMAC
@@ -288,7 +288,7 @@ Writing a redaction module or its tests? Read `REDACTION-FIXTURES.md` first.
 
 ## The 1.7 adapter seam
 
-`export_pending()` forwards one batch past a cursor in the telemetry uploader's wire format
+`export_pending()` forwards one batch past a cursor in PR #329's wire format
 (gzip NDJSON), with event types prefixed `analytics.`. It is declared in the
 egress inventory as `product_analytics_export`. Nothing on develop-1.6 calls it.
 
@@ -304,7 +304,7 @@ Before it can be enabled:
    `tests/telemetry_ingest/test_analytics_contract.py` builds wire records with
    this package's own export and fails when they disagree. Still open under
    this item: the ingest has no report that reads an `analytics.*` event.
-2. Something must call `export_pending()`. Reuse the telemetry uploader's schedule rather
+2. Something must call `export_pending()`. Reuse #329's uploader schedule rather
    than adding a second CronJob to a one-node cluster.
 3. **Required before anything exports:** the customer-facing egress inventory /
    DPA sub-processor list must gain this channel. That document was not located

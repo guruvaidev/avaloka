@@ -10,7 +10,9 @@ Kubernetes API, etcd and anyone allowed to read RayJobs -- held them. Now:
     exit path. The app may create and delete Secrets there, never read them.
   * Direct mode: the keys go to the Ray Job Submission API as the job's env.
   * The planner's registry keeps a UI connection's handle, not its secret; the
-    transfer opens the handle when it runs.
+    transfer opens the handle when it runs (on 1.7: as the signed-in user's
+    assertion, from the sealed ``credential_handle`` /credentials returns, and
+    only after the user confirms the transfer -- tests/dta_confirm).
 
 kubectl is faked at subprocess.run, so every manifest the code sends is
 captured. The credential values are synthetic and recognisable, and never
@@ -32,6 +34,13 @@ import yaml
 
 import app.data_transfer_docker.gke_run as gk
 import app.infra.ray_job_runner as rjr
+
+try:  # tests/ as a package, or tests/ on sys.path
+    from tests.dta_confirm import run_confirmed
+    from tests.onboarding_identity import assertion_user
+except ImportError:  # pragma: no cover
+    from dta_confirm import run_confirmed
+    from onboarding_identity import assertion_user
 
 REPO = Path(__file__).resolve().parents[1]
 CHART = REPO / "deploy" / "helm" / "avaloka"
@@ -98,7 +107,11 @@ def test_rendered_rayjob_and_configmap_hold_no_credential(monkeypatch):
     for c in containers:
         refs = {e["name"]: e["valueFrom"]["secretKeyRef"] for e in c.get("env") or []
                 if "secretKeyRef" in (e.get("valueFrom") or {})}
-        assert refs == {k: {"name": secret, "key": k} for k in CLOUD_ENV}, c["name"]
+        # Plus the Ray auth token, from the same Secret under the key KubeRay
+        # expects (tests/test_mlflow_ray_auth.py); the runner adds it to the Secret.
+        expected = {k: {"name": secret, "key": k} for k in CLOUD_ENV}
+        expected["RAY_AUTH_TOKEN"] = {"name": secret, "key": "auth_token"}
+        assert refs == expected, c["name"]
 
 
 # ── 2. the per-job Secret (KubeRay mode) ─────────────────────────────────────
@@ -218,7 +231,9 @@ def _helm(*args):
 
 
 def test_rbac_lets_transfers_create_and_delete_their_secret_without_get():
-    docs = _helm("--set", "rbac.rayJobSecretsNamespace=dta-jobs")
+    # 1.7 names the transfer namespace config.dtaJobNamespace (default "<release>-dta-jobs");
+    # rbac.rayJobSecretsNamespace is the analysis RayJobs' (tests/test_ray_job_secret.py).
+    docs = _helm("--set", "config.dtaJobNamespace=dta-jobs")
     config = next((d for d in docs if d["kind"] == "ConfigMap" and "KUBE_NAMESPACE" in (d.get("data") or {})), None)
     assert config is not None, "no ConfigMap sets KUBE_NAMESPACE: transfers go to 'default', where no Role is"
     assert config["data"]["KUBE_NAMESPACE"] == "dta-jobs"
@@ -275,11 +290,24 @@ def test_direct_mode_passes_credentials_as_the_jobs_runtime_env_only(monkeypatch
 CLOUD_ID = "6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b"
 
 
+def _sealing_key(monkeypatch):
+    import app.api.cloud_connections as cc
+    monkeypatch.setattr(cc, "DB_ENCRYPTION_KEY", "test-only-" + secrets.token_hex(16), raising=False)
+    monkeypatch.setattr(cc, "_AESGCM_KEY", None, raising=False)
+
+
 def _planner_harness(monkeypatch, pipeline=None):
-    """The planner's transfer path with the onboarding API, cloud store and runner faked."""
+    """The planner's transfer path with the onboarding API, cloud store and runner faked.
+
+    The onboarding fake answers as the real router does: the signed-in user's
+    assertion lists their own customers and gets each one's sealed
+    ``credential_handle``; nothing else sees a password.
+    """
     import app.agents.planner as P
     import app.api.cloud_connections as cc
+    from app.mcp_server.credentials import credential_handle
 
+    _sealing_key(monkeypatch)
     creds = {
         "src_db": {"host": "src-db.example", "port": 5432, "database": "src",
                    "username": "src_user", "password": SRC_PW, "table": "orders"},
@@ -304,9 +332,16 @@ def _planner_harness(monkeypatch, pipeline=None):
         def get(self, url, headers=None, **_kw):
             tail = url[len(P.ONBOARDING_API_URL):]
             parts = tail.strip("/").split("/")
+            if assertion_user(headers) != "user_a":
+                return _Resp(401 if assertion_user(headers) is None else 404, {})
             if len(parts) == 3 and parts[0] == "customers" and parts[2] == "credentials":
                 body = creds.get(parts[1])
-                return _Resp(200, {**body, "database_type": "postgresql"}) if body else _Resp(404, {})
+                if not body:
+                    return _Resp(404, {})
+                dsn = (f"postgresql://{body['username']}:{quote_plus(body['password'])}"
+                       f"@{body['host']}:{body['port']}/{body['database']}")
+                shown = {k: v for k, v in body.items() if k != "password"}
+                return _Resp(200, {**shown, "credential_handle": credential_handle(dsn), "database_type": "postgresql"})
             if tail.rstrip("/") == "/customers":
                 return _Resp(200, [{"customer_id": k, "database_type": "postgresql"} for k in creds])
             return _Resp(404, {})
@@ -320,8 +355,11 @@ def _planner_harness(monkeypatch, pipeline=None):
     monkeypatch.setattr(P.requests, "Session", _Session)
     monkeypatch.setattr(cc, "get_cloud_connection", _cloud)
     monkeypatch.setattr(P, "_list_dest_tables", lambda *a, **k: ["orders_copy"])
+    monkeypatch.setattr(P, "_list_source_tables", lambda *a, **k: ["orders"], raising=False)
+    monkeypatch.setattr(P, "_count_source_rows", lambda *a, **k: None)   # the confirmation's count: no network
     monkeypatch.setenv("EXECUTION_ENV", "gke")
     monkeypatch.setenv("DTA_GKE_REACHES_PRIVATE", "1")
+    monkeypatch.setenv("RAY_DASHBOARD_URL", "http://ray.invalid:8265")
 
     handed, launched = {}, {}
 
@@ -343,10 +381,11 @@ def _planner_harness(monkeypatch, pipeline=None):
 
 
 def _transfer(h, source, destination, **extra):
+    """A transfer as the chat runs it, the user answering "yes" to its confirmation."""
     state = {"user_id": "user_a", "dta_database_registry": {}, "messages": []}
-    msg = h.P._handle_initiate_transfer(
+    msg = run_confirmed(
         state,
-        h.P.InitiateTransferParams(source_alias=source, destination_alias=destination,
+        h.P.InitiateTransferParams(source_alias=source, destination_alias=destination, source_table="orders",
                                    user_prompt=f"copy orders from {source} to {destination}",
                                    write_mode="append", **extra),
     )
@@ -549,6 +588,7 @@ class _FakeCluster:
         return subprocess.CompletedProcess(cmd, 0, out, "")
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("mode", ["kuberay", "direct"])
 def test_real_postgres_transfer_copies_and_the_probe_shows_up_nowhere(pg, monkeypatch, caplog, capsys,
                                                                      tmp_path, mode):
@@ -559,6 +599,7 @@ def test_real_postgres_transfer_copies_and_the_probe_shows_up_nowhere(pg, monkey
     from sqlalchemy import text
 
     caplog.set_level("DEBUG")
+    _sealing_key(monkeypatch)        # the registry is sealed at rest; the handles open under this key
     token = secrets.token_urlsafe(32)
     monkeypatch.setenv("MCP_SERVICE_TOKEN", token)
     monkeypatch.setenv("EXECUTION_ENV", "gke")
@@ -658,8 +699,8 @@ def test_real_postgres_transfer_copies_and_the_probe_shows_up_nowhere(pg, monkey
         monkeypatch.setattr(gk, "run_rayjob_from_yaml", _runner)
 
         state = {"user_id": "user_a", "dta_database_registry": {}, "messages": []}
-        msg = P._handle_initiate_transfer(state, P.InitiateTransferParams(
-            source_alias="cust_src", destination_alias="cust_dst",
+        msg = run_confirmed(state, P.InitiateTransferParams(
+            source_alias="cust_src", destination_alias="cust_dst", source_table="orders",
             user_prompt="copy orders from cust_src to cust_dst",
             write_mode="append", dest_table="orders_copy"))
     finally:

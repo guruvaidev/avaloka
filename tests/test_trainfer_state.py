@@ -53,14 +53,13 @@ def test_migration_declares_the_endpoint_lifecycle_and_server_kinds():
 
 
 def test_migration_is_listed_in_merge_order():
-    from tests.test_migration_versions_unique import MERGED_MIGRATIONS
-    assert MIGRATION in MERGED_MIGRATIONS
-    # Appended after everything develop-1.6 had when it was written; a later
-    # branch may follow it (20261121110000_background_jobs.sql builds on it),
-    # so the rule is "every entry after it sorts after it", not "it is last".
-    i = MERGED_MIGRATIONS.index(MIGRATION)
-    assert all(later > MIGRATION for later in MERGED_MIGRATIONS[i + 1:]), "a migration behind ours must sort after it"
-    assert all(earlier < MIGRATION for earlier in MERGED_MIGRATIONS[:i]), "ours must sort after everything before it"
+    """On 1.7 the merged list holds stems (tests/contract/test_migration_versions.py) and a
+    migration ported from 1.6 keeps its 1.6 name, so it is also in FROM_1_6, exempt from
+    the version-order checks (like the Celery one)."""
+    from tests.contract.test_migration_versions import FROM_1_6, MERGED_MIGRATIONS
+    stem = MIGRATION[:-len(".sql")]
+    assert stem in MERGED_MIGRATIONS
+    assert stem in FROM_1_6
 
 
 def test_migration_holds_no_customer_data_columns():

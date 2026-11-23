@@ -24,6 +24,7 @@ import pandas as pd
 import pytest
 
 import app.agents.validator as validator_mod
+import app.executor.client as exec_client
 from app.executor import sample as sample_mod
 from app.executor.env import ALLOWED_ENV_NAMES, FORBIDDEN_NAME_PARTS, scrubbed_env
 
@@ -138,9 +139,9 @@ def test_full_run_error_carries_no_probe(probes, tmp_path):
 
 
 def test_full_run_positive_control_probe_reaches_unscrubbed_child(probes, tmp_path, monkeypatch):
-    import app.agents.execution_agent as ea
-
-    monkeypatch.setattr(ea, "scrubbed_env", _passthrough_env, raising=False)
+    # The full run goes through app.executor.client.run_script, which builds
+    # the child's environment itself; the scrub is turned off where it happens.
+    monkeypatch.setattr(exec_client, "scrubbed_env", _passthrough_env)
     result, _ = _full_run(tmp_path, PROBE_CODE)
     assert result["status"] == "success", result
     assert _leaked(result) == sorted(PROBES)
@@ -179,7 +180,7 @@ def test_dta_sample_positive_control(probes, tmp_path, monkeypatch):
     pytest.importorskip("daft")
     from app.agents.data_transfer_agent import daft_execution
 
-    monkeypatch.setattr(daft_execution, "scrubbed_env", _passthrough_env, raising=False)
+    monkeypatch.setattr(exec_client, "scrubbed_env", _passthrough_env)   # the DTA preview runs via run_script too
     result = _daft_run(tmp_path, monkeypatch)
     assert _leaked(result) == sorted(PROBES)
 

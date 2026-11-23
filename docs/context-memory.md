@@ -56,8 +56,8 @@ Responsibilities:
 - Falls back to zero vectors only as a final degraded mode.
 - Pads or trims vectors to a consistent dimension.
 
-**Vectors stored by the other provider.** An install that ran an earlier 1.6 build
-with `OPENAI_API_KEY` set holds OpenAI vectors. Both providers are padded to the same
+**Vectors stored by the other provider.** An install that ran before 2.0 with
+`OPENAI_API_KEY` set holds OpenAI vectors. Both providers are padded to the same
 length, so nothing fails on a dimension mismatch, but the two spaces are not
 comparable. A local vector is zero past its native 384 dimensions and an OpenAI
 one is not, which is how mixed stores are detected. Redis (Layer 1) skips such
@@ -401,7 +401,7 @@ memory-plane-specific override.
 
 ## Scope and Deletion
 
-Since the 1.6 thread-scope hotfix (ported from the 2.0 line):
+Since the 1.6 thread-scope hotfix (ported from 2.0 #578 and #580):
 
 - **What crosses threads.** Each learned item is classified once, when it is
   written (`app/services/memory_scope.py`), and filed under the key of its

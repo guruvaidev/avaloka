@@ -430,6 +430,7 @@ _THOUSANDS_GROUND_TRUTH = GroundTruth(
                  "the Revenue column multiplied by 1000; a reader that reports "
                  "the raw sum is out by a factor of 1000."),
     },
+    question='What is the total Revenue?',
     shape=("Row 1 is a one-cell title, 'Revenue by region (GBP thousands)', "
            "and is the only place the scale appears -- not in the header, not "
            "in the column names, not in the number formats. Header on row 2, "
@@ -498,6 +499,7 @@ _NEGATIVES_GROUND_TRUTH = GroundTruth(
                  "read as -1234; reading the brackets as decoration gives a "
                  "positive total of the absolute values."),
     },
+    question='What is the total Movement?',
     shape=("Header on row 1, 28 data rows. Movement and Closing balance mix "
            "plain numeric positives with accounting negatives written as text "
            "'(1,234)' meaning -1234. Closing balance = Opening balance + "
@@ -570,6 +572,7 @@ _FOOTNOTES_GROUND_TRUTH = GroundTruth(
         "note": ("The second row's label is written 'Bath*'. A correct reader "
                  "resolves it to 'Bath'; row_labels is the full clean set."),
     },
+    question='What is the Headcount where Segment is Bath?',
     shape=("Header on row 1 with markers glued on: 'Segment*', "
            "'Headcount (a)', 'Attrition rate<dagger>'. 22 data rows whose "
            "labels carry the same markers cyclically. Sheet row 24 is blank "
@@ -910,6 +913,7 @@ _SEC_GROUND_TRUTH = GroundTruth(
                  "line_items is the full statement with the footnote marker "
                  "resolved off 'Cost of revenue (a)'."),
     },
+    question='What is the total Dec. 31, 2023 where Line item = "Net income"?',
     shape=("Three sheets: 'Cover' (six key/value cells of filing metadata), "
            "'CONSOLIDATED STATEMENTS OF OPER' and 'Consolidated Balance "
            "Sheets'. The ground truth describes the operations statement: "
@@ -1011,6 +1015,7 @@ DECOY_SHEET_TRUTH = GroundTruth(
         "value": 1_777_000.0,
         "row_labels": ["2024 Q1", "2024 Q2", "2024 Q3", "2024 Q4"],
     },
+    question='What is the total Revenue?',
     shape=("two sheets: the answer is on the smaller one ('Quarterly summary', "
            "4 data rows), while the decoy ('Reference data', 40 rows) is longer "
            "and denser, so both size heuristics pick the wrong sheet"),
@@ -1066,6 +1071,14 @@ _TOTALS_GROUND_TRUTH = GroundTruth(
     numeric_columns=["Units", "Revenue"],
     text_columns=["Region"],
     planted_answer={
+        # label/value are what answer_value and answer_bound grade; without
+        # them both failed whatever the reader did ("carries no 'value'").
+        "label": "Total revenue",
+        "value": round(sum(_totals_revenue(i) for i in range(_TOTALS_N)), 2),
+        # The asked statistic. The totals row's own value equals this sum and
+        # becomes the column max on a misread, so a bare value match is not
+        # evidence of a correct answer.
+        "statistic": "sum",
         "column": "Revenue",
         "sum": round(sum(_totals_revenue(i) for i in range(_TOTALS_N)), 2),
         "max": max(_totals_revenue(i) for i in range(_TOTALS_N)),
@@ -1075,6 +1088,7 @@ _TOTALS_GROUND_TRUTH = GroundTruth(
                  "correct read has 12 rows and sums to the figure the totals "
                  "row states, not to twice it."),
     },
+    question='What is the total Revenue?',
     shape=("Header on row 1, 12 data rows, then a 'Total' row on sheet row 14 "
            "holding the column sums. Read as data it doubles every sum and "
            "becomes the maximum of every numeric column. The ground truth is "
@@ -1138,6 +1152,12 @@ _SUBTOTALS_GROUND_TRUTH = GroundTruth(
     numeric_columns=["Units", "Revenue"],
     text_columns=["Area", "Store"],
     planted_answer={
+        "label": "Total revenue",
+        "value": round(sum(r[3] for r in _subtotal_records()), 2),
+        # The asked statistic. The totals row's own value equals this sum and
+        # becomes the column max on a misread, so a bare value match is not
+        # evidence of a correct answer.
+        "statistic": "sum",
         "column": "Revenue",
         "sum": round(sum(r[3] for r in _subtotal_records()), 2),
         "max": max(r[3] for r in _subtotal_records()),
@@ -1147,6 +1167,7 @@ _SUBTOTALS_GROUND_TRUTH = GroundTruth(
                  "'Grand Total' are not records. A correct read has 12 rows "
                  "and exactly three distinct areas."),
     },
+    question='What is the total Revenue?',
     shape=("Header on row 1; 12 store records in three groups, each closed by "
            "an '<Area> subtotal' row, and a 'Grand Total' row last (16 rows "
            "under the header, 12 of them data). Read as data every sum is "

@@ -147,7 +147,8 @@ set; those are what the EDGAR task fetches. Nothing here implies PDF support.
 
 The family is `conversational_scorers`, and the name is load-bearing. **It
 scores the probe scorers and, optionally, a raw model. It does not measure
-Avaloka's conversational behaviour, and no path on this branch does.**
+Avaloka's conversational behaviour; that is the `conversational_product`
+family below.**
 
 `tests/conversational/probes.py` was pytest-only, so it produced a "passed" and
 no number. It is now a scored family: one task per dimension (interactivity,
@@ -163,30 +164,56 @@ Every task records its subject in `source_scheme` — `ref:brilliant`,
 number *of*.
 
 `--live` drives a real provider under the standing provider ruling: a local
-model first, then Groq, **never Anthropic**. It reaches that model over HTTP; it
-does not enter Avaloka's agent graph either.
+model first, then Groq, **never Anthropic**. For this family it reaches that
+model over HTTP and does not enter Avaloka's agent graph.
 
-#### The declared gap
+### Conversational product
 
-`conv_avaloka_behaviour_is_unmeasured` is a standing **failure**, not a note:
+`conversational_product` runs the same eleven probes through **Avaloka's
+compiled agent graph** (`app.api.workflow.build_graph()`), one graph run per
+probe, and grades the last assistant message the user would see
+(`avaloka/benchmark/conversational_product.py`). The probe's evidence rides in
+`avaloka_recommendation`, the field the reply step already forwards. A probe
+the agent delegates continues into the planner, and whatever the product says
+there is graded.
 
-```
-avaloka_conversational_behaviour_is_measured: FAIL
-  avaloka.benchmark.conversational_product does not exist. no path on this
-  branch drives the conversational probes through Avaloka's own agent graph…
-```
+- **`product:replay` (default, hermetic).** In a fresh interpreter, before any
+  agent module is imported, `app.core.inference.build_chat_model` is replaced
+  by a replay model reading `tests/conversational/cassettes/product.jsonl`,
+  keyed by probe, agent and the SHA-256 of the rendered request. **A request
+  with no recording fails the probe that made it**, naming the agent and the
+  hash; it is never a silent fallback. Any prompt or graph change that alters
+  a model input shows up as a miss, which means: re-record. The child has a
+  whitelisted environment and no network socket.
+- **`product:live:<model>` (`--live`).** The real router, local model first,
+  then Groq, never Anthropic. A hosted run must be priced
+  (`AVALOKA_CONV_INPUT_USD_PER_MTOK`, `AVALOKA_CONV_OUTPUT_USD_PER_MTOK`) or it
+  refuses to start.
+- **Re-recording.** The committed cassette is gpt-oss through OpenRouter with
+  the router's own defaults, priced and capped (`AVALOKA_CONV_MAX_USD`, default
+  $1.00 at the operator rate):
+  `python -m avaloka.benchmark.conversational_product record --provider openrouter`
+  with `OPENROUTER_API_KEY` and the two `AVALOKA_CONV_*_USD_PER_MTOK` rates set.
+  Each call's OpenRouter generation id is kept in the cassette, so its billed
+  cost can be looked up. Against a local model, set `OLLAMA_HOST` and omit
+  `--provider`. Replay runs under the provider the cassette names.
 
-It is there because prose does not survive. Someone reading
-`conversational 1.00` off a scorecard in six months will quote it as a product
-number, which is exactly what happened to the 0.80. So the suite reports the
-gap beside its score — the same device as `DEFERRED_FORMATS` in
-`datasets_formats`, where a limitation lives in code and review can see it.
+Where `app` cannot be imported (the Benchmark Scorecard CI step installs only
+the benchmark extra) the product tasks SKIP. The replay runs in the Python test
+step instead, through `tests/conversational/test_product_replay.py`, which
+fails rather than skips there.
 
-The check grades a **lookup, not a constant**: add
-`avaloka/benchmark/conversational_product.py` with a `product_responder()`
-factory that drives Avaloka and returns the user-visible reply, and the check
-passes on its own with nobody editing it. A gap assertion that has to be
-remembered and deleted by hand goes stale and then lies.
+#### The measurement check
+
+`conv_avaloka_behaviour_is_unmeasured` was a standing failure while no path
+drove the probes through the graph. It used to clear as soon as a
+`product_responder` factory *returned*, which a lazy factory does where the
+product cannot run: a pass on a name. It now passes only when the product run
+produced a record for every probe, sent each probe its own question, walked
+the graph from `drivers_route` through `avaloka_agent` to `verify_claims`,
+reached a model at least once, missed no recording, opened no network socket
+on replay, and wrote its results back. Without `app` it is skipped with the
+product tasks, not failed.
 
 Synthetic tasks need no network and carry ground truth by construction, so the
 benchmark always runs. Kaggle tasks reuse the repo's existing download

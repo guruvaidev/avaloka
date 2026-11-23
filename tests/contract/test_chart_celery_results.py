@@ -16,14 +16,14 @@ from pathlib import Path
 import pytest
 import yaml
 
-from tests.contract.test_chart_reuse_values import CHART, OLD_VALUES, _helm
+from tests.contract.test_chart_reuse_values import CHART, FIXTURES, OLD_VALUES, _helm
 
 
-def _render(tmp_path: Path, *args: str, old_values: bool = False):
+def _render(tmp_path: Path, *args: str, old_values: str = ""):
     chart = tmp_path / "avaloka"
     shutil.copytree(CHART, chart)
     if old_values:
-        shutil.copyfile(OLD_VALUES, chart / "values.yaml")
+        shutil.copyfile(FIXTURES / old_values, chart / "values.yaml")
     run = subprocess.run([_helm(), "template", "avaloka", str(chart), "--set", "celery.enabled=true", *args],
                          capture_output=True, text=True, timeout=180)
     docs = [d for d in yaml.safe_load_all(run.stdout) if isinstance(d, dict)] if run.returncode == 0 else []
@@ -51,9 +51,10 @@ def test_values_override_both(tmp_path):
     assert (data.get("CELERY_RESULT_EXPIRES"), data.get("CELERY_RESULT_RETENTION_DAYS")) == ("3600", "1095")
 
 
-def test_an_install_without_the_values_gets_the_defaults(tmp_path):
-    """--reuse-values: the 2026-09-12 values have neither key."""
-    code, docs, err = _render(tmp_path, old_values=True)
+@pytest.mark.parametrize("fixture", OLD_VALUES)
+def test_an_install_without_the_values_gets_the_defaults(tmp_path, fixture):
+    """--reuse-values: the old installs' values have neither key."""
+    code, docs, err = _render(tmp_path, old_values=fixture)
     assert code == 0, err[-800:]
     data = _config(docs)
     assert (data.get("CELERY_RESULT_EXPIRES"), data.get("CELERY_RESULT_RETENTION_DAYS")) == ("604800", "365")
@@ -77,8 +78,9 @@ def test_the_backfill_job_is_off_by_default(tmp_path):
     assert not _jobs(docs)
 
 
-def test_the_backfill_job_renders_nothing_for_an_install_without_the_values(tmp_path):
-    code, docs, err = _render(tmp_path, old_values=True)
+@pytest.mark.parametrize("fixture", OLD_VALUES)
+def test_the_backfill_job_renders_nothing_for_an_install_without_the_values(tmp_path, fixture):
+    code, docs, err = _render(tmp_path, old_values=fixture)
     assert code == 0, err[-800:]
     assert not _jobs(docs)
 

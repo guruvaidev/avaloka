@@ -35,13 +35,66 @@ spec:
         {{- end }}
     spec:
       serviceAccountName: {{ include "avaloka.serviceAccountName" . }}
+      # The tracking server needs no Kubernetes API: no token in the pod (GKE
+      # Workload Identity for gs:// artifacts uses the metadata server, not the
+      # mounted token), and no Service environment variables.
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: mlflow
           image: "{{ $repository }}:{{ $tag }}"
           imagePullPolicy: {{ $pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           command: ["/bin/sh", "-c"]
+          # Migrate the tracking schema before serving, explicitly. MLflow's own
+          # start-up migrates only when a release adds tables (it creates them and
+          # runs alembic -- 3.14 -> 3.17 is such a release); a release that only
+          # alters existing tables meets the old alembic head and the server refuses
+          # to start on its schema check. `mlflow db upgrade` makes every image
+          # upgrade behave the same way: idempotent at head, and on an empty
+          # database it creates the tables. `set -e` keeps a failed migration
+          # from falling through to a server that would only fail the same check.
+          # Every replica runs it on start and concurrent migrations are not safe,
+          # so raise mlflow.replicas above 1 only once the schema is at head.
+          #
+          # Authentication (mlflow.auth): `--app-name basic-auth`. Its user store is
+          # configured through an ini file (database_uri has no environment
+          # variable), written here at start into the pod's own emptyDir with
+          # umask 077 because it carries the database URI and the admin password.
+          # The admin user and password come from the Secret (MLFLOW_AUTH_ADMIN_*,
+          # which MLflow 3.17 reads first) and are written into that ini too, so an
+          # older mlflow in a stale image -- whose packaged ini still says
+          # admin_password = password1234 and which ignores those variables -- can
+          # never create the admin with the published default. Ordering: the
+          # tracking schema migrates first (`mlflow db upgrade`, above), then
+          # `mlflow server` migrates the user store (its own alembic table,
+          # alembic_version_auth) and creates the admin user in the server process
+          # before any worker starts, so a failure there exits the container
+          # instead of looping workers.
           args:
             - |
+              set -e
+              mlflow db upgrade "$MLFLOW_BACKEND_STORE_URI"
+              {{- if (include "avaloka.mlflowAuthEnabled" $) }}
+              umask 077
+              export MLFLOW_AUTH_CONFIG_PATH="${MLFLOW_AUTH_CONFIG_PATH:-${TMPDIR:-/tmp}/mlflow-basic-auth.ini}"
+              printf '[mlflow]\ndefault_permission = %s\ndatabase_uri = %s\nadmin_username = %s\nadmin_password = %s\nauthorization_function = mlflow.server.auth:authenticate_request_basic_auth\n' \
+                "$MLFLOW_AUTH_DEFAULT_PERMISSION" \
+                "$(printf '%s' "$MLFLOW_AUTH_DATABASE_URI" | sed 's/%/%%/g')" \
+                "$(printf '%s' "$MLFLOW_AUTH_ADMIN_USERNAME" | sed 's/%/%%/g')" \
+                "$(printf '%s' "$MLFLOW_AUTH_ADMIN_PASSWORD" | sed 's/%/%%/g')" > "$MLFLOW_AUTH_CONFIG_PATH"
+              {{- end }}
               exec mlflow server \
                 --backend-store-uri "$MLFLOW_BACKEND_STORE_URI" \
                 --artifacts-destination "$MLFLOW_ARTIFACTS_DESTINATION" \
@@ -49,7 +102,13 @@ spec:
                 --port "$MLFLOW_PORT" \
                 --workers "$MLFLOW_WORKERS" \
                 --allowed-hosts "$MLFLOW_ALLOWED_HOSTS"
+              {{- if (include "avaloka.mlflowAuthEnabled" $) }} \
+                --app-name basic-auth
+              {{- end }}
           env:
+            # MLflow 3.x usage telemetry, and every other third-party beacon the
+            # image could carry, off (app/core/thirdparty_optout.py).
+            {{- include "avaloka.thirdPartyOptoutEnv" . | nindent 12 }}
             - name: MLFLOW_BACKEND_STORE_URI
               valueFrom:
                 secretKeyRef:
@@ -91,6 +150,49 @@ spec:
               value: {{ .Values.mlflow.workers | quote }}
             - name: MLFLOW_ALLOWED_HOSTS
               value: {{ include "avaloka.mlflowAllowedHosts" . | quote }}
+            # A read-only root filesystem: scratch space and the auth files live
+            # on emptyDirs.
+            - name: HOME
+              value: /tmp
+            - name: TMPDIR
+              value: /tmp
+            {{- if (include "avaloka.mlflowAuthEnabled" $) }}
+            - name: MLFLOW_AUTH_CONFIG_PATH
+              value: /mlflow-auth/basic_auth.ini
+            - name: MLFLOW_AUTH_DEFAULT_PERMISSION
+              value: {{ (dig "auth" "defaultPermission" "NO_PERMISSIONS" $.Values.mlflow) | quote }}
+            - name: MLFLOW_AUTH_ADMIN_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "avaloka.secretName" . }}
+                  key: MLFLOW_TRACKING_USERNAME
+            - name: MLFLOW_AUTH_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "avaloka.secretName" . }}
+                  key: MLFLOW_TRACKING_PASSWORD
+            - name: MLFLOW_FLASK_SERVER_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "avaloka.secretName" . }}
+                  key: MLFLOW_FLASK_SERVER_SECRET_KEY
+            - name: MLFLOW_AUTH_DATABASE_URI
+              {{- if (dig "auth" "databaseUri" "" $.Values.mlflow) }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "avaloka.secretName" . }}
+                  key: MLFLOW_AUTH_DATABASE_URI
+              {{- else }}
+              value: "sqlite:////mlflow-auth/basic_auth.db"
+              {{- end }}
+            {{- end }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            {{- if (include "avaloka.mlflowAuthEnabled" $) }}
+            - name: auth
+              mountPath: /mlflow-auth
+            {{- end }}
           ports:
             - name: http
               containerPort: {{ .Values.mlflow.port }}
@@ -121,6 +223,14 @@ spec:
             periodSeconds: 20
           resources:
             {{- toYaml .Values.mlflow.resources | nindent 12 }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        {{- if (include "avaloka.mlflowAuthEnabled" $) }}
+        - name: auth
+          emptyDir:
+            sizeLimit: 64Mi
+        {{- end }}
 ---
 apiVersion: v1
 kind: Service
@@ -139,4 +249,53 @@ spec:
       port: {{ .Values.mlflow.port }}
       targetPort: http
       protocol: TCP
+{{- if (include "avaloka.mlflowNetworkPolicyEnabled" $) }}
+---
+# Who may open the tracking server's port. Its clients, read off the chart:
+#   api, langgraph, celery, celery-redbeat   MLFLOW_TRACKING_URI from avaloka-config
+#   Ray head + workers                       training runs and Ray Serve load models
+# Ray pods are created by the KubeRay operator and carry none of this release's
+# labels; ray.io/node-type is the label KubeRay puts on every head and worker.
+# kubectl port-forward reaches the pod through the kubelet and is not affected.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-mlflow
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mlflow
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "avaloka.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: mlflow
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "avaloka.selectorLabels" . | nindent 14 }}
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values:
+                  - api
+                  - langgraph
+                  - celery
+                  - celery-redbeat
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ include "avaloka.rayNamespace" . | quote }}
+          podSelector:
+            matchExpressions:
+              - key: ray.io/node-type
+                operator: Exists
+        {{- with (dig "networkPolicy" "extraIngressFrom" list $.Values.mlflow) }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      ports:
+        - port: {{ .Values.mlflow.port }}
+          protocol: TCP
+{{- end }}
 {{- end }}

@@ -1,7 +1,9 @@
 from typing_extensions import NotRequired, TypedDict
 from typing import Literal, List, Dict, Optional, Any
 
-class HyperparameterConfig(TypedDict):
+class HyperparameterConfig(TypedDict, total=False):
+    # Shared. Defaults below are the MLP's; other families read what applies to
+    # them and ignore the rest (see estimators.FAMILY_HYPERPARAMETERS).
     learning_rate: float                                = 0.001
     epochs: int                                         = 30
     batch_size: int                                     = 32
@@ -13,6 +15,18 @@ class HyperparameterConfig(TypedDict):
     activation: Literal["relu", "tanh", "sigmoid"]      = "relu"
     dropout_rate: float                                 = 0.2
     batch_norm: bool                                    = True
+
+    # gradient_boosting
+    max_iter: int                                       = 200
+    max_depth: Optional[int]                            = None
+    max_leaf_nodes: int                                 = 31
+    l2_regularization: float                            = 0.0
+    # random_forest
+    n_estimators: int                                   = 300
+    min_samples_leaf: int                               = 1
+    max_features: str                                   = "sqrt"
+    # linear
+    alphas: List[float]                                 = [0.1, 1.0, 10.0, 100.0]
 
 class RayConfig(TypedDict):
     num_workers: int                                    = 4
@@ -38,6 +52,12 @@ class CrossValidationConfig(TypedDict):
 
 class TrainingPlan(TypedDict):
     model_type: Literal["classification", "regression"] = "classification"
+    # WHICH model, as distinct from which task. Before this field the agent
+    # trained a DynamicMLP whatever the data looked like, because nothing in
+    # the plan could say otherwise. Defaults to "mlp" so a plan written before
+    # this existed trains exactly what it trained yesterday.
+    algorithm: Literal["mlp", "gradient_boosting", "random_forest", "linear"] = "mlp"
+    algorithm_rationale: Optional[str] = None
     model_name: str
     model_description: str
     model_version: str
@@ -64,6 +84,7 @@ class TrainingFailure(TypedDict, total=False):
     duplicate_count: Optional[int]
     duplicate_ratio: Optional[float]
     excluded_identifier_columns: List[str]
+    invalid_time_values: Optional[int]
     provider: Optional[str]
     technical_details: str
     retryable: bool
@@ -111,6 +132,12 @@ class TrainingResult(TypedDict):
     failure: NotRequired[TrainingFailure]
     integrity_report: NotRequired[Dict[str, Any]]
     evaluation_report: NotRequired[Dict[str, Any]]
+    algorithm: NotRequired[str]
+    # A prompt-sized account of what the model learned -- influential features,
+    # a linear and a depth-3-tree yardstick, and how much the trained model beat
+    # them by. The conversational agent could not previously explain a
+    # prediction because nothing in the system knew.
+    model_summary_text: NotRequired[Optional[str]]
 
 class ModelSummary(TypedDict):
     mlflow_run_id:     str
@@ -159,6 +186,9 @@ class ModelDetail(TypedDict):
     num_samples:   int
 
     hyperparameters: Dict[str, Any]
+    algorithm: str
+    model_summary_text: Optional[str]
+    feature_importances: List[Dict[str, Any]]
 
     metrics: Dict[str, float]
 

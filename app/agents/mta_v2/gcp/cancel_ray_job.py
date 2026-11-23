@@ -1,6 +1,8 @@
 import requests
 import time
 
+from app.infra.ray_auth import auth_headers
+
 TERMINAL_STATUSES = {"SUCCEEDED", "FAILED", "STOPPED"}
 
 def cancel_ray_job(
@@ -11,7 +13,7 @@ def cancel_ray_job(
     base_url = dashboard_url.rstrip("/")
 
     try:
-        r = requests.get(f"{base_url}/api/jobs/{job_id}", timeout=10)
+        r = requests.get(f"{base_url}/api/jobs/{job_id}", headers=auth_headers(), timeout=10)
         r.raise_for_status()
         status = r.json().get("status", "UNKNOWN")
         if status in TERMINAL_STATUSES:
@@ -22,7 +24,7 @@ def cancel_ray_job(
 
     for attempt in range(max_retries):
         try:
-            r = requests.delete(f"{base_url}/api/jobs/{job_id}", timeout=10)
+            r = requests.delete(f"{base_url}/api/jobs/{job_id}", headers=auth_headers(), timeout=10)
             r.raise_for_status()
             return True
         except requests.exceptions.RequestException as e:

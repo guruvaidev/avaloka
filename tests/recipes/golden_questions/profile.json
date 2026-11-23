@@ -1,0 +1,199 @@
+[
+ {
+  "question": "What is in this file?",
+  "columns": {
+   "order_date": "time",
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "units": "measure",
+   "customer_id": "id",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "profile",
+   "params": {},
+   "flags": []
+  }
+ },
+ {
+  "question": "Give me an overview of the dataset",
+  "columns": {
+   "signup_date": "time",
+   "user_id": "id",
+   "plan": "dimension",
+   "mrr": "measure",
+   "churned": "measure",
+   "sessions": "measure",
+   "country": "dimension"
+  },
+  "expected": {
+   "recipe": "profile",
+   "params": {},
+   "flags": []
+  }
+ },
+ {
+  "question": "Can I trust this data?",
+  "columns": {
+   "ts": "time",
+   "latency_ms": "measure",
+   "errors": "measure",
+   "service": "dimension",
+   "host": "high_card_dimension"
+  },
+  "expected": {
+   "recipe": "profile",
+   "params": {},
+   "flags": []
+  }
+ },
+ {
+  "question": "Profile the data please",
+  "columns": {
+   "employee_id": "id",
+   "salary": "measure",
+   "age": "measure",
+   "department": "dimension",
+   "hire_date": "time",
+   "tenure_years": "measure"
+  },
+  "expected": {
+   "recipe": "profile",
+   "params": {},
+   "flags": []
+  }
+ },
+ {
+  "question": "How is the data quality here",
+  "columns": {
+   "order_date": "time",
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "units": "measure",
+   "customer_id": "id",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "profile",
+   "params": {},
+   "flags": []
+  }
+ },
+ {
+  "question": "summarise the table for me",
+  "columns": {
+   "signup_date": "time",
+   "user_id": "id",
+   "plan": "dimension",
+   "mrr": "measure",
+   "churned": "measure",
+   "sessions": "measure",
+   "country": "dimension"
+  },
+  "expected": {
+   "recipe": "profile",
+   "params": {},
+   "flags": []
+  }
+ },
+ {
+  "question": "Are there duplicates or missing values?",
+  "columns": {
+   "order_date": "time",
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "units": "measure",
+   "customer_id": "id",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "profile",
+   "params": {},
+   "flags": []
+  }
+ },
+ {
+  "question": "what columns do i have and what do they look like",
+  "columns": {
+   "employee_id": "id",
+   "salary": "measure",
+   "age": "measure",
+   "department": "dimension",
+   "hire_date": "time",
+   "tenure_years": "measure"
+  },
+  "expected": {
+   "recipe": "profile",
+   "params": {},
+   "flags": []
+  }
+ },
+ {
+  "question": "Describe the dataset",
+  "columns": {
+   "ts": "time",
+   "latency_ms": "measure",
+   "errors": "measure",
+   "service": "dimension",
+   "host": "high_card_dimension"
+  },
+  "expected": {
+   "recipe": "profile",
+   "params": {},
+   "flags": []
+  }
+ },
+ {
+  "question": "Quick sanity check on this csv before I go further",
+  "columns": {
+   "order_date": "time",
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "units": "measure",
+   "customer_id": "id",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "profile",
+   "params": {},
+   "flags": []
+  }
+ },
+ {
+  "question": "First look at the data - anything I should know?",
+  "columns": {
+   "signup_date": "time",
+   "user_id": "id",
+   "plan": "dimension",
+   "mrr": "measure",
+   "churned": "measure",
+   "sessions": "measure",
+   "country": "dimension"
+  },
+  "expected": {
+   "recipe": "profile",
+   "params": {},
+   "flags": []
+  }
+ },
+ {
+  "question": "Is this file clean enough to use?",
+  "columns": {
+   "employee_id": "id",
+   "salary": "measure",
+   "age": "measure",
+   "department": "dimension",
+   "hire_date": "time",
+   "tenure_years": "measure"
+  },
+  "expected": {
+   "recipe": "profile",
+   "params": {},
+   "flags": []
+  }
+ }
+]

@@ -32,30 +32,9 @@ from typing import Iterable
 #: task name -> what is wrong. Keyed by task, so every source scheme of a
 #: listed task is covered; none of the tasks below runs on more than one.
 KNOWN_DEFECTS: dict[str, str] = {
-    # The CLI's spreadsheet reader (avaloka/io/loader.py::_read_excel).
-    "xlsx_decoy_sheet_outweighs_the_answer":
-        "the sheet with the most non-empty cells is read, whatever the question is about",
-    "xlsx_sec_financial_report":
-        "period columns of a 10-K statement stay text, and the stated unit (thousands) is not carried",
-    "xlsx_footnote_markers_on_labels":
-        "footnote markers (*, (a), †) stay on column names and the footnote block is read as rows",
-    "xlsx_merged_header_cells":
-        "the second row of a merged header is never read, so its columns come back unnamed",
-    "xlsx_stacked_two_row_header":
-        "a two-row header is read as one row, so period sub-headings are lost",
-    "xlsx_second_table_below":
-        "a second table under the first is read as more rows of the first",
-    "xlsx_subtotals_and_grand_total":
-        "subtotal and grand-total rows are read as data rows",
-    "xlsx_totals_row_at_bottom":
-        "a totals row at the bottom is read as a data row",
-    "xlsx_parenthesised_negatives":
-        "accounting negatives written (1,234) are not read as numbers",
-    "xlsx_thousands_scaling_in_title":
-        "a scale stated in the title (GBP thousands) is not applied or reported",
-    # The conversational family grades probe scorers, not the product.
-    "conv_avaloka_behaviour_is_unmeasured":
-        "no path drives the conversational probes through Avaloka's own agent graph",
+    # The conversational probes through the agent graph (tests/conversational/
+    # test_product_replay.py, replayed from the gpt-oss recording) all pass:
+    # none is listed. A probe that fails again goes here as conv_product_<dimension>.
 }
 
 

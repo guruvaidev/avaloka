@@ -1,0 +1,6 @@
+{
+ "note": "hand-written reply for 'How has revenue moved month by month?'",
+ "replies": [
+  "{\"recipe\": \"trend\", \"params\": {\"measure\": \"revenue\", \"time\": \"order_date\", \"grain\": \"month\"}, \"flags\": [], \"confidence\": 0.9}"
+ ]
+}

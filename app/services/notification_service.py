@@ -89,7 +89,8 @@ async def profile_id_for(user_id: Optional[str]) -> Optional[str]:
     try:
         row = _first(await asyncio.to_thread(_q))
     except Exception as exc:  # noqa: BLE001
-        logger.warning("[notify] profile lookup failed for %s: %s", str(user_id)[:8], exc)
+        from app.agents.sampling_persistence import log_supabase_skip
+        log_supabase_skip(logger, f"[notify] profile lookup failed for {str(user_id)[:8]}", exc)
         return None
     if row and row.get("id"):
         _profile_cache[user_id] = str(row["id"])

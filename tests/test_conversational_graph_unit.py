@@ -69,5 +69,8 @@ def test_data_request_delegates_to_planner_then_runs_claim_verifier():
 
     planner.assert_called_once()
     assert result["verification_safe_to_present"] is True
-    assert result["verification_report"]["claims_checked"] == 1
+    # It ran over the reply's one statement, which no check can resolve (no
+    # figure, no superlative): seen, not counted as checked (D13.2).
+    assert result["verification_report"]["claims_seen"] == 1
+    assert result["verification_report"]["claims_checked"] == 0
     assert "skipped" not in result["verification_report"]

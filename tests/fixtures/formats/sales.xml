@@ -1,0 +1,963 @@
+<?xml version='1.0' encoding='utf-8'?>
+<sales>
+  <sale>
+    <region>west</region>
+    <units_sold>651</units_sold>
+    <revenue_usd>5255.45</revenue_usd>
+    <reported_on>2024-01-01</reported_on>
+    <channel>retail</channel>
+    <note>customer asked for a quote on the extended warranty and bulk pricing</note>
+  </sale>
+  <sale>
+    <region>north</region>
+    <units_sold>255</units_sold>
+    <revenue_usd>6159.27</revenue_usd>
+    <reported_on>2024-01-02</reported_on>
+    <channel>online</channel>
+    <note>delivered late because the carrier rerouted the shipment via the depot</note>
+  </sale>
+  <sale>
+    <region>north</region>
+    <units_sold>727</units_sold>
+    <revenue_usd>4499.97</revenue_usd>
+    <reported_on>2024-01-03</reported_on>
+    <channel>online</channel>
+    <note>repeat order from the spring campaign, same configuration as before</note>
+  </sale>
+  <sale>
+    <region/>
+    <units_sold>569</units_sold>
+    <revenue_usd>4113.14</revenue_usd>
+    <reported_on>2024-01-04</reported_on>
+    <channel>online</channel>
+    <note>returned one unit with a cracked housing; replacement sent same day</note>
+  </sale>
+  <sale>
+    <region>south</region>
+    <units_sold>433</units_sold>
+    <revenue_usd>4097.34</revenue_usd>
+    <reported_on>2024-01-05</reported_on>
+    <channel>online</channel>
+    <note>customer asked for a quote on the extended warranty and bulk pricing</note>
+  </sale>
+  <sale>
+    <region>south</region>
+    <units_sold>667</units_sold>
+    <revenue_usd>4128.55</revenue_usd>
+    <reported_on>2024-01-06</reported_on>
+    <channel>online</channel>
+    <note>delivered late because the carrier rerouted the shipment via the depot</note>
+  </sale>
+  <sale>
+    <region>north</region>
+    <units_sold>623</units_sold>
+    <revenue_usd>3712.01</revenue_usd>
+    <reported_on>2024-01-07</reported_on>
+    <channel>online</channel>
+    <note>repeat order from the spring campaign, same configuration as before</note>
+  </sale>
+  <sale>
+    <region>south</region>
+    <units_sold>80</units_sold>
+    <revenue_usd/>
+    <reported_on>2024-01-08</reported_on>
+    <channel>online</channel>
+    <note>returned one unit with a cracked housing; replacement sent same day</note>
+  </sale>
+  <sale>
+    <region>east</region>
+    <units_sold>214</units_sold>
+    <revenue_usd>6163.94</revenue_usd>
+    <reported_on>2024-01-09</reported_on>
+    <channel>retail</channel>
+    <note>customer asked for a quote on the extended warranty and bulk pricing</note>
+  </sale>
+  <sale>
+    <region>south</region>
+    <units_sold>600</units_sold>
+    <revenue_usd>4466.02</revenue_usd>
+    <reported_on>2024-01-10</reported_on>
+    <channel>online</channel>
+    <note>delivered late because the carrier rerouted the shipment via the depot</note>
+  </sale>
+  <sale>
+    <region>west</region>
+    <units_sold>370</units_sold>
+    <revenue_usd>5231.4</revenue_usd>
+    <reported_on>2024-01-11</reported_on>
+    <channel>online</channel>
+    <note>repeat order from the spring campaign, same configuration as before</note>
+  </sale>
+  <sale>
+    <region>west</region>
+    <units_sold>296</units_sold>
+    <revenue_usd>3904.8</revenue_usd>
+    <reported_on>2024-01-12</reported_on>
+    <channel>online</channel>
+    <note>returned one unit with a cracked housing; replacement sent same day</note>
+  </sale>
+  <sale>
+    <region>east</region>
+    <units_sold>495</units_sold>
+    <revenue_usd>5152.69</revenue_usd>
+    <reported_on>2024-01-13</reported_on>
+    <channel>retail</channel>
+    <note>customer asked for a quote on the extended warranty and bulk pricing</note>
+  </sale>
+  <sale>
+    <region>west</region>
+    <units_sold>153</units_sold>
+    <revenue_usd>3433.3</revenue_usd>
+    <reported_on>2024-01-14</reported_on>
+    <channel>retail</channel>
+    <note>delivered late because the carrier rerouted the shipment via the depot</note>
+  </sale>
+  <sale>
+    <region>east</region>
+    <units_sold>884</units_sold>
+    <revenue_usd>4371.12</revenue_usd>
+    <reported_on>2024-01-15</reported_on>
+    <channel>online</channel>
+    <note>repeat order from the spring campaign, same configuration as before</note>
+  </sale>
+  <sale>
+    <region>north</region>
+    <units_sold>499</units_sold>
+    <revenue_usd>7029.09</revenue_usd>
+    <reported_on>2024-01-16</reported_on>
+    <channel>online</channel>
+    <note>returned one unit with a cracked housing; replacement sent same day</note>
+  </sale>
+  <sale>
+    <region>west</region>
+    <units_sold>16</units_sold>
+    <revenue_usd>4475.33</revenue_usd>
+    <reported_on>2024-01-17</reported_on>
+    <channel>online</channel>
+    <note>customer asked for a quote on the extended warranty and bulk pricing</note>
+  </sale>
+  <sale>
+    <region/>
+    <units_sold>421</units_sold>
+    <revenue_usd>6007.98</revenue_usd>
+    <reported_on>2024-01-18</reported_on>
+    <channel>online</channel>
+    <note>delivered late because the carrier rerouted the shipment via the depot</note>
+  </sale>
+  <sale>
+    <region>north</region>
+    <units_sold>672</units_sold>
+    <revenue_usd>5409.55</revenue_usd>
+    <reported_on>2024-01-19</reported_on>
+    <channel>online</channel>
+    <note>repeat order from the spring campaign, same configuration as before</note>
+  </sale>
+  <sale>
+    <region>south</region>
+    <units_sold>523</units_sold>
+    <revenue_usd>4862.31</revenue_usd>
+    <reported_on>2024-01-20</reported_on>
+    <channel>retail</channel>
+    <note>returned one unit with a cracked housing; replacement sent same day</note>
+  </sale>
+  <sale>
+    <region>north</region>
+    <units_sold>463</units_sold>
+    <revenue_usd>4413.1</revenue_usd>
+    <reported_on>2024-01-21</reported_on>
+    <channel>online</channel>
+    <note>customer asked for a quote on the extended warranty and bulk pricing</note>
+  </sale>
+  <sale>
+    <region>west</region>
+    <units_sold>581</units_sold>
+    <revenue_usd>6158.22</revenue_usd>
+    <reported_on>2024-01-22</reported_on>
+    <channel>retail</channel>
+    <note>delivered late because the carrier rerouted the shipment via the depot</note>
+  </sale>
+  <sale>
+    <region>east</region>
+    <units_sold>32</units_sold>
+    <revenue_usd>4840.35</revenue_usd>
+    <reported_on>2024-01-23</reported_on>
+    <channel>retail</channel>
+    <note>repeat order from the spring campaign, same configuration as before</note>
+  </sale>
+  <sale>
+    <region>west</region>
+    <units_sold>453</units_sold>
+    <revenue_usd>6374.68</revenue_usd>
+    <reported_on>2024-01-24</reported_on>
+    <channel>retail</channel>
+    <note>returned one unit with a cracked housing; replacement sent same day</note>
+  </sale>
+  <sale>
+    <region>south</region>
+    <units_sold>368</units_sold>
+    <revenue_usd>4352.83</revenue_usd>
+    <reported_on>2024-01-25</reported_on>
+    <channel>online</channel>
+    <note>customer asked for a quote on the extended warranty and bulk pricing</note>
+  </sale>
+  <sale>
+    <region>east</region>
+    <units_sold>815</units_sold>
+    <revenue_usd>5051.61</revenue_usd>
+    <reported_on>2024-01-26</reported_on>
+    <channel>online</channel>
+    <note>delivered late because the carrier rerouted the shipment via the depot</note>
+  </sale>
+  <sale>
+    <region>east</region>
+    <units_sold>529</units_sold>
+    <revenue_usd>5418.95</revenue_usd>
+    <reported_on>2024-01-27</reported_on>
+    <channel>online</channel>
+    <note>repeat order from the spring campaign, same configuration as before</note>
+  </sale>
+  <sale>
+    <region>west</region>
+    <units_sold>168</units_sold>
+    <revenue_usd>5335.84</revenue_usd>
+    <reported_on>2024-01-28</reported_on>
+    <channel>retail</channel>
+    <note>returned one unit with a cracked housing; replacement sent same day</note>
+  </sale>
+  <sale>
+    <region>north</region>
+    <units_sold>769</units_sold>
+    <revenue_usd>3889.58</revenue_usd>
+    <reported_on>2024-01-29</reported_on>
+    <channel>online</channel>
+    <note>customer asked for a quote on the extended warranty and bulk pricing</note>
+  </sale>
+  <sale>
+    <region>east</region>
+    <units_sold>267</units_sold>
+    <revenue_usd>4402.34</revenue_usd>
+    <reported_on>2024-01-30</reported_on>
+    <channel>retail</channel>
+    <note>delivered late because the carrier rerouted the shipment via the depot</note>
+  </sale>
+  <sale>
+    <region>east</region>
+    <units_sold>896</units_sold>
+    <revenue_usd>4823.62</revenue_usd>
+    <reported_on>2024-01-31</reported_on>
+    <channel>online</channel>
+    <note>repeat order from the spring campaign, same configuration as before</note>
+  </sale>
+  <sale>
+    <region>west</region>
+    <units_sold>327</units_sold>
+    <revenue_usd>4231.67</revenue_usd>
+    <reported_on>2024-02-01</reported_on>
+    <channel>retail</channel>
+    <note>returned one unit with a cracked housing; replacement sent same day</note>
+  </sale>
+  <sale>
+    <region>east</region>
+    <units_sold>764</units_sold>
+    <revenue_usd>5609.59</revenue_usd>
+    <reported_on>2024-02-02</reported_on>
+    <channel>online</channel>
+    <note>customer asked for a quote on the extended warranty and bulk pricing</note>
+  </sale>
+  <sale>
+    <region>south</region>
+    <units_sold>699</units_sold>
+    <revenue_usd>5529.22</revenue_usd>
+    <reported_on>2024-02-03</reported_on>
+    <channel>retail</channel>
+    <note>delivered late because the carrier rerouted the shipment via the depot</note>
+  </sale>
+  <sale>
+    <region>south</region>
+    <units_sold>652</units_sold>
+    <revenue_usd>3238.62</revenue_usd>
+    <reported_on>2024-02-04</reported_on>
+    <channel>retail</channel>
+    <note>repeat order from the spring campaign, same configuration as before</note>
+  </sale>
+  <sale>
+    <region>south</region>
+    <units_sold>590</units_sold>
+    <revenue_usd>3375.27</revenue_usd>
+    <reported_on>2024-02-05</reported_on>
+    <channel>retail</channel>
+    <note>returned one unit with a cracked housing; replacement sent same day</note>
+  </sale>
+  <sale>
+    <region>north</region>
+    <units_sold>29</units_sold>
+    <revenue_usd>3846.59</revenue_usd>
+    <reported_on>2024-02-06</reported_on>
+    <channel>online</channel>
+    <note>customer asked for a quote on the extended warranty and bulk pricing</note>
+  </sale>
+  <sale>
+    <region>south</region>
+    <units_sold>193</units_sold>
+    <revenue_usd>5105.53</revenue_usd>
+    <reported_on>2024-02-07</reported_on>
+    <channel>online</channel>
+    <note>delivered late because the carrier rerouted the shipment via the depot</note>
+  </sale>
+  <sale>
+    <region>north</region>
+    <units_sold>787</units_sold>
+    <revenue_usd>6829.86</revenue_usd>
+    <reported_on>2024-02-08</reported_on>
+    <channel>online</channel>
+    <note>repeat order from the spring campaign, same configuration as before</note>
+  </sale>
+  <sale>
+    <region>north</region>
+    <units_sold>672</units_sold>
+    <revenue_usd>4655.88</revenue_usd>
+    <reported_on>2024-02-09</reported_on>
+    <channel>retail</channel>
+    <note>returned one unit with a cracked housing; replacement sent same day</note>
+  </sale>
+  <sale>
+    <region>west</region>
+    <units_sold>421</units_sold>
+    <revenue_usd>5225.59</revenue_usd>
+    <reported_on>2024-02-10</reported_on>
+    <channel>online</channel>
+    <note>customer asked for a quote on the extended warranty and bulk pricing</note>
+  </sale>
+  <sale>
+    <region>east</region>
+    <units_sold>696</units_sold>
+    <revenue_usd>4043.2</revenue_usd>
+    <reported_on>2024-02-11</reported_on>
+    <channel>retail</channel>
+    <note>delivered late because the carrier rerouted the shipment via the depot</note>
+  </sale>
+  <sale>
+    <region/>
+    <units_sold>594</units_sold>
+    <revenue_usd>4057.85</revenue_usd>
+    <reported_on>2024-02-12</reported_on>
+    <channel>retail</channel>
+    <note>repeat order from the spring campaign, same configuration as before</note>
+  </sale>
+  <sale>
+    <region>south</region>
+    <units_sold>695</units_sold>
+    <revenue_usd>3238.49</revenue_usd>
+    <reported_on>2024-02-13</reported_on>
+    <channel>online</channel>
+    <note>returned one unit with a cracked housing; replacement sent same day</note>
+  </sale>
+  <sale>
+    <region>south</region>
+    <units_sold>484</units_sold>
+    <revenue_usd>4974.49</revenue_usd>
+    <reported_on>2024-02-14</reported_on>
+    <channel>retail</channel>
+    <note>customer asked for a quote on the extended warranty and bulk pricing</note>
+  </sale>
+  <sale>
+    <region>east</region>
+    <units_sold>79</units_sold>
+    <revenue_usd>5852.5</revenue_usd>
+    <reported_on>2024-02-15</reported_on>
+    <channel>retail</channel>
+    <note>delivered late because the carrier rerouted the shipment via the depot</note>
+  </sale>
+  <sale>
+    <region>west</region>
+    <units_sold>373</units_sold>
+    <revenue_usd>4678.96</revenue_usd>
+    <reported_on>2024-02-16</reported_on>
+    <channel>online</channel>
+    <note>repeat order from the spring campaign, same configuration as before</note>
+  </sale>
+  <sale>
+    <region>north</region>
+    <units_sold>198</units_sold>
+    <revenue_usd>6256.81</revenue_usd>
+    <reported_on>2024-02-17</reported_on>
+    <channel>online</channel>
+    <note>returned one unit with a cracked housing; replacement sent same day</note>
+  </sale>
+  <sale>
+    <region>south</region>
+    <units_sold>777</units_sold>
+    <revenue_usd>5178.07</revenue_usd>
+    <reported_on>2024-02-18</reported_on>
+    <channel>retail</channel>
+    <note>customer asked for a quote on the extended warranty and bulk pricing</note>
+  </sale>
+  <sale>
+    <region>south</region>
+    <units_sold>806</units_sold>
+    <revenue_usd>4967.23</revenue_usd>
+    <reported_on>2024-02-19</reported_on>
+    <channel>retail</channel>
+    <note>delivered late because the carrier rerouted the shipment via the depot</note>
+  </sale>
+  <sale>
+    <region>west</region>
+    <units_sold>190</units_sold>
+    <revenue_usd>5465.53</revenue_usd>
+    <reported_on>2024-02-20</reported_on>
+    <channel>online</channel>
+    <note>repeat order from the spring campaign, same configuration as before</note>
+  </sale>
+  <sale>
+    <region>south</region>
+    <units_sold>792</units_sold>
+    <revenue_usd>5438.64</revenue_usd>
+    <reported_on>2024-02-21</reported_on>
+    <channel>retail</channel>
+    <note>returned one unit with a cracked housing; replacement sent same day</note>
+  </sale>
+  <sale>
+    <region>north</region>
+    <units_sold>303</units_sold>
+    <revenue_usd>6033.03</revenue_usd>
+    <reported_on>2024-02-22</reported_on>
+    <channel>online</channel>
+    <note>customer asked for a quote on the extended warranty and bulk pricing</note>
+  </sale>
+  <sale>
+    <region>north</region>
+    <units_sold>192</units_sold>
+    <revenue_usd>4278.24</revenue_usd>
+    <reported_on>2024-02-23</reported_on>
+    <channel>online</channel>
+    <note>delivered late because the carrier rerouted the shipment via the depot</note>
+  </sale>
+  <sale>
+    <region>south</region>
+    <units_sold>252</units_sold>
+    <revenue_usd>2940.76</revenue_usd>
+    <reported_on>2024-02-24</reported_on>
+    <channel>online</channel>
+    <note>repeat order from the spring campaign, same configuration as before</note>
+  </sale>
+  <sale>
+    <region>east</region>
+    <units_sold>500</units_sold>
+    <revenue_usd>5103.27</revenue_usd>
+    <reported_on>2024-02-25</reported_on>
+    <channel>retail</channel>
+    <note>returned one unit with a cracked housing; replacement sent same day</note>
+  </sale>
+  <sale>
+    <region>south</region>
+    <units_sold>223</units_sold>
+    <revenue_usd>4449.49</revenue_usd>
+    <reported_on>2024-02-26</reported_on>
+    <channel>retail</channel>
+    <note>customer asked for a quote on the extended warranty and bulk pricing</note>
+  </sale>
+  <sale>
+    <region>south</region>
+    <units_sold>243</units_sold>
+    <revenue_usd>4975.54</revenue_usd>
+    <reported_on>2024-02-27</reported_on>
+    <channel>retail</channel>
+    <note>delivered late because the carrier rerouted the shipment via the depot</note>
+  </sale>
+  <sale>
+    <region/>
+    <units_sold>632</units_sold>
+    <revenue_usd>6497.87</revenue_usd>
+    <reported_on>2024-02-28</reported_on>
+    <channel>retail</channel>
+    <note>repeat order from the spring campaign, same configuration as before</note>
+  </sale>
+  <sale>
+    <region>south</region>
+    <units_sold>380</units_sold>
+    <revenue_usd>4007.44</revenue_usd>
+    <reported_on>2024-02-29</reported_on>
+    <channel>retail</channel>
+    <note>returned one unit with a cracked housing; replacement sent same day</note>
+  </sale>
+  <sale>
+    <region>west</region>
+    <units_sold>630</units_sold>
+    <revenue_usd>5688.32</revenue_usd>
+    <reported_on>2024-03-01</reported_on>
+    <channel>online</channel>
+    <note>customer asked for a quote on the extended warranty and bulk pricing</note>
+  </sale>
+  <sale>
+    <region>north</region>
+    <units_sold>28</units_sold>
+    <revenue_usd>5851.28</revenue_usd>
+    <reported_on>2024-03-02</reported_on>
+    <channel>online</channel>
+    <note>delivered late because the carrier rerouted the shipment via the depot</note>
+  </sale>
+  <sale>
+    <region>west</region>
+    <units_sold>96</units_sold>
+    <revenue_usd>5414.66</revenue_usd>
+    <reported_on>2024-03-03</reported_on>
+    <channel>retail</channel>
+    <note>repeat order from the spring campaign, same configuration as before</note>
+  </sale>
+  <sale>
+    <region>west</region>
+    <units_sold>260</units_sold>
+    <revenue_usd>6006.66</revenue_usd>
+    <reported_on>2024-03-04</reported_on>
+    <channel>retail</channel>
+    <note>returned one unit with a cracked housing; replacement sent same day</note>
+  </sale>
+  <sale>
+    <region>west</region>
+    <units_sold>332</units_sold>
+    <revenue_usd/>
+    <reported_on>2024-03-05</reported_on>
+    <channel>online</channel>
+    <note>customer asked for a quote on the extended warranty and bulk pricing</note>
+  </sale>
+  <sale>
+    <region>west</region>
+    <units_sold>250</units_sold>
+    <revenue_usd>4386.64</revenue_usd>
+    <reported_on>2024-03-06</reported_on>
+    <channel>online</channel>
+    <note>delivered late because the carrier rerouted the shipment via the depot</note>
+  </sale>
+  <sale>
+    <region>east</region>
+    <units_sold>362</units_sold>
+    <revenue_usd>5935.08</revenue_usd>
+    <reported_on>2024-03-07</reported_on>
+    <channel>retail</channel>
+    <note>repeat order from the spring campaign, same configuration as before</note>
+  </sale>
+  <sale>
+    <region>east</region>
+    <units_sold>828</units_sold>
+    <revenue_usd>5648.27</revenue_usd>
+    <reported_on>2024-03-08</reported_on>
+    <channel>online</channel>
+    <note>returned one unit with a cracked housing; replacement sent same day</note>
+  </sale>
+  <sale>
+    <region>north</region>
+    <units_sold>419</units_sold>
+    <revenue_usd>6251.34</revenue_usd>
+    <reported_on>2024-03-09</reported_on>
+    <channel>retail</channel>
+    <note>customer asked for a quote on the extended warranty and bulk pricing</note>
+  </sale>
+  <sale>
+    <region>south</region>
+    <units_sold>533</units_sold>
+    <revenue_usd>5191.06</revenue_usd>
+    <reported_on>2024-03-10</reported_on>
+    <channel>online</channel>
+    <note>delivered late because the carrier rerouted the shipment via the depot</note>
+  </sale>
+  <sale>
+    <region>south</region>
+    <units_sold>712</units_sold>
+    <revenue_usd>6461.21</revenue_usd>
+    <reported_on>2024-03-11</reported_on>
+    <channel>retail</channel>
+    <note>repeat order from the spring campaign, same configuration as before</note>
+  </sale>
+  <sale>
+    <region>west</region>
+    <units_sold>167</units_sold>
+    <revenue_usd>4746.13</revenue_usd>
+    <reported_on>2024-03-12</reported_on>
+    <channel>online</channel>
+    <note>returned one unit with a cracked housing; replacement sent same day</note>
+  </sale>
+  <sale>
+    <region>west</region>
+    <units_sold>138</units_sold>
+    <revenue_usd>4045.7</revenue_usd>
+    <reported_on>2024-03-13</reported_on>
+    <channel>online</channel>
+    <note>customer asked for a quote on the extended warranty and bulk pricing</note>
+  </sale>
+  <sale>
+    <region>east</region>
+    <units_sold>390</units_sold>
+    <revenue_usd>3166.62</revenue_usd>
+    <reported_on>2024-03-14</reported_on>
+    <channel>retail</channel>
+    <note>delivered late because the carrier rerouted the shipment via the depot</note>
+  </sale>
+  <sale>
+    <region>east</region>
+    <units_sold>563</units_sold>
+    <revenue_usd>4008.74</revenue_usd>
+    <reported_on>2024-03-15</reported_on>
+    <channel>retail</channel>
+    <note>repeat order from the spring campaign, same configuration as before</note>
+  </sale>
+  <sale>
+    <region>south</region>
+    <units_sold>448</units_sold>
+    <revenue_usd>5736.65</revenue_usd>
+    <reported_on>2024-03-16</reported_on>
+    <channel>online</channel>
+    <note>returned one unit with a cracked housing; replacement sent same day</note>
+  </sale>
+  <sale>
+    <region>south</region>
+    <units_sold>116</units_sold>
+    <revenue_usd>3681.56</revenue_usd>
+    <reported_on>2024-03-17</reported_on>
+    <channel>online</channel>
+    <note>customer asked for a quote on the extended warranty and bulk pricing</note>
+  </sale>
+  <sale>
+    <region>west</region>
+    <units_sold>577</units_sold>
+    <revenue_usd>4592.87</revenue_usd>
+    <reported_on>2024-03-18</reported_on>
+    <channel>online</channel>
+    <note>delivered late because the carrier rerouted the shipment via the depot</note>
+  </sale>
+  <sale>
+    <region>north</region>
+    <units_sold>832</units_sold>
+    <revenue_usd>6895.93</revenue_usd>
+    <reported_on>2024-03-19</reported_on>
+    <channel>retail</channel>
+    <note>repeat order from the spring campaign, same configuration as before</note>
+  </sale>
+  <sale>
+    <region>south</region>
+    <units_sold>483</units_sold>
+    <revenue_usd>5762.12</revenue_usd>
+    <reported_on>2024-03-20</reported_on>
+    <channel>retail</channel>
+    <note>returned one unit with a cracked housing; replacement sent same day</note>
+  </sale>
+  <sale>
+    <region>south</region>
+    <units_sold>809</units_sold>
+    <revenue_usd>6611.89</revenue_usd>
+    <reported_on>2024-03-21</reported_on>
+    <channel>online</channel>
+    <note>customer asked for a quote on the extended warranty and bulk pricing</note>
+  </sale>
+  <sale>
+    <region>east</region>
+    <units_sold>384</units_sold>
+    <revenue_usd>4107.59</revenue_usd>
+    <reported_on>2024-03-22</reported_on>
+    <channel>retail</channel>
+    <note>delivered late because the carrier rerouted the shipment via the depot</note>
+  </sale>
+  <sale>
+    <region>south</region>
+    <units_sold>366</units_sold>
+    <revenue_usd>2786.02</revenue_usd>
+    <reported_on>2024-03-23</reported_on>
+    <channel>retail</channel>
+    <note>repeat order from the spring campaign, same configuration as before</note>
+  </sale>
+  <sale>
+    <region>south</region>
+    <units_sold>286</units_sold>
+    <revenue_usd>6364.74</revenue_usd>
+    <reported_on>2024-03-24</reported_on>
+    <channel>retail</channel>
+    <note>returned one unit with a cracked housing; replacement sent same day</note>
+  </sale>
+  <sale>
+    <region>north</region>
+    <units_sold>472</units_sold>
+    <revenue_usd>3724.75</revenue_usd>
+    <reported_on>2024-03-25</reported_on>
+    <channel>retail</channel>
+    <note>customer asked for a quote on the extended warranty and bulk pricing</note>
+  </sale>
+  <sale>
+    <region>south</region>
+    <units_sold>521</units_sold>
+    <revenue_usd>5081.83</revenue_usd>
+    <reported_on>2024-03-26</reported_on>
+    <channel>retail</channel>
+    <note>delivered late because the carrier rerouted the shipment via the depot</note>
+  </sale>
+  <sale>
+    <region>north</region>
+    <units_sold>103</units_sold>
+    <revenue_usd>5195.38</revenue_usd>
+    <reported_on>2024-03-27</reported_on>
+    <channel>online</channel>
+    <note>repeat order from the spring campaign, same configuration as before</note>
+  </sale>
+  <sale>
+    <region>east</region>
+    <units_sold>878</units_sold>
+    <revenue_usd>4145.99</revenue_usd>
+    <reported_on>2024-03-28</reported_on>
+    <channel>retail</channel>
+    <note>returned one unit with a cracked housing; replacement sent same day</note>
+  </sale>
+  <sale>
+    <region>south</region>
+    <units_sold>146</units_sold>
+    <revenue_usd>6397.37</revenue_usd>
+    <reported_on>2024-03-29</reported_on>
+    <channel>online</channel>
+    <note>customer asked for a quote on the extended warranty and bulk pricing</note>
+  </sale>
+  <sale>
+    <region>north</region>
+    <units_sold>502</units_sold>
+    <revenue_usd>6394.4</revenue_usd>
+    <reported_on>2024-03-30</reported_on>
+    <channel>retail</channel>
+    <note>delivered late because the carrier rerouted the shipment via the depot</note>
+  </sale>
+  <sale>
+    <region>east</region>
+    <units_sold>286</units_sold>
+    <revenue_usd>5496.3</revenue_usd>
+    <reported_on>2024-03-31</reported_on>
+    <channel>retail</channel>
+    <note>repeat order from the spring campaign, same configuration as before</note>
+  </sale>
+  <sale>
+    <region/>
+    <units_sold>799</units_sold>
+    <revenue_usd>4973.46</revenue_usd>
+    <reported_on>2024-04-01</reported_on>
+    <channel>retail</channel>
+    <note>returned one unit with a cracked housing; replacement sent same day</note>
+  </sale>
+  <sale>
+    <region>south</region>
+    <units_sold>583</units_sold>
+    <revenue_usd>5172.29</revenue_usd>
+    <reported_on>2024-04-02</reported_on>
+    <channel>online</channel>
+    <note>customer asked for a quote on the extended warranty and bulk pricing</note>
+  </sale>
+  <sale>
+    <region>east</region>
+    <units_sold>23</units_sold>
+    <revenue_usd>4013.68</revenue_usd>
+    <reported_on>2024-04-03</reported_on>
+    <channel>online</channel>
+    <note>delivered late because the carrier rerouted the shipment via the depot</note>
+  </sale>
+  <sale>
+    <region>east</region>
+    <units_sold>34</units_sold>
+    <revenue_usd>4784.84</revenue_usd>
+    <reported_on>2024-04-04</reported_on>
+    <channel>online</channel>
+    <note>repeat order from the spring campaign, same configuration as before</note>
+  </sale>
+  <sale>
+    <region>north</region>
+    <units_sold>190</units_sold>
+    <revenue_usd>4905.56</revenue_usd>
+    <reported_on>2024-04-05</reported_on>
+    <channel>online</channel>
+    <note>returned one unit with a cracked housing; replacement sent same day</note>
+  </sale>
+  <sale>
+    <region>north</region>
+    <units_sold>740</units_sold>
+    <revenue_usd>4232.99</revenue_usd>
+    <reported_on>2024-04-06</reported_on>
+    <channel>online</channel>
+    <note>customer asked for a quote on the extended warranty and bulk pricing</note>
+  </sale>
+  <sale>
+    <region>east</region>
+    <units_sold>779</units_sold>
+    <revenue_usd>5764.29</revenue_usd>
+    <reported_on>2024-04-07</reported_on>
+    <channel>retail</channel>
+    <note>delivered late because the carrier rerouted the shipment via the depot</note>
+  </sale>
+  <sale>
+    <region>west</region>
+    <units_sold>500</units_sold>
+    <revenue_usd>3716.17</revenue_usd>
+    <reported_on>2024-04-08</reported_on>
+    <channel>online</channel>
+    <note>repeat order from the spring campaign, same configuration as before</note>
+  </sale>
+  <sale>
+    <region>east</region>
+    <units_sold>516</units_sold>
+    <revenue_usd/>
+    <reported_on>2024-04-09</reported_on>
+    <channel>online</channel>
+    <note>returned one unit with a cracked housing; replacement sent same day</note>
+  </sale>
+  <sale>
+    <region>south</region>
+    <units_sold>585</units_sold>
+    <revenue_usd>2972.41</revenue_usd>
+    <reported_on>2024-04-10</reported_on>
+    <channel>online</channel>
+    <note>customer asked for a quote on the extended warranty and bulk pricing</note>
+  </sale>
+  <sale>
+    <region>east</region>
+    <units_sold>443</units_sold>
+    <revenue_usd>5447.14</revenue_usd>
+    <reported_on>2024-04-11</reported_on>
+    <channel>retail</channel>
+    <note>delivered late because the carrier rerouted the shipment via the depot</note>
+  </sale>
+  <sale>
+    <region>north</region>
+    <units_sold>464</units_sold>
+    <revenue_usd>5668.34</revenue_usd>
+    <reported_on>2024-04-12</reported_on>
+    <channel>retail</channel>
+    <note>repeat order from the spring campaign, same configuration as before</note>
+  </sale>
+  <sale>
+    <region>south</region>
+    <units_sold>338</units_sold>
+    <revenue_usd>5559.16</revenue_usd>
+    <reported_on>2024-04-13</reported_on>
+    <channel>online</channel>
+    <note>returned one unit with a cracked housing; replacement sent same day</note>
+  </sale>
+  <sale>
+    <region>south</region>
+    <units_sold>446</units_sold>
+    <revenue_usd>7626.28</revenue_usd>
+    <reported_on>2024-04-14</reported_on>
+    <channel>online</channel>
+    <note>customer asked for a quote on the extended warranty and bulk pricing</note>
+  </sale>
+  <sale>
+    <region>south</region>
+    <units_sold>272</units_sold>
+    <revenue_usd>5845.81</revenue_usd>
+    <reported_on>2024-04-15</reported_on>
+    <channel>online</channel>
+    <note>delivered late because the carrier rerouted the shipment via the depot</note>
+  </sale>
+  <sale>
+    <region>east</region>
+    <units_sold>675</units_sold>
+    <revenue_usd>4152.21</revenue_usd>
+    <reported_on>2024-04-16</reported_on>
+    <channel>online</channel>
+    <note>repeat order from the spring campaign, same configuration as before</note>
+  </sale>
+  <sale>
+    <region>south</region>
+    <units_sold>614</units_sold>
+    <revenue_usd>7397.19</revenue_usd>
+    <reported_on>2024-04-17</reported_on>
+    <channel>online</channel>
+    <note>returned one unit with a cracked housing; replacement sent same day</note>
+  </sale>
+  <sale>
+    <region>west</region>
+    <units_sold>647</units_sold>
+    <revenue_usd>4171.71</revenue_usd>
+    <reported_on>2024-04-18</reported_on>
+    <channel>online</channel>
+    <note>customer asked for a quote on the extended warranty and bulk pricing</note>
+  </sale>
+  <sale>
+    <region>south</region>
+    <units_sold>335</units_sold>
+    <revenue_usd>5709.86</revenue_usd>
+    <reported_on>2024-04-19</reported_on>
+    <channel>retail</channel>
+    <note>delivered late because the carrier rerouted the shipment via the depot</note>
+  </sale>
+  <sale>
+    <region/>
+    <units_sold>362</units_sold>
+    <revenue_usd>5668.81</revenue_usd>
+    <reported_on>2024-04-20</reported_on>
+    <channel>retail</channel>
+    <note>repeat order from the spring campaign, same configuration as before</note>
+  </sale>
+  <sale>
+    <region>east</region>
+    <units_sold>397</units_sold>
+    <revenue_usd>4208.25</revenue_usd>
+    <reported_on>2024-04-21</reported_on>
+    <channel>retail</channel>
+    <note>returned one unit with a cracked housing; replacement sent same day</note>
+  </sale>
+  <sale>
+    <region>west</region>
+    <units_sold>546</units_sold>
+    <revenue_usd>6255.81</revenue_usd>
+    <reported_on>2024-04-22</reported_on>
+    <channel>retail</channel>
+    <note>customer asked for a quote on the extended warranty and bulk pricing</note>
+  </sale>
+  <sale>
+    <region>east</region>
+    <units_sold>701</units_sold>
+    <revenue_usd>5319.13</revenue_usd>
+    <reported_on>2024-04-23</reported_on>
+    <channel>retail</channel>
+    <note>delivered late because the carrier rerouted the shipment via the depot</note>
+  </sale>
+  <sale>
+    <region>west</region>
+    <units_sold>17</units_sold>
+    <revenue_usd>5513.86</revenue_usd>
+    <reported_on>2024-04-24</reported_on>
+    <channel>online</channel>
+    <note>repeat order from the spring campaign, same configuration as before</note>
+  </sale>
+  <sale>
+    <region>south</region>
+    <units_sold>852</units_sold>
+    <revenue_usd>4391.84</revenue_usd>
+    <reported_on>2024-04-25</reported_on>
+    <channel>online</channel>
+    <note>returned one unit with a cracked housing; replacement sent same day</note>
+  </sale>
+  <sale>
+    <region>west</region>
+    <units_sold>777</units_sold>
+    <revenue_usd>6172.37</revenue_usd>
+    <reported_on>2024-04-26</reported_on>
+    <channel>retail</channel>
+    <note>customer asked for a quote on the extended warranty and bulk pricing</note>
+  </sale>
+  <sale>
+    <region>north</region>
+    <units_sold>894</units_sold>
+    <revenue_usd>4225.16</revenue_usd>
+    <reported_on>2024-04-27</reported_on>
+    <channel>online</channel>
+    <note>delivered late because the carrier rerouted the shipment via the depot</note>
+  </sale>
+  <sale>
+    <region>north</region>
+    <units_sold>257</units_sold>
+    <revenue_usd>3398.76</revenue_usd>
+    <reported_on>2024-04-28</reported_on>
+    <channel>retail</channel>
+    <note>repeat order from the spring campaign, same configuration as before</note>
+  </sale>
+  <sale>
+    <region>west</region>
+    <units_sold>441</units_sold>
+    <revenue_usd>6282.61</revenue_usd>
+    <reported_on>2024-04-29</reported_on>
+    <channel>retail</channel>
+    <note>returned one unit with a cracked housing; replacement sent same day</note>
+  </sale>
+</sales>

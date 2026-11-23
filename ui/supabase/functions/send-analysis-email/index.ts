@@ -3,6 +3,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
 import { PDFDocument, StandardFonts, rgb } from "https://esm.sh/@cantoo/pdf-lib@2.7.4";
 import { sendMail } from "../_shared/raw-smtp.ts";
+import { drawChartPlan, planChart, type Prim } from "../_shared/chart-render.ts";
 
 const sendViaSmtp = sendMail;
 
@@ -188,24 +189,6 @@ function buildChartJsConfig(chart: JsonRecord, fallbackRows: unknown[] | null): 
   };
 }
 
-async function renderChartPng(config: Record<string, unknown>): Promise<Uint8Array | null> {
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 8000);
-    const res = await fetch("https://quickchart.io/chart", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chart: config, width: 700, height: 380, format: "png", backgroundColor: "white" }),
-      signal: controller.signal,
-    });
-    clearTimeout(timer);
-    if (!res.ok) return null;
-    return new Uint8Array(await res.arrayBuffer());
-  } catch {
-    return null;
-  }
-}
-
 // Sanitize text for WinAnsi (StandardFonts) — strip characters outside Latin-1
 function safeText(s: string): string {
   // Replace common smart chars
@@ -223,6 +206,12 @@ function safeText(s: string): string {
   return out;
 }
 
+// Chart labels come from customer data, and StandardFonts is WinAnsi-only, so
+// every string that reaches drawText goes through safeText first.
+function sanitizePrims(prims: Prim[]): Prim[] {
+  return prims.map((p) => (p.kind === "text" ? { ...p, text: safeText(p.text) } : p));
+}
+
 type Pair = { question: string; output: unknown };
 
 async function buildEncryptedPdf(
@@ -236,6 +225,10 @@ async function buildEncryptedPdf(
   const pdfDoc = await PDFDocument.create();
   const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
   const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+
+  // Text width for the chart renderer, measured with the font that will draw it.
+  const measure = (text: string, size: number, bold: boolean) =>
+    (bold ? fontBold : font).widthOfTextAtSize(safeText(text), size);
 
   const PAGE_W = 595.28; // A4
   const PAGE_H = 841.89;
@@ -311,27 +304,26 @@ async function buildEncryptedPdf(
     const viz = pickVizConfig(p.output, analysisViz);
     const rows = pickOutputRows(p.output, viz);
 
-    // Charts
+    // Charts, drawn locally as vector graphics with the pdf-lib already
+    // embedded here. They used to be rendered by POSTing the chart config —
+    // real data values plus column and series labels — to https://quickchart.io,
+    // an undeclared third-party sub-processor.
     const charts = arrayValue(asRecord(viz)?.charts)?.slice(0, 2) ?? [];
     for (const chartRaw of charts) {
       const chart = asRecord(chartRaw);
       if (!chart) continue;
       const cfg = buildChartJsConfig(chart, rows);
       if (!cfg) continue;
-      const png = await renderChartPng(cfg);
-      if (!png) continue;
-      try {
-        const img = await pdfDoc.embedPng(png);
-        const maxW = CONTENT_W;
-        const scale = Math.min(1, maxW / img.width);
-        const w = img.width * scale;
-        const h = img.height * scale;
-        ensureSpace(h + 12);
-        page.drawImage(img, { x: MARGIN, y: y - h, width: w, height: h });
-        y -= h + 12;
-      } catch {
-        // skip on embed failure
-      }
+      const CHART_H = 230;
+      ensureSpace(CHART_H + 12);
+      const prims = planChart(
+        cfg,
+        { x: MARGIN, y: y - CHART_H, width: CONTENT_W, height: CHART_H },
+        measure,
+      );
+      if (!prims.length) continue;
+      drawChartPlan(page, sanitizePrims(prims), { font, fontBold, rgb });
+      y -= CHART_H + 12;
     }
 
     // Table (first ~30 rows, up to 6 cols)

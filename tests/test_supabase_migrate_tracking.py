@@ -66,8 +66,11 @@ BASELINE = {
         CREATE TABLE IF NOT EXISTS public.canary_log (ran_at timestamptz DEFAULT now());
         INSERT INTO public.canary_log DEFAULT VALUES;
     """,
+    # The marker objects of this chart's newest baseline migrations (db-migrate.sh
+    # backfills only when all of them exist).
     "20261009094500_notifications": "CREATE TABLE IF NOT EXISTS public.notifications (id int);",
     "20261025120000_ray_jobs": "CREATE TABLE IF NOT EXISTS public.ray_jobs (submission_id text PRIMARY KEY);",
+    "integration_connections": "CREATE TABLE IF NOT EXISTS public.integration_connections (id int);",
 }
 
 
@@ -169,7 +172,7 @@ def test_a_fresh_database_applies_every_migration_once_and_records_it(db, tmp_pa
     assert "untracked" in out
     assert db.recorded() == {v: "applied" for v in BASELINE}
     assert db.scalar("SELECT count(*) FROM public.canary_log") == "1"
-    assert "5 applied, 0 already recorded" in out
+    assert "6 applied, 0 already recorded" in out
 
 
 # ---- (b) second run -------------------------------------------------------------
@@ -181,7 +184,7 @@ def test_b_a_second_run_applies_nothing(db, tmp_path):
     before = db.scalar("SELECT string_agg(version || applied_at::text, ',' ORDER BY version) FROM avaloka_meta.schema_migrations")
     out = _ok(db.run_script(mig))
     assert "migration state: tracked" in out
-    assert "0 applied, 5 already recorded" in out
+    assert "0 applied, 6 already recorded" in out
     assert db.scalar("SELECT count(*) FROM public.canary_log") == "1"
     after = db.scalar("SELECT string_agg(version || applied_at::text, ',' ORDER BY version) FROM avaloka_meta.schema_migrations")
     assert before == after
@@ -199,12 +202,12 @@ def test_c_an_existing_install_is_backfilled_without_reapplying(db, tmp_path):
     assert db.scalar("SELECT to_regclass('avaloka_meta.schema_migrations') IS NULL") == "t"
 
     out = _ok(db.run_script(mig))
-    assert "existing install, backfilled 5 baseline migration(s)" in out
+    assert "existing install, backfilled 6 baseline migration(s)" in out
     assert db.recorded() == {v: "backfilled" for v in BASELINE}
     # Not re-applied: no third canary row, and no "already exists" error.
     assert db.scalar("SELECT count(*) FROM public.canary_log") == "2"
     assert "ERROR" not in out
-    assert "0 applied, 5 already recorded" in out
+    assert "0 applied, 6 already recorded" in out
 
 
 def test_c2_an_install_older_than_the_newest_baseline_is_not_backfilled(db, tmp_path):
@@ -221,7 +224,7 @@ def test_c2_an_install_older_than_the_newest_baseline_is_not_backfilled(db, tmp_
     # would have done on this deploy), is recorded, and never runs again.
     assert "statement error(s) in baseline migration 20260619141649_canary" in out
     out = _ok(db.run_script(mig))
-    assert "0 applied, 5 already recorded" in out
+    assert "0 applied, 6 already recorded" in out
     assert db.scalar("SELECT count(*) FROM public.canary_log") == "2"
 
 
@@ -241,12 +244,12 @@ def test_d_a_new_migration_runs_once(db, tmp_path, history):
         encoding="utf-8",
     )
     out = _ok(db.run_script(mig))
-    assert "1 applied, 5 already recorded" in out
+    assert "1 applied, 6 already recorded" in out
     assert db.recorded()["20261101000000_new"] == "applied"
     assert int(db.scalar("SELECT count(*) FROM public.canary_log")) == int(canary_rows) + 1
 
     out = _ok(db.run_script(mig))
-    assert "0 applied, 6 already recorded" in out
+    assert "0 applied, 7 already recorded" in out   # the six baseline files and the one added later
     assert int(db.scalar("SELECT count(*) FROM public.canary_log")) == int(canary_rows) + 1
 
 

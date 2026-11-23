@@ -12,36 +12,83 @@ Two rules keep the magic honest:
 2. She is meta-cognitive: she narrates what she is about to do and why, when she
    clones herself across a swarm, and how she converges the result back to you.
 
-An LLM (Claude) is used only to rephrase her lines more naturally when a key is
-present; without it she is still fluent, because her observations come from the
-data itself.
+An LLM (``--llm``: a local model, Groq, OpenRouter, OpenAI or Anthropic) is used
+only to rephrase her lines more naturally; without it she is still fluent,
+because her observations come from the data itself.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+from avaloka.commentary import mark_commentary
 from avaloka.llm import LLMClient, narrate
+from avaloka.llm.guard import clean_rephrasing
 
 NAME = "Avaloka"
 SIGNATURE = "— Avaloka"
 
 # A compact system prompt so the optional LLM stays in character and never
-# fabricates figures.
+# fabricates figures. The output contract is spelled out because small models
+# otherwise narrate the task: gemma4:e4b answered "I'm going to rephrase this to
+# cleanly communicate that ..." and "To structure this request, I'm going to
+# confirm ...". The old wording asked her to be meta-cognitive in the same
+# breath as "rephrase the given line", and the model was meta-cognitive about
+# the rephrasing. Her lines already say what she is doing with the data; the
+# model's job is only the wording. avaloka.llm.guard is the backstop.
 VOICE_SYSTEM = (
-    "You are Avaloka: a brilliant, warm, slightly playful young data scientist. "
-    "You speak in the first person, concisely and confidently. You are "
-    "meta-cognitive — you say what you are doing and why. Rephrase the given line "
-    "in your voice in one or two sentences. Never invent numbers; keep every "
-    "figure exactly as given."
+    "You are Avaloka: a brilliant, warm, slightly playful young data scientist, "
+    "speaking in the first person, concisely and confidently.\n"
+    "You will receive ONE line that Avaloka is about to say to the user. Reply with "
+    "that line reworded in her voice, in one or two sentences, and NOTHING else.\n"
+    "Rules:\n"
+    "- Output only the reworded line itself. No preamble, no explanation, no quotes, "
+    "no markdown, no options.\n"
+    "- Never describe what you are doing to the text: do not say rephrase, reframe, "
+    "restructure, this statement, this line, or similar.\n"
+    "- Keep every number and every name exactly as given; never add a number.\n"
+    "- Keep the meaning; add no new facts.\n"
+    "Example. Line: Let me look… 1,200 rows across 9 columns. Give me a second to "
+    "really see it.\n"
+    "Reply: Ooh, 1,200 rows across 9 columns. Give me a second to really take it in."
 )
+
+#: The user turn: the line, marked so the model cannot mistake it for a request.
+VOICE_PROMPT = "Line: {line}\nReply:"
+
+
+#: A top value must hold at least this share of rows before it is called a
+#: segment the data "leans hard on". Below it the line was being printed for
+#: a 3% invoice number, which is noise dressed as an insight.
+SEGMENT_MIN_SHARE = 1 / 3
+
+#: ...and lead the second-commonest value by this factor. Gender at 50/50 was
+#: being called a lean on "Male"; a lean is a value that clearly dominates.
+SEGMENT_MIN_LEAD = 1.5
+
+#: A column whose distinct values cover this fraction of rows is treated as
+#: an identifier for observation purposes, the same line the leakage check
+#: in :mod:`avaloka.stats` draws.
+ID_LIKE_UNIQUE_PCT = 0.5
+
+#: ...or whose distinct values outnumber max(this, sqrt(rows)): the average
+#: value then appears fewer than sqrt(rows) times, which is a label (an invoice
+#: number, a recipe title) rather than a segment, whatever its top share.
+SEGMENT_MAX_CARDINALITY = 50
+
+
+def _distinct(column: dict[str, Any], n_rows: int) -> float:
+    n = column.get("n_unique")
+    return float(n) if n is not None else float(column.get("unique_pct", 0.0)) * n_rows
 
 
 class Avaloka:
     """Avaloka's voice. Returns rich-markup strings; the caller prints them."""
 
-    def __init__(self, *, llm: bool = False, model: str | None = None) -> None:
-        self._client = LLMClient(model=model) if llm else None
+    def __init__(self, *, llm: bool = False, model: str | None = None,
+                 provider: str | None = None, notify=None) -> None:
+        self._client = (LLMClient(model=model, provider=provider, required=True, notify=notify)
+                        if llm else None)
         self.model_cost_usd = 0.0
 
     # --- low-level ---------------------------------------------------------
@@ -49,9 +96,12 @@ class Avaloka:
         """Optionally let the LLM rephrase a line; always safe."""
         if self._client is None or not self._client.available:
             return line
-        text, cost = narrate(self._client, VOICE_SYSTEM, line, line)
+        text, cost = narrate(self._client, VOICE_SYSTEM, VOICE_PROMPT.format(line=line), line)
         self.model_cost_usd += cost
-        return text
+        spoken = clean_rephrasing(line, text)
+        # The model's wording is commentary; the deterministic line it would
+        # replace (and falls back to) is not.
+        return line if spoken == line else mark_commentary(spoken)
 
     def say(self, line: str) -> str:
         return f"[bold magenta]{NAME}[/bold magenta]  {line}"
@@ -64,8 +114,10 @@ class Avaloka:
 
     def first_glance(self, dataset: dict[str, Any]) -> str:
         rows, cols = dataset["n_rows"], dataset["n_cols"]
+        # A planner's estimate is said as one, never as the count.
+        shown = f"about {rows:,} rows (estimated)" if dataset.get("estimated") else f"{rows:,} rows"
         return self.say(self._voice(
-            f"Let me look… {rows:,} rows across {cols} columns. Give me a second to really see it."))
+            f"Let me look… {shown} across {cols} columns. Give me a second to really see it."))
 
     def observe(self, profile: dict[str, Any], limit: int = 4) -> list[str]:
         """Magical-but-real observations, each pinned to a measured statistic."""
@@ -73,20 +125,56 @@ class Avaloka:
         q = profile["quality"]
         cols = {c["name"]: c for c in profile["columns"]}
 
-        # strongest relationship
-        for p in profile.get("correlations", [])[:1]:
+        # Identifier-like columns carry no signal to observe: an invoice number
+        # or a recipe title is "categorical" to the profiler, and two id
+        # columns can correlate without there being a relationship to name.
+        n_rows = max(1, profile["dataset"]["n_rows"])
+        ids = set(q.get("id_columns") or [])
+        ids |= {c["name"] for c in profile["columns"]
+                if c.get("role") == "id" or c.get("unique_pct", 0.0) >= ID_LIKE_UNIQUE_PCT
+                or _distinct(c, n_rows) > max(SEGMENT_MAX_CARDINALITY, n_rows ** 0.5)}
+
+        # strongest relationship, between columns that are not identifiers
+        for p in profile.get("correlations", []):
+            if p["a"] in ids or p["b"] in ids:
+                continue
             if p["corr"] >= 0.5:
                 obs.append(f"I can already feel a pull between [cyan]{p['a']}[/cyan] and "
                            f"[cyan]{p['b']}[/cyan] — they move together (|corr| {p['corr']}).")
+            break
 
-        # dominant segment
-        cat = next((c for c in profile["columns"]
-                    if c["role"] == "categorical" and c.get("top_values")), None)
-        if cat:
-            top = cat["top_values"][0]
-            share = top["count"] / max(1, profile["dataset"]["n_rows"])
-            obs.append(f"[cyan]{cat['name']}[/cyan] leans hard on “{top['value']}” "
-                       f"({share:.0%} of rows) — that's a segment worth naming.")
+        # dominant segment: the categorical column whose top value holds the
+        # largest share of rows, and only when that share is a real lean. The
+        # first categorical column's top value at 3% of rows is not a segment.
+        best, best_share = None, 0.0        # the strongest genuine lean
+        closest, closest_share = None, 0.0  # the strongest top value of any real categorical
+        for c in profile["columns"]:
+            if c.get("role") != "categorical" or not c.get("top_values") or c["name"] in ids:
+                continue
+            # A column with one value is a constant, not a segment: the
+            # largest-share rule would otherwise always pick it at 100%.
+            if _distinct(c, n_rows) <= 1 or len(c["top_values"]) < 2:
+                continue
+            tops = c["top_values"]
+            share = tops[0]["count"] / n_rows
+            if share > closest_share:
+                closest, closest_share = c, share
+            # A 50/50 split is not a lean either: the top value must clearly
+            # lead the runner-up, not merely be the larger half.
+            runner_up = tops[1]["count"] if len(tops) > 1 else 0
+            if tops[0]["count"] < SEGMENT_MIN_LEAD * runner_up:
+                continue
+            if share > best_share:
+                best, best_share = c, share
+        if best is not None and best_share >= SEGMENT_MIN_SHARE:
+            top = best["top_values"][0]
+            obs.append(f"[cyan]{best['name']}[/cyan] leans hard on “{top['value']}” "
+                       f"({best_share:.0%} of rows) — that's a segment worth naming.")
+        elif closest is not None:
+            # Say that nothing leans, rather than inventing a segment.
+            top = closest["top_values"][0]
+            obs.append(f"Nothing dominates a column — the closest is [cyan]{closest['name']}[/cyan] "
+                       f"at {closest_share:.0%} “{top['value']}”; the segments are spread out.")
 
         # skew / outliers
         skewed = next((c for c in profile["columns"]

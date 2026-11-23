@@ -10,13 +10,15 @@ from app.agents.state import CodingAgentState
 from app.agents.blueprint_contract import (
     BlueprintContract,
     ContractError,
-    check_contract,
+    code_reads_own_data,
+    evaluate_contract,
     format_violations,
 )
 from app.agents.logical_review_verdict import (
     LogicalReviewDecision,
     record_logical_verdict,
 )
+from avaloka.io.schema import validate_complex_loader_code
 import os
 STRICT_LOGIC_ENV = "AVALOKA_STRICT_LOGIC_VALIDATION"
 # Incomplete results are sent back to the coder (default on), but only while
@@ -2044,6 +2046,154 @@ class FilteredMLTrainingVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
 
+class DatabaseWriteVisitor(ast.NodeVisitor):
+    """HARD: analysis code never connects to or writes into a database.
+
+    rc10 (D1 e_expiry): after a cancelled transfer and a bare "yes", the analysis
+    coder planned ``df.to_sql(name=..., con=tgt_conn, if_exists='append')`` into
+    the warehouse, with no confirmation shown. The sandbox has the drivers; only
+    the model's own choice to raise kept the rows out. A database write belongs
+    to the transfer path, which confirms first, so here the analysis code may not
+    import a driver, open an engine or connection, or run write SQL. Its data
+    arrives as a file (input.csv); it has no database to read either.
+
+    The transfer agent's own generated code is validated by the same node and
+    is exempt only when its pipeline says so (``dta_transfer_codegen``).
+    """
+
+    RULE = "NoDatabaseWrites"
+    # Root modules of database drivers and ORMs; google.cloud.bigquery and
+    # snowflake.connector are matched on their full dotted prefix.
+    _DRIVER_MODULES = {
+        "sqlalchemy", "psycopg", "psycopg2", "psycopg2cffi", "pymysql", "MySQLdb", "mysql",
+        "pymongo", "motor", "asyncpg", "aiomysql", "aiopg", "aiosqlite", "pyodbc", "pymssql",
+        "cx_Oracle", "oracledb", "redshift_connector", "teradatasql", "ibm_db", "trino",
+        "clickhouse_driver", "clickhouse_connect", "databricks", "sqlmodel", "peewee",
+        "pandas_gbq",
+    }
+    _DRIVER_PREFIXES = ("snowflake.connector", "google.cloud.bigquery", "google.cloud.spanner")
+    _ENGINE_CALLS = {"create_engine", "create_async_engine", "engine_from_config"}
+    _FRAME_WRITERS = {"to_sql", "to_gbq"}
+    _DB_READERS = {"read_sql", "read_sql_query", "read_sql_table", "read_gbq"}
+    _MONGO_WRITES = {
+        "insert_one", "insert_many", "update_one", "update_many", "replace_one",
+        "delete_one", "delete_many", "bulk_write", "drop_collection", "drop_database",
+        "find_one_and_update", "find_one_and_replace", "find_one_and_delete",
+    }
+    _SQL_RUNNERS = {"execute", "executemany", "executescript", "exec_driver_sql", "text", "sql"}
+    # A statement that writes: its leading keyword, or a write clause anywhere
+    # (a CTE can front an INSERT). REPLACE(...) inside a SELECT is a function,
+    # not a statement, so keywords are only read at a statement's start.
+    _WRITE_SQL_LEAD_RE = re.compile(
+        r"^\s*(?:(?:--[^\n]*\n|/\*.*?\*/)\s*)*(INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|TRUNCATE|"
+        r"REPLACE|MERGE|UPSERT|GRANT|REVOKE|ATTACH|COPY|VACUUM)\b",
+        re.IGNORECASE | re.DOTALL,
+    )
+    _WRITE_SQL_ANY_RE = re.compile(
+        r"\b(INSERT\s+INTO|DELETE\s+FROM|UPDATE\s+[\w.\"`\[\]]+\s+SET)\b", re.IGNORECASE)
+    # Spark/DuckDB temporary views live in the session, not in a database.
+    _TEMP_VIEW_RE = re.compile(
+        r"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:GLOBAL\s+)?TEMP(?:ORARY)?\s+VIEW\b", re.IGNORECASE)
+
+    @classmethod
+    def _sql_write_verb(cls, sql: str) -> str | None:
+        for statement in sql.split(";"):
+            if cls._TEMP_VIEW_RE.match(statement):
+                continue
+            m = cls._WRITE_SQL_LEAD_RE.match(statement) or cls._WRITE_SQL_ANY_RE.search(statement)
+            if m:
+                return m.group(1).split()[0].upper()
+        return None
+
+    def __init__(self):
+        self.errors: list[str] = []
+        self._string_names: dict[str, str] = {}
+        # "import sqlite3 as db" / "from sqlite3 import connect as c"
+        self._sqlite_modules: set[str] = {"sqlite3"}
+        self._sqlite_connects: set[str] = set()
+
+    def _add(self, line: int, what: str):
+        msg = (
+            f"SemanticError [{self.RULE}] (line {line}): {what}. Analysis code must not connect "
+            "to or write into a database; work on the provided df and return the result. "
+            "Copying data into a database is done by a transfer the user confirms."
+        )
+        if msg not in self.errors:
+            self.errors.append(msg)
+
+    def _is_driver(self, module: str) -> bool:
+        module = module or ""
+        return (module.split(".")[0] in self._DRIVER_MODULES
+                or any(module == p or module.startswith(p + ".") for p in self._DRIVER_PREFIXES))
+
+    def _literal_sql(self, node: ast.AST) -> str | None:
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value
+        if isinstance(node, ast.JoinedStr):
+            return "".join(v.value for v in node.values
+                           if isinstance(v, ast.Constant) and isinstance(v.value, str))
+        if isinstance(node, ast.Name):
+            return self._string_names.get(node.id)
+        if isinstance(node, ast.Call) and node.args:        # text("INSERT ...")
+            return self._literal_sql(node.args[0])
+        return None
+
+    def visit_Import(self, node: ast.Import):
+        for alias in node.names:
+            if self._is_driver(alias.name):
+                self._add(node.lineno, f"imports the database driver '{alias.name}'")
+            elif alias.name == "sqlite3":
+                self._sqlite_modules.add(alias.asname or alias.name)
+        self.generic_visit(node)
+
+    def visit_ImportFrom(self, node: ast.ImportFrom):
+        module = node.module or ""
+        if self._is_driver(module):
+            self._add(node.lineno, f"imports from the database driver '{module}'")
+        elif module == "sqlite3":
+            self._sqlite_connects.update(a.asname or a.name for a in node.names if a.name == "connect")
+        self.generic_visit(node)
+
+    def visit_Assign(self, node: ast.Assign):
+        sql = self._literal_sql(node.value) if isinstance(node.value, (ast.Constant, ast.JoinedStr)) else None
+        if sql is not None:
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    self._string_names[target.id] = sql
+        self.generic_visit(node)
+
+    def visit_Call(self, node: ast.Call):
+        func = node.func
+        name = func.attr if isinstance(func, ast.Attribute) else (func.id if isinstance(func, ast.Name) else "")
+        owner = func.value.id if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name) else ""
+
+        if name in self._FRAME_WRITERS:
+            self._add(node.lineno, f"calls .{name}(), which writes a DataFrame into a database")
+        elif name in self._ENGINE_CALLS:
+            self._add(node.lineno, f"calls {name}(), which opens a database connection")
+        elif name in self._DB_READERS:
+            self._add(node.lineno, f"calls {name}(), which connects to a database")
+        elif name in self._MONGO_WRITES:
+            self._add(node.lineno, f"calls .{name}(), a MongoDB write")
+        elif ((name == "connect" and owner in self._sqlite_modules)
+              or (isinstance(func, ast.Name) and name in self._sqlite_connects)):
+            target = node.args[0] if node.args else next(
+                (k.value for k in node.keywords if k.arg == "database"), None)
+            if not (isinstance(target, ast.Constant) and target.value == ":memory:"):
+                self._add(node.lineno, "calls sqlite3.connect() on a database file")
+        elif name in ("__import__", "import_module") and node.args:
+            mod = node.args[0]
+            if isinstance(mod, ast.Constant) and isinstance(mod.value, str) and self._is_driver(mod.value):
+                self._add(node.lineno, f"imports the database driver '{mod.value}'")
+
+        if name in self._SQL_RUNNERS and node.args:
+            sql = self._literal_sql(node.args[0])
+            verb = self._sql_write_verb(sql) if sql else None
+            if verb:
+                self._add(node.lineno, f"runs {verb} SQL through .{name}()")
+        self.generic_visit(node)
+
+
 def _prompt_requests_filtered_ml(user_prompt: str) -> bool:
     prompt = (user_prompt or "").lower()
     ml_terms = (
@@ -2176,6 +2326,18 @@ def static_semantic_validator_node(state: CodingAgentState) -> dict:
         deprecated_api_visitor = DeprecatedApiVisitor()
         deprecated_api_visitor.visit(tree)
 
+        # 16) HARD: no database connection or write outside the transfer path.
+        # Fail closed: only the transfer agent's own pipeline turns it off.
+        db_write_visitor = DatabaseWriteVisitor()
+        if not state.get("dta_transfer_codegen"):
+            db_write_visitor.visit(tree)
+
+        complex_loader_validation = validate_complex_loader_code(
+            code,
+            state.get("input_data_type"),
+            primary_source=state.get("data_source_location"),
+        )
+
         # Combine errors from both checks
         all_errors: list[str] = []
         all_errors.extend(col_visitor.errors)
@@ -2193,6 +2355,11 @@ def static_semantic_validator_node(state: CodingAgentState) -> dict:
         all_errors.extend(label_encoder_visitor.errors)
         all_errors.extend(synthetic_prediction_visitor.errors)
         all_errors.extend(deprecated_api_visitor.errors)
+        all_errors.extend(db_write_visitor.errors)
+        all_errors.extend(
+            f"SemanticError: {issue.message}"
+            for issue in complex_loader_validation.issues
+        )
 
         if (
             _prompt_requests_filtered_ml(state.get("user_prompt", ""))
@@ -2232,7 +2399,28 @@ def static_semantic_validator_node(state: CodingAgentState) -> dict:
 
 import io
 import pandas as pd
-from contextlib import redirect_stdout, redirect_stderr
+
+
+#: Rows read from each OTHER dataset of a join for the sample run: enough for
+#: keys to meet, small enough to stay a sample.
+JOIN_SAMPLE_ROWS = 5000
+
+
+def _dataset_sources(state: CodingAgentState) -> dict:
+    """alias / file name -> readable path, for every dataset of the turn."""
+    sources: dict = {}
+    for meta in state.get("datasets_context") or state.get("multi_dataset_state") or []:
+        if not isinstance(meta, dict):
+            continue
+        path = (meta.get("data_source_location") or meta.get("full_data_location")
+                or meta.get("sample_data_location"))
+        if not path:
+            continue
+        if meta.get("filename"):
+            sources[os.path.basename(str(meta["filename"]))] = path
+        if meta.get("alias"):
+            sources[str(meta["alias"])] = path
+    return sources
 
 
 VALIDATION_SAMPLE_ROWS_ENV = "AVALOKA_VALIDATION_SAMPLE_ROWS"
@@ -2322,15 +2510,18 @@ def execute_code_node(state: CodingAgentState) -> dict:
             "execution_output_data": None
         }
 
-    # Model-written code: it runs in a child process with the scrubbed
-    # environment and time and memory limits, never exec()'d in this one,
-    # where it could read every secret in os.environ and every module global.
-    # app/executor/_sample_runner.py repeats the old in-process steps exactly:
-    # one exec scope with ``pd``, __name__ deliberately not "__main__" so the
-    # script's entry block (which reads the full dataset and writes the real
-    # output) stays inert, and stdout/stderr captured around main() only.
+    # Model-written code never runs in this process, where it could read every
+    # secret in os.environ and every module global: app/executor/sample.py runs
+    # it in the executor when one is configured (compose, Helm), else in a
+    # child with the scrubbed environment, ``python -I`` and time and memory
+    # limits. The script repeats the old in-process steps exactly: one exec
+    # scope with ``pd``, __name__ deliberately not "__main__" so the script's
+    # entry block (which reads the full dataset and writes the real output)
+    # stays inert, bind_main_frames for a join written as
+    # main(df_customers, df_orders), and stdout/stderr captured around main() only.
     from app.executor.sample import run_main_on_sample
-    return run_main_on_sample(code, sample_df)
+    return run_main_on_sample(code, sample_df, _dataset_sources(state),
+                              state.get("data_source_location"), JOIN_SAMPLE_ROWS)
 
 def contract_validator_node(state: CodingAgentState) -> dict:
     """Check the executed result against the blueprint's own acceptance criteria.
@@ -2379,17 +2570,33 @@ def contract_validator_node(state: CodingAgentState) -> dict:
         return {}
 
     source_df = _build_sample_dataframe(state)
+    # The sample is the result's input only when main() used just the frame it
+    # was given. Code that reads the files itself (a union, a join) returns a
+    # result built from the full data; comparing it with the sample's groups
+    # rejected correct per-group results with a false reason (rc18b).
+    source_is_input = not code_reads_own_data(state.get("generated_code") or "")
 
     logger.info("--- Checking blueprint contract ---")
     try:
-        violations = check_contract(contract, result_df, source_df)
+        report = evaluate_contract(contract, result_df, source_df,
+                                   question=state.get("user_prompt") or "",
+                                   source_is_input=source_is_input,
+                                   source_is_sample=True)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Contract check raised (%s); treating as no violation.", exc)
         return {}
+    violations = report.violations
+    # Recorded either way, so a trace shows where an exact row count came from
+    # and which stated postconditions were advisory rather than enforced.
+    recorded = {
+        "contract_advisories": [{"rule": a.rule, "detail": a.detail} for a in report.advisories],
+        "contract_row_count": report.row_count.to_dict() if report.row_count else None,
+        "contract_bounds": [b.to_dict() for b in report.bounds],
+    }
 
     if not violations:
         logger.info("Result satisfies the blueprint contract.")
-        return {"contract_error": False, "contract_violations": []}
+        return {"contract_error": False, "contract_violations": [], **recorded}
 
     feedback = format_violations(violations, contract)
     logger.warning(
@@ -2400,6 +2607,7 @@ def contract_validator_node(state: CodingAgentState) -> dict:
         "contract_error": True,
         "contract_violations": [{"rule": v.rule, "detail": v.detail} for v in violations],
         "code_validation_feedback": feedback,
+        **recorded,
     }
 
 
@@ -2728,6 +2936,23 @@ def logical_semantic_validator_node(state: CodingAgentState) -> dict:
             **record_logical_verdict(LogicalReviewDecision.NO_VERDICT_UNPARSEABLE),
         }
 
+
+
+def database_write_errors(code: str) -> list[str]:
+    """The NoDatabaseWrites (HARD) findings for ``code``, checked on their own.
+
+    For a caller that may skip the other validators -- save-and-execute with
+    ``run_validation: false`` -- but must never skip this one: it is a safety
+    rule, not a quality check. Code that does not parse yields nothing here; it
+    cannot run either, and the executor reports why.
+    """
+    try:
+        tree = ast.parse(code or "")
+    except SyntaxError:
+        return []
+    visitor = DatabaseWriteVisitor()
+    visitor.visit(tree)
+    return list(visitor.errors)
 
 
 def run_code_validation(

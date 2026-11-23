@@ -1,5 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
-import { getRuntimeEnv } from "@/lib/runtime-env";
+import { getPublicRuntimeEnv, publicEnvScript } from "@/lib/runtime-env";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   Outlet,
@@ -83,7 +83,9 @@ function ErrorComponent({ error: thrown, reset }: { error: unknown; reset: () =>
   );
 }
 
-const getPublicEnv = createServerFn({ method: "GET" }).handler(() => getRuntimeEnv());
+// Only browser-safe keys reach the page: API_BASE and SUPABASE_INCLUSTER_URL are
+// in-cluster addresses the UI server proxies to, and must not be published.
+const getPublicEnv = createServerFn({ method: "GET" }).handler(() => getPublicRuntimeEnv());
 
 export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()({
   loader: () => getPublicEnv(),
@@ -101,17 +103,21 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { name: "twitter:site", content: "@Lovable" },
       { name: "twitter:title", content: "Log in · Avaloka AI" },
       { name: "twitter:description", content: "Sign in to Avaloka AI — the unified data workspace for SQL warehouses, dashboards, and AI-driven analytics." },
-      { property: "og:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/90f70da9-867a-464c-845d-9435165b579a/id-preview-9f21cf52--d096b358-5cb6-462a-800f-115f9aa8054c.lovable.app-1783161881109.png" },
-      { name: "twitter:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/90f70da9-867a-464c-845d-9435165b579a/id-preview-9f21cf52--d096b358-5cb6-462a-800f-115f9aa8054c.lovable.app-1783161881109.png" },
+      { property: "og:image", content: "/og-image.png" },
+      { name: "twitter:image", content: "/og-image.png" },
     ],
     links: [
       { rel: "stylesheet", href: appCss },
       { rel: "icon", type: "image/svg+xml", href: "/favicon.svg" },
       { rel: "icon", type: "image/png", href: "/favicon.png" },
-      { rel: "preconnect", href: "https://api.fontshare.com" },
+      // Fonts are self-hosted (styles.css, public/fonts): no third-party request
+      // leaves the viewer's browser for a page to render.
       {
-        rel: "stylesheet",
-        href: "https://api.fontshare.com/v2/css?f[]=general-sans@400,500,600,700&display=swap",
+        rel: "preload",
+        href: "/fonts/figtree/figtree-latin-wght-normal.woff2",
+        as: "font",
+        type: "font/woff2",
+        crossOrigin: "anonymous",
       },
     ],
   }),
@@ -123,11 +129,10 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
 
 function RootShell({ children }: { children: ReactNode }) {
   const env = Route.useLoaderData();
-  const serialized = JSON.stringify(env).replace(/</g, "\\u003c");
   return (
     <html lang="en">
       <head>
-        <script dangerouslySetInnerHTML={{ __html: `window.__ENV__=${serialized}` }} />
+        <script dangerouslySetInnerHTML={{ __html: publicEnvScript(env) }} />
         <HeadContent />
       </head>
       <body>

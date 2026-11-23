@@ -1,0 +1,68 @@
+{
+  "recipe": "cohort_retention",
+  "version_major": 1,
+  "verdict": "qualified",
+  "reason": null,
+  "figures": [
+    {
+      "id": "/cohorts/count",
+      "value": 4.0,
+      "decimals": 0,
+      "unit": "count"
+    },
+    {
+      "id": "/ids/count",
+      "value": 85.0,
+      "decimals": 0,
+      "unit": "count"
+    },
+    {
+      "id": "/cohorts/smallest",
+      "value": 18.0,
+      "decimals": 0,
+      "unit": "count"
+    },
+    {
+      "id": "/cohorts/largest",
+      "value": 25.0,
+      "decimals": 0,
+      "unit": "count"
+    },
+    {
+      "id": "/periods/observed",
+      "value": 4.0,
+      "decimals": 0,
+      "unit": "count"
+    },
+    {
+      "id": "/rows/duplicates",
+      "value": 0.0,
+      "decimals": 0,
+      "unit": "count"
+    },
+    {
+      "id": "/retention/period_1",
+      "value": 68.2,
+      "decimals": 1,
+      "unit": "percent"
+    },
+    {
+      "id": "/retention/period_3",
+      "value": 40.0,
+      "decimals": 1,
+      "unit": "percent"
+    }
+  ],
+  "caveats": [
+    "small_n"
+  ],
+  "must_not_say": [
+    "cause",
+    "causes",
+    "drives",
+    "because",
+    "effect of",
+    "leads to"
+  ],
+  "note": "pandas as clean_monthly; every cohort is below 30 ids, so small_n; period 1 is 58 of 85 by the rule."
+}

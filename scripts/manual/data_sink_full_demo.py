@@ -11,6 +11,8 @@ Step 7: checking if the output is correct
 '''
 
 from pathlib import Path
+from app.core.thirdparty_optout import disable_thirdparty_telemetry
+disable_thirdparty_telemetry()  # before daft: its import-time usage beacon
 import daft
 import os
 

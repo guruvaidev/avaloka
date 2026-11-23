@@ -1,6 +1,10 @@
 """DB_ENCRYPTION_KEY fails closed only when it cannot be provisioned; the Helm
 chart generates a private one and keeps it across upgrades.
 
+2.x port of 1.6's tests (hotfix/1.6-chat-connection-sealing 3943a023 +
+d0737d14). 2.x shipped the published fallback key and started with no key at
+all; every test here fails on c3b27651.
+
 CHANGED (owner, after #647): the services no longer hard-fail on an empty or
 published key. They provision it (generate, save to .env, reuse) and refuse to
 start only when, after provisioning, there is still none -- provisioning
@@ -182,17 +186,17 @@ def test_bundled_supabase_functions_and_mcp_use_the_release_key():
     out = _helm(CHART, "--set", "supabase.enabled=true", "--set", "supabase.requireOwnCredentials=false").stdout
     rendered_published = PUBLISHED in out  # a boolean: a failure must not print the manifests
     assert not rendered_published, "a published DB_ENCRYPTION_KEY is rendered into the release"
-    consumers = {}
+    found = {}
     for d in _docs(out):
         if d.get("kind") != "Deployment":
             continue
         for c in d["spec"]["template"]["spec"].get("containers") or []:
-            for e in c.get("env") or []:
-                if e.get("name") == "DB_ENCRYPTION_KEY":
-                    consumers[d["metadata"]["name"]] = e
-    for name in ("t-avaloka-supabase-functions", "t-avaloka-mcp"):
-        match = next((e for n, e in consumers.items() if n.endswith(name.split("t-avaloka-")[1])), None)
-        assert match is not None, f"{name} does not get DB_ENCRYPTION_KEY"
-        ref = (match.get("valueFrom") or {}).get("secretKeyRef") or {}
-        assert ref.get("key") == "DB_ENCRYPTION_KEY" and "value" not in match, \
-            f"{name} does not read DB_ENCRYPTION_KEY from the release Secret"
+            via_ref = any((e.get("valueFrom") or {}).get("secretKeyRef", {}).get("key") == "DB_ENCRYPTION_KEY"
+                          for e in c.get("env") or [] if e.get("name") == "DB_ENCRYPTION_KEY")
+            literal = any("value" in e for e in c.get("env") or [] if e.get("name") == "DB_ENCRYPTION_KEY")
+            via_envfrom = any((f.get("secretRef") or {}).get("name", "").endswith("-secrets")
+                              for f in c.get("envFrom") or [])
+            found[d["metadata"]["name"]] = (via_ref or via_envfrom) and not literal
+    for suffix in ("supabase-functions", "mcp"):
+        match = [ok for name, ok in found.items() if name.endswith(suffix)]
+        assert match and all(match), f"{suffix} does not read DB_ENCRYPTION_KEY from the release Secret"

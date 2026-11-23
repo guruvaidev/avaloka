@@ -220,8 +220,10 @@ def test_exactly_and_at_most_relations():
     assert _check(at_most, SOURCE.head(2)) == []
     assert any(v.rule == "too_many_rows" for v in _check(at_most, SOURCE))
 
+    # An exact count is HARD only when derivable -- here, SOURCE's three
+    # hospitals (see test_exact_count_derivable.py for the other sources).
     exactly = {"result_kind": "aggregate", "result_columns": ["billing"],
-               "row_relation": {"type": "exactly", "n": 3}}
+               "row_relation": {"type": "exactly", "n": 3, "group_by": ["hospital"]}}
     assert any(v.rule == "wrong_row_count" for v in _check(exactly, SOURCE.head(2)))
 
 

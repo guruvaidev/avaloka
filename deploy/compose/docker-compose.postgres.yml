@@ -8,8 +8,11 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password123}
       POSTGRES_DB: ${POSTGRES_DB:-testdb}
+    # Loopback only, and the host port is yours to move: a laptop usually has a
+    # Postgres on 5432 already, and "0.0.0.0:5432" collided with it (and
+    # published a password123 database to the network). POSTGRES_HOST_PORT=55432 ...
     ports:
-      - "5432:5432"
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     restart: unless-stopped

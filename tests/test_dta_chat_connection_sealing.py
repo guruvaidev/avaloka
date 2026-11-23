@@ -1,12 +1,13 @@
 """A database typed into chat: its password lives in the sealed store and nowhere else.
 
-1.6 port of 2.0's #599 chat sealing (app/core/typed_secrets.py, the planner's
-register_database, app/api/db_connections.register_and_save). Every probe here
-is synthetic; a failing assertion names places, never prints the probe.
-
-The tests reach the code only through what 1.6 already had (the planner node,
-the API server, the Redis history reader, httpx), so on a tree without the fix
-they fail on their assertions, not on an import.
+1.6's tests for its port of #599 chat sealing (ef210008: app/core/typed_secrets.py,
+the planner's register_database, app/api/db_connections.register_and_save),
+adapted to the 1.7 line they now run on: the planner registers and reads back
+as the signed-in user (an avu1 assertion, app/mcp_server/client.user_headers),
+/credentials answers with a sealed ``credential_handle`` the planner opens in
+process, and a transfer runs only after the user confirms it (tests/dta_confirm).
+The fakes of the onboarding API answer exactly as the real one does. Every probe
+here is synthetic; a failing assertion names places, never prints the probe.
 """
 from __future__ import annotations
 
@@ -25,6 +26,14 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 import app.agents.planner as P
 import app.api.cloud_connections as cc
+from app.mcp_server.credentials import credential_handle
+
+try:  # tests/ as a package, or tests/ on sys.path
+    from tests.dta_confirm import run_confirmed
+    from tests.onboarding_identity import assertion_user
+except ImportError:  # pragma: no cover
+    from dta_confirm import run_confirmed
+    from onboarding_identity import assertion_user
 
 USER = "user_chat"
 # Synthetic, and not a real secret: built so no literal DSN with a password sits in the file.
@@ -45,13 +54,22 @@ def _places_with(probes, places):
 
 
 @pytest.fixture(autouse=True)
-def _key(monkeypatch):
-    """A deployment key for the AES-GCM seal (synthetic), and the service token."""
+def _key(monkeypatch, tmp_path):
+    """A deployment key for the AES-GCM seal (synthetic), the service token, and the
+    API's saved-connections file (register_and_save keeps the sealed api_key there) in tmp."""
+    import app.api.db_connections as dbc
     monkeypatch.setattr(cc, "DB_ENCRYPTION_KEY", "test-only-" + secrets.token_hex(16), raising=False)
     monkeypatch.setattr(cc, "_AESGCM_KEY", None, raising=False)
     monkeypatch.setenv("MCP_SERVICE_TOKEN", "svc-" + secrets.token_hex(8))
     monkeypatch.setenv("EXECUTION_ENV", "gke")
     monkeypatch.setenv("DTA_GKE_REACHES_PRIVATE", "1")
+    monkeypatch.setenv("RAY_DASHBOARD_URL", "http://ray.invalid:8265")
+    monkeypatch.setenv("AVALOKA_CONNECTIONS_FILE", str(tmp_path / "db_connections.json"))
+    # No Supabase here, so register_and_save keeps its row in that file (the bucket
+    # test below gives the planner a fake Supabase of its own).
+    for name in ("SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    assert not dbc.uses_supabase()
 
 
 # ── fakes: the planner's model, and the onboarding API over httpx ───────────
@@ -91,7 +109,13 @@ def _register_args(text):
 
 
 class _Onboarding:
-    """The onboarding API's /customers routes, reached over httpx (register) and requests (read)."""
+    """The onboarding API's /customers routes, reached over httpx (register) and requests (read).
+
+    Answers as the real router does on 1.7: a registration or a read needs the
+    signed-in user's assertion; /credentials returns display fields and the
+    connection string sealed as ``credential_handle``, never a password; GET
+    /customers lists only that user's own customers.
+    """
 
     def __init__(self, register_status=200, register_detail=None):
         self.register_status, self.register_detail = register_status, register_detail
@@ -118,11 +142,12 @@ class _Onboarding:
             async def request(self, method, url, content=None, headers=None, **_k):
                 body = json.loads(content or b"{}")
                 store.bodies.append(body)
-                if not (headers or {}).get("X-Avaloka-User"):
+                user = assertion_user(headers)
+                if not user:
                     return _Resp(401, {"detail": "Authentication required"})
                 if store.register_status != 200:
                     return _Resp(store.register_status, {"detail": store.register_detail})
-                store.registered[body["customer_id"]] = {**body, "owner": headers["X-Avaloka-User"]}
+                store.registered[body["customer_id"]] = {**body, "owner": user}
                 return _Resp(200, {"customer_id": body["customer_id"], "api_key": "ak_" + secrets.token_hex(8),
                                    "status": "active", "database_type": body["database_type"]})
 
@@ -135,16 +160,22 @@ class _Onboarding:
 
             def get(self, url, headers=None, **_k):
                 parts = url[len(P.ONBOARDING_API_URL):].strip("/").split("/")
+                user = assertion_user(headers)
+                if user is None:
+                    return _Resp(401, {})
                 if len(parts) == 3 and parts[0] == "customers" and parts[2] == "credentials":
                     rec = store.registered.get(parts[1])
-                    if rec and (headers or {}).get("X-Avaloka-User") == rec["owner"]:
+                    if rec and user == rec["owner"]:
+                        dsn = (f"postgresql://{rec['username']}:{quote_plus(rec['password'])}"
+                               f"@{rec['host']}:{rec['port']}/{rec['database_name']}")
                         return _Resp(200, {"host": rec["host"], "port": rec["port"],
                                            "database": rec["database_name"], "username": rec["username"],
-                                           "password": rec["password"], "table": "first_table",
+                                           "credential_handle": credential_handle(dsn), "table": "first_table",
                                            "database_type": rec["database_type"]})
                     return _Resp(404, {})
                 if parts == ["customers"]:
-                    return _Resp(200, [])
+                    return _Resp(200, [{"customer_id": cid, "database_type": rec["database_type"]}
+                                       for cid, rec in store.registered.items() if rec["owner"] == user])
                 return _Resp(404, {})
 
         monkeypatch.setattr(httpx, "AsyncClient", _AsyncClient)
@@ -241,14 +272,17 @@ def test_a_transfer_opens_the_chat_handle_at_run_time(monkeypatch):
     monkeypatch.setitem(sys.modules, fake_dta.__name__, fake_dta)
     monkeypatch.setitem(sys.modules, fake_gke.__name__, fake_gke)
     monkeypatch.setattr(P, "_list_dest_tables", lambda *a, **k: ["orders_copy"])
+    monkeypatch.setattr(P, "_list_source_tables", lambda *a, **k: ["orders"], raising=False)
+    monkeypatch.setattr(P, "_count_source_rows", lambda *a, **k: None)   # the confirmation's count: no network
     state["dta_database_registry"]["sink"] = {"db_type": "postgresql", "conn_id": "warehouse_sink",
                                               "host": "db.chat.example", "database": "sink", "_source": "chat"}
     onboarding.registered["warehouse_sink"] = {"host": "db.chat.example", "port": 5432, "database_name": "sink",
                                                "username": "etl", "password": "sink-pw-" + secrets.token_hex(4),
                                                "database_type": "postgresql", "owner": USER}
-    msg = P._handle_initiate_transfer(state, P.InitiateTransferParams(
-        source_alias="warehouse", destination_alias="sink", user_prompt="copy orders from warehouse to sink",
-        write_mode="append", dest_table="orders_copy"))
+    # The transfer runs once the user says yes to its confirmation (tests/dta_confirm).
+    msg = run_confirmed(state, P.InitiateTransferParams(
+        source_alias="warehouse", destination_alias="sink", source_table="orders",
+        user_prompt="copy orders from warehouse to sink", write_mode="append", dest_table="orders_copy"))
     src = handed.get("source_credentials") or {}
     assert src.get("password") == PROBE_PW, f"the handle was not opened for the transfer: {msg[:120]}"
     assert src.get("table") == "orders", "the chat registration's table was lost"
@@ -296,7 +330,11 @@ def test_a_chat_typed_bucket_keeps_its_keys_sealed_in_cloud_datasets(monkeypatch
 # ── 2. checkpoints and history written before sealing ───────────────────────
 
 def test_an_older_checkpoint_holding_a_chat_password_is_scrubbed_on_read(monkeypatch):
-    """Registry entry and transcript as a pre-sealing checkpoint left them; one planner read later, gone."""
+    """Registry entry and transcript as a pre-sealing checkpoint left them; one planner read later, gone.
+
+    The transcript half needs plan_etl_job to seal EVERY human message it reads,
+    not only this turn's (1.6 ef210008, planner.plan_etl_job).
+    """
     _Onboarding().install(monkeypatch)
     monkeypatch.setattr(P, "llm", _Model("list_databases", lambda text: {}))
     state = {
@@ -451,6 +489,8 @@ class _ChatModel:
             return SimpleNamespace(content="", tool_calls=[{"name": "initiate_transfer", "args": {
                 "source_alias": "chatsrc", "destination_alias": "chatdst", "user_prompt": text,
                 "write_mode": "append", "dest_table": "orders_copy"}}])
+        if "named" not in text:   # the "yes" to the transfer's confirmation: nothing to plan
+            return SimpleNamespace(content="", tool_calls=[])
         alias = re.search(r"named (\w+)", text).group(1)
         pw = _typed_value(text, "password")
         if pw and pw.startswith("⟦"):
@@ -465,6 +505,7 @@ class _ChatModel:
         return self
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("sealing", ["on", "off (positive control)"])
 def test_real_postgres_chat_connection_transfer_and_probe_scan(pg, client, monkeypatch, caplog, capsys,
                                                               tmp_path, sealing):
@@ -499,10 +540,19 @@ def test_real_postgres_chat_connection_transfer_and_probe_scan(pg, client, monke
             monkeypatch.setattr(cr, "seal_record", lambda rec: dict(rec))
             monkeypatch.setattr(cdb, "credential_handle", lambda v: {"scheme": cr.HANDLE_SCHEME, "plain": v},
                                 raising=False)
-            real_open = cr.open_credential_handle
-            monkeypatch.setattr(mts, "open_credential_handle",
-                                lambda h: h.get("plain") if isinstance(h, dict) and "plain" in h else real_open(h),
-                                raising=False)
+            # ...and the openers: the MCP server opens the admin body's handles with
+            # open_sealed_secret (a string); the planner opens a /credentials handle
+            # with open_credential_handle (the parsed DSN). A plain handle opens as-is.
+            real_secret, real_handle = cr.open_sealed_secret, cr.open_credential_handle
+
+            def _plain(h):
+                return h.get("plain") if isinstance(h, dict) and "plain" in h else None
+
+            monkeypatch.setattr(mts, "open_sealed_secret",
+                                lambda h: _plain(h) if _plain(h) is not None else real_secret(h), raising=False)
+            monkeypatch.setattr(cr, "open_credential_handle",
+                                lambda h: (cr.parse_connection_string(_plain(h)) if _plain(h) is not None
+                                           else real_handle(h)))
         except ImportError:
             pass
 
@@ -605,6 +655,8 @@ def test_real_postgres_chat_connection_transfer_and_probe_scan(pg, client, monke
         f"Register a postgres connection named chatdst on host {pg.host} port {pg.port} database {dst.db} "
         f"user {dst.role} password {dst.pw} table orders_copy",
         "transfer from chatsrc to chatdst into table orders_copy",
+        # Every chat transfer stops at one confirmation first (1.7, tests/dta_confirm.py).
+        "yes",
     ]
     replies = []
     try:
@@ -618,7 +670,7 @@ def test_real_postgres_chat_connection_transfer_and_probe_scan(pg, client, monke
         store_text = store.read_text()
         try:  # what the store holds, opened with the deployment key
             from app.mcp_server.credentials import load_registry
-            store_opened = json.dumps(load_registry(str(store), migrate=False))
+            store_opened = json.dumps(load_registry(str(store)))
         except ImportError:
             store_opened = store_text
     finally:

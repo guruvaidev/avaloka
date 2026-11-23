@@ -1,0 +1,301 @@
+[
+ {
+  "question": "Which region has the highest revenue?",
+  "columns": {
+   "order_date": "time",
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "units": "measure",
+   "customer_id": "id",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "segment",
+   "params": {
+    "measure": "revenue",
+    "dimension": "region"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Revenue by region",
+  "columns": {
+   "order_date": "time",
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "units": "measure",
+   "customer_id": "id",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "segment",
+   "params": {
+    "measure": "revenue",
+    "dimension": "region"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Top products by units",
+  "columns": {
+   "order_date": "time",
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "units": "measure",
+   "customer_id": "id",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "segment",
+   "params": {
+    "measure": "units",
+    "dimension": "product"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Break down mrr by plan",
+  "columns": {
+   "signup_date": "time",
+   "user_id": "id",
+   "plan": "dimension",
+   "mrr": "measure",
+   "churned": "measure",
+   "sessions": "measure",
+   "country": "dimension"
+  },
+  "expected": {
+   "recipe": "segment",
+   "params": {
+    "measure": "mrr",
+    "dimension": "plan"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "share of revenue per product",
+  "columns": {
+   "order_date": "time",
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "units": "measure",
+   "customer_id": "id",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "segment",
+   "params": {
+    "measure": "revenue",
+    "dimension": "product"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Which services have the worst latency?",
+  "columns": {
+   "ts": "time",
+   "latency_ms": "measure",
+   "errors": "measure",
+   "service": "dimension",
+   "host": "high_card_dimension"
+  },
+  "expected": {
+   "recipe": "segment",
+   "params": {
+    "measure": "latency_ms",
+    "dimension": "service"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Salary across departments",
+  "columns": {
+   "employee_id": "id",
+   "salary": "measure",
+   "age": "measure",
+   "department": "dimension",
+   "hire_date": "time",
+   "tenure_years": "measure"
+  },
+  "expected": {
+   "recipe": "segment",
+   "params": {
+    "measure": "salary",
+    "dimension": "department"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Rank countries by churned users",
+  "columns": {
+   "signup_date": "time",
+   "user_id": "id",
+   "plan": "dimension",
+   "mrr": "measure",
+   "churned": "measure",
+   "sessions": "measure",
+   "country": "dimension"
+  },
+  "expected": {
+   "recipe": "segment",
+   "params": {
+    "measure": "churned",
+    "dimension": "country"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "How concentrated is revenue among regions?",
+  "columns": {
+   "order_date": "time",
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "units": "measure",
+   "customer_id": "id",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "segment",
+   "params": {
+    "measure": "revenue",
+    "dimension": "region"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Which groups matter most for cost?",
+  "columns": {
+   "order_date": "time",
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "units": "measure",
+   "customer_id": "id",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "segment",
+   "params": {
+    "measure": "cost"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "errors per host",
+  "columns": {
+   "ts": "time",
+   "latency_ms": "measure",
+   "errors": "measure",
+   "service": "dimension",
+   "host": "high_card_dimension"
+  },
+  "expected": {
+   "recipe": "segment",
+   "params": {
+    "measure": "errors",
+    "dimension": "host"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Average revenue or cost by region",
+  "columns": {
+   "order_date": "time",
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "units": "measure",
+   "customer_id": "id",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "segment",
+   "params": {
+    "dimension": "region"
+   },
+   "flags": [
+    "ambiguous"
+   ]
+  }
+ },
+ {
+  "question": "Which region drives the most revenue?",
+  "columns": {
+   "order_date": "time",
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "units": "measure",
+   "customer_id": "id",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "segment",
+   "params": {
+    "measure": "revenue",
+    "dimension": "region"
+   },
+   "flags": [
+    "causal_question"
+   ]
+  }
+ },
+ {
+  "question": "Segment the revenue by product and region",
+  "columns": {
+   "order_date": "time",
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "units": "measure",
+   "customer_id": "id",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "segment",
+   "params": {
+    "measure": "revenue",
+    "dimension": "product"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Revenue by region and also the correlation of cost with units",
+  "columns": {
+   "order_date": "time",
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "units": "measure",
+   "customer_id": "id",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "segment",
+   "params": {
+    "measure": "revenue",
+    "dimension": "region"
+   },
+   "flags": [
+    "multi_question"
+   ]
+  }
+ }
+]

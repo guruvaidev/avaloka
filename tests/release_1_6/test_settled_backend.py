@@ -409,15 +409,23 @@ def test_cm07_dataset_discovery_describes_the_bound_dataset():
     assert "error" not in out
 
 
-@pytest.mark.defect
-@pytest.mark.xfail(strict=True, reason=(
-    "CM-07: discovery_tools.discover_database imports app.mcp_server.client.list_tables, "
-    "a module that does not exist, so database discovery always answers 'client not available'"))
-def test_cm07_database_discovery_client_exists():
+def test_cm07_database_discovery_client_exists(monkeypatch):
     """CM-07: native database discovery has the MCP client it delegates to
-    (discovery_tools.py docstring: "DB introspection is provided by app.mcp_server")."""
+    (discovery_tools.py docstring: "DB introspection is provided by app.mcp_server").
+
+    Settled on 1.7: app/mcp_server/client.py exists and discover_database lists
+    the tables through it; on 1.6 the import failed and every database
+    discovery answered "client not available"."""
     spec = importlib.util.find_spec("app.mcp_server.client")
 
     assert spec is not None
     module = importlib.import_module("app.mcp_server.client")
     assert callable(getattr(module, "list_tables", None))
+
+    from app.agents.avaloka_agent.discovery_tools import discover_database
+
+    monkeypatch.setattr(module, "api_key_from_handle", lambda handle: "api-key" if handle else None)
+    monkeypatch.setattr(module, "list_tables", lambda cid, api_key, **kw: ["orders", "customers"])
+    out = discover_database("cust-1", credential_handle="sealed")
+    assert out == {"source": "native", "connection_id": "cust-1", "tables": ["orders", "customers"]}
+    assert "not available" not in str(out.get("error", ""))

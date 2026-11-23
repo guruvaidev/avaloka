@@ -1,0 +1,346 @@
+{
+ "_about": "Built by ~/avaloka-work/cardtruth/scripts/build_ui_fixture.py with the backend at fix/2.0-rc17-card-truth from stored rweb17 fields (rw7a messy_xlsx upload, rw7a nullxlsx reply).",
+ "overview_vocabulary": {
+  "domain": "retail",
+  "domain_source": "vocabulary",
+  "domain_reasoning": "2 distinct cue(s) matched column names (Quantity, UnitPrice)",
+  "domain_reasoning_source": "vocabulary",
+  "readiness_score": 78,
+  "readiness_reasoning": "High completeness but missing CustomerID hampers customer‑level insights. (commentary — not checked)",
+  "red_flags": [
+   "CustomerID missing >10% of rows. (commentary — not checked)",
+   "Duplicate InvoiceNo entries without unique line ID. (commentary — not checked)",
+   "Potential extreme Quantity values. (commentary — not checked)"
+  ],
+  "quick_wins": [],
+  "strengths": [],
+  "concerns": [],
+  "analysis_suggestions": [],
+  "high_value_columns": [],
+  "incomplete_sections": [],
+  "readiness_reasoning_segments": [
+   {
+    "text": "High completeness but missing CustomerID hampers customer‑level insights.",
+    "kind": "commentary"
+   }
+  ],
+  "domain_reasoning_segments": [
+   {
+    "text": "2 distinct cue(s) matched column names (Quantity, UnitPrice)",
+    "kind": "plain"
+   }
+  ],
+  "domain_segments": [
+   {
+    "text": "retail",
+    "kind": "plain"
+   }
+  ],
+  "readiness_score_segments": [
+   {
+    "text": "78/100",
+    "kind": "commentary"
+   }
+  ],
+  "red_flags_segments": [
+   [
+    {
+     "text": "CustomerID missing >10% of rows.",
+     "kind": "commentary"
+    }
+   ],
+   [
+    {
+     "text": "Duplicate InvoiceNo entries without unique line ID.",
+     "kind": "commentary"
+    }
+   ],
+   [
+    {
+     "text": "Potential extreme Quantity values.",
+     "kind": "commentary"
+    }
+   ]
+  ],
+  "concerns_segments": [],
+  "strengths_segments": [],
+  "quick_wins_segments": [],
+  "analysis_suggestions_segments": []
+ },
+ "overview_model_domain": {
+  "domain": "retail",
+  "domain_source": "model",
+  "domain_reasoning": "Retail transactions with invoices, products and countries. (commentary — not checked)",
+  "domain_reasoning_source": "model",
+  "readiness_score": 78,
+  "readiness_reasoning": "High completeness but missing CustomerID hampers customer‑level insights. (commentary — not checked)",
+  "red_flags": [
+   "CustomerID missing >10% of rows. (commentary — not checked)",
+   "Duplicate InvoiceNo entries without unique line ID. (commentary — not checked)",
+   "Potential extreme Quantity values. (commentary — not checked)"
+  ],
+  "quick_wins": [],
+  "strengths": [],
+  "concerns": [],
+  "analysis_suggestions": [],
+  "high_value_columns": [],
+  "incomplete_sections": [],
+  "readiness_reasoning_segments": [
+   {
+    "text": "High completeness but missing CustomerID hampers customer‑level insights.",
+    "kind": "commentary"
+   }
+  ],
+  "domain_reasoning_segments": [
+   {
+    "text": "Retail transactions with invoices, products and countries.",
+    "kind": "commentary"
+   }
+  ],
+  "domain_segments": [
+   {
+    "text": "retail",
+    "kind": "commentary"
+   }
+  ],
+  "readiness_score_segments": [
+   {
+    "text": "78/100",
+    "kind": "commentary"
+   }
+  ],
+  "red_flags_segments": [
+   [
+    {
+     "text": "CustomerID missing >10% of rows.",
+     "kind": "commentary"
+    }
+   ],
+   [
+    {
+     "text": "Duplicate InvoiceNo entries without unique line ID.",
+     "kind": "commentary"
+    }
+   ],
+   [
+    {
+     "text": "Potential extreme Quantity values.",
+     "kind": "commentary"
+    }
+   ]
+  ],
+  "concerns_segments": [],
+  "strengths_segments": [],
+  "quick_wins_segments": [],
+  "analysis_suggestions_segments": []
+ },
+ "column_stats": [
+  {
+   "name": "InvoiceNo",
+   "dtype": "categorical",
+   "role": "dimension",
+   "missing_pct": 0.0,
+   "n_unique": 938,
+   "top_values": [
+    {
+     "value": "537434",
+     "count": 675,
+     "pct": 3.4
+    },
+    {
+     "value": "537638",
+     "count": 601,
+     "pct": 3.0
+    },
+    {
+     "value": "537237",
+     "count": 597,
+     "pct": 3.0
+    }
+   ],
+   "meaning": "Unique identifier for each transaction record (commentary — not checked)",
+   "meaning_segments": [
+    {
+     "text": "Unique identifier for each transaction record",
+     "kind": "commentary"
+    }
+   ],
+   "meaning_source": "model",
+   "predictive_value": "low",
+   "predictive_value_source": "model"
+  },
+  {
+   "name": "StockCode",
+   "dtype": "categorical",
+   "role": "dimension",
+   "missing_pct": 0.0,
+   "n_unique": 2408,
+   "top_values": [
+    {
+     "value": "85123A",
+     "count": 106,
+     "pct": 0.5
+    },
+    {
+     "value": "22867",
+     "count": 102,
+     "pct": 0.5
+    },
+    {
+     "value": "22633",
+     "count": 95,
+     "pct": 0.5
+    }
+   ],
+   "meaning": "Code representing the specific product sold (commentary — not checked)",
+   "meaning_segments": [
+    {
+     "text": "Code representing the specific product sold",
+     "kind": "commentary"
+    }
+   ],
+   "meaning_source": "model",
+   "predictive_value": "high",
+   "predictive_value_source": "model"
+  },
+  {
+   "name": "Description",
+   "dtype": "categorical",
+   "role": "dimension",
+   "missing_pct": 0.35,
+   "n_unique": 2362,
+   "top_values": [
+    {
+     "value": "WHITE HANGING HEART T-LIGHT HOLDER",
+     "count": 108,
+     "pct": 0.5
+    },
+    {
+     "value": "HAND WARMER BIRD DESIGN",
+     "count": 102,
+     "pct": 0.5
+    },
+    {
+     "value": "HAND WARMER UNION JACK",
+     "count": 95,
+     "pct": 0.5
+    }
+   ],
+   "meaning": "Textual name of the product associated with the StockCode (commentary — not checked)",
+   "meaning_segments": [
+    {
+     "text": "Textual name of the product associated with the StockCode",
+     "kind": "commentary"
+    }
+   ],
+   "meaning_source": "model",
+   "predictive_value": "medium",
+   "predictive_value_source": "model"
+  }
+ ],
+ "trace_steps": [
+  {
+   "agent": "Avaloka",
+   "role": "Lead: reads the intent and decides who takes it",
+   "clone": null,
+   "inputs": {
+    "question": null,
+    "data_scope": {}
+   },
+   "decision": {
+    "type": "intent",
+    "value": "statistical_analysis",
+    "reason": "a what-predicts/drives question: analyse the outcome, not inference",
+    "confidence": null,
+    "delegate": false,
+    "mode": null,
+    "reason_segments": [
+     {
+      "text": "a what-predicts/drives question: analyse the outcome, not inference",
+      "kind": "commentary"
+     }
+    ]
+   },
+   "calculation": null,
+   "gates": []
+  },
+  {
+   "agent": "Logical review",
+   "role": "Judges whether the code answers the question",
+   "clone": "skeptic",
+   "inputs": {
+    "question": null,
+    "data_scope": {}
+   },
+   "decision": {
+    "type": "check",
+    "check": "Logical review",
+    "value": "pass",
+    "reason": "The returned DataFrame is missing values the user asked for: analysis identifying factors that drive Outcome (e.g., relationship between Glucose, visit_date, Notes and Outcome). Put every requested value into the DataFrame that main(df) returns (as columns, or as rows of a summary table). Values only printed with print() are not shown to the user. Reviewer notes: The user asked \"What drives Outcome?\" which implies a need for insight into the variables that influence the Outcome column (e.g., statistical relationships, predictive modeling, correlation analysis). The provided code only aggregat…",
+    "decided_by": null,
+    "overruled": null,
+    "reason_segments": [
+     {
+      "text": "The returned DataFrame is missing values the user asked for: analysis identifying factors that drive Outcome (e.g., relationship between Glucose, visit_date, Notes and Outcome).",
+      "kind": "commentary"
+     },
+     {
+      "text": " ",
+      "kind": "plain"
+     },
+     {
+      "text": "Put every requested value into the DataFrame that main(df) returns (as columns, or as rows of a summary table).",
+      "kind": "commentary"
+     },
+     {
+      "text": " ",
+      "kind": "plain"
+     },
+     {
+      "text": "Values only printed with print() are not shown to the user.",
+      "kind": "commentary"
+     },
+     {
+      "text": " ",
+      "kind": "plain"
+     },
+     {
+      "text": "Reviewer notes: The user asked \"What drives Outcome?\" which implies a need for insight into the variables that influence the Outcome column (e.g., statistical relationships, predictive modeling, correlation analysis).",
+      "kind": "commentary"
+     },
+     {
+      "text": " ",
+      "kind": "plain"
+     },
+     {
+      "text": "The provided code only aggregat…",
+      "kind": "commentary"
+     }
+    ]
+   },
+   "calculation": null,
+   "gates": []
+  },
+  {
+   "agent": "Dry run",
+   "role": "Runs the code on the sample before it is trusted",
+   "clone": "runner",
+   "inputs": {
+    "question": null,
+    "data_scope": {}
+   },
+   "decision": {
+    "type": "check",
+    "check": "Dry run",
+    "value": "pass",
+    "reason": null
+   },
+   "calculation": {
+    "operation": "dry run on the sample",
+    "result": null,
+    "operations": []
+   },
+   "gates": []
+  }
+ ]
+}

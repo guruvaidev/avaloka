@@ -16,7 +16,8 @@ data:
     server {
         listen 80;
         server_name _;
-        client_max_body_size 100m;
+        # upload.maxBodySize: the outer bound; the API enforces the upload limit (D5).
+        client_max_body_size {{ dig "maxBodySize" "1024m" (.Values.upload | default dict) }};
         root /usr/share/nginx/html;
         index index.html;
 

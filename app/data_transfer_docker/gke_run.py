@@ -68,7 +68,9 @@ def launch_gke_pipeline(injection_script: str, job_id: str = None, cloud_env: di
     # Respect the operator-provided RAY_DASHBOARD_URL (e.g. exported by the
     # startup script or set in .env) instead of forcing a hard-coded IP that
     # goes stale. Fail clearly if it is missing.
-    ray_dashboard_url = os.environ.get("RAY_DASHBOARD_URL")
+    # An explicit dashboard_url (the in-cluster one) is a dashboard too; the
+    # planner checks the same pair before it writes anything.
+    ray_dashboard_url = dashboard_url or os.environ.get("RAY_DASHBOARD_URL")
     if not ray_dashboard_url:
         raise RuntimeError(
             "RAY_DASHBOARD_URL is not set. Export it (or add it to .env) "

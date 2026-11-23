@@ -1,0 +1,212 @@
+{{- if (.Values.executor).enabled }}
+{{- $fullname := include "avaloka.fullname" . }}
+# The code executor: where model-written code runs (app/executor).
+#
+# The coder's analysis script, the validator's sample check and a transfer's
+# sample preview are code a model wrote. In the API pod they inherited
+# DB_ENCRYPTION_KEY, every provider key, the auth secret, REDIS_URL, the
+# connection registry and a network that reaches every database. This pod has
+# none of that:
+#
+#   network      the NetworkPolicy below denies ALL egress (not even DNS) and
+#                admits ingress only from the pods that run the graph
+#   environment  an explicit, short env list; never envFrom the chart's
+#                ConfigMap/Secret
+#   identity     no ServiceAccount token, uid 65534, read-only root, every
+#                capability dropped, no privilege escalation, RuntimeDefault
+#                seccomp
+#   storage      no PVC and no /state: emptyDirs that hold one run's inputs
+#                (sent by the API with the run) and are wiped after it
+#
+# The API, LangGraph and Celery pods reach it through AVALOKA_EXECUTOR_URL in
+# the ConfigMap. Nothing is shared on disk, so it needs no RWX volume and no
+# affinity to the API pod.
+#
+# NetworkPolicy is enforced by the CNI (kindnet, Calico, Cilium, GKE Dataplane
+# V2 do; some do not). On a CNI that ignores it this pod still holds no secret
+# and no data beyond the current run, but it can reach the network.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-code-executor
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: code-executor
+spec:
+  replicas: {{ .Values.executor.replicas }}
+  selector:
+    matchLabels:
+      {{- include "avaloka.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: code-executor
+  template:
+    metadata:
+      labels:
+        {{- include "avaloka.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: code-executor
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: executor
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["python", "-m", "app.executor.server", "--host", "0.0.0.0", "--port", "{{ .Values.executor.port }}"]
+          ports:
+            - name: http
+              containerPort: {{ .Values.executor.port }}
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: AVALOKA_EXECUTOR_SANDBOX
+              value: "1"
+            - name: AVALOKA_EXECUTOR_STAGE_ROOTS
+              value: /tmp:/var/tmp:/state
+            - name: AVALOKA_EXECUTOR_MAX_TIMEOUT
+              value: {{ .Values.executor.maxTimeoutSeconds | quote }}
+            - name: HOME
+              value: /tmp
+            - name: MPLCONFIGDIR
+              value: /tmp/.mpl
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: HF_HUB_OFFLINE
+              value: "1"
+            - name: TRANSFORMERS_OFFLINE
+              value: "1"
+            {{- include "avaloka.thirdPartyOptoutEnv" . | nindent 12 }}
+            - name: AWS_EC2_METADATA_DISABLED
+              value: "true"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.executor.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: vartmp
+              mountPath: /var/tmp
+            - name: stage-state
+              mountPath: /state
+      volumes:
+        # Scratch only. /state here is an empty dir where a stored dataset's
+        # file is recreated for one run, not the API's state.
+        - name: tmp
+          emptyDir:
+            sizeLimit: {{ .Values.executor.scratch.tmp | quote }}
+        - name: vartmp
+          emptyDir:
+            sizeLimit: {{ .Values.executor.scratch.varTmp | quote }}
+        - name: stage-state
+          emptyDir:
+            sizeLimit: {{ .Values.executor.scratch.state | quote }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-code-executor
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: code-executor
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "avaloka.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: code-executor
+  ports:
+    - name: http
+      port: {{ .Values.executor.port }}
+      targetPort: http
+      protocol: TCP
+{{- if .Values.executor.networkPolicy.enabled }}
+---
+# Default-deny egress for the executor: an empty egress list allows nothing,
+# not even DNS, which it does not need -- it only answers the API.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-code-executor-isolation
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: code-executor
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "avaloka.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: code-executor
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # The pods that run the agent graph and so send it code.
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "avaloka.selectorLabels" . | nindent 14 }}
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values: [api, langgraph, celery, celery-redbeat]
+      ports:
+        - port: {{ .Values.executor.port }}
+          protocol: TCP
+  egress: []
+---
+# The other half, on the databases' side: admit any pod EXCEPT the executor.
+# Redundant while the policy above holds; it is what still stands if that one
+# is edited away or the executor is relabelled into another release. NotIn
+# matches pods with no component label at all (KubeRay's head and workers), so
+# nothing that reaches these stores today is cut off.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-datastores-deny-executor
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: code-executor
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "avaloka.selectorLabels" . | nindent 6 }}
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [postgres, redis]
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector: {}
+          podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: NotIn
+                values: [code-executor]
+{{- end }}
+{{- end }}

@@ -11,6 +11,10 @@ Needs Node `^22.22.2` (jsdom's floor) — the same major as `ui/Dockerfile`.
 ## Layout
 
 - `tests/unit/` — pure logic. Import with the `@/` alias, no rendering.
+  Specs for the Supabase edge functions live here too; `@/` only maps `src/`,
+  so they reach `supabase/functions/` by relative path. Those modules are
+  written with their Deno bits injected (`fetchFn`, `resolve`, `createClient`)
+  so a unit test never opens a socket or resolves a name.
 - `tests/component/` — React components rendered with Testing Library. Recharts
   is real; only `ResponsiveContainer` is replaced, because jsdom has no layout
   and it would otherwise measure 0×0 and draw nothing.

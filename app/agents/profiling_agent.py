@@ -18,9 +18,11 @@ import logging
 import os
 import re
 import concurrent.futures
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from dotenv import load_dotenv
 from langchain_core.messages import SystemMessage, HumanMessage
+from avaloka.domains import (CONFIDENT as DOMAIN_CONFIDENT, GENERIC as GENERIC_DOMAIN, VOCABULARY,
+                             classify as classify_domain, coerce as coerce_domain, hints_for)
 from app.core.model_config import resolve as resolve_model
 from app.core.model_fallback import attach_fallback
 from app.core.log_utils import describe_response
@@ -230,18 +232,24 @@ def _call_json(system: str, user: str, label: str) -> Optional[Dict]:
 
 # --- Call 1: Domain classification ---
 
+_DOMAIN_CHOICES = ", ".join(f"'{d.id}' ({d.label})" for d in VOCABULARY.values())
+
+
 def _call_domain(column_names: List[str], sample_rows: List[Dict]) -> Optional[Dict]:
     """
     LLM Call 1: Identify the dataset domain from column names and a few sample rows.
-    Fast and reliable — just needs column names, no stats required.
+    Fast and reliable — just needs column names, no stats required. The answer
+    is constrained to the closed vocabulary; `_resolve_domain` maps whatever
+    comes back onto it anyway.
     """
     system = (
         "You are a data domain classifier. Given column names and a few sample rows from a dataset, "
         "identify the business or scientific domain it belongs to.\n\n"
+        f"The category MUST be one of: {_DOMAIN_CHOICES}. Use 'generic' when none fits.\n\n"
         "Respond with ONLY a valid JSON object:\n"
         "{\n"
         "  \"domain\": {\n"
-        "    \"category\": \"string (be specific; not limited to examples. Prefer '<industry>/<subdomain>' like 'Retail/E-commerce', 'Marketing/Ads Attribution', 'FinTech/Payments', 'Healthcare/Claims', 'Media/YouTube Analytics', 'Scientific/Bioinformatics')\",\n"
+        "    \"category\": \"string (one of the categories above)\",\n"
         "    \"confidence\": float (0.0-1.0),\n"
         "    \"reasoning\": \"string (1-2 sentences)\"\n"
         "  }\n"
@@ -256,6 +264,70 @@ def _call_domain(column_names: List[str], sample_rows: List[Dict]) -> Optional[D
     parsed = _call_json(system, user, "domain")
     domain = parsed.get("domain") if parsed else None
     return domain if isinstance(domain, dict) else None
+
+
+def _resolve_domain(schema: List[str], sample_rows: List[Dict]) -> Tuple[Dict[str, Any], Optional[bool]]:
+    """The dataset's domain, always one of `avaloka.domains.VOCABULARY`.
+
+    Column names decide first (`classify`, no model). The model is asked only
+    when that says `generic` or is unsure (confidence below `CONFIDENT`), and
+    its free text is mapped onto the vocabulary with `coerce` — anything it
+    invents outside the set becomes `generic`. The hint set (`hints`,
+    `questions`) always comes from the vocabulary, never from the model.
+
+    Returns (domain, model_ok): model_ok is None when the model was not
+    consulted, False when it was and returned nothing parseable.
+    """
+    det = classify_domain(schema, sample_rows)
+    domain: Dict[str, Any] = {
+        "category": det["domain"],
+        "label": det["label"],
+        "confidence": det["confidence"],
+        "reasoning": det["reason"],
+        # Who wrote `reasoning`, recorded here where it is written: the
+        # vocabulary's sentence is code's and shown plain, the model's is
+        # commentary (visualization_agent.build_upload_message_segments).
+        "reasoning_source": "vocabulary",
+        "source": "vocabulary",
+        "matched_cues": det["matched_cues"],
+        "hints": det["hints"],
+        "questions": det["questions"],
+    }
+    if det["domain"] != GENERIC_DOMAIN and det["confidence"] >= DOMAIN_CONFIDENT:
+        return domain, None
+
+    raw = _call_domain(schema, sample_rows)
+    if raw is None:
+        return domain, False
+    free_text = raw.get("category")
+    chosen = coerce_domain(free_text)
+    vocab = hints_for(chosen)
+    try:
+        model_conf = max(0.0, min(1.0, float(raw.get("confidence", 0.0))))
+    except (TypeError, ValueError):
+        model_conf = 0.0
+    if chosen == GENERIC_DOMAIN:
+        # Either the model agreed it is generic or it answered outside the
+        # vocabulary; both leave the deterministic answer standing.
+        said = str(free_text or "").strip()
+        domain["source"] = "model_rejected" if said and said.lower() not in {GENERIC_DOMAIN, "unknown"} else "model"
+        domain["model_said"] = said[:80] or None
+        return domain, True
+    domain.update({
+        "category": chosen,
+        "label": vocab["label"],
+        "confidence": round(model_conf, 2),
+        # The model's reason for the model's choice. The vocabulary's reason
+        # was for a different answer ("treating the data as generic"), so it
+        # is no stand-in when the model gives none.
+        "reasoning": str(raw.get("reasoning") or "")[:400] or None,
+        "reasoning_source": "model",
+        "source": "model",
+        "model_said": str(free_text)[:80],
+        "hints": vocab["hints"],
+        "questions": vocab["questions"],
+    })
+    return domain, True
 
 
 # --- Call 2: Column semantics (batched for wide schemas) ---
@@ -422,11 +494,9 @@ def profile_quick(
         }
 
     try:
-        # Call 1: domain
-        domain = _call_domain(schema, sample_rows) or {
-            "category": "Unknown", "confidence": 0.0, "reasoning": "Domain detection skipped"
-        }
-        domain_category = domain.get("category", "Unknown")
+        # Call 1: domain — names first, the model only when names are not enough
+        domain, _ = _resolve_domain(schema, sample_rows)
+        domain_category = domain["category"]
 
         # Call 2: column semantics (using basic stats from quick sample if available)
         semantics = _call_all_column_semantics(
@@ -484,12 +554,9 @@ def profile_full(
         col_stats = sample_statistics.get("column_statistics", {})
         data_quality = sample_statistics.get("data_quality", {})
 
-        # Call 1: domain
-        domain_raw = _call_domain(schema, sample_rows)
-        domain = domain_raw or {
-            "category": "Unknown", "confidence": 0.0, "reasoning": "Domain detection skipped"
-        }
-        domain_category = domain.get("category", "Unknown")
+        # Call 1: domain — names first, the model only when names are not enough
+        domain, domain_model_ok = _resolve_domain(schema, sample_rows)
+        domain_category = domain["category"]
 
         if _PROFILE_PARALLEL:
             # Calls 2 and 3 only depend on the domain from Call 1, so run them
@@ -534,7 +601,9 @@ def profile_full(
         missing_cols = semantics.get("columns_without_semantics", [])
 
         incomplete: List[str] = []
-        if domain_raw is None:
+        if domain_model_ok is False:
+            # The names were not enough and the model never answered; the
+            # vocabulary's low-confidence read stands, but say it is partial.
             incomplete.append("domain")
         if missing_cols:
             incomplete.append("column_semantics")
@@ -552,6 +621,21 @@ def profile_full(
             "incomplete_sections": incomplete,
             "columns_without_semantics": missing_cols,
         }
+
+        if (domain_model_ok is False and insights_raw is None
+                and len(missing_cols) >= len(schema)):
+            # Every section incomplete: no model call answered, so nothing in
+            # this "profile" was measured. Reporting it as full_profile upgraded
+            # the session to a profile that does not exist.
+            logger.warning("profile_full: no section of the profile was produced")
+            return {
+                "full_profiling_result": {
+                    "status": "error",
+                    "reason": "no section of the profile could be produced",
+                    "incomplete_sections": incomplete,
+                },
+                "profiling_status": "error",
+            }
 
         if incomplete:
             logger.warning(
@@ -575,6 +659,22 @@ def profile_full(
             "full_profiling_result": {"status": "error", "reason": str(e)},
             "profiling_status": "error",
         }
+
+
+def usable_full_profile(res: Any) -> Optional[Dict[str, Any]]:
+    """The profile in a :func:`profile_full` result, or None when there is none.
+
+    profile_full never raises: a failure comes back as
+    ``{"status": "error", "reason": ...}`` (or ``"skipped"``) in the profile's
+    place. A caller that keeps that dict keeps an error as the dataset's
+    profile, and the session reads "full_profile" for it.
+    """
+    if not isinstance(res, dict) or res.get("profiling_status") in ("error", "skipped"):
+        return None
+    result = res.get("full_profiling_result")
+    if not isinstance(result, dict) or result.get("status") in ("error", "skipped"):
+        return None
+    return result
 
 
 def format_profile_as_table(

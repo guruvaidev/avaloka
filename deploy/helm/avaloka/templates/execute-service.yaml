@@ -96,6 +96,9 @@ spec:
               value: "1"
             - name: AWS_EC2_METADATA_DISABLED
               value: "true"
+            # Third-party usage beacons off (app/core/thirdparty_optout.py); this
+            # pod reads no ConfigMap.
+            {{- include "avaloka.thirdPartyOptoutEnv" . | nindent 12 }}
           readinessProbe:
             httpGet:
               path: /health

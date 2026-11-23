@@ -26,6 +26,19 @@ os.environ.setdefault("CHROMA_HOST", "127.0.0.1")
 os.environ.setdefault("CHROMA_PORT", "59999")
 
 # ---------------------------------------------------------------------------
+# No memory warm-up thread -- MUST run before any app import.
+#
+# Importing app.services.memory_plane starts a daemon thread that loads the
+# embedding model, which imports packages in the background while the tests
+# run. pytest's warnings plugin iterates sys.modules around every test, so a
+# test failed now and then with "RuntimeError: dictionary changed size during
+# iteration" raised from contextlib, in whichever test happened to be running
+# (1 in 30 runs of the H3 selection, a different test each time). Tests that
+# need the embedding model load it on first use, as a request does.
+# ---------------------------------------------------------------------------
+os.environ.setdefault("MEMORY_WARMUP", "0")
+
+# ---------------------------------------------------------------------------
 # Lineage goes to a throwaway file -- MUST run before any app import.
 #
 # Every test that runs an execution node, a training node or the preparation
@@ -61,7 +74,90 @@ os.environ.setdefault("DB_ENCRYPTION_KEY", "pytest-" + _secrets.token_hex(32))
 # (app/core/provisioning.py). The suite never writes the repository's .env.
 os.environ["AVALOKA_ENV_FILE"] = os.path.join(_LINEAGE_TEST_DIR, "avaloka-test.env")
 
+import re
+
+# ---------------------------------------------------------------------------
+# Third-party usage beacons off for the whole session -- before any app import.
+#
+# `import daft` pings daft.gateway.scarf.sh and osstelemetry.io from a
+# background thread, and mlflow, onnxruntime, Ray and others have beacons of
+# their own (app/core/thirdparty_optout.py lists each one). A gate run on the
+# base made about 154 such lookups. The deployment images switch them off
+# with ENV; the suite has no image, so it switches them off here.
+#
+# Assigned, not setdefault: a developer's shell does not opt the suite back in.
+# Tests that need a beacon (tests/test_thirdparty_optout.py's controls) strip
+# these from a child process's environment themselves.
+# ---------------------------------------------------------------------------
+from app.core.thirdparty_optout import THIRDPARTY_TELEMETRY_OPTOUT_ENV as _TELEMETRY_OPTOUT
+
+os.environ.update(_TELEMETRY_OPTOUT)
+
+# ---------------------------------------------------------------------------
+# A developer's .env never reaches the suite -- MUST run before any app import.
+#
+# A dozen app modules call load_dotenv() when imported, most with an explicit
+# <checkout>/.env path. On a developer machine that file holds real
+# credentials, so a test that does not go through the harness stubs -- one that
+# reaches _schedule_small_file_persistence, resolve_plan or an MCP connection
+# lookup -- would read and write a real Supabase project. AVALOKA_ENV_FILE
+# above only moves where provisioning WRITES; it does not stop those reads.
+#
+# So, for this session, python-dotenv loads nothing from inside the checkout:
+# an explicit path under it is refused, and so is a bare load_dotenv(), which
+# searches upward from its caller -- that is, the checkout. A test that writes
+# its own env file under tmp_path and loads it is unaffected.
+#
+# And the session starts with no SUPABASE_* variables at all, whatever the
+# shell exported. A test that genuinely needs the shell's values asks for the
+# `real_supabase_env` fixture below; a whole session (the e2e pack in deployed
+# mode reads SUPABASE_JWT_SECRET at import) opts in with
+# AVALOKA_TEST_REAL_SUPABASE=1 in the environment that starts pytest.
+# ---------------------------------------------------------------------------
+import pathlib as _pathlib
+
+_CHECKOUT = _pathlib.Path(__file__).resolve().parent.parent
+
+try:
+    import dotenv as _dotenv
+    import dotenv.main as _dotenv_main
+except ImportError:  # python-dotenv not installed: nothing can load a .env
+    _dotenv = None
+
+if _dotenv is not None:
+    _real_load_dotenv = _dotenv_main.load_dotenv
+
+    def _inside_checkout(path) -> bool:
+        try:
+            _pathlib.Path(path).resolve().relative_to(_CHECKOUT)
+            return True
+        except (TypeError, ValueError, OSError):
+            return False
+
+    def _load_dotenv_outside_checkout(dotenv_path=None, stream=None, *args, **kwargs):
+        if stream is None and (not dotenv_path or _inside_checkout(dotenv_path)):
+            return False
+        return _real_load_dotenv(dotenv_path, stream, *args, **kwargs)
+
+    _dotenv.load_dotenv = _dotenv_main.load_dotenv = _load_dotenv_outside_checkout
+
+_SHELL_SUPABASE_ENV = {k: v for k, v in os.environ.items() if "SUPABASE" in k.upper()}
+if os.environ.get("AVALOKA_TEST_REAL_SUPABASE") != "1":
+    for _name in _SHELL_SUPABASE_ENV:
+        del os.environ[_name]
+
 import pytest
+
+
+@pytest.fixture
+def real_supabase_env(monkeypatch):
+    """The SUPABASE_* values the shell exported, back for this one test.
+
+    Opt-in only: the session starts without them (see above). Values come from
+    the shell that started pytest, never from a .env file."""
+    for name, value in _SHELL_SUPABASE_ENV.items():
+        monkeypatch.setenv(name, value)
+    return dict(_SHELL_SUPABASE_ENV)
 
 
 def pytest_configure(config):
@@ -152,11 +248,40 @@ def _wants_integration_marker(relpath: str) -> bool:
     return normalised.endswith(_INTEGRATION_SUFFIXES)
 
 
+# Tests that start a real `langgraph dev`. The CLI is not in requirements.txt (its
+# langgraph-api caps cryptography <45; see requirements-langgraph-server.txt), so
+# the main test environment cannot run them, and they must not quietly skip
+# there either. They are marked here, from the module's own source, so a test
+# module needs no marker of its own to be routed correctly:
+#   main env:   -m "... and not langgraph_server"  (scripts/ci.sh, the pipeline)
+#   server venv: scripts/langgraph_server_tests.sh runs -m langgraph_server with
+#                the CLI installed, where they fail (never skip) if it is missing.
+_LANGGRAPH_CLI_IMPORT = re.compile(r"^\s*(from|import)\s+langgraph_cli\b|['\"]from langgraph_cli[ .]", re.M)
+_langgraph_cli_modules: dict = {}
+
+
+def _starts_langgraph_cli(source: str) -> bool:
+    return bool(_LANGGRAPH_CLI_IMPORT.search(source))
+
+
+def _module_starts_langgraph_cli(path: str) -> bool:
+    if path not in _langgraph_cli_modules:
+        try:
+            with open(path, encoding="utf-8") as fh:
+                _langgraph_cli_modules[path] = _starts_langgraph_cli(fh.read())
+        except OSError:
+            _langgraph_cli_modules[path] = False
+    return _langgraph_cli_modules[path]
+
+
 def pytest_collection_modifyitems(config, items):
     """Mark end-to-end and integration suites so `-m 'not integration'` means it."""
     import pathlib
     root = pathlib.Path(str(config.rootpath))
     for item in items:
+        if str(item.fspath).endswith(".py") and _module_starts_langgraph_cli(str(item.fspath)) \
+                and not any(m.name == "langgraph_server" for m in item.iter_markers()):
+            item.add_marker(pytest.mark.langgraph_server)
         try:
             rel = pathlib.Path(str(item.fspath)).relative_to(root).as_posix()
         except ValueError:

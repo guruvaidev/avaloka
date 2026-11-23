@@ -2,8 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Database, Loader2, Plus, Play } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
 import { backendApi } from "@/lib/api/backendApi";
+import { connectionsApi } from "@/lib/api/connections";
 import { DatabaseConnectModal, DB_LABEL, type DbType } from "./DatabaseConnectModal";
 import { DatabaseQueryModal, type McpConnection } from "./DatabaseQueryModal";
 import { cn } from "@/lib/utils";
@@ -26,17 +26,11 @@ export function DatabaseConnectionsListModal({
   const load = async () => {
     setLoading(true);
     try {
-      const { data: userData } = await supabase.auth.getUser();
-      const uid = userData.user?.id;
-      if (!uid) {
+      try {
+        setRows((await connectionsApi.list()) as McpConnection[]);
+      } catch {
         setRows([]);
-        return;
       }
-      const { data } = await (supabase.from as any)("mcp_connections")
-        .select("*")
-        .eq("user_id", uid)
-        .order("created_at", { ascending: false });
-      setRows((data as McpConnection[]) ?? []);
       try {
         const h = await backendApi.checkMcpHealth();
         setHealth(h);
@@ -48,30 +42,9 @@ export function DatabaseConnectionsListModal({
     }
   };
 
+  // Reloads on open and after a new connection is saved (onConnected below).
   useEffect(() => {
     if (open) void load();
-  }, [open]);
-
-  // realtime refresh
-  useEffect(() => {
-    if (!open) return;
-    let channel: any;
-    (async () => {
-      const { data: userData } = await supabase.auth.getUser();
-      const uid = userData.user?.id;
-      if (!uid) return;
-      channel = supabase
-        .channel(`mcp-conn-${uid}`)
-        .on(
-          "postgres_changes" as any,
-          { event: "*", schema: "public", table: "mcp_connections", filter: `user_id=eq.${uid}` },
-          () => load(),
-        )
-        .subscribe();
-    })();
-    return () => {
-      if (channel) supabase.removeChannel(channel);
-    };
   }, [open]);
 
   const filtered = useMemo(

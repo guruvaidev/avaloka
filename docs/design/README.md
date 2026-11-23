@@ -13,6 +13,10 @@ of this branch will otherwise go looking for paths that are not here.
 | [TELEMETRY.md](TELEMETRY.md) | Anonymous usage statistics from open-source installs — JSONL files, batched upload, default-on with four opt-outs | Proposed. Supersedes the dual-pipeline OTEL + Redis stats-agent design; §2 explains why. |
 | [AGENT_EXPERIENCE.md](AGENT_EXPERIENCE.md) | A local wiki compiling agent experience into skills, after WikiSkill (arXiv:2608.27454) | Proposed |
 | [LOOP_GRAPH_AND_CATALOG.md](LOOP_GRAPH_AND_CATALOG.md) | Extending that to loop policy and graph structure; anomaly detection; a local knowledge-graph catalog | Proposed |
+| [AGENT_TRACE.md](AGENT_TRACE.md) | The agent trace API, the granular planner graph, and the telemetry projection of agent steps | Built on 1.7 |
+| [SWARM_DEMO.md](SWARM_DEMO.md) | Running the live swarm demo (`/swarm`) against the real API on a laptop: the exact commands, the token, what is assumed | Built on 1.7 |
+| [2.0-ADVANCED-PLAN.md](2.0-ADVANCED-PLAN.md) | Evaluation of the owner's advanced 2.0 feature set against integration/2.0: what exists, the L1/L2/L3 layering, and staffing | Owner, team lead, stream owners |
+| [1.7-INSTANT-ANALYSIS.md](1.7-INSTANT-ANALYSIS.md) | Instant Analysis: a versioned recipe library over DuckDB and scipy/statsmodels that emits Outcome Reports and notebooks, routing, metering, a 90-day PR plan. Internal; withheld from the public tree by `oss/manifest.yaml` | Owner, coordinator, the PR owners in its §8 |
 
 Each is also present as a `.docx` for circulation. **The markdown is the source**
 — review and amend that; the Word files are regenerated from it with `pandoc`.

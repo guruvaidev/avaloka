@@ -15,6 +15,10 @@ import {
 import { ChartCarousel, InlineMarkdown } from "@/components/analysis/ChartCarousel";
 import { rayJobMarkdown, rayJobIdFromHref } from "@/lib/rayDashboard";
 import { RayJobLink, RayJobText } from "@/components/analysis/RayJobLink";
+
+/** Reply links: a Ray job id (rayJobMarkdown) opens the dashboard; anything else is a plain anchor. */
+const renderReplyLink = ({ href, children }: { href?: string; children?: ReactNode }): ReactNode =>
+  rayJobIdFromHref(href) ? <RayJobLink jobId={rayJobIdFromHref(href) ?? ""}>{children}</RayJobLink> : <a href={href}>{children}</a>;
 import { Link } from "@tanstack/react-router";
 import { DataWorkspaceCard } from "@/components/dashboard/data-view/DataWorkspaceCard";
 import { DataViewTabs } from "@/components/dashboard/data-view/DataViewTabs";
@@ -157,7 +161,11 @@ import { CommentsPanel } from "@/components/dashboard/CommentsPanel";
 import { ProjectNotificationsPopover } from "@/components/dashboard/ProjectNotificationsPopover";
 import { ShareCollaboratorsButton } from "@/components/dashboard/ShareCollaboratorsButton";
 import { backendApi, isDeferredTurn } from "@/lib/api/backendApi";
-import { buildUploadSummaryMessage } from "@/lib/upload-summary";
+import { buildUploadSummaryMessage, buildUploadSummarySegments } from "@/lib/upload-summary";
+import { MarkdownContent } from "@/components/chat/MarkdownContent";
+import { CommentaryText } from "@/components/chat/CommentaryText";
+import { CollectedInsight, collectSlidesInsights } from "@/components/chat/InsightLine";
+import { parseReplySegments, type ReplySegment } from "@/lib/reply-segments";
 
 /** Analyses whose upload summary was already saved this session (prevents duplicates). */
 const summaryPersisted = new Set<string>();
@@ -187,7 +195,11 @@ import { useNotifications } from "@/hooks/useNotifications";
 import { batchIdOfTranscriptRow, isThreadJobNotification, jobNoteChatMessages, type JobNoteBatch } from "@/lib/job-notes";
 
 import { cx } from "@/lib/utils/cx";
+import { AgentTracePanel } from "@/components/agent-trace/AgentTracePanel";
+import { promptsToMessages, type QuickReply } from "@/lib/assistant-prompts";
 import { toast } from "sonner";
+import { chipsWithFinishedProfile, pendingProfileDatasetId, waitForDeferredProfile } from "@/lib/deferred-profile";
+import { readDatasetBatch as readDatasetBatchOf, storeDatasetBatch as storeDatasetBatchOf, type StoredBatch as StoredBatchOf } from "@/lib/dataset-batch";
 import { resolveHistoryViewPayload, type HistoryViewPayload } from "@/lib/analysis-history";
 import { HistoryCollaborationDetailModal } from "@/components/dashboard/HistoryCollaborationDetailModal";
 import { supabase } from "@/integrations/supabase/client";
@@ -213,6 +225,8 @@ import { DataSourceGrid } from "@/components/dashboard/DataSourceGrid";
 const bgPattern = { url: "/assets/dashboard/Background_pattern_decorative.png" };
 const illustration = { url: "/assets/dashboard/Upload_Illustration.png" };
 import { useUpgradeGate } from "@/components/dashboard/UpgradeGate";
+import { saveExecuteOutcome } from "@/lib/save-execute-outcome";
+import { userFacingError } from "@/lib/user-facing-error";
 
 export const Route = createFileRoute("/analysis")({
   head: () => ({
@@ -245,6 +259,12 @@ type ChatMessage = {
   authorName?: string;
   authorAvatar?: string | null;
   isSelf?: boolean;
+  /** Avaloka's per-step prompt (assistant_prompts): buttons that send a reply. */
+  quickReplies?: QuickReply[];
+  link?: { label: string; href: string };
+  step?: string;
+  /** reply_segments (2.0): which parts are model-written commentary. Absent on older threads. */
+  segments?: ReplySegment[];
   /** The claim verifier did not clear this reply (verification_safe_to_present === false). */
   verification?: VerifierNotice | null;
   /** A fallback model answered instead of the configured one (ChatResponse.answered_by). */
@@ -354,30 +374,11 @@ function datasetChipLabel(name: string): string {
   return readableDatasetName(tail);
 }
 
-const BATCH_KEY = "analysis:batch";
-type StoredBatch = { chips: DatasetChip[]; selectedId: string | null };
-
-function storeDatasetBatch(analysisId: string | null | undefined, batch: StoredBatch) {
-  try {
-    const raw = JSON.stringify(batch);
-    sessionStorage.setItem(BATCH_KEY, raw);
-    if (analysisId) sessionStorage.setItem(`${BATCH_KEY}:${analysisId}`, raw);
-  } catch {
-    /* ignore */
-  }
-}
-
-function readDatasetBatch(analysisId: string | null | undefined): StoredBatch | null {
-  try {
-    const raw =
-      (analysisId ? sessionStorage.getItem(`${BATCH_KEY}:${analysisId}`) : null) ?? sessionStorage.getItem(BATCH_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as StoredBatch;
-    return Array.isArray(parsed?.chips) && parsed.chips.length ? parsed : null;
-  } catch {
-    return null;
-  }
-}
+type StoredBatch = StoredBatchOf<DatasetChip>;
+const storeDatasetBatch = (analysisId: string | null | undefined, batch: StoredBatch) =>
+  storeDatasetBatchOf<DatasetChip>(analysisId, batch);
+const readDatasetBatch = (analysisId: string | null | undefined): StoredBatch | null =>
+  readDatasetBatchOf<DatasetChip>(analysisId);
 
 type UserInsightEntry = { id: string; sectionId: string; vizConfig: unknown; samples?: unknown[] };
 
@@ -610,21 +611,9 @@ function slidesForDashboardTab(
   return indices.map((i) => allSlides[i]).filter((s): s is Slide => s != null);
 }
 
-function collectSlidesInsights(slides: Slide[]) {
-  const summaries: string[] = [];
-  const insights: string[] = [];
-  const seen = new Set<string>();
-  const add = (list: string[], text?: string | null) => {
-    const t = text?.trim();
-    if (!t || seen.has(t)) return;
-    seen.add(t);
-    list.push(t);
-  };
-  for (const slide of slides) {
-    add(summaries, slide.subtitle);
-    slide.insights.forEach((item) => add(insights, item));
-  }
-  return { summaries, insights };
+/** One collected insight, through CommentaryText with the chat's inline markdown. */
+function InsightLine({ text, segments }: { text: string; segments?: ReplySegment[] }) {
+  return <CollectedInsight text={text} segments={segments} renderText={(t) => <InlineMarkdown content={t} />} />;
 }
 
 const chartData = [
@@ -768,6 +757,8 @@ function AnalysisPage() {
   const [autoInsightsDatasetName, setAutoInsightsDatasetName] = useState<string | undefined>(undefined);
 
   const [autoInsightsSamples, setAutoInsightsSamples] = useState<any[] | undefined>(undefined);
+  // Set when the upload answered before its data profile finished.
+  const [deferredProfile, setDeferredProfile] = useState<{ datasetId: string; initialCfg: any; initialChipCfg?: any } | null>(null);
   // User Insights: latest chart derived from a user prompt reply (separate
   // from the stable Auto Insights generated at upload time).
   const [userInsightsOpen, setUserInsightsOpen] = useState(false);
@@ -854,9 +845,13 @@ function AnalysisPage() {
   const [plannerGraphUrl, setPlannerGraphUrl] = useState<string | null>(null);
   const [plannerGraphLoading, setPlannerGraphLoading] = useState(false);
   const [plannerGraphError, setPlannerGraphError] = useState<string | null>(null);
+  // Agent trace (app/trace): the latest recorded turn, and whether its panel is open.
+  const [traceTurnId, setTraceTurnId] = useState<string | null>(null);
+  const [traceOpen, setTraceOpen] = useState(false);
 
   const updatePlannerGraphAvailability = (res: any) => {
     if (!res) return;
+    if (typeof res.trace_turn_id === "string" && res.trace_turn_id) setTraceTurnId(res.trace_turn_id);
     const failed = res.planner_graph_status === "failure";
     const hasGraph =
       (res.planner_graph_status === "success" && !!res.planner_graph_display_url) ||
@@ -1260,11 +1255,20 @@ function AnalysisPage() {
     setActiveAnalysisId(null);
     // Explain the data right away, built only from the upload response.
     let summaryText: string | null = null;
+    let summarySegments: ReplySegment[] | undefined;
     try {
       summaryText = buildUploadSummaryMessage(up, navState?.filename);
+      summarySegments = buildUploadSummarySegments(up) ?? undefined;
     } catch (err) {
       console.error("[auto-insight-message]", err);
     }
+    // Avaloka's first word after the auto-insights: what she saw, one question,
+    // quick replies (assistant_prompts on the upload response).
+    const uploadPrompts = promptsToMessages(
+      up,
+      `upload-${key}`,
+      new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }),
+    );
     if (summaryText) {
       setMessages([
         {
@@ -1272,16 +1276,23 @@ function AnalysisPage() {
           role: "ai",
           content: summaryText,
           time: new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }),
+          segments: summarySegments,
         } as any,
+        ...uploadPrompts,
       ]);
       if (freshAid && !summaryPersisted.has(freshAid)) {
         summaryPersisted.add(freshAid);
-        persistMessage({ analysis_id: freshAid, role: "assistant", content: summaryText }).catch((err) =>
+        persistMessage({
+          analysis_id: freshAid,
+          role: "assistant",
+          content: summaryText,
+          output: summarySegments ? { reply_segments: summarySegments } : undefined,
+        }).catch((err) =>
           console.warn("Failed to save upload summary message", err),
         );
       }
     } else {
-      setMessages([]);
+      setMessages(uploadPrompts);
     }
     setUserInsightsList([]);
     setUserInsightsViz(null);
@@ -1307,6 +1318,18 @@ function AnalysisPage() {
     setAutoInsightsStatus(status ?? (cfg ? "ready" : undefined));
     setAutoInsightsDatasetName(navState?.filename ?? up.dataset_id);
     setAutoInsightsSamples(populatedDataset?.samples);
+    const pendingProfileId = pendingProfileDatasetId(up);
+    setDeferredProfile(
+      pendingProfileId
+        ? {
+            datasetId: pendingProfileId,
+            initialCfg: cfg,
+            // The chip's own upload-time config: what the Auto Insights modal shows.
+            initialChipCfg: datasetChipsFromResponse(up, navState?.filename).find((c) => c.id === pendingProfileId)
+              ?.visualizationConfig,
+          }
+        : null,
+    );
     setPersistedDataset(populatedDataset);
     if (cfg && (!status || status === "ready")) {
       setAnalysisVizConfig(cfg);
@@ -1341,6 +1364,37 @@ function AnalysisPage() {
       });
     }
   }, [navState, aidFromUrl, childIdFromUrl, navigate]);
+
+  // The upload's data profile is still running: wait for it, then swap in the
+  // charts written with it unless other charts are already on screen. A
+  // failed profile is said in a toast (and in the notification bell).
+  useEffect(() => {
+    if (!deferredProfile) return;
+    const ctrl = new AbortController();
+    const { datasetId, initialCfg, initialChipCfg } = deferredProfile;
+    waitForDeferredProfile(() => backendApi.getDatasetProfile(datasetId), { signal: ctrl.signal }).then(
+      (outcome) => {
+        if (ctrl.signal.aborted) return;
+        if (outcome.kind === "failed") {
+          toast.error(outcome.message);
+        } else if (outcome.kind === "ready" && outcome.visualizationConfig) {
+          const next = outcome.visualizationConfig;
+          setAutoInsightsConfig((prev: any) => (prev === initialCfg ? next : prev));
+          setAnalysisVizConfig((prev: any) => (prev === initialCfg ? next : prev));
+          // The modal reads each dataset's chip: swap the finished profile in there too,
+          // and in the stored batch, or the next restore brings the upload-time chip back.
+          setDatasetChips((chips) => chipsWithFinishedProfile(chips, datasetId, initialChipCfg, next));
+          for (const key of [null, aidFromUrl]) {
+            const stored = readDatasetBatch(key);
+            if (!stored) continue;
+            const swapped = chipsWithFinishedProfile(stored.chips, datasetId, initialChipCfg, next);
+            if (swapped !== stored.chips) storeDatasetBatch(key, { ...stored, chips: swapped });
+          }
+        }
+      },
+    );
+    return () => ctrl.abort();
+  }, [deferredProfile]);
 
   const [addToDashboardOpen, setAddToDashboardOpen] = useState(false);
   const [dashboardChartIndex, setDashboardChartIndex] = useState(0);
@@ -1633,12 +1687,10 @@ function AnalysisPage() {
         return;
       }
       const {
-        status,
         planner_status,
         planner_notes,
         final_code,
         corrected_code,
-        validation_passed,
         validation_feedback,
         output_json,
         output_file_data,
@@ -1657,12 +1709,18 @@ function AnalysisPage() {
         }
       }
 
-      if (status === "validation_failed" || validation_passed === false) {
+      // HTTP 200 is not success: a failed run comes back 200 with its status.
+      const outcome = saveExecuteOutcome(body);
+      if (outcome.kind === "needs_fix") {
         setValidationFeedback(typeof validation_feedback === "string" ? validation_feedback : "Validation failed.");
         if (typeof corrected_code === "string" && corrected_code) {
           setCodeText(corrected_code);
         }
         toast.error("Couldn't run — the code still needs fixing");
+        return;
+      }
+      if (outcome.kind === "failed") {
+        toast.error(outcome.message);
         return;
       }
 
@@ -2195,6 +2253,10 @@ function AnalysisPage() {
               authorName: authorMeta?.name,
               authorAvatar: authorMeta?.avatar ?? null,
               isSelf,
+              segments:
+                r.role === "assistant"
+                  ? parseReplySegments((r.output as { reply_segments?: unknown } | null)?.reply_segments) ?? undefined
+                  : undefined,
             };
             if (r.role !== "user") return base;
             const next = chatRows[idx + 1];
@@ -2229,18 +2291,18 @@ function AnalysisPage() {
       });
       if (!hasChat && row) {
         let summaryText: string | null = null;
+        let summarySegments: ReplySegment[] | undefined;
         try {
-          summaryText = buildUploadSummaryMessage(
-            {
-              dataset_id: row?.dataset_id ?? null,
-              filename: row?.filename ?? null,
-              alias: row?.name ?? null,
-              schema: row?.schema ?? null,
-              samples: row?.samples ?? null,
-              visualization_config: row?.viz_config ?? null,
-            },
-            row?.filename ?? row?.name ?? undefined,
-          );
+          const summarySource = {
+            dataset_id: row?.dataset_id ?? null,
+            filename: row?.filename ?? null,
+            alias: row?.name ?? null,
+            schema: row?.schema ?? null,
+            samples: row?.samples ?? null,
+            visualization_config: row?.viz_config ?? null,
+          };
+          summaryText = buildUploadSummaryMessage(summarySource, row?.filename ?? row?.name ?? undefined);
+          summarySegments = buildUploadSummarySegments(summarySource) ?? undefined;
         } catch (err) {
           console.error("[auto-insight-message]", err);
         }
@@ -2251,11 +2313,17 @@ function AnalysisPage() {
               role: "ai",
               content: summaryText,
               time: new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }),
+              segments: summarySegments,
             } as any,
           ]);
           if (!summaryPersisted.has(targetAnalysisId)) {
             summaryPersisted.add(targetAnalysisId);
-            persistMessage({ analysis_id: targetAnalysisId, role: "assistant", content: summaryText }).catch((err) =>
+            persistMessage({
+              analysis_id: targetAnalysisId,
+              role: "assistant",
+              content: summaryText,
+              output: summarySegments ? { reply_segments: summarySegments } : undefined,
+            }).catch((err) =>
               console.warn("Failed to save upload summary message", err),
             );
           }
@@ -2267,7 +2335,16 @@ function AnalysisPage() {
       setSelectedRunId(hydratedRuns.length ? hydratedRuns[hydratedRuns.length - 1]!.id : null);
       setPastedAnalyses(extractPastedAnalysesFromMessages(rows, hydrateDefaultSectionId));
 
-      const lastOutput = [...rows].reverse().find((r) => r.role === "assistant" && r.output != null);
+      // A text-only reply stores just its reply_segments; it carries no result,
+      // so it must not hide the last turn that did.
+      const lastOutput = [...rows]
+        .reverse()
+        .find(
+          (r) =>
+            r.role === "assistant" &&
+            r.output != null &&
+            !(typeof r.output === "object" && Object.keys(r.output).every((k) => k === "reply_segments")),
+        );
       let lastMessageViz: unknown = null;
       if (lastOutput?.output) {
         const out = lastOutput.output as { output_json?: unknown[]; viz_config?: unknown };
@@ -3501,10 +3578,11 @@ function AnalysisPage() {
       ? extractTabularContent(lastAssistant.content as string)
       : { text: "", tables: [] as ParsedTable[] };
 
+    const bgId = `bg-${Date.now()}`;
     setMessages((curr) => [
       ...curr.filter((m) => !m.thinking),
       {
-        id: `bg-${Date.now()}`,
+        id: bgId,
         role: "ai",
         content: extracted.text || ANALYSIS_COMPLETE_MESSAGE,
         time: nowTime,
@@ -3512,6 +3590,7 @@ function AnalysisPage() {
         verification: verifierNotice(res),
         answeredBy: answeredBy(res),
       },
+      ...promptsToMessages(res, bgId, nowTime),
     ]);
     appendJobNotes((res as { job_notes?: JobNoteBatch[] | null }).job_notes);
 
@@ -3802,8 +3881,12 @@ function AnalysisPage() {
       // The verifier's findings ride on the reply they are about.
       const verification = verifierNotice(res);
       const answered = answeredBy(res);
+      // Which sentences of the reply a model wrote (2.0): reply_segments on the
+      // assistant message. The string already carries the suffix after each;
+      // the segments let the bubble mark them instead.
+      const replySegments = parseReplySegments(lastAssistant?.reply_segments) ?? undefined;
       const assistantMsgs: ChatMessage[] = lastAssistantText
-        ? [{ id: `${placeholderId}-a0`, role: "ai" as const, content: lastAssistantText, time: nowTime(), verification }]
+        ? [{ id: `${placeholderId}-a0`, role: "ai" as const, segments: replySegments, content: lastAssistantText, time: nowTime(), verification }]
         : hasExecutionResult(res) || lastAssistant || extractedTables.length
           ? [
               {
@@ -3884,9 +3967,13 @@ function AnalysisPage() {
         });
       }
 
+      // Avaloka talks through the steps this turn took (assistant_prompts):
+      // one bubble per step, each with its question and quick replies.
+      const stepPrompts = promptsToMessages(res, placeholderId, nowTime(), lastAssistant?.content as string | undefined);
       setMessages((curr) => {
         const without = curr.filter((m) => m.id !== placeholderId);
-        if (assistantMsgs.length) return [...without, ...assistantMsgs];
+        if (assistantMsgs.length) return [...without, ...assistantMsgs, ...stepPrompts];
+        if (stepPrompts.length) return [...without, ...stepPrompts];
         return [
           ...without,
           {
@@ -3981,7 +4068,7 @@ function AnalysisPage() {
               analysis_id: aid,
               role: "assistant",
               content: am.content,
-              output,
+              output: am.segments ? { ...(output ?? {}), reply_segments: am.segments } : output,
             }).catch((err) => console.warn("Failed to save assistant message", err));
           }
         } else {
@@ -4983,6 +5070,17 @@ function AnalysisPage() {
                                       {plannerGraphLoading ? "Loading…" : "Planner Graph"}
                                     </button>
                                   ) : null}
+                                  {threadId ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => setTraceOpen((open) => !open)}
+                                      aria-expanded={traceOpen}
+                                      aria-controls="agent-trace-panel"
+                                      className="inline-flex items-center gap-1.5 rounded-lg border border-secondary bg-primary px-2.5 py-1.5 text-xs font-semibold text-primary shadow-xs hover:bg-primary_hover"
+                                    >
+                                      {traceOpen ? "Hide agent trace" : "Agent trace"}
+                                    </button>
+                                  ) : null}
                                   {plannerGraphError ? (
                                     <span className="text-xs text-error-primary">{plannerGraphError}</span>
                                   ) : null}
@@ -4993,6 +5091,26 @@ function AnalysisPage() {
                                 className="data-workspace-content"
                                 data-table-view={view === "sample" || view === "results"}
                               >
+                                {traceOpen && threadId ? (
+                                  <div
+                                    id="agent-trace-panel"
+                                    className="mb-4 rounded-xl border border-secondary bg-primary p-4 shadow-xs"
+                                  >
+                                    <div className="mb-3 flex items-center justify-between gap-2">
+                                      <h3 className="text-sm font-semibold text-primary">Agent trace</h3>
+                                      <a
+                                        href={`/agent-trace?thread=${encodeURIComponent(threadId)}${
+                                          traceTurnId ? `&turn=${encodeURIComponent(traceTurnId)}` : ""
+                                        }${analysisId ?? aidFromUrl ? `&aid=${encodeURIComponent(String(analysisId ?? aidFromUrl))}` : ""}`}
+                                        className="text-xs font-semibold text-brand-secondary hover:text-brand-secondary_hover"
+                                      >
+                                        Open full page
+                                      </a>
+                                    </div>
+                                    <AgentTracePanel threadId={threadId} turnId={traceTurnId} refreshKey={traceTurnId} compact />
+                                  </div>
+                                ) : null}
+
                                 {view === "preview" ? (
                                   <>
                                     <p className="mb-2 text-xs text-tertiary">
@@ -5831,7 +5949,7 @@ function InlineCodeEditor({
       {validationFeedback && (
         <div className="flex items-start justify-between gap-3 border-b border-[#fecdca] bg-[#fef3f2] px-4 py-2 text-[12px] text-[#b42318]">
           <pre className="whitespace-pre-wrap break-words font-mono text-[12px] leading-relaxed">
-            {validationFeedback}
+            {userFacingError(validationFeedback, "Your code couldn't be checked, so it was not run.")}
           </pre>
           {onDismissValidation && (
             <button
@@ -6527,6 +6645,7 @@ function ChatComposer({
 function MessageRow({
   message,
   onReply,
+  onQuickReply,
   onSectionSelect,
   activeSectionId,
   onRefresh,
@@ -6542,6 +6661,8 @@ function MessageRow({
   /** User's own messages: Save in the inline editor re-sends the edited text. */
   onEditResend?: (text: string) => void;
   onReply?: () => void;
+  /** A quick-reply button: sends its text as the user's next message. */
+  onQuickReply?: (text: string) => void;
   onSectionSelect?: (sectionId: string) => void;
   activeSectionId?: string;
   onRefresh?: () => void;
@@ -6678,18 +6799,41 @@ function MessageRow({
                   const parts = splitAtKeyFindings(message.content);
                   return (
                     <>
-                      {parts.before.trim() ? <MarkdownContent content={parts.before} /> : null}
+                      {parts.before.trim() ? <MarkdownContent content={rayJobMarkdown(parts.before)} prepare={stripTabularContent} renderLink={renderReplyLink} /> : null}
                       {keyFindings}
-                      {parts.after.trim() ? <MarkdownContent content={parts.after} /> : null}
+                      {parts.after.trim() ? <MarkdownContent content={rayJobMarkdown(parts.after)} prepare={stripTabularContent} renderLink={renderReplyLink} /> : null}
                     </>
                   );
                 })()
               ) : (
-                <MarkdownContent content={message.content} />
+                // Ray job ids (dta-…) in a reply link to the Ray dashboard, as on 1.6.
+                <MarkdownContent content={rayJobMarkdown(message.content)} segments={message.segments} prepare={(md) => rayJobMarkdown(stripTabularContent(md))} renderLink={renderReplyLink} />
               )}
+              {message.link ? (
+                <a
+                  href={message.link.href}
+                  className="mt-1.5 inline-block text-xs font-semibold text-brand-secondary hover:text-brand-secondary_hover"
+                >
+                  {message.link.label}
+                </a>
+              ) : null}
             </div>
             {message.verification && <VerifierNoticeBlock notice={message.verification} />}
             {message.answeredBy && <AnsweredByNote answeredBy={message.answeredBy} />}
+            {message.quickReplies?.length ? (
+              <div className="mt-2 flex flex-wrap gap-1.5" data-testid="quick-replies">
+                {message.quickReplies.map((reply) => (
+                  <button
+                    key={`${message.id}-${reply.label}`}
+                    type="button"
+                    onClick={() => onQuickReply?.(reply.send)}
+                    className="rounded-full border border-secondary bg-primary px-2.5 py-1 text-xs font-semibold text-primary shadow-xs hover:border-[#b2ddff] hover:bg-primary_hover"
+                  >
+                    {reply.label}
+                  </button>
+                ))}
+              </div>
+            ) : null}
             <div className="mt-2 flex items-center gap-3 text-fg-quaternary">
               <button
                 aria-label="Refresh"
@@ -6818,26 +6962,6 @@ function MessageRow({
   );
 }
 
-function MarkdownContent({ content }: { content: string }) {
-  return (
-    <div className="prose-sm max-w-none break-words text-sm leading-relaxed [&_a]:text-[#1565ef] [&_a]:underline [&_code]:rounded [&_code]:bg-secondary/60 [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-[12px] [&_pre]:my-2 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:bg-[#0f172a] [&_pre]:p-3 [&_pre]:text-[12px] [&_pre]:text-white [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_pre_code]:text-white [&_h1]:mt-2 [&_h1]:mb-1 [&_h1]:text-base [&_h1]:font-semibold [&_h2]:mt-2 [&_h2]:mb-1 [&_h2]:text-sm [&_h2]:font-semibold [&_h3]:mt-2 [&_h3]:mb-1 [&_h3]:text-sm [&_h3]:font-semibold [&_p]:my-1 [&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:my-0.5 [&_blockquote]:my-2 [&_blockquote]:border-l-2 [&_blockquote]:border-secondary [&_blockquote]:pl-3 [&_blockquote]:text-secondary [&_table]:my-2 [&_table]:w-full [&_table]:border-collapse [&_th]:border [&_th]:border-secondary [&_th]:px-2 [&_th]:py-1 [&_th]:text-left [&_td]:border [&_td]:border-secondary [&_td]:px-2 [&_td]:py-1 [&_hr]:my-2 [&_hr]:border-secondary [&_strong]:font-semibold">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={{
-          a: ({ children, href }) =>
-            rayJobIdFromHref(href) ? (
-              <RayJobLink jobId={rayJobIdFromHref(href) ?? ""}>{children}</RayJobLink>
-            ) : (
-              <a href={href}>{children}</a>
-            ),
-        }}
-      >
-        {rayJobMarkdown(content)}
-      </ReactMarkdown>
-    </div>
-  );
-}
-
 
 function workspaceChartCardKey(keyPrefix: string, slide: Slide, index: number) {
   return `${keyPrefix}::${slideFingerprint(slide)}::${index}`;
@@ -6850,6 +6974,7 @@ function WorkspaceChartCards({
   onDismiss,
   activeRunId,
   onRunChange,
+  showNeighbors = true,
 }: {
   slides: RunSlide[];
   keyPrefix: string;
@@ -6857,6 +6982,7 @@ function WorkspaceChartCards({
   onDismiss?: (cardKey: string) => void;
   activeRunId?: string | null;
   onRunChange?: (runId: string) => void;
+  showNeighbors?: boolean;
 }) {
   const visible = useMemo(
     () =>
@@ -6871,7 +6997,7 @@ function WorkspaceChartCards({
     [slides, keyPrefix, dismissedKeys],
   );
   if (!visible.length) return null;
-  return <ChartCarousel items={visible} onDismiss={onDismiss} activeRunId={activeRunId} onRunChange={onRunChange} />;
+  return <ChartCarousel items={visible} onDismiss={onDismiss} activeRunId={activeRunId} onRunChange={onRunChange} showNeighbors={showNeighbors} />;
 }
 
 function CollapsibleInsights({
@@ -7677,12 +7803,12 @@ function PastedAnalysisSection({ runs, slides, insights, index }: PastedAnalysis
               <>
                 {insights.summaries.map((summary, i) => (
                   <li key={`${run.id}-summary-${i}`}>
-                    <InlineMarkdown content={summary} />
+                    <InsightLine text={summary} segments={(insights as { segments?: Record<string, ReplySegment[]> }).segments?.[summary]} />
                   </li>
                 ))}
                 {insights.insights.map((insight, i) => (
                   <li key={`${run.id}-insight-${i}`}>
-                    <InlineMarkdown content={insight} />
+                    <InsightLine text={insight} segments={(insights as { segments?: Record<string, ReplySegment[]> }).segments?.[insight]} />
                   </li>
                 ))}
               </>

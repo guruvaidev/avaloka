@@ -42,6 +42,10 @@ spec:
         - name: vllm
           image: {{ .Values.localLLM.vllm.image | quote }}
           imagePullPolicy: {{ .Values.localLLM.vllm.pullPolicy }}
+          env:
+            # vLLM's usage report to its own collector, off (its documented switch).
+            - name: VLLM_NO_USAGE_STATS
+              value: "1"
           args:
             - "--model"
             - {{ .Values.localLLM.model | quote }}

@@ -198,7 +198,9 @@ def summarize(final: Any) -> Dict[str, Any]:
     samples = final.get("available_samples")
     if isinstance(samples, (list, tuple)):
         out["available_samples"] = [s[:128] for s in samples if isinstance(s, str)][:200]
-    for key in ("sample_status", "profiling_status"):
+    # analysis_fidelity and selected_sample_name feed the result's execution
+    # context (app/api/ui_contract.py build_execution_context_from_state).
+    for key in ("sample_status", "profiling_status", "analysis_fidelity", "selected_sample_name"):
         value = _short_str(final.get(key), 64)
         if value:
             out[key] = value

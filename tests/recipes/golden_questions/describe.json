@@ -1,0 +1,245 @@
+[
+ {
+  "question": "What is the distribution of salary?",
+  "columns": {
+   "employee_id": "id",
+   "salary": "measure",
+   "age": "measure",
+   "department": "dimension",
+   "hire_date": "time",
+   "tenure_years": "measure"
+  },
+  "expected": {
+   "recipe": "describe",
+   "params": {
+    "measure": "salary"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Average revenue?",
+  "columns": {
+   "order_date": "time",
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "units": "measure",
+   "customer_id": "id",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "describe",
+   "params": {
+    "measure": "revenue"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "What does a typical order cost look like?",
+  "columns": {
+   "order_date": "time",
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "units": "measure",
+   "customer_id": "id",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "describe",
+   "params": {
+    "measure": "cost"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Describe latency_ms",
+  "columns": {
+   "ts": "time",
+   "latency_ms": "measure",
+   "errors": "measure",
+   "service": "dimension",
+   "host": "high_card_dimension"
+  },
+  "expected": {
+   "recipe": "describe",
+   "params": {
+    "measure": "latency_ms"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Show me the spread of mrr by plan",
+  "columns": {
+   "signup_date": "time",
+   "user_id": "id",
+   "plan": "dimension",
+   "mrr": "measure",
+   "churned": "measure",
+   "sessions": "measure",
+   "country": "dimension"
+  },
+  "expected": {
+   "recipe": "describe",
+   "params": {
+    "measure": "mrr",
+    "dimension": "plan"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "median tenure",
+  "columns": {
+   "employee_id": "id",
+   "salary": "measure",
+   "age": "measure",
+   "department": "dimension",
+   "hire_date": "time",
+   "tenure_years": "measure"
+  },
+  "expected": {
+   "recipe": "describe",
+   "params": {
+    "measure": "tenure_years"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "How much is the typical salary in each department?",
+  "columns": {
+   "employee_id": "id",
+   "salary": "measure",
+   "age": "measure",
+   "department": "dimension",
+   "hire_date": "time",
+   "tenure_years": "measure"
+  },
+  "expected": {
+   "recipe": "describe",
+   "params": {
+    "measure": "salary",
+    "dimension": "department"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Histogram of sessions",
+  "columns": {
+   "signup_date": "time",
+   "user_id": "id",
+   "plan": "dimension",
+   "mrr": "measure",
+   "churned": "measure",
+   "sessions": "measure",
+   "country": "dimension"
+  },
+  "expected": {
+   "recipe": "describe",
+   "params": {
+    "measure": "sessions"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Is revenue skewed?",
+  "columns": {
+   "order_date": "time",
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "units": "measure",
+   "customer_id": "id",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "describe",
+   "params": {
+    "measure": "revenue"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "what's the mean and standard deviation of age",
+  "columns": {
+   "employee_id": "id",
+   "salary": "measure",
+   "age": "measure",
+   "department": "dimension",
+   "hire_date": "time",
+   "tenure_years": "measure"
+  },
+  "expected": {
+   "recipe": "describe",
+   "params": {
+    "measure": "age"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Summary stats for errors",
+  "columns": {
+   "ts": "time",
+   "latency_ms": "measure",
+   "errors": "measure",
+   "service": "dimension",
+   "host": "high_card_dimension"
+  },
+  "expected": {
+   "recipe": "describe",
+   "params": {
+    "measure": "errors"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Distribution of revenue and cost",
+  "columns": {
+   "order_date": "time",
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "units": "measure",
+   "customer_id": "id",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "describe",
+   "params": {},
+   "flags": [
+    "ambiguous"
+   ]
+  }
+ },
+ {
+  "question": "Compare the spread of cost",
+  "columns": {
+   "order_date": "time",
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "units": "measure",
+   "customer_id": "id",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "describe",
+   "params": {
+    "measure": "cost"
+   },
+   "flags": [
+    "ambiguous"
+   ]
+  }
+ }
+]

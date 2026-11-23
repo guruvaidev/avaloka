@@ -27,6 +27,22 @@ import pytest
 _CALLS = {"pipeline": []}
 
 
+try:  # tests/ as a package, or tests/ on sys.path
+    from tests.dta_confirm import run_confirmed
+except ImportError:  # pragma: no cover
+    from dta_confirm import run_confirmed
+
+
+@pytest.fixture(autouse=True)
+def _ray_executor_configured(monkeypatch):
+    """These tests drive the (mocked) Ray runner, so a Ray dashboard is configured.
+
+    The planner now checks for one before the pipeline can create a destination
+    table; with none it takes the no-Ray path (tests/test_dta_no_ray_transfer.py).
+    """
+    monkeypatch.setenv("RAY_DASHBOARD_URL", "http://127.0.0.1:8265")
+
+
 @pytest.fixture(autouse=True)
 def _stub_pipeline_and_network(monkeypatch):
     _CALLS["pipeline"].clear()
@@ -77,7 +93,7 @@ def _transfer(state, **kwargs):
     import app.agents.planner as planner
     # No source_alias on purpose — the source is implicit.
     params = planner.InitiateTransferParams(**kwargs)
-    return planner._handle_initiate_transfer(state, params)
+    return run_confirmed(state, params)
 
 
 def _last_pipeline_call():
@@ -376,3 +392,16 @@ def test_object_path_recognizes_all_destination_formats():
     for ext in ("csv", "json", "parquet", "tsv", "xlsx", "xml", "avro", "orc"):
         got = P._extract_object_path_from_prompt(f"move to gcs_backup, to file report.{ext}", "dest")
         assert got == f"report.{ext}", f"missed extension: {ext}"
+
+
+# Registry credentials these tests seed live in a stand-in sealed store, not in
+# state: the planner opens them by handle after the confirm gate (tests/dta_sealed.py).
+try:  # tests/ as a package, or tests/ on sys.path
+    from tests import dta_sealed as _dta_sealed
+except ImportError:  # pragma: no cover
+    import dta_sealed as _dta_sealed
+
+
+@pytest.fixture(autouse=True)
+def _sealed_store(monkeypatch):
+    return _dta_sealed.install(monkeypatch)

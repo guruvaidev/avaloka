@@ -193,8 +193,17 @@ def _state(obj: Optional[Dict[str, Any]]) -> str:
 _VERSION_RE = re.compile(r":(\d+\.\d+\.\d+)")
 
 
+# The app's own Ray release (requirements.txt): Ray Client refuses a version
+# mismatch between this process and the head it connects to, so a user cluster
+# built from a default image must run the Ray the app pins. The py311 tag
+# matches the API image's interpreter (Ray Client checks the Python minor too).
+# tests/test_ray_version_alignment.py holds this with every other Ray pin.
+DEFAULT_IMAGE = "rayproject/ray:2.56.0-py311"
+DEFAULT_RAY_VERSION = "2.56.0"
+
+
 def _image() -> str:
-    return (os.getenv("RAY_USER_CLUSTER_IMAGE") or "rayproject/ray:2.10.0").strip()
+    return (os.getenv("RAY_USER_CLUSTER_IMAGE") or DEFAULT_IMAGE).strip()
 
 
 def _ray_version(image: str) -> str:
@@ -202,7 +211,7 @@ def _ray_version(image: str) -> str:
     if explicit:
         return explicit
     match = _VERSION_RE.search(image)
-    return match.group(1) if match else "2.10.0"
+    return match.group(1) if match else DEFAULT_RAY_VERSION
 
 
 def _logical_cpus(cpu: str) -> str:
@@ -443,16 +452,16 @@ def ensure_running(user_id: str, timeout_s: Optional[float] = None,
     deadline = _monotonic() + timeout_s
     started = False
     while True:
-        state = _state(_get(name))
-        if state == "stopped":
+        phase = _state(_get(name))          # the cluster's phase, a short string
+        if phase == "stopped":
             start(user_id)
             started = True
-        elif state == "running" and _dashboard_answers(url):
+        elif phase == "running" and _dashboard_answers(url):
             if not started:
                 _touch_name(name)
             return url
         if _monotonic() >= deadline:
-            logger.warning("[user-ray] %s not ready after %.0fs (state=%s)", name, timeout_s, state)
+            logger.warning("[user-ray] %s not ready after %.0fs (phase=%s)", name, timeout_s, phase)
             return None
         _sleep(poll_s)
 

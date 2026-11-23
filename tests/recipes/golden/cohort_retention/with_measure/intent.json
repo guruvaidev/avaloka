@@ -1,0 +1,11 @@
+{
+  "question": "How do monthly cohorts of users retain over time?",
+  "recipe": "cohort_retention",
+  "params": {
+    "id": "user_id",
+    "time": "date",
+    "measure": "orders"
+  },
+  "confidence": 1.0,
+  "source": "fixture"
+}

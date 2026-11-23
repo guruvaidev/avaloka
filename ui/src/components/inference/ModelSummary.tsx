@@ -1,4 +1,7 @@
 import { Link } from "@tanstack/react-router";
+import { useQuery } from "@tanstack/react-query";
+import { crossValidationQuery } from "@/api/inference";
+import { ConfusionMatrix } from "./ConfusionMatrix";
 import { Copy, Loader2, Play, Square } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -30,6 +33,7 @@ function Tile({ label, value }: { label: string; value: string }) {
 }
 
 export function ModelSummary({ model, starting, busy, onStart, onStop }: { model: InferenceModel; starting: boolean; busy: boolean; onStart: () => void; onStop: () => void }) {
+  const cv = useQuery(crossValidationQuery(model.runId ?? ""));
   const tiles: { label: string; value: string }[] = model.isClassification
     ? [
         { label: "Accuracy", value: formatPercent(model.accuracy) },
@@ -87,6 +91,11 @@ export function ModelSummary({ model, starting, busy, onStart, onStop }: { model
       {shown.length > 0 && <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-4">{shown.map((t) => <Tile key={t.label} {...t} />)}</div>}
       {beat !== undefined && <p className="mt-3 text-sm inf-success-text">Beats baseline (mean prediction) by {formatPercent(beat, 1)}</p>}
       {footer.length > 0 && <p className="mt-4 border-t border-border pt-3 text-xs text-muted-foreground">{footer.join(" · ")}</p>}
+    {cv.data && (
+        <div className="mt-4 rounded-lg bg-inf-tile p-3" data-testid="cv-section">
+          <ConfusionMatrix cv={cv.data} />
+        </div>
+      )}
     </section>
   );
 }

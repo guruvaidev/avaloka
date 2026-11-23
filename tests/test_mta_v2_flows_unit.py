@@ -213,10 +213,15 @@ class TestUpdateTrainingPlanFlow:
 # ---------------------------------------------------------------------------
 
 class TestExecuteTrainingLocal:
-    def test_training_result_stored_in_state(self):
+    def test_training_result_stored_in_state(self, tmp_path):
         from app.agents.mta_v2.agent import ModelTrainingAgent
 
         plan = _make_local_training_plan()
+        # A local input must exist now: a missing one is refused before the
+        # trainer runs (tests/test_training_failure_is_never_a_success.py).
+        iris = tmp_path / "iris.csv"
+        iris.write_text("sepal_length,sepal_width,species\n5.1,3.5,0\n6.2,2.9,1\n")
+        plan["data_config"]["dataset_uri"] = str(iris)
         mock_result = {
             "mlflow_run_id": "run-abc",
             "model_name": "iris_clf",
@@ -440,7 +445,11 @@ class TestExecuteExceptionHandling:
 
         last_msg = result["messages"][-1]
         assert isinstance(last_msg, AIMessage)
-        assert "sorry" in last_msg.content.lower() or "wrong" in last_msg.content.lower()
+        # A failed turn answers in plain words (no "Sorry, ..." internal string) and
+        # records the failure where the chat response and the trace read it.
+        assert not last_msg.content.startswith("Sorry")
+        assert "try again" in last_msg.content.lower()
+        assert result["agent_errors"][-1]["error_class"] == "RuntimeError"
 
     def test_state_training_flags_cleared_on_exception(self):
         from app.agents.mta_v2.agent import ModelTrainingAgent

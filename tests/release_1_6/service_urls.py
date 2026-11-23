@@ -3,7 +3,7 @@
 A skip reads as a pass in a summary line. On a laptop that is fine: a developer
 without a Postgres or MySQL server gets a skip naming the variable. On the run
 that certifies the release (bitbucket-pipelines.yml release-1-6-integration,
-where Bitbucket sets CI=true) a skip would mean the service path was never
+where the CI service sets CI=true) a skip would mean the service path was never
 exercised, so there it is a failure. Same rule as tests/test_lineage.py and
 tests/telemetry_ingest/test_postgres.py.
 """

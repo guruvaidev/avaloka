@@ -1,0 +1,12 @@
+{
+  "question": "How has revenue moved month by month in each region?",
+  "recipe": "trend",
+  "params": {
+    "measure": "revenue",
+    "time": "date",
+    "grain": "month",
+    "dimension": "region"
+  },
+  "confidence": 1.0,
+  "source": "fixture"
+}

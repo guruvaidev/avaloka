@@ -1,5 +1,13 @@
+import hashlib
 import os
+import secrets
+
 import pytest
+
+try:  # tests/ as a package, or tests/ on sys.path
+    from tests.onboarding_identity import assertion_user
+except ImportError:  # pragma: no cover
+    from onboarding_identity import assertion_user
 from unittest.mock import patch, MagicMock
 
 from app.agents.planner import (
@@ -12,6 +20,22 @@ from app.agents.data_transfer_agent.data_transfer_agent import data_transfer_pip
 # ==============================================================================
 # FIXTURES + HELPERS
 # ==============================================================================
+
+try:  # tests/ as a package, or tests/ on sys.path
+    from tests.dta_confirm import run_confirmed
+except ImportError:  # pragma: no cover
+    from dta_confirm import run_confirmed
+
+
+@pytest.fixture(autouse=True)
+def _ray_executor_configured(monkeypatch):
+    """These tests drive the (mocked) Ray runner, so a Ray dashboard is configured.
+
+    The planner now checks for one before the pipeline can create a destination
+    table; with none it takes the no-Ray path (tests/test_dta_no_ray_transfer.py).
+    """
+    monkeypatch.setenv("RAY_DASHBOARD_URL", "http://127.0.0.1:8265")
+
 
 @pytest.fixture(autouse=True)
 def _force_gke_runner_path(monkeypatch):
@@ -66,7 +90,7 @@ def transfer_params():
 def _config_session(mock_session, status=404, payload=None):
     """Configure a patched ``app.agents.planner.requests.Session`` mock.
 
-    status=404 → _fetch_full_creds / _auto_fetch fall back to the registry entry.
+    status=404 → the credentials route refuses; the handle cannot be opened.
     status=200 + payload → the onboarding API 'returns' those credentials.
     """
     inst = mock_session.return_value.__enter__.return_value
@@ -75,6 +99,30 @@ def _config_session(mock_session, status=404, payload=None):
     resp.json.return_value = payload if payload is not None else {}
     inst.get.return_value = resp
     return inst
+
+
+@pytest.fixture
+def sealing_key(monkeypatch):
+    """A throwaway deployment key made here; no real key or handle is a fixture."""
+    import app.api.cloud_connections as cc
+    key = secrets.token_hex(16)
+    monkeypatch.setattr(cc, "DB_ENCRYPTION_KEY", key, raising=False)
+    monkeypatch.setattr(cc, "_AESGCM_KEY", hashlib.sha256(key.encode()).digest(), raising=False)
+
+
+def _connected(state, alias):
+    """Give ``state`` the server's sealed handle for ``alias``, as for a database the user connected.
+
+    Returns ``(api_key, password, credential_handle)``: the api_key the planner must
+    present, the password only the handle carries, and the handle the onboarding
+    API returns in place of a password.
+    """
+    from app.api.cloud_connections import encrypt_secret
+    from app.mcp_server.credentials import credential_handle
+
+    api_key, password = "ak_" + secrets.token_hex(8), secrets.token_hex(12)
+    state.setdefault("db_credential_handles", {})[alias] = encrypt_secret(api_key)
+    return api_key, password, credential_handle(f"mysql://u:{password}@203.0.113.4:3306/api_db")
 
 # ==============================================================================
 # SECTION 1: THE MESSENGER TESTS (planner._handle_initiate_transfer)
@@ -85,7 +133,7 @@ def _config_session(mock_session, status=404, payload=None):
 def test_1_planner_critical_error(mock_pipeline, mock_session, mock_state, transfer_params):
     _config_session(mock_session)
     mock_pipeline.return_value = ({"error_message": "Connection Error: Failed", "warnings": None}, None)
-    result = _handle_initiate_transfer(mock_state, transfer_params)
+    result = run_confirmed(mock_state, transfer_params)
     assert "❌ **Transfer Setup Failed:**" in result
     assert "Connection Error: Failed" in result
 
@@ -94,7 +142,7 @@ def test_1_planner_critical_error(mock_pipeline, mock_session, mock_state, trans
 def test_2_planner_schema_mismatch(mock_pipeline, mock_session, mock_state, transfer_params):
     _config_session(mock_session)
     mock_pipeline.return_value = ({"error_message": "Schema Mismatch Detected!", "warnings": None}, None)
-    result = _handle_initiate_transfer(mock_state, transfer_params)
+    result = run_confirmed(mock_state, transfer_params)
     assert "Schema Mismatch Detected!" in result
 
 @patch("app.data_transfer_docker.gke_run.launch_gke_pipeline", return_value=True)
@@ -103,7 +151,7 @@ def test_2_planner_schema_mismatch(mock_pipeline, mock_session, mock_state, tran
 def test_3_planner_with_warnings(mock_pipeline, mock_session, mock_gke, mock_state, transfer_params):
     _config_session(mock_session)
     mock_pipeline.return_value = ({"error_message": None, "warnings": ["Table not found"]}, "print('code')")
-    result = _handle_initiate_transfer(mock_state, transfer_params)
+    result = run_confirmed(mock_state, transfer_params)
     assert "✅ **Transfer complete:" in result
     assert "⚠️ **Warnings:**" in result
 
@@ -113,7 +161,7 @@ def test_3_planner_with_warnings(mock_pipeline, mock_session, mock_gke, mock_sta
 def test_4_planner_success(mock_pipeline, mock_session, mock_gke, mock_state, transfer_params):
     _config_session(mock_session)
     mock_pipeline.return_value = ({"error_message": None, "warnings": None}, "print('code')")
-    result = _handle_initiate_transfer(mock_state, transfer_params)
+    result = run_confirmed(mock_state, transfer_params)
     assert "✅ **Transfer complete:" in result
     assert "❌" not in result
 
@@ -122,53 +170,79 @@ def test_4_planner_success(mock_pipeline, mock_session, mock_gke, mock_state, tr
 def test_5_planner_system_crash(mock_pipeline, mock_session, mock_state, transfer_params):
     _config_session(mock_session)
     mock_pipeline.side_effect = Exception("Out of Memory")
-    result = _handle_initiate_transfer(mock_state, transfer_params)
+    result = run_confirmed(mock_state, transfer_params)
     assert "❌ **Transfer failed (System Error):**" in result
 
 @patch("app.agents.planner.requests.Session")
 def test_6_planner_missing_source(mock_session, mock_state, transfer_params):
     _config_session(mock_session, status=404)  # auto-fetch fails
     transfer_params.source_alias = "ghost_db"
-    result = _handle_initiate_transfer(mock_state, transfer_params)
+    result = run_confirmed(mock_state, transfer_params)
     assert "Source **`ghost_db`** not registered" in result
 
 @patch("app.agents.planner.requests.Session")
 def test_7_planner_missing_dest(mock_session, mock_state, transfer_params):
     _config_session(mock_session, status=404)
     transfer_params.destination_alias = "ghost_db"
-    result = _handle_initiate_transfer(mock_state, transfer_params)
+    result = run_confirmed(mock_state, transfer_params)
     assert "Destination **`ghost_db`** not registered" in result
 
 @patch("app.data_transfer_docker.gke_run.launch_gke_pipeline", return_value=True)
 @patch("app.agents.planner.requests.Session")
 @patch("app.agents.data_transfer_agent.data_transfer_agent.data_transfer_pipeline")
-def test_8_planner_auto_fetch_source_api_success(mock_pipeline, mock_session, mock_gke, mock_state, transfer_params):
-    # The onboarding API 'has' this source; it should be auto-registered.
-    _config_session(mock_session, status=200, payload={
+def test_8_planner_auto_fetch_source_api_success(mock_pipeline, mock_session, mock_gke, mock_state, transfer_params, sealing_key):
+    # The onboarding API 'has' this source, which the user connected but is not
+    # analysing; it should be auto-registered through its own handle.
+    mock_state["user_id"] = "user-1"
+    api_key, password, handle = _connected(mock_state, "new_api_db")
+    inst = _config_session(mock_session, status=200, payload={
         "host": "203.0.113.4", "port": 3306, "database": "api_db",
-        "username": "u", "password": "p", "table": "t",
+        "username": "u", "table": "t", "credential_handle": handle,
         "customers": [{"customer_id": "new_api_db", "database_type": "mysql"}],
     })
     transfer_params.source_alias = "new_api_db"
+    # The table is named: the endpoint's "table" is only its auto-detected first
+    # table, which a transfer never reads in place of a named one (J1).
+    transfer_params.source_table = "t"
     mock_pipeline.return_value = ({"error_message": None}, "print('code')")
-    result = _handle_initiate_transfer(mock_state, transfer_params)
+    result = run_confirmed(mock_state, transfer_params)
     assert "✅ **Transfer complete:" in result
-    assert "new_api_db" in mock_state["dta_database_registry"]
+    # Registered as a handle: the password reached the pipeline, never the registry.
+    entry = mock_state["dta_database_registry"]["new_api_db"]
+    assert entry["conn_id"] == "new_api_db" and "password" not in entry
+    assert password not in repr(mock_state["dta_database_registry"])
+    assert mock_pipeline.call_args.kwargs["source_credentials"]["password"] == password
+    # Asked as the signed-in user (1.7 merge, decision 1); the api_key is never sent.
+    cred_calls = [c for c in inst.get.call_args_list if "/new_api_db/credentials" in c.args[0]]
+    assert cred_calls and all(assertion_user(c.kwargs["headers"]) == "user-1" for c in cred_calls)
+    assert api_key not in repr(inst.get.call_args_list)
 
 @patch("app.data_transfer_docker.gke_run.launch_gke_pipeline", return_value=True)
 @patch("app.agents.planner.requests.Session")
 @patch("app.agents.data_transfer_agent.data_transfer_agent.data_transfer_pipeline")
-def test_9_planner_auto_fetch_dest_api_success(mock_pipeline, mock_session, mock_gke, mock_state, transfer_params):
-    _config_session(mock_session, status=200, payload={
+def test_9_planner_auto_fetch_dest_api_success(mock_pipeline, mock_session, mock_gke, mock_state, transfer_params, sealing_key):
+    # The destination is the user's OTHER connected database: never the active
+    # one, so it resolves only through the per-database handle map.
+    mock_state["user_id"] = "user-1"
+    mock_state["active_db_customer_id"] = "source_db"
+    api_key, password, handle = _connected(mock_state, "new_api_db")
+    inst = _config_session(mock_session, status=200, payload={
         "host": "203.0.113.4", "port": 5432, "database": "api_db",
-        "username": "u", "password": "p", "table": "t",
+        "username": "u", "table": "t", "credential_handle": handle,
         "customers": [{"customer_id": "new_api_db", "database_type": "postgresql"}],
     })
     transfer_params.destination_alias = "new_api_db"
     mock_pipeline.return_value = ({"error_message": None}, "print('code')")
-    result = _handle_initiate_transfer(mock_state, transfer_params)
+    result = run_confirmed(mock_state, transfer_params)
     assert "✅ **Transfer complete:" in result
-    assert "new_api_db" in mock_state["dta_database_registry"]
+    entry = mock_state["dta_database_registry"]["new_api_db"]
+    assert entry["conn_id"] == "new_api_db" and "password" not in entry
+    assert password not in repr(mock_state["dta_database_registry"])
+    assert mock_pipeline.call_args.kwargs["destination_credentials"]["password"] == password
+    # Asked as the signed-in user (1.7 merge, decision 1); the api_key is never sent.
+    cred_calls = [c for c in inst.get.call_args_list if "/new_api_db/credentials" in c.args[0]]
+    assert cred_calls and all(assertion_user(c.kwargs["headers"]) == "user-1" for c in cred_calls)
+    assert api_key not in repr(inst.get.call_args_list)
 
 @patch("app.data_transfer_docker.gke_run.launch_gke_pipeline", return_value=True)
 @patch("app.agents.planner.requests.Session")
@@ -177,7 +251,7 @@ def test_10_planner_script_not_dumped_in_response(mock_pipeline, mock_session, m
     # The success message must NOT echo the (potentially huge) generated script.
     massive_script = "x" * 5000
     mock_pipeline.return_value = ({"error_message": None}, massive_script)
-    result = _handle_initiate_transfer(mock_state, transfer_params)
+    result = run_confirmed(mock_state, transfer_params)
     assert massive_script not in result
     assert len(result) < 500
     assert "✅ **Transfer complete:" in result
@@ -189,7 +263,7 @@ def test_11_planner_write_mode_overwrite(mock_pipeline, mock_session, mock_gke, 
     _config_session(mock_session)
     transfer_params.write_mode = "overwrite"
     mock_pipeline.return_value = ({"error_message": None}, "code")
-    result = _handle_initiate_transfer(mock_state, transfer_params)
+    result = run_confirmed(mock_state, transfer_params)
     assert "- Write mode: `overwrite`" in result
 
 @patch("app.data_transfer_docker.gke_run.launch_gke_pipeline", return_value=False)
@@ -199,7 +273,7 @@ def test_11b_planner_execution_failure(mock_pipeline, mock_session, mock_gke, mo
     # Setup succeeds (script produced) but the runner reports failure.
     _config_session(mock_session)
     mock_pipeline.return_value = ({"error_message": None, "warnings": None}, "code")
-    result = _handle_initiate_transfer(mock_state, transfer_params)
+    result = run_confirmed(mock_state, transfer_params)
     assert "❌ **Transfer failed during execution**" in result
 
 # ==============================================================================
@@ -387,7 +461,7 @@ def test_20_real_connection_error(mock_session):
         source_alias="real_source", destination_alias="real_dest",
         user_prompt="Copy everything into table t.", write_mode="append", dest_table="t",
     )
-    result = _handle_initiate_transfer(real_state, params)
+    result = run_confirmed(real_state, params)
     assert "❌ **Transfer Setup Failed:**" in result
     assert "Cannot connect to source database" in result
 
@@ -441,7 +515,7 @@ def test_22_case1_no_table_asks_user(mock_session, mock_state):
         user_prompt="transfer from source_db to dest_db", write_mode="append",
         dest_table=None,
     )
-    result = _handle_initiate_transfer(mock_state, params)
+    result = run_confirmed(mock_state, params)
     # The wizard now asks which table (listing existing ones, or offering to create a new one).
     assert "Which table" in result
     assert "new table" in result.lower()
@@ -462,7 +536,7 @@ def test_23_case2_named_table_overrides_registered_default(
         user_prompt="transfer from source_db to dest_db into table custom_orders",
         write_mode="append", dest_table="custom_orders",
     )
-    _handle_initiate_transfer(mock_state, params)
+    run_confirmed(mock_state, params)
 
     # The pipeline must be handed the NAMED table, not the registry default 'target_users'.
     _, kwargs = mock_pipeline.call_args
@@ -632,3 +706,16 @@ def test_31_sink_append_does_not_delete():
     joined = " ".join(executed)
     assert "DELETE FROM" not in joined                         # append never clears the target
     assert 'INSERT INTO "orders"' in joined
+
+
+# Registry credentials these tests seed live in a stand-in sealed store, not in
+# state: the planner opens them by handle after the confirm gate (tests/dta_sealed.py).
+try:  # tests/ as a package, or tests/ on sys.path
+    from tests import dta_sealed as _dta_sealed
+except ImportError:  # pragma: no cover
+    import dta_sealed as _dta_sealed
+
+
+@pytest.fixture(autouse=True)
+def _sealed_store(monkeypatch):
+    return _dta_sealed.install(monkeypatch)

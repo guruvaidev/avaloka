@@ -21,7 +21,19 @@ THE RULE
     A column is TEXT when, with the null-like words set aside, the reader could
     not type it and it holds at least one real string. Otherwise it is typed --
     which includes a column made only of null-like words: nothing in it says
-    they are labels, so it stays missing, exactly as before.
+    they are labels, so it stays missing, exactly as before. And a column whose
+    real cells -- null-like words in any case, "-" and "?" set aside -- are at
+    least MOSTLY_TYPED_SHARE numbers is typed whatever the reader said: its
+    stray words are gaps, not categories.
+
+    ONLY A GAP TOKEN MAY BECOME MISSING: a null-like word in any case, "-",
+    "?", or a blank cell. Any other string is a real value, whatever share of
+    the column is numbers -- "V45" and "E888" in an ICD-9 diagnosis column are
+    codes, not gaps, and reading them as missing once called 5,058 real codes
+    "empty". A mostly-numeric column that holds real strings is MIXED: it
+    stays text, its gap tokens are missing and its real strings are kept. No
+    threshold of "a few stray strings" is coerced: the reader cannot tell a
+    typo from a code, and only one of the two mistakes loses data.
 
 WHY LABELS, EVEN FOR ``N/A``
     A user can always filter out a category they can see. They can never
@@ -108,6 +120,38 @@ def is_null_word(value: Any) -> bool:
     return isinstance(value, str) and value in NULL_WORDS
 
 
+#: The share of a column's real cells that must parse as numbers for the
+#: column to count as typed despite stray words the reader could not type
+#: ("none", "-"). Below it ("1.5, unknown, NA, 2.5") the column is untypable
+#: and stays text. The CLI copy (avaloka/io/loader.py) carries the same number.
+MOSTLY_TYPED_SHARE = 0.8
+
+#: Set aside, with the null-like words in any case ("NONE", "none"), before the
+#: share is taken: what an export writes for "no value" that pandas' list lacks.
+_JUNK_TOKENS = frozenset({"-", "?"})
+_NULL_WORDS_FOLDED = frozenset(word.casefold() for word in NULL_WORDS)
+
+
+def is_gap_token(cell: Any) -> bool:
+    """A null-like word in any case, a junk token, or blank: the only strings a
+    typed or mixed column may read as missing. Anything else is a real value."""
+    if not isinstance(cell, str):
+        return False
+    stripped = cell.strip()
+    return not stripped or stripped.casefold() in _NULL_WORDS_FOLDED or stripped in _JUNK_TOKENS
+
+
+def mostly_numeric(present_cells: Iterable[Any]) -> bool:
+    """Whether at least MOSTLY_TYPED_SHARE of the real cells parse as numbers.
+    Real cells: not missing, not a null-like word in any case, not a junk
+    token, not blank."""
+    real = [str(cell).strip() for cell in present_cells if not is_gap_token(str(cell))]
+    if not real:
+        return False
+    parsed = pd.to_numeric(pd.Series(real, dtype=object), errors="coerce")
+    return bool(parsed.notna().mean() >= MOSTLY_TYPED_SHARE)
+
+
 def keeps_null_words(present_cells: Iterable[Any], reader_typed: bool) -> bool:
     """THE decision: do this column's null-like words stay as labels?
 
@@ -118,11 +162,87 @@ def keeps_null_words(present_cells: Iterable[Any], reader_typed: bool) -> bool:
     Labels are kept only in a text column: not typed, and holding at least one
     real string. Booleans read from a file arrive as ``True``/``False`` objects,
     not strings, so a boolean column counts as typed here even when pandas
-    leaves its dtype as ``object``.
+    leaves its dtype as ``object``. A column the reader could not type only
+    because a few cells say "none" or "-" is numeric all the same: those cells
+    are gaps, not categories (2026-10-18, see MOSTLY_TYPED_SHARE).
     """
     if reader_typed:
         return False
-    return any(isinstance(cell, str) and cell.strip() for cell in present_cells)
+    cells = list(present_cells)
+    if mostly_numeric(cells):
+        return False
+    return any(isinstance(cell, str) and cell.strip() for cell in cells)
+
+
+#: Strings a reader types as booleans: a column of them is typed, not text.
+_BOOLEAN_WORDS = frozenset({"True", "False", "TRUE", "FALSE", "true", "false"})
+
+
+def _empty_cell(cell: Any) -> bool:
+    """Missing before any word is read: no value, NaN, or the empty string.
+    Whitespace is a value, as pandas keeps it."""
+    if cell is None or (isinstance(cell, str) and cell == ""):
+        return True
+    if isinstance(cell, str):
+        return False
+    try:
+        return bool(pd.isna(cell))
+    except (TypeError, ValueError):
+        return False
+
+
+def _types_as_value(cell: str) -> bool:
+    """Whether a reader would type this string: a number or a boolean."""
+    if cell in _BOOLEAN_WORDS:
+        return True
+    try:
+        float(cell)
+    except ValueError:
+        return False
+    return True
+
+
+def gap_cells(cells: Iterable[Any]) -> list:
+    """THE RULE for a profiler that sees one column's raw cells (strings,
+    numbers, ``None``) rather than a pandas read: for each cell, whether it is
+    a gap. Empty cells are gaps everywhere; a null-like word is a gap in a
+    typed column and a label in a text column; in a mostly-numeric column a
+    gap token ("none", "-", "?") is a gap too, exactly as
+    ``coerce_mostly_numeric`` reads it -- and any other string ("V45") is a
+    real value, never a gap. The decision is ``keeps_null_words``, so this
+    answers as ``read_csv_best_effort`` does for the same cells."""
+    cells = list(cells)
+    present = [cell for cell in cells if not _empty_cell(cell) and not is_null_word(cell)]
+    reader_typed = all(_types_as_value(cell) for cell in present if isinstance(cell, str))
+    if keeps_null_words(present, reader_typed):
+        return [_empty_cell(cell) for cell in cells]
+    coerced = not reader_typed and mostly_numeric(present)
+    return [_empty_cell(cell) or is_null_word(cell)
+            or (coerced and is_gap_token(cell))
+            for cell in cells]
+
+
+def coerce_mostly_numeric(frame: pd.DataFrame, text_columns: Iterable[Any]) -> list:
+    """Read the gap tokens of a mostly-numeric object column as missing, in
+    place; returns the columns changed. The column becomes numeric only when
+    nothing but gap tokens stood in the way; with real strings in it ("V45")
+    it stays text, mixed, and keeps them. Text columns are never touched."""
+    skip = set(text_columns)
+    changed = []
+    for column in frame.columns:
+        if column in skip or not (frame[column].dtype == object
+                                  or isinstance(frame[column].dtype, pd.StringDtype)):
+            continue
+        original = frame[column]
+        present = original.dropna().tolist()
+        if present and mostly_numeric(present):
+            gaps = original.notna() & original.map(is_gap_token).astype(bool)
+            kept = original.where(~gaps)
+            parsed = pd.to_numeric(kept.astype(str).str.strip(), errors="coerce")
+            real = kept.notna() & parsed.isna()
+            frame[column] = kept if real.any() else parsed
+            changed.append(column)
+    return changed
 
 
 def blank_null_words(frame: pd.DataFrame) -> pd.DataFrame:
@@ -178,10 +298,15 @@ def read_csv_keeping_labels(path: Any, **kwargs: Any) -> pd.DataFrame:
     text = csv_text_columns(head)
     if not text:
         # Nothing to keep: exactly the read pandas always did.
-        return pd.read_csv(path, **kwargs)
-    every_word = sorted(NULL_WORDS | {""})
-    missing = {column: ([""] if column in text else every_word) for column in head.columns}
-    return pd.read_csv(path, keep_default_na=False, na_values=missing, **kwargs)
+        frame = pd.read_csv(path, **kwargs)
+    else:
+        every_word = sorted(NULL_WORDS | {""})
+        missing = {column: ([""] if column in text else every_word) for column in head.columns}
+        frame = pd.read_csv(path, keep_default_na=False, na_values=missing, **kwargs)
+    # Stray words in a typed column ("none", "-") survive both reads as text;
+    # they are missing values.
+    coerce_mostly_numeric(frame, text)
+    return frame
 
 
 def read_csv_best_effort(path: str, **kwargs: Any) -> pd.DataFrame:

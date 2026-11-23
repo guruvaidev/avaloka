@@ -169,6 +169,18 @@ def build_router(resolve_user_id: ResolveUser, require_premium_plan: RequirePlan
             raise HTTPException(status.HTTP_404_NOT_FOUND, "No endpoint for this model.")
         return endpoint_payload(run_id, ep, model)
 
+    # ------------------------------------------------------- cross-validation
+    @router.get("/api/models/{run_id}/cross-validation")
+    async def get_cross_validation(request: Request, run_id: str):
+        """Per-fold and summed confusion matrices (classification) or fold metrics (regression)."""
+        user_id = _caller(request)
+        store = get_ml_store()
+        cv = store.get_cross_validation(run_id)
+        if cv is None or str(cv.user_id) != user_id:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND)
+        return {"run_id": run_id, "status": cv.status, "k": cv.k, "splitter": cv.splitter, "reason": cv.reason,
+                "aggregate": cv.aggregate, "folds": cv.folds or [], "updated_at": _iso(cv.updated_at)}
+
     # ------------------------------------------------------------------ jobs
     @router.get("/api/ml-jobs/{job_id}")
     async def get_job(request: Request, job_id: str):

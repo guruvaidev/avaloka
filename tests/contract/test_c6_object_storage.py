@@ -389,14 +389,21 @@ def test_c6_11_ray_pods_inherit_the_storage_wiring(group: str) -> None:
     }
     for key in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"):
         assert keyed.get(key, {}).get("name") == "avaloka-secrets", f"ray {group} lacks {key}"
-    # Ray must remain usable without the avaloka chart installed alongside it.
+    # Ray must remain usable without the avaloka chart installed alongside it --
+    # except for its auth token. RAY_AUTH_TOKEN is required on purpose
+    # (tests/test_mlflow_ray_auth.py): a Ray pod with no token must not start
+    # open, so it comes from avaloka-ray-auth and is never optional.
+    storage = {name: ref for name, ref in keyed.items() if name != "RAY_AUTH_TOKEN"}
     assert all(
         ref.get("optional") is True
         for entry in env_from
         for key, ref in entry.items()
         if key in {"configMapRef", "secretRef"}
-    ) and all(ref.get("optional") is True for ref in keyed.values()), (
+    ) and all(ref.get("optional") is True for ref in storage.values()), (
         f"ray {group} hard-requires the avaloka ConfigMap/Secret"
+    )
+    assert keyed.get("RAY_AUTH_TOKEN", {}).get("optional") is not True, (
+        f"ray {group} would start without its auth token"
     )
 
 

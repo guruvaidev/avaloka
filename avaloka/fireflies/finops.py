@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import Any
 
 from avaloka.fireflies.base import Firefly
+from avaloka.modeling import selection_key
 from avaloka.util import write_json
 
 CPU_USD_PER_HOUR = 0.12          # commodity vCPU price for training-cost attribution
@@ -28,6 +29,12 @@ class FinOps(Firefly):
     def perform(self) -> tuple[str, float, dict[str, Any]]:
         training = self.ctx.blackboard["training"]
         higher_is_better = training.metric not in {"rmse", "mae"}
+        # Rank on the number the selection ranked on (the CV mean over the
+        # shared folds, unless CV failed), so "Maximum quality" and the
+        # selected model cannot disagree about which candidate is better.
+        # This ranked on the holdout while the selection used CV.
+        basis = getattr(training, "selection_basis", "holdout")
+        key = {c.name: selection_key(c, basis, not higher_is_better) for c in training.candidates}
 
         rows = []
         for c in training.candidates:
@@ -35,20 +42,24 @@ class FinOps(Firefly):
             serving = SERVING_BASE_USD + c.inference_ms_per_1k * SERVING_LATENCY_USD_PER_MS
             rows.append({
                 "candidate": c.name,
-                "validation_score": round(c.primary_score, 4),
+                "validation_score": round(c.cv_mean if basis == "cv" else c.primary_score, 4),
+                "score_basis": basis,
+                "holdout_score": round(c.primary_score, 4),
                 "metric": c.primary_metric,
                 "training_cost_usd": round(train_cost, 4),
                 "api_latency_ms": round(c.inference_ms_per_1k, 2),
                 "est_monthly_serving_usd": round(serving, 2),
             })
 
-        ranked = sorted(rows, key=lambda r: r["validation_score"], reverse=higher_is_better)
+        def by_quality(r):
+            return key[r["candidate"]]
+
+        ranked = sorted(rows, key=by_quality, reverse=True)
         cheapest = min(rows, key=lambda r: r["est_monthly_serving_usd"])
         best = ranked[0]
         # Balanced = best score among the cheaper half.
         cheaper_half = sorted(rows, key=lambda r: r["est_monthly_serving_usd"])[: max(1, len(rows) // 2 + 1)]
-        balanced = sorted(cheaper_half, key=lambda r: r["validation_score"],
-                          reverse=higher_is_better)[0]
+        balanced = sorted(cheaper_half, key=by_quality, reverse=True)[0]
 
         options = {
             "Economical": cheapest,
@@ -56,6 +67,9 @@ class FinOps(Firefly):
             "Maximum quality": best,
         }
         recommendation = self._recommend(options, higher_is_better)
+        recommendation.update(self._against_selection(
+            options[recommendation["choice"]], {r["candidate"]: r for r in rows},
+            training.best.name, training.metric, basis, higher_is_better))
 
         finops = {"options": options, "all_candidates": rows, "recommendation": recommendation,
                   "assumptions": {"cpu_usd_per_hour": CPU_USD_PER_HOUR,
@@ -91,3 +105,34 @@ class FinOps(Firefly):
             choice, text = "Maximum quality", (
                 "The quality gain justifies the additional serving cost for this objective.")
         return {"choice": choice, "rationale": text}
+
+    @staticmethod
+    def _against_selection(option: dict[str, Any], rows: dict[str, dict[str, Any]],
+                           selected: str, metric: str, basis: str,
+                           higher: bool) -> dict[str, Any]:
+        """Say how the recommendation relates to the selected model.
+
+        The two answer different questions -- the selection is the best model
+        on quality alone, the recommendation weighs quality against serving
+        cost -- so they may differ, but never silently: the e2e run selected
+        the ensemble while cost_quality.json recommended logistic regression
+        and neither said why.
+        """
+        candidate = option["candidate"]
+        if candidate == selected or selected not in rows:
+            return {"candidate": candidate, "selected": selected, "agrees_with_selection": True,
+                    "selection_note": f"The recommended option is the selected model '{selected}'."}
+        sel = rows[selected]
+        gap = option["validation_score"] - sel["validation_score"]
+        if not higher:
+            gap = -gap
+        saving = sel["est_monthly_serving_usd"] - option["est_monthly_serving_usd"]
+        label = "CV" if basis == "cv" else "holdout"
+        note = (f"Selection picks '{selected}' on quality alone ({label} {metric} "
+                f"{sel['validation_score']:.4f}). On cost this recommends '{candidate}' "
+                f"({option['validation_score']:.4f}, {gap:+.4f}), which serves for "
+                f"${abs(saving):.2f}/month {'less' if saving >= 0 else 'more'}. "
+                f"The bundle's model.pkl is '{selected}'; choose '{candidate}' only if "
+                f"that trade is acceptable.")
+        return {"candidate": candidate, "selected": selected, "agrees_with_selection": False,
+                "selection_note": note}

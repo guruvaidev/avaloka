@@ -10,7 +10,7 @@ Two packs implement the plan's clusterless layers:
 Everything here is designed to gate a pull request. No Docker, no cluster, no
 API keys, no network.
 
-The gate (`scripts/ci.sh`, the Bitbucket pipeline, the 16d gate) selects this
+The gate (`scripts/ci.sh`, the CI pipeline, the 16d gate) selects this
 pack with `-m "not cluster and not cloud and not integration"`. Files that need
 cloud data or a model provider carry a module marker and stay out:
 `test_e3_real_dataset_gcs.py` is `cloud`, `test_e5_golden_missions.py` is

@@ -35,46 +35,45 @@ def test_cloud_connectivity_is_the_professional_line():
         assert getattr(free, capability) is False
         assert getattr(pro, capability) is True, capability
 
-def test_swarm_intelligence_is_commercial_and_absent_from_open_source():
-    """Swarm ships on the 1.7 line but never in the open-source distribution.
+def test_swarm_is_open_in_every_edition():
+    """1.7: swarm ships in the published tree, so every edition has it.
 
-    develop-1.6 contains no swarm code at all, so an open-source build cannot
-    resolve this capability whatever edition the environment claims.
+    What differs is how far a mission may fan out (swarm_limits), not whether
+    the capability exists.
     """
-    assert GATE_REASON["swarm_intelligence"] is GateReason.COMMERCIAL
+    assert GATE_REASON["swarm_intelligence"] is GateReason.OPEN
     oss = resolve_capabilities("self_hosted", "oss", has_commercial_build=False)
-    assert oss.swarm_intelligence is False
-    assert caps("avaloka_hosted", "free").swarm_intelligence is False
-    assert caps("avaloka_hosted", "professional").swarm_intelligence is True
-    assert caps("avaloka_hosted", "enterprise").swarm_intelligence is True
+    assert oss.swarm_intelligence is True
+    for edition in ("free", "professional", "enterprise"):
+        assert caps("avaloka_hosted", edition).swarm_intelligence is True, edition
+        assert caps("avaloka_hosted", edition, commercial=False).swarm_intelligence is True
 
 
-def test_an_oss_build_cannot_claim_swarm_by_setting_an_edition():
-    """Capability follows installed code, never configuration."""
-    forged = resolve_capabilities("avaloka_hosted", "enterprise",
-                                  has_commercial_build=False)
-    assert forged.swarm_intelligence is False
+def test_swarm_limits_follow_installed_code_not_configuration():
+    """An OSS build claiming Enterprise still gets the preview fan-out."""
+    from app.core.editions import swarm_limits
+
+    assert swarm_limits("oss", has_commercial_build=False).max_clones_per_mission == 2
+    assert swarm_limits("free", has_commercial_build=True).max_clones_per_mission == 2
+    assert swarm_limits("enterprise", has_commercial_build=False).max_clones_per_mission == 2
+    assert swarm_limits("professional", has_commercial_build=True).max_clones_per_mission == 16
+    assert swarm_limits("enterprise", has_commercial_build=True).max_clones_per_mission is None
 
 
-def test_swarm_intelligence_is_commercial_and_absent_from_open_source():
-    """Swarm ships on the 1.7 line but never in the open-source distribution.
-
-    develop-1.6 contains no swarm code at all, so an open-source build cannot
-    resolve this capability whatever edition the environment claims.
-    """
-    assert GATE_REASON["swarm_intelligence"] is GateReason.COMMERCIAL
-    oss = resolve_capabilities("self_hosted", "oss", has_commercial_build=False)
-    assert oss.swarm_intelligence is False
-    assert caps("avaloka_hosted", "free").swarm_intelligence is False
-    assert caps("avaloka_hosted", "professional").swarm_intelligence is True
-    assert caps("avaloka_hosted", "enterprise").swarm_intelligence is True
+def test_teams_and_invites_are_professional_and_up():
+    """Owner ruling 2026-11-01 (NEW-BG-01, revised): Professional forms teams and
+    invites collaborators; Free does neither."""
+    assert caps("avaloka_hosted", "free").team_collaboration is False
+    assert caps("avaloka_hosted", "professional").team_collaboration is True
+    assert caps("avaloka_hosted", "enterprise").team_collaboration is True
 
 
-def test_an_oss_build_cannot_claim_swarm_by_setting_an_edition():
-    """Capability follows installed code, never configuration."""
-    forged = resolve_capabilities("avaloka_hosted", "enterprise",
-                                  has_commercial_build=False)
-    assert forged.swarm_intelligence is False
+def test_org_structure_is_the_enterprise_line():
+    """Departments, roles, branches and users stay Enterprise-only."""
+    assert GATE_REASON["org_structure"] is GateReason.COMMERCIAL
+    for edition in ("oss", "free", "professional"):
+        assert caps("avaloka_hosted", edition).org_structure is False, edition
+    assert caps("avaloka_hosted", "enterprise").org_structure is True
 
 
 def test_teams_and_invites_are_professional_and_up():

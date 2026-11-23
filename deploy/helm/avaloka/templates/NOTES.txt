@@ -1,15 +1,52 @@
 Avaloka {{ .Chart.AppVersion }} is installed as release {{ .Release.Name }} in namespace {{ .Release.Namespace }}.
 {{- if not .Values.existingSecret }}
 
-Generated secrets (DB_ENCRYPTION_KEY, MCP_SERVICE_TOKEN, EXECUTE_SERVICE_TOKEN, LANGGRAPH_SERVICE_TOKEN, AVALOKA_PII_KEY) are in the
+Generated secrets (DB_ENCRYPTION_KEY, MCP_SERVICE_TOKEN, EXECUTE_SERVICE_TOKEN, LANGGRAPH_SERVICE_TOKEN, AVALOKA_PII_KEY
+{{- if and $.Values.mlflow.enabled (include "avaloka.mlflowAuthEnabled" $) }}, MLFLOW_TRACKING_PASSWORD, MLFLOW_FLASK_SERVER_SECRET_KEY{{ end }}
+{{- if (include "avaloka.rayAuthEnabled" $) }}, RAY_AUTH_TOKEN{{ end }}) are in the
 Secret {{ include "avaloka.secretName" . }}: generated on first install when not given,
 kept on every upgrade. Back up DB_ENCRYPTION_KEY: without it sealed credentials are lost.
-{{- range $name, $given := dict "DB_ENCRYPTION_KEY" (.Values.secrets.dbEncryptionKey | default .Values.supabase.functions.dbEncryptionKey) "MCP_SERVICE_TOKEN" .Values.secrets.mcpServiceToken "EXECUTE_SERVICE_TOKEN" .Values.secrets.executeServiceToken "LANGGRAPH_SERVICE_TOKEN" .Values.secrets.langgraphServiceToken "AVALOKA_PII_KEY" .Values.secrets.piiKey }}
-{{- if include "avaloka.isPublishedSecret" $given }}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace (include "avaloka.secretName" .) }}
+{{- range $name, $given := dict "DB_ENCRYPTION_KEY" (.Values.secrets.dbEncryptionKey | default .Values.supabase.functions.dbEncryptionKey) "MCP_SERVICE_TOKEN" .Values.secrets.mcpServiceToken "EXECUTE_SERVICE_TOKEN" .Values.secrets.executeServiceToken "LANGGRAPH_SERVICE_TOKEN" .Values.secrets.langgraphServiceToken "AVALOKA_PII_KEY" .Values.secrets.piiKey "MLFLOW_TRACKING_PASSWORD" .Values.secrets.mlflowAdminPassword "RAY_AUTH_TOKEN" .Values.secrets.rayAuthToken }}
+{{- $old := "" }}
+{{- if and (not $given) $existing $existing.data (index $existing.data $name) }}
+{{- $old = index $existing.data $name | b64dec }}
+{{- end }}
+{{- if or (include "avaloka.isPublishedSecret" $given) (include "avaloka.isPublishedSecret" $old) }}
 
-WARNING: the value given for {{ $name }} is a published one (it ships in this
-repository) and protects nothing. It was replaced with a generated value. Remove it
-from your values.
+WARNING: {{ if include "avaloka.isPublishedSecret" $given }}the value given for {{ $name }}{{ else }}the {{ $name }} this release's Secret held{{ end }} is a published one (it
+ships in this repository) and protects nothing. It was replaced with a generated value.
+{{- if include "avaloka.isPublishedSecret" $given }} Remove it from your values.{{ end }}
+{{- if eq $name "DB_ENCRYPTION_KEY" }}
+Anything sealed under the old key can no longer be opened: saved database connections,
+cloud connection keys, MCP and GitHub tokens, and passwords typed into chat. Register
+those connections again (and re-enter those tokens).
+{{- else if eq $name "AVALOKA_PII_KEY" }}
+Columns pseudonymised under the old key no longer match new pseudonyms; retrain models
+trained on pseudonymised data.
+{{- else }}
+Nothing stored depends on it; every pod reads the new value from the release Secret.
 {{- end }}
 {{- end }}
+{{- end }}
+{{- end }}
+{{- if and $.Values.mlflow.enabled (include "avaloka.mlflowAuthEnabled" $) }}
+
+MLflow requires a login (mlflow.auth). The Service is cluster-internal only. From a
+workstation:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "avaloka.fullname" . }}-mlflow {{ .Values.mlflow.port }}:{{ .Values.mlflow.port }}
+then sign in as the user in MLFLOW_TRACKING_USERNAME with the password in
+MLFLOW_TRACKING_PASSWORD, both in the Secret {{ include "avaloka.secretName" . }}:
+  kubectl -n {{ .Release.Namespace }} get secret {{ include "avaloka.secretName" . }} -o jsonpath='{.data.MLFLOW_TRACKING_PASSWORD}' | base64 -d
+(a script can export both variables instead; the mlflow client sends them).
+{{- end }}
+{{- if (include "avaloka.rayAuthEnabled" $) }}
+
+Ray requires a token (ray.auth, RAY_AUTH_MODE=token; Ray 2.52+ and KubeRay 1.6+).
+Apply deploy/helm/ray/*.yaml after this release: they read the token from the
+Secret {{ include "avaloka.rayAuthSecretName" . }}. The dashboard has no NodePort or LoadBalancer:
+  kubectl -n {{ include "avaloka.rayNamespace" . }} port-forward svc/avaloka-raycluster-head-svc 8265:8265
+and paste the token into the dashboard's login, or export RAY_AUTH_MODE=token and
+RAY_AUTH_TOKEN for `ray job submit`:
+  kubectl -n {{ include "avaloka.rayNamespace" . }} get secret {{ include "avaloka.rayAuthSecretName" . }} -o jsonpath='{.data.auth_token}' | base64 -d
 {{- end }}

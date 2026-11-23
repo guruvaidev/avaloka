@@ -50,7 +50,7 @@ spec:
         spec:
           containers:
             - name: ray-head
-              image: rayproject/ray:2.49.2
+              image: rayproject/ray:2.56.0-py311
 """
 
 SA_JSON = json.dumps({"type": "service_account", "project_id": "p", "private_key": "k", "client_email": "a@b.c"})

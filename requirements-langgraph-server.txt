@@ -1,0 +1,19 @@
+# The LangGraph server (`langgraph dev`) that serves langgraph.json's graph and
+# the thread registry the API calls at LANGGRAPH_API_URL.
+#
+# Only the LangGraph server's image installs this file (avaloka-langgraph:
+# deploy/docker/Dockerfile.api built with REQUIREMENTS=requirements-langgraph-server.txt;
+# deploy/avaloka/charts/avaloka-backend/docker/Dockerfile.langgraph). The API
+# image installs requirements.txt alone.
+#
+# Why a separate file: langgraph-cli[inmem] installs langgraph-api, and the
+# 0.5.x line that langgraph 0.6 allows caps cryptography below 45. Kept in
+# requirements.txt, that cap held the API process at cryptography 44.0.3 with
+# four high advisories. Here it holds only this server, until the LangGraph 1.x
+# migration (phase 3) moves langgraph-api to a release without the cap.
+#
+# For local development, install this file instead of requirements.txt when
+# you also run `langgraph dev`.
+-r requirements.txt
+langgraph-cli>=0.4.2,<0.5 ; python_version < "3.11"
+langgraph-cli[inmem]>=0.4.2,<0.5 ; python_version >= "3.11"

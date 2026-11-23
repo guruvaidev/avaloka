@@ -25,8 +25,13 @@ from app.agents.avaloka_agent.prompts import (
     INTENT_CLASSIFIER_PROMPT,
     INTENTS,
 )
+from app.agents.avaloka_agent.correction import correction_facts
+from app.agents.user_text import own_words
 from app.core.inference import build_chat_model
 from app.core.model_config import resolve as resolve_model
+# The CLI's predicts/drives rule, reused rather than copied: the app may
+# import avaloka (never the reverse).
+from avaloka.goal_analysis import driver_target
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +61,9 @@ class IntentResult:
             # renderer at the end of it, not the routing (see
             # _render_direct_reply).
             "schedule",
+            # A correction to the method always re-plans (owner ruling): it is
+            # never answered from the results in hand.
+            "correction",
         }
 
     def should_delegate(self) -> bool:
@@ -67,6 +75,12 @@ class IntentResult:
         is reserved for clearly conversational intents.
         """
         return self.is_data_touching() or self.intent == "clarification"
+
+
+#: Assigned by the heuristic only, never offered to the LLM classifier: it
+#: depends on what the turn carries (verified results), not on the words alone.
+#: Answered directly, like ``exploration``, but with no discovery pass.
+DISCUSSION = "discussion"
 
 
 _GROQ_MODEL = resolve_model("conversational")
@@ -98,6 +112,18 @@ def _get_llm() -> Optional[Any]:
 
 
 def _last_human_message(messages: List[BaseMessage]) -> str:
+    """The latest human message in the user's own words.
+
+    The web chat appends "[Analysis context] ..." (fidelity, and per dataset
+    its columns and preview rows) to the message it hands the graph. Read as
+    the user's words it made "hi" a greeting followed by a request (rc18 live
+    check), and a column such as ``schedule_date`` or ``predicted_value``
+    could route any question to schedule or inference.
+    """
+    return own_words(_raw_last_human_message(messages))
+
+
+def _raw_last_human_message(messages: List[BaseMessage]) -> str:
     for m in reversed(messages or []):
         if isinstance(m, HumanMessage):
             content = m.content
@@ -143,7 +169,7 @@ _KEYWORD_RULES = (
         "feature importance", "anova", "t-test",
     )),
     ("schedule", (
-        "every day", "every hour", "schedule", "cron", "at 2am",
+        "every day", "every hour", "schedule", "reschedule", "cron", "crontab", "at 2am",
         "tomorrow at",
     )),
     ("infrastructure", (
@@ -178,15 +204,143 @@ _KEYWORD_RULES = (
         "list columns", "describe the columns", "sample rows",
     )),
     ("chit_chat", (
-        "hello", "hi ", "hey", "what is avaloka", "who are you",
+        "hello", "hi", "hey", "what is avaloka", "who are you",
         "what can you do",
     )),
 )
 
+#: Keywords that match only as whole words. A substring match routed "how do
+#: *they* relate?" to chit-chat on 'hey' (rc17 web regrade), and would route
+#: "Othello", "Delhi sales", "who are your best customers" and "what can you
+#: download" the same way; "etl" sits inside "metlife", "cron" inside
+#: "acronym" and "Cronbach", "anova" inside "Villanova". The other keywords
+#: stay substrings on purpose: "predict" must still catch "predictions",
+#: "chart" "charts".
+_WHOLE_WORD = frozenset(
+    {kw for intent, keywords in _KEYWORD_RULES if intent == "chit_chat" for kw in keywords}
+    | {"etl", "cron", "crontab", "anova"}
+)
+
+#: Whole words with the inflections that keep their meaning. "unscheduled
+#: maintenance" is a column to count, not a job to schedule, and "provisional
+#: figures" are not infrastructure; "scheduled", "scheduler", "provisioning"
+#: still are. "reschedule" is its own keyword: rescheduling a job is a
+#: schedule request.
+_INFLECTED = {
+    "schedule": r"schedul(?:e|es|ed|er|ers|ing)",
+    "reschedule": r"reschedul(?:e|es|ed|ing)",
+    "provision": r"provision(?:s|ed|ing)?",
+}
+
+
+def _keyword_in(keyword: str, text: str) -> bool:
+    if keyword in _INFLECTED:
+        return re.search(rf"(?<![a-z0-9]){_INFLECTED[keyword]}(?![a-z0-9])", text) is not None
+    if keyword not in _WHOLE_WORD:
+        return keyword in text
+    return re.search(rf"(?<![a-z0-9]){re.escape(keyword)}(?![a-z0-9])", text) is not None
+
+
+#: Words a greeting may carry and still be only a greeting: "hey there",
+#: "hello Avaloka", "good morning".
+_GREETING_FILLER = frozenset({
+    "there", "avaloka", "ava", "again", "all", "everyone", "folks", "friend",
+    "good", "morning", "afternoon", "evening", "oh", "well",
+})
+
+
+def _only_chit_chat(text: str) -> bool:
+    """Whether *text* is nothing but chit-chat once its greeting words go.
+
+    "hey, what's the average age?" opens with a greeting and asks about the
+    data: with "hey" removed, "what's the average age" is left, so it is not
+    chit-chat. What may remain is filler ("there", "Avaloka") and
+    punctuation; a "?" with no words left is the chit-chat's own ("who are
+    you?", "what can you do?").
+    """
+    rest = text
+    for intent, keywords in _KEYWORD_RULES:
+        if intent != "chit_chat":
+            continue
+        for kw in sorted(keywords, key=len, reverse=True):
+            rest = re.sub(rf"(?<![a-z0-9]){re.escape(kw)}(?![a-z0-9])", " ", rest)
+    words = [w for w in re.findall(r"[a-z0-9']+", rest) if w not in _GREETING_FILLER]
+    return not words
+
+
+def asks_what_drives(text: str) -> bool:
+    """"What predicts a stroke?", "what drives churn", "drivers of default":
+    a question about the data's outcome, answered by analysing the data.
+
+    The rule is the CLI's (avaloka.goal_analysis.driver_target): an explicit
+    driver verb or noun followed by the outcome phrase. "What does the model
+    predict for row 5" names no outcome and asks a model, so it is not one;
+    "predict churn for these customers" has no question word and stays
+    inference.
+    """
+    target = driver_target(text or "", {})
+    if not target or not target.get("explicit_verb") or not target.get("phrase"):
+        return False
+    return "model" not in str(target.get("subject") or "").lower()
+
+
+def _driver_goal_is_analysis(result: IntentResult, text: str) -> IntentResult:
+    """A predicts/drives question is an analysis of the outcome. It never
+    routes to inference -- there is no model to run, and "I don't have a
+    trained model" answered a question the data can answer (web e2e,
+    2026-10-18) -- and it is not left unclassified either."""
+    if result.intent in ("ml_inference", "clarification") and asks_what_drives(text):
+        return IntentResult(intent="statistical_analysis", confidence=0.7, params=dict(result.params),
+                            reasoning="a what-predicts/drives question: analyse the outcome, not inference")
+    return result
+
+
+#: Words that ask for new work on the data -- a computation, a change to the
+#: data, a re-run. A message carrying one goes to the planner however it is
+#: phrased: "include refunds and recompute" needs the pipeline even when results
+#: are already in hand. Prefix-matched, so "recompute", "filtering", "running"
+#: and "re-run" count; whole-word at the front, so "account" is not "count".
+_NEW_WORK = re.compile(
+    r"(?<![a-z])(?:re-?)?(?:comput|calculat|run|count|impute|includ|exclud|filter|train|"
+    r"fit|load|join|merg|aggregat|group|sort|convert|export|sav|drop|clean|appl|build|"
+    r"creat|generat|updat|fix|redo|tabulat|sum up|break .{0,12}down)")
+
+
+def asks_about_results(text: str) -> bool:
+    """Whether *text* asks about what is already known rather than for new work.
+
+    "Churn fell -- can you confirm?", "That's wrong, it's 42.5", "How did the
+    model do?", "What's churn for the enterprise segment?" are answered from
+    results in hand: confirmed, corrected, interpreted, or declined because the
+    figure is not there. "Compute distinct aisles", "include refunds and
+    recompute", "impute the missing values" are new work.
+    """
+    t = own_words(text or "").lower().strip()
+    return bool(t) and _NEW_WORK.search(t) is None
+
+
+def _results_question(heuristic: IntentResult, text: str, results_in_hand: bool) -> IntentResult:
+    """A question about results the reply already holds is answered, not delegated.
+
+    ``clarification`` -- no keyword matched -- delegates to the planner, which
+    plans an analysis. When the turn already carries verified results (the
+    reply prompt's ``<recommendation>``), a question about them has its answer
+    in hand: delegating it handed "can you confirm?" to a planner that never
+    sees those results, and the turn ended in a planning failure or an
+    execution error. Only ``clarification`` is redirected: a keyword match (a
+    chart, a model, a schedule) still goes where it went.
+    """
+    if (results_in_hand and heuristic.intent == "clarification"
+            and asks_about_results(text)):
+        return IntentResult(intent="discussion", confidence=0.6,
+                            reasoning="a question about verified results already in hand")
+    return heuristic
+
 
 def _heuristic_intent(text: str, has_connection_event: bool) -> IntentResult:
     """Deterministic fallback used when Groq is unavailable."""
-    t = (text or "").strip().lower()
+    # Only the user's own words: never the run context appended to them.
+    t = own_words(text).lower()
     if not t:
         if has_connection_event:
             return IntentResult(intent="onboarding", confidence=0.9,
@@ -209,14 +363,26 @@ def _heuristic_intent(text: str, has_connection_event: bool) -> IntentResult:
     best_intent, best_kw = "", ""
     for intent, keywords in _KEYWORD_RULES:
         for kw in keywords:
-            if kw in t and len(kw) > len(best_kw):
+            if _keyword_in(kw, t) and len(kw) > len(best_kw):
                 best_intent, best_kw = intent, kw
+    if best_intent == "chit_chat" and not _only_chit_chat(t):
+        # A greeting in front of a request is not the message: route on what
+        # follows it, or leave it to the planner when no other keyword names it.
+        best_intent, best_kw = "", ""
+        for intent, keywords in _KEYWORD_RULES:
+            for kw in keywords:
+                if intent != "chit_chat" and _keyword_in(kw, t) and len(kw) > len(best_kw):
+                    best_intent, best_kw = intent, kw
+        if not best_kw:
+            return _driver_goal_is_analysis(
+                IntentResult(intent="clarification", confidence=0.4,
+                             reasoning="a greeting followed by a request; no keyword matched the request"), t)
     if best_kw:
-        return IntentResult(intent=best_intent, confidence=0.6,
-                            reasoning=f"keyword match: '{best_kw}'")
+        return _driver_goal_is_analysis(
+            IntentResult(intent=best_intent, confidence=0.6, reasoning=f"keyword match: '{best_kw}'"), t)
 
-    return IntentResult(intent="clarification", confidence=0.4,
-                        reasoning="no keyword matched")
+    return _driver_goal_is_analysis(
+        IntentResult(intent="clarification", confidence=0.4, reasoning="no keyword matched"), t)
 
 
 _JSON_RE = re.compile(r"\{[\s\S]*\}", re.MULTILINE)
@@ -246,11 +412,15 @@ def classify_intent(
     *,
     has_connection_event: bool = False,
     session_summary: str = "",
+    results_in_hand: bool = False,
 ) -> IntentResult:
     """Classify the latest human message into one of ``INTENTS``.
 
     ``session_summary`` is a short text snippet describing prior thread state
     so the classifier can prefer ``onboarding`` / ``status`` when relevant.
+    ``results_in_hand`` says the turn carries verified results the reply can
+    answer from; a question about them is then ``discussion``, which is
+    answered directly (see :func:`_results_question`).
     """
     user_text = _last_human_message(messages)
 
@@ -261,6 +431,11 @@ def classify_intent(
     # and deterministic, and avoids surprising Groq calls on every chat
     # turn (the LLM still drives reply rendering in agent.py for tone).
     heuristic = _heuristic_intent(user_text, has_connection_event)
+    facts = correction_facts(user_text)
+    if facts is not None and heuristic.intent in ("clarification", "statistical_analysis"):
+        return IntentResult(intent="correction", confidence=0.7, params={"correction": facts.as_dict()},
+                            reasoning="a correction to the method: re-plan with it")
+    heuristic = _results_question(heuristic, user_text, results_in_hand)
 
     # Optionally consult the LLM only when explicitly opted in.
     if os.getenv("AVALOKA_LLM_INTENT_CLASSIFY", "0").strip() not in ("1", "true", "True", "yes"):
@@ -308,9 +483,9 @@ def classify_intent(
     if intent_str == "onboarding" and not has_connection_event:
         intent_str = "clarification"
 
-    return IntentResult(
+    return _driver_goal_is_analysis(IntentResult(
         intent=intent_str,
         confidence=float(parsed.get("confidence", 0.5) or 0.5),
         params=dict(parsed.get("params") or {}),
         reasoning=str(parsed.get("reasoning") or ""),
-    )
+    ), user_text)

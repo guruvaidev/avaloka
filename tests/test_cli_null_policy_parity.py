@@ -50,6 +50,10 @@ def test_same_sniff_depth():
     assert loader.CSV_SNIFF_ROWS == null_policy.CSV_SNIFF_ROWS
 
 
+def test_same_mostly_typed_share():
+    assert loader.MOSTLY_TYPED_SHARE == null_policy.MOSTLY_TYPED_SHARE
+
+
 @pytest.mark.parametrize("case", CASES, ids=CASE_IDS)
 def test_platform_reader_returns_the_expected_outcome(tmp_path, case):
     assert _platform(_write(tmp_path, case)) == (case.platform_returns or case.expected)

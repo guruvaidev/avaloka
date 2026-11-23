@@ -7,9 +7,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { AlertTriangle, Database, Loader2, Table as TableIcon, Play } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { backendApi } from "@/lib/api/backendApi";
-import { BACKEND_API_BASE } from "@/lib/api/backend-config";
-import { MCP_TOOL_BASE } from "@/lib/api/mcp-config";
-import { mcpProxyFetch, proxyFetch } from "@/lib/api/backendApi";
+import { proxyFetch } from "@/lib/api/backendApi";
 
 import { openDatasetsInProAnalysis } from "@/lib/open-analysis-from-datasets";
 
@@ -261,20 +259,35 @@ export function DatabaseQueryModal({
     setSelectedTables([]);
 
     try {
-      const { apiKey } = await decryptApiKey(connection.id);
-      
-      const res = await mcpProxyFetch(MCP_TOOL_BASE, "/call_tool", {
-          method: "POST",
-          headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-          body: JSON.stringify({ method: "call_tool", params: { name, arguments: args } }),
+      // Through the API, which resolves the saved connection's credentials
+      // itself (owner-checked) and calls the MCP tool server-side. The backend
+      // proxy only reaches the API, so a direct /call_tool never arrived.
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData.session?.access_token;
+      if (!accessToken) throw new Error("Not signed in");
+      const res = await proxyFetch(`/api/v1/database/query`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          role: "user",
+          content: name === "list_tables" ? "list tables" : `describe table ${args.table}`,
+          customer_id: connection.customer_id,
+          connection_id: connection.id,
+        }),
       });
       const body = await res.json().catch(() => ({} as any));
       if (!res.ok) {
+        if (res.status === 503 && /decrypt/i.test(String(body?.detail || ""))) setNeedsReregister(true);
         setError(body?.detail || body?.error || `${name} failed (${res.status})`);
         return;
       }
-      setRawText(typeof body === "string" ? body : JSON.stringify(body, null, 2));
-      setTables(extractTables(body));
+      const result = body?.query_result ?? body;
+      if (result?.error) {
+        setError(String(result.error));
+        return;
+      }
+      setRawText(typeof result === "string" ? result : JSON.stringify(result, null, 2));
+      setTables(extractTables(result));
 
     } catch (e: any) {
       if (e instanceof DecryptError && e.status === 409) setNeedsReregister(true);

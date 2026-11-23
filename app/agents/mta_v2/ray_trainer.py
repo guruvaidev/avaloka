@@ -112,6 +112,15 @@ class RayTrainer:
         """Build the runtime environment shared by both Ray deployment modes."""
         ray_cfg = training_plan.get("ray_config") or {}
         hyper_cfg = training_plan.get("hyperparameter_config") or {}
+        from app.agents.mta_v2.estimators import normalise_algorithm
+        if normalise_algorithm(training_plan.get("algorithm")) != "mlp":
+            # The Ray job trains only the MLP. A tree or linear plan now carries
+            # that family's values (learning rate 0.1, say), which must not
+            # reach an MLP; it trains with the MLP's defaults, as it did when
+            # such a plan still carried the MLP template.
+            logger.warning("Ray training runs the MLP only; ignoring %s hyperparameters.",
+                           training_plan.get("algorithm"))
+            hyper_cfg = {}
         data_cfg = training_plan.get("data_config") or {}
         pii_columns = data_cfg.get("pii_key_required_columns") or []
         if pii_columns and not (os.getenv(PII_KEY_ENV) or "").strip():

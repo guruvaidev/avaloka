@@ -232,9 +232,11 @@ def test_declared_deployment_values(monkeypatch, value, declared):
 
 # ------------------------------------------------------------------ billing
 
+# 1.7 rule (plan_limits._billing_disabled): a declared self_hosted deployment is
+# never billed, whatever the edition; 1.6 billed it when AVALOKA_EDITION was unset.
 @pytest.mark.parametrize("deployment, edition, disabled", [
     ("hosted", "", False), ("hosted", "oss", False),
-    ("self_hosted", "", False), ("self_hosted", "oss", True),
+    ("self_hosted", "", True), ("self_hosted", "oss", True),
     ("undeclared", "", False), ("undeclared", "community", True),
 ])
 def test_billing_reads_the_signal(monkeypatch, deployment, edition, disabled):

@@ -4,6 +4,7 @@
 .env
 env_bak
 *.env
+.env.quickstart
 
 # Local dev artifacts / caches (960MB+)
 artifacts/
@@ -18,6 +19,7 @@ htmlcov/
 
 # Virtualenvs / node
 .venv/
+.venv-langgraph-server/
 venv/
 node_modules/
 

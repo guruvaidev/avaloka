@@ -46,6 +46,7 @@ from tests.e2e.conftest import (
     MCP_CONNECTION_OWNED,
     MCP_CONNECTIONS,
     MODE,
+    PUBLIC_ROUTES,
     UNAUTH_MESSAGE,
     ApiClient,
     mint_token,
@@ -56,8 +57,9 @@ from tests.e2e.conftest import (
 # Routes that are known to fail open TODAY. Every member must be covered by a
 # dedicated @pytest.mark.defect xfail test, and is excluded from the generated
 # sweep so the pack stays green enough to gate PRs.
-#   POST /threads -- app/api/server.py:2028-2049, see test_e2_05a_* below.
-KNOWN_FAIL_OPEN: set[Tuple[str, str]] = {("POST", "/threads")}
+#   (empty) POST /threads was here until fix/2.0-threads-route-auth; its
+#   test_e2_05a_* tests below now pass and stay as regressions.
+KNOWN_FAIL_OPEN: set[Tuple[str, str]] = set()
 
 # Cross-tenant sweep: statuses that provably leak nothing.
 NON_LEAKING_STATUSES = {400, 401, 403, 404, 415, 422, 503}
@@ -279,18 +281,131 @@ def test_e2_05_known_fail_open_entries_still_exist(method: str, template: str) -
     assert (method, template) in {(m, p) for m, p, _ in route_inventory()}
 
 
-# ---------------------------------------------------------------------------
-# E2.05a -- confirmed defect
-# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("method,template", sorted(PUBLIC_ROUTES), ids=[route_id(m, p) for m, p in sorted(PUBLIC_ROUTES)])
+def test_e2_05_public_route_answers_an_anonymous_caller(api: ApiClient, method: str, template: str) -> None:
+    """The other half of the sweep: what it skips as public must really be reachable without a token."""
+    resp = api.request(method, template)
+    assert resp.status_code != 401, f"{route_id(method, template)} -> {resp.status_code} {resp.text[:200]}"
+    assert resp.status_code < 500, f"{route_id(method, template)} -> {resp.status_code} {resp.text[:200]}"
 
 
-@pytest.mark.defect
-@pytest.mark.xfail(
-    strict=True,
-    reason="DEFECT E2.05a (P0): POST /threads never calls _resolve_user_id "
-    "(app/api/server.py:2028-2049) - an anonymous caller creates LangGraph threads "
-    "bound to a caller-chosen session. Remove this xfail when fixed.",
+# Every route the widened sweep found answering an anonymous caller before the
+# auth gate, with what it answered then. A signed-in caller must still get exactly
+# that: the gate only stops callers with no token, it never moves validation.
+#   422  FastAPI body/query validation   400  the handler's own body check
+#   200  the analytics collector's "nowhere to store" stop (no store in the fakes)
+REACHED_VALIDATION_BEFORE_AUTH: Dict[Tuple[str, str], int] = {
+    ("GET", "/catalog/resolve"): 422,
+    ("POST", "/analysis/{analysis_id}/feedback"): 422,
+    ("POST", "/analysis/{analysis_id}/insights/explain"): 422,
+    ("POST", "/analysis/{analysis_id}/restore"): 422,
+    ("POST", "/analysis/{analysis_id}/save-and-execute"): 422,
+    ("POST", "/analytics/events"): 200,
+    ("POST", "/api/database/tables-to-analysis"): 422,
+    ("POST", "/api/integrations/github/connect"): 422,
+    ("POST", "/api/register-existing-folder"): 422,
+    ("PUT", "/analytics/opt-out"): 400,
+}
+
+
+def test_e2_05_validation_list_names_live_swept_routes() -> None:
+    swept = {(m, p) for m, p, _ in _sweep_routes()}
+    assert set(REACHED_VALIDATION_BEFORE_AUTH) <= swept, sorted(set(REACHED_VALIDATION_BEFORE_AUTH) - swept)
+
+
+@pytest.mark.parametrize(
+    "method,template",
+    sorted(REACHED_VALIDATION_BEFORE_AUTH),
+    ids=[route_id(m, p) for m, p in sorted(REACHED_VALIDATION_BEFORE_AUTH)],
 )
+def test_e2_05_signed_in_caller_still_reaches_validation(api: ApiClient, method: str, template: str) -> None:
+    """The same probe with a valid token is validated as before -- never 401."""
+    concrete = next(c for m, p, c in route_inventory() if (m, p) == (method, template))
+    resp = api.request(method, concrete, user=OWNER, **_payload(method, template))
+    assert resp.status_code != 401, f"{route_id(method, template)} -> 401 {resp.text[:200]}"
+    if api.mode == "hermetic":
+        want = REACHED_VALIDATION_BEFORE_AUTH[(method, template)]
+        assert resp.status_code == want, f"{route_id(method, template)} -> {resp.status_code}, want {want} {resp.text[:200]}"
+
+
+class _SchemaReadSpy:
+    """Stands in for a deployment's /openapi.json and records how it was asked."""
+
+    def __init__(self, status: int = 200) -> None:
+        self.status = status
+        self.headers: List[Dict[str, str]] = []
+
+    def __call__(self, url: str, headers: Optional[Dict[str, str]] = None, **kw: Any) -> Any:
+        import types
+
+        self.headers.append(dict(headers or {}))
+        spec = {"paths": {"/datasets": {"get": {}}}}
+        return types.SimpleNamespace(status_code=self.status, json=lambda: spec)
+
+
+def _schema_reader_of(headers: Dict[str, str]) -> Optional[str]:
+    import jwt
+
+    from tests.e2e import conftest
+
+    auth = headers.get("Authorization", "")
+    assert auth.startswith("Bearer "), f"schema read sent no bearer token: {headers}"
+    return jwt.decode(auth.split(" ", 1)[1], conftest.JWT_SECRET, algorithms=["HS256"]).get("sub")
+
+
+def test_e2_05_deployed_inventory_reads_the_schema_signed_in(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The deployed sweep builds its inventory from /openapi.json with the pack's token, never anonymously."""
+    import httpx
+
+    from tests.e2e import conftest
+
+    spy = _SchemaReadSpy()
+    monkeypatch.setattr(conftest, "MODE", "deployed")
+    monkeypatch.setattr(conftest, "DEPLOYED_URL", "http://deployment.invalid")
+    monkeypatch.setattr(httpx, "get", spy)
+    inventory = conftest.route_inventory()
+    assert spy.headers, "the deployed inventory never read /openapi.json"
+    assert all(_schema_reader_of(h) == conftest.SCHEMA_READER for h in spy.headers)
+    assert ("GET", "/datasets") in {(m, p) for m, p, _ in inventory}
+
+
+def test_e2_05_deployed_inventory_refuses_an_unread_schema(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A schema the token cannot read must stop the sweep, not shrink it to nothing."""
+    import httpx
+
+    from tests.e2e import conftest
+
+    monkeypatch.setattr(conftest, "MODE", "deployed")
+    monkeypatch.setattr(conftest, "DEPLOYED_URL", "http://deployment.invalid")
+    monkeypatch.setattr(httpx, "get", _SchemaReadSpy(status=401))
+    with pytest.raises(RuntimeError, match="401"):
+        conftest.route_inventory()
+
+
+def test_e2_09_surface_checks_read_the_schema_signed_in() -> None:
+    """E2.09's surface checks read /openapi.json as SCHEMA_READER, in both modes."""
+    from tests.e2e import conftest, test_e2_contract
+
+    seen: List[Dict[str, Any]] = []
+
+    class _Api:
+        def get(self, path: str, **kw: Any) -> Any:
+            import types
+
+            seen.append({"path": path, **kw})
+            return types.SimpleNamespace(status_code=200, json=lambda: {"paths": {}})
+
+    test_e2_contract._openapi_spec(_Api())  # type: ignore[arg-type]
+    assert [c.get("path") for c in seen] == ["/openapi.json"], seen
+    assert seen[0].get("user"), f"the surface checks read /openapi.json anonymously: {seen}"
+    assert seen[0]["user"] == conftest.SCHEMA_READER, seen
+
+
+# ---------------------------------------------------------------------------
+# E2.05a -- POST /threads fail-open (fixed; kept as regressions)
+# ---------------------------------------------------------------------------
+
+
 def test_e2_05a_post_threads_rejects_anonymous_caller(api: ApiClient) -> None:
     """POST /threads must reject an unauthenticated caller with 401 instead of creating a thread."""
     resp = api.post("/threads", json={})
@@ -298,13 +413,6 @@ def test_e2_05a_post_threads_rejects_anonymous_caller(api: ApiClient) -> None:
     assert resp.json().get("detail") == UNAUTH_MESSAGE
 
 
-@pytest.mark.defect
-@pytest.mark.xfail(
-    strict=True,
-    reason="DEFECT E2.05a (P0): POST /threads binds the new thread to any caller-supplied "
-    "X-Avaloka-Session without checking the token (app/api/server.py:2042-2044). "
-    "Remove this xfail when fixed.",
-)
 def test_e2_05a_post_threads_rejects_anonymous_session_binding(api: ApiClient) -> None:
     """An anonymous POST /threads carrying another user's session id must be rejected, not bound."""
     _seed_session("sess-victim", user_id="user-a", dataset_id="ds-a")

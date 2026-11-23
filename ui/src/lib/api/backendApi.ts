@@ -1,4 +1,17 @@
 import { supabase } from "@/integrations/supabase/external-client";
+import type { AgentMetric, AgentTrace, ApiCapabilities, PlanGraph } from "@/lib/agent-trace/types";
+import type { UploadFormatStatus } from "@/lib/upload-formats";
+import type { DeferredProfileResponse } from "@/lib/deferred-profile";
+import type {
+  SwarmCloneDoc,
+  SwarmEpisodes,
+  SwarmMissionDoc,
+  SwarmMissionRequest,
+  SwarmMissionSummary,
+  SwarmRecordsPage,
+  SwarmStartResponse,
+  SwarmTelemetry,
+} from "@/lib/agent-trace/swarm";
 import { BACKEND_API_BASE as API_BASE } from "@/lib/api/backend-config";
 // The configured MCP bases (runtime env, else localhost); never a hardcoded tunnel.
 import { MCP_API_BASE, MCP_TOOL_BASE } from "@/lib/api/mcp-config";
@@ -46,6 +59,10 @@ interface UploadResponse {
   portfolio_samples?: Record<string, any[]>;
   available_samples?: string[];
   profiling_result?: Record<string, any>;
+  // "pending" while the data profile runs after the upload returned; poll
+  // getDatasetProfile until it is full_profile, failed or skipped.
+  profiling_status?: string | null;
+  profiling_error?: string | null;
   sample_statistics?: Record<string, any>;
   sample_status?: string;
   background_task_id?: string;
@@ -77,6 +94,8 @@ export interface DatasetItem {
   portfolio_samples?: Record<string, any[]>;
   available_samples?: string[];
   profiling_result?: Record<string, any>;
+  profiling_status?: string | null;
+  profiling_error?: string | null;
   sample_statistics?: Record<string, any>;
 }
 
@@ -140,6 +159,9 @@ interface MessageResponse {
   error?: string;
   fallback?: boolean;
   execution_context?: { mode: string; mode_label: string; sample?: string | null };
+  // The agent trace recorded for this turn (GET trace_url).
+  trace_turn_id?: string | null;
+  trace_url?: string | null;
   /** Set when a fallback model tier answered instead of the configured model. */
   answered_by?: {
     configured_model: string;
@@ -180,22 +202,6 @@ interface HealthResponse {
   upstream_timeout_s: number;
 }
 
-interface DatabaseRegistrationResponse {
-  connection_id: string;
-  customer_id: string;
-  status: string;
-  message: string;
-}
-
-interface DatabaseTablesResponse {
-  tables: Array<{
-    name: string;
-    columns: string[];
-    row_count?: number;
-    schema?: string;
-  }>;
-}
-
 interface DatabaseSessionResponse {
   session_id: string;
   thread_id: string;
@@ -225,6 +231,8 @@ export interface PendingTurnResponse {
   status: "running" | "done" | "error" | "superseded" | "none" | string;
   message?: string;
   result?: any;
+  /** On "superseded": the id of the turn that replaced this one. */
+  superseded_by?: string | null;
 }
 
 /**
@@ -357,7 +365,25 @@ function parsePredictionFromReply(reply: string): unknown {
 
 
 
+/**
+ * A token pasted into the browser for a laptop demo against an API started
+ * with a chosen SUPABASE_JWT_SECRET (docs/design/SWARM_DEMO.md). Read only
+ * when set; the server still verifies it. Nothing else reads this key.
+ */
+export const DEV_TOKEN_KEY = "avaloka-dev-token";
+
+function devToken(): string | null {
+  try {
+    return typeof window !== "undefined" ? window.localStorage.getItem(DEV_TOKEN_KEY) : null;
+  } catch {
+    return null;
+  }
+}
+
+// Exported for the inference panel (src/api/inference.ts), as on 1.6.
 export async function getAccessToken(): Promise<string> {
+  const pasted = devToken();
+  if (pasted) return pasted;
   const {
     data: { session },
   } = await supabase.auth.getSession();
@@ -455,6 +481,56 @@ function processingTimeoutMs(totalBytes: number) {
   return Math.min(180_000, 60_000 + Math.ceil(mb) * 1000);
 }
 
+async function getTraceJson<T>(path: string, what: string): Promise<T> {
+  const accessToken = await getAccessToken();
+  const response = await proxyFetch(path, {
+    method: "GET",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) {
+    const err = new Error(`Failed to fetch ${what}: ${response.statusText}`) as Error & { status?: number; code?: string };
+    err.status = response.status;
+    if (response.status === 403) {
+      // The swarm console gate (app/api/swarm_gate.py) names itself in detail.code.
+      try {
+        const json = await response.json();
+        if (json?.detail?.code) err.code = String(json.detail.code);
+      } catch {
+        /* a bare 403 */
+      }
+    }
+    throw err;
+  }
+  return response.json() as Promise<T>;
+}
+
+async function postTraceJson<T>(path: string, body: unknown, what: string): Promise<T> {
+  const accessToken = await getAccessToken();
+  const response = await proxyFetch(path, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    // A 400 carries the reason (an unknown sample, a missing target column); say it.
+    let detail = response.statusText;
+    try {
+      const json = await response.json();
+      if (typeof json?.detail === "string") detail = json.detail;
+    } catch {
+      /* not JSON */
+    }
+    const err = new Error(`Failed to ${what}: ${detail}`) as Error & { status?: number };
+    err.status = response.status;
+    throw err;
+  }
+  return response.json() as Promise<T>;
+}
+
+function turnQuery(turnId?: string | null, sep = "?"): string {
+  return turnId ? `${sep}turn=${encodeURIComponent(turnId)}` : "";
+}
+
 /** GET /api/llm-models: the language model per agent role and its fallback chain. */
 export type LlmModelsResponse = {
   roles: Array<{
@@ -469,6 +545,82 @@ export type LlmModelsResponse = {
 };
 
 export const backendApi = {
+  /** Every agent step of one analysis (app/trace). */
+  async getAgentTrace(threadId: string, turnId?: string | null): Promise<AgentTrace> {
+    return getTraceJson<AgentTrace>(
+      `/threads/${encodeURIComponent(threadId)}/trace${turnQuery(turnId)}`,
+      "agent trace",
+    );
+  },
+
+  /** The granular, typed planner graph of one recorded turn. */
+  async getPlanGraph(threadId: string, turnId?: string | null): Promise<PlanGraph> {
+    return getTraceJson<PlanGraph>(
+      `/threads/${encodeURIComponent(threadId)}/planner-graph?format=json${turnQuery(turnId, "&")}`,
+      "planner graph",
+    );
+  },
+
+  /** Per-agent calls, latency, tokens, cost and outcomes across the caller's analyses. */
+  async getAgentMetrics(): Promise<{ threads: number; turns: number; agents: AgentMetric[] }> {
+    return getTraceJson(`/api/agent-metrics`, "agent metrics");
+  },
+
+  /** Feature discovery; ``features.swarm`` carries the edition's swarm limits,
+   *  ``features.swarm_console`` whether the live /swarm page is open to this caller,
+   *  ``features.upload_format_status`` what /api/upload takes and defers. */
+  async getCapabilities(): Promise<ApiCapabilities & {
+    features?: {
+      upload_formats?: string[];
+      upload_format_status?: Record<string, UploadFormatStatus>;
+    };
+  }> {
+    return getTraceJson(`/api/capabilities`, "capabilities");
+  },
+
+  // ---- Swarm missions (app/trace/swarm_service.py; owner-only, Bearer auth) ----
+
+  /** Start a coordinated mission; returns at once, then poll getSwarmRecords. */
+  async startSwarmMission(body: SwarmMissionRequest): Promise<SwarmStartResponse> {
+    return postTraceJson<SwarmStartResponse>(`/api/swarm/missions`, body, "start the swarm mission");
+  },
+
+  async listSwarmMissions(): Promise<{ missions: SwarmMissionSummary[] }> {
+    return getTraceJson(`/api/swarm/missions`, "swarm missions");
+  },
+
+  async getSwarmMission(missionId: string, opts: { records?: boolean } = {}): Promise<SwarmMissionDoc> {
+    return getTraceJson<SwarmMissionDoc>(
+      `/api/swarm/missions/${encodeURIComponent(missionId)}${opts.records ? "?records=1" : ""}`,
+      "swarm mission",
+    );
+  },
+
+  /** Records with seq > after (seq starts at 1); `done` once the mission finished and the tail is drained. */
+  async getSwarmRecords(missionId: string, after = 0, limit = 500): Promise<SwarmRecordsPage> {
+    return getTraceJson<SwarmRecordsPage>(
+      `/api/swarm/missions/${encodeURIComponent(missionId)}/records?after=${after}&limit=${limit}`,
+      "swarm records",
+    );
+  },
+
+  async getSwarmClone(missionId: string, cloneId: string): Promise<SwarmCloneDoc> {
+    return getTraceJson<SwarmCloneDoc>(
+      `/api/swarm/missions/${encodeURIComponent(missionId)}/clones/${encodeURIComponent(cloneId)}`,
+      "swarm clone",
+    );
+  },
+
+  /** The RL view: one episode per clone, reward left null. */
+  async getSwarmEpisodes(missionId: string): Promise<SwarmEpisodes> {
+    return getTraceJson<SwarmEpisodes>(`/api/swarm/missions/${encodeURIComponent(missionId)}/episodes`, "swarm episodes");
+  },
+
+  /** Exactly the records telemetry would send for this mission; nothing is sent. */
+  async getSwarmTelemetry(missionId: string): Promise<SwarmTelemetry> {
+    return getTraceJson<SwarmTelemetry>(`/api/swarm/missions/${encodeURIComponent(missionId)}/telemetry`, "swarm telemetry");
+  },
+
   async getPlannerGraph(threadId: string): Promise<Blob> {
     const accessToken = await getAccessToken();
     const response = await proxyFetch(`/threads/${threadId}/planner-graph`, {
@@ -1112,6 +1264,17 @@ export const backendApi = {
     return promise;
   },
 
+  /** The upload's background data profile (GET /api/datasets/{id}/profile). */
+  async getDatasetProfile(datasetId: string): Promise<DeferredProfileResponse> {
+    const accessToken = await getAccessToken();
+    const response = await proxyFetch(`/api/datasets/${encodeURIComponent(datasetId)}/profile`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!response.ok) throw new Error(`Profile fetch failed: ${response.statusText}`);
+    return response.json();
+  },
+
   /** Uploaded datasets for the signed-in user (GET /datasets). */
   async listDatasets(): Promise<any> {
     const accessToken = await getAccessToken();
@@ -1275,42 +1438,10 @@ export const backendApi = {
     return response.json();
   },
 
-  async registerDatabase(connectionData: {
-    connection_name: string;
-    db_type: string;
-    host: string;
-    port: number;
-    database: string;
-    username: string;
-    password: string;
-    use_ssl: boolean;
-  }): Promise<DatabaseRegistrationResponse> {
-    const accessToken = await getAccessToken();
-    const response = await proxyFetch(`/api/database/register`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify(connectionData),
-    });
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}) as any);
-      throw new Error(errorData.detail || `Database registration failed: ${response.statusText}`);
-    }
-    return response.json();
-  },
-
-  async listDatabaseTables(connectionId: string): Promise<DatabaseTablesResponse> {
-    const accessToken = await getAccessToken();
-    const response = await proxyFetch(`/api/database/tables`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ connection_id: connectionId }),
-    });
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}) as any);
-      throw new Error(errorData.detail || `Failed to fetch tables: ${response.statusText}`);
-    }
-    return response.json();
-  },
+  // No registerDatabase / listDatabaseTables here: they posted to
+  // /api/database/register and /api/database/tables, which no backend route
+  // serves, and nothing called them. Databases are registered by
+  // DatabaseConnectModal through the onboarding API (/customers/register).
 
   async createDatabaseSession(connectionId: string): Promise<DatabaseSessionResponse> {
     const accessToken = await getAccessToken();
@@ -1486,6 +1617,34 @@ export const backendApi = {
       probabilities: probabilities?.probabilities ?? probabilities?.class_probabilities,
       rawResponse: res,
     };
+  },
+
+
+  /** One Instant Analysis run (GET /api/instant/{run_id}): verdict, report, export links. */
+  async getInstantRun(runId: string): Promise<unknown> {
+    const accessToken = await getAccessToken();
+    const response = await proxyFetch(`/api/instant/${encodeURIComponent(runId)}`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!response.ok) throw new Error(`Run fetch failed: ${response.statusText}`);
+    return response.json();
+  },
+
+  /**
+   * A run's self-contained HTML export, as text. A backend path
+   * ("/api/instant/{run_id}/export.html") goes through the proxy with the
+   * bearer; an absolute URL (a signed object-store link) is fetched as is.
+   */
+  async getInstantExport(url: string): Promise<string> {
+    const response = /^https?:\/\//i.test(url)
+      ? await fetch(url, { method: "GET" })
+      : await proxyFetch(url, {
+          method: "GET",
+          headers: { Authorization: `Bearer ${await getAccessToken()}` },
+        });
+    if (!response.ok) throw new Error(`Export fetch failed: ${response.statusText}`);
+    return response.text();
   },
 
   _mcpApi: MCP_API_BASE,

@@ -87,13 +87,31 @@ CONN_1 = "3c9a1f2e-6b7d-4e8f-a1b2-c3d4e5f60718"
 CONN_2 = "7d2e4f6a-8b9c-4d0e-b1f2-a3b4c5d6e7f8"
 
 
+class _OneRowStore:
+    """The db_connections store seam the MCP credential routes read and write
+    through on 1.7 (owned_row -> connection_store().get; _mcp_conn_update ->
+    connection_store().update), holding one row."""
+
+    def __init__(self, row: Dict[str, Any]):
+        self.row = row
+
+    def get(self, connection_id: str):
+        return dict(self.row) if connection_id == self.row["id"] else None
+
+    def update(self, connection_id: str, patch: Dict[str, Any]) -> None:
+        self.row.update(patch)
+
+
+def _one_row_store(monkeypatch, server, row: Dict[str, Any]) -> None:
+    monkeypatch.setattr(server._db_connections, "connection_store", lambda: _OneRowStore(row))
+
+
 def test_cm06_mcp_credentials_round_trip_with_the_real_cipher(client, real_cipher, monkeypatch):
     """CM-06: encrypting MCP connection credentials stores only ciphertext at rest, and decrypting that stored row recovers the original values."""
     import app.api.server as server
 
     row: Dict[str, Any] = {"id": CONN_1, "user_id": "mcp-owner", "customer_id": None}
-    monkeypatch.setattr(server, "_mcp_conn_select", lambda cid: dict(row), raising=False)
-    monkeypatch.setattr(server, "_mcp_conn_update", lambda cid, patch: row.update(patch), raising=False)
+    _one_row_store(monkeypatch, server, row)
     api_key, username = "test-api-key-1", "user-1"
 
     enc = client.post(f"/api/mcp-connections/{CONN_1}/encrypt",
@@ -117,8 +135,7 @@ def test_cm06_ciphertext_does_not_open_under_another_key(client, real_cipher, mo
     import app.api.server as server
 
     row: Dict[str, Any] = {"id": CONN_2, "user_id": "mcp-owner", "customer_id": None}
-    monkeypatch.setattr(server, "_mcp_conn_select", lambda cid: dict(row), raising=False)
-    monkeypatch.setattr(server, "_mcp_conn_update", lambda cid, patch: row.update(patch), raising=False)
+    _one_row_store(monkeypatch, server, row)
     assert client.post(f"/api/mcp-connections/{CONN_2}/encrypt", json={"apiKey": "test-api-key-1"},
                        headers=make_auth_headers("mcp-owner")).status_code == 200
 
@@ -186,7 +203,9 @@ def test_cm12_commercial_capabilities_refused_for_the_commercial_reason():
                 if getattr(resolve_capabilities("avaloka_hosted", e, has_commercial_build=True), name)]
 
     # Owner's rule: what is Enterprise-only. Everything else commercial is both.
-    enterprise_only = {"org_structure", "sso_audit"}
+    # shared_catalog is 1.7's shared dataset catalog, Enterprise only by design
+    # (docs/EDITIONS.md, tests/catalog/test_editions_catalog.py).
+    enterprise_only = {"org_structure", "sso_audit", "shared_catalog"}
     for name in commercial:
         assert sold_on(name) == (["Enterprise"] if name in enterprise_only else ["Professional", "Enterprise"]), name
 

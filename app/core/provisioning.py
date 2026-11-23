@@ -23,6 +23,8 @@ Where it runs:
 
 * ``scripts/install.sh`` and ``python -m app.core.provisioning`` -- local
   installs and any compose stack that reads the same .env (``env_file``);
+* ``scripts/quickstart.sh`` -- the same rules for ``.env.quickstart``, in bash
+  (it runs before any Python dependency is installed);
 * each service's startup, for the same .env, so a plain
   ``uvicorn app.api.server:app`` on a host needs no manual step either;
 * Helm does the same in the chart (``avaloka.generatedSecret``: ``lookup`` of
@@ -33,8 +35,7 @@ one deployment must share one value, and a key generated inside one container
 lives only in that container's filesystem. A container adopts what its env
 file already holds (:func:`adopt_from_file`); one that finds no key is a broken
 deploy and refuses to start (encryption_key.py). ``AVALOKA_AUTO_PROVISION=1``
-opts a (non-Kubernetes) container in; Kubernetes pods never generate. (Port of
-2.x's rule, fix/2.x-encryption-key-self-provision 396baf8e.)
+opts a (non-Kubernetes) container in; Kubernetes pods never generate.
 
 Standalone on purpose (stdlib only): the installer runs it before the app's
 dependencies are importable.
@@ -72,7 +73,30 @@ PUBLISHED_VALUES = frozenset({
     "<generate-with-openssl-rand-hex-32>",
     "<generate-and-store-a-strong-random-secret>",
     "changeme", "change-me", "secret", "test", "dev", "development",
+    # MLflow's basic_auth.ini default admin password before 3.17 (GHSA-gq3w-7jj3-x7gr).
+    "password", "password1234",
 })
+
+#: What replacing a published value costs, per secret: said with every
+#: replacement warning, so an operator upgrading an install learns it there.
+REPLACEMENT_CONSEQUENCE: Dict[str, str] = {
+    "DB_ENCRYPTION_KEY": (
+        "Anything sealed under the old key can no longer be opened: saved database "
+        "connections, cloud connection keys, MCP and GitHub tokens, and passwords typed "
+        "into chat. Register those connections again (and re-enter those tokens)."),
+    "MCP_SERVICE_TOKEN": (
+        "Nothing stored depends on it; restart every service (API, LangGraph, MCP) so "
+        "they all use the new value."),
+    "EXECUTE_SERVICE_TOKEN": (
+        "Nothing stored depends on it; restart the graph pods and the execute service so "
+        "they all use the new value."),
+    "LANGGRAPH_SERVICE_TOKEN": (
+        "Nothing stored depends on it; restart the API and the LangGraph server so "
+        "they both use the new value."),
+    "AVALOKA_PII_KEY": (
+        "Columns pseudonymised under the old key no longer match new pseudonyms; "
+        "retrain models trained on pseudonymised data."),
+}
 
 _LINE_RE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$")
 
@@ -240,8 +264,9 @@ def provision(env_file: Optional[Path] = None, names: Iterable[str] = GENERATED_
             logger.warning("%s was not set: generated and saved to %s", name, path)
         elif how == "replaced-published":
             logger.warning("%s was a published value (it ships in this repository) and protects "
-                           "nothing: replaced with a generated one, saved to %s. If it was exported "
-                           "in your shell, remove the export.", name, path)
+                           "nothing: replaced with a generated one, saved to %s. %s If it was "
+                           "exported in your shell, remove the export.", name, path,
+                           REPLACEMENT_CONSEQUENCE.get(name, ""))
     return done
 
 
@@ -257,7 +282,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"[provision] {name}: generated and saved to {path}")
         elif how == "replaced-published":
             print(f"[provision] {name}: WARNING the value was a published one; replaced with a generated "
-                  f"one, saved to {path}")
+                  f"one, saved to {path}. {REPLACEMENT_CONSEQUENCE.get(name, '')}")
         elif how == "file":
             print(f"[provision] {name}: kept the value already in {path}")
         else:

@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 vi.mock("@tanstack/react-router", () => ({ Link: ({ children, ...p }: { children: unknown }) => createElement("a", p as object, children as never) }));
 vi.mock("@/lib/api/backendApi", () => ({ proxyFetch: vi.fn(), getAccessToken: vi.fn() }));
 import { normalizeModels, normalizeResult } from "@/api/inference";
@@ -13,7 +14,9 @@ import { InferenceResults } from "./InferenceResults";
 function render(node: React.ReactElement) {
   const el = document.createElement("div");
   document.body.appendChild(el);
-  act(() => { createRoot(el).render(node); });
+  // ModelSummary reads the run's cross-validation through react-query (2.x); the sections need a client.
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  act(() => { createRoot(el).render(createElement(QueryClientProvider, { client }, node)); });
   return el;
 }
 const raw = [

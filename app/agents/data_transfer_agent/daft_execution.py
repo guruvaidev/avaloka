@@ -15,13 +15,19 @@ import shutil
 import numpy as np
 import pandas as pd
 from langchain_core.messages import AIMessage
+from app.api import reply_segments as _rs
 from app.agents.execution_agent import _strip_markdown_code_fences, get_service_details
-from app.executor.env import scrubbed_env
 from app.agents.data_transfer_agent.dta_state import DaftETLState
 from pathlib import Path 
 
 from app.graph.etl_state import ETLState
 from app.utils import generate_filename_timestamp
+from app.core.thirdparty_optout import THIRDPARTY_OPTOUT_ENV, disable_thirdparty_telemetry
+from app.executor.client import run_script
+
+# The generated harness below runs `import daft` in a child process, which
+# inherits this environment; the harness sets the opt-out itself as well.
+disable_thirdparty_telemetry()
 
 logger = logging.getLogger(__name__)
 AVALOKA_LOCAL_EXEC_TIMEOUT=120
@@ -52,7 +58,7 @@ def execution_agent_node_local(state: DaftETLState) -> DaftETLState:
     if coder_explanation:
         existing_messages = state.get("messages", [])
         if not any(getattr(msg, "content", None) == coder_explanation for msg in existing_messages):
-            state["messages"] = existing_messages + [AIMessage(content=coder_explanation)]
+            state["messages"] = existing_messages + [_rs.commentary_message(content=coder_explanation)]
 
     # Get input data from state
     input_sample_data = coder_def.get("input_sample_data")
@@ -66,7 +72,7 @@ def execution_agent_node_local(state: DaftETLState) -> DaftETLState:
         new_state["coder_definition"] = coder_def
         new_state["code_executed"] = False
         new_state["generated_output_schema"] = None
-        new_state["messages"] = new_state["messages"] + [AIMessage(content=error_msg)]
+        new_state["messages"] = new_state["messages"] + [_rs.plain_message(content=error_msg)]
         return new_state
 
     # Execute code locally
@@ -93,7 +99,7 @@ def execution_agent_node_local(state: DaftETLState) -> DaftETLState:
             f"Here is a preview of the transformed data:\n\n"
             f"```text\n{preview_table}\n```"
         )
-        new_state["messages"] = new_state["messages"] + [AIMessage(content=success_msg)]
+        new_state["messages"] = new_state["messages"] + [_rs.plain_message(content=success_msg)]
         
     else:
         # execution_error holds the real cause; stderr is empty on timeout and
@@ -117,7 +123,7 @@ def execution_agent_node_local(state: DaftETLState) -> DaftETLState:
             f"Error Details:\n\n"
             f"```text\n{error_msg}\n```"
         )
-        new_state["messages"] = new_state["messages"] + [AIMessage(content=failure_msg)]
+        new_state["messages"] = new_state["messages"] + [_rs.plain_message(content=failure_msg)]
         
 
     new_state["coder_definition"] = coder_def
@@ -135,7 +141,9 @@ def execute_code_on_local(
     extracted_code = _strip_markdown_code_fences(code)
 
     run_id = str(uuid.uuid4())[:8]
-    temp_data_path = f"temp_data_{run_id}.parquet"
+    # Absolute, in the temp dir: the script may run in the executor, which
+    # recreates its inputs at their own path and has no writable cwd.
+    temp_data_path = os.path.join(tempfile.gettempdir(), f"avaloka_dta_sample_{run_id}.parquet")
 
     # We save the Pandas DataFrame to Parquet. This preserves strict data types 
     try:
@@ -152,6 +160,9 @@ def execute_code_on_local(
     #harnessing template for the script to execute as daft code
     
     harness_template = textwrap.dedent(f"""\
+import os
+for _k, _v in {dict(THIRDPARTY_OPTOUT_ENV)!r}.items():
+    os.environ.setdefault(_k, _v)
 import daft
 import sys
 
@@ -208,39 +219,34 @@ except Exception as e:
     sys.exit(1)
 """)
 
-    # Save the script content to a temporary file (optional, but good for complex scripts)
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as temp_file:
-        temp_file.write(script_to_run)
-        temp_file_path = temp_file.name
-
+    # The transform is model-written and needs only the sample: it runs with
+    # the allowlisted environment (no DB URLs, no keys) and, with an executor
+    # configured, in the executor -- no network to any database.
     exec_home = tempfile.mkdtemp(prefix="avaloka_dta_home_")
     try:
-        # Run the script in a separate process
-        result = subprocess.run(
-            [sys.executable, temp_file_path],
-            capture_output=True,
-            text=True,
-            encoding='utf-8',      # ← Decode subprocess output as UTF-8
-            errors='replace',  
-            check=False, 
+        ran = run_script(
+            script_to_run,
             timeout=int(os.getenv("AVALOKA_LOCAL_EXEC_TIMEOUT", "60")),
-            # Model-written code: the allowlisted environment, never this
-            # process's keys and passwords. cwd is unchanged: the harness reads
-            # the sample from a path relative to it.
-            env=scrubbed_env(extra={'PYTHONIOENCODING': 'utf-8',
-                                    'HOME': exec_home, 'TMPDIR': exec_home})
+            inputs=[temp_data_path],
+            # A local child gets a private HOME/TMPDIR as well; cwd is unchanged:
+            # the harness reads the sample from a path relative to it.
+            extra_env={"PYTHONIOENCODING": "utf-8", "HOME": exec_home, "TMPDIR": exec_home},
         )
+        stdout = ran.stdout or ""
+        stderr = ran.stderr or ""
 
-        stdout = result.stdout or ""
-        stderr = result.stderr or ""
-        
         # Store raw output for logging
-        out["returncode"] = result.returncode
+        out["returncode"] = ran.returncode
         out["execution_stdout"] = stdout
         out["execution_stderr"] = stderr
 
-        # Status Logic ---
-        if result.returncode == 0:
+        if ran.timed_out:
+            out["status"] = "error"
+            out["execution_error"] = "Timeout Error: The transformation took too long to generate a preview."
+        elif ran.returncode is None:
+            out["status"] = "error"
+            out["execution_error"] = f"System Error: {ran.error or 'the script did not run'}"
+        elif ran.returncode == 0:
             logger.info("Output from the new interpreter:\n%s", stdout)
             if stderr.strip():
                 # warnings are not errors
@@ -258,27 +264,17 @@ except Exception as e:
             out["status"] = "success"
             out["execution_error"] = None
         else:
-            logger.error("Interpreter failed (rc=%s)", result.returncode)
+            logger.error("Interpreter failed (rc=%s)", ran.returncode)
             logger.error("Stdout:\n%s", stdout)
             logger.error("Stderr:\n%s", stderr)
 
             out["status"] = "error"
-            out["execution_error"] = f"Script failed with exit status {result.returncode}. Error: {stderr.strip()}"
-
-    except subprocess.TimeoutExpired as e:
-        out["status"] = "error"
-        out["execution_error"] = "Timeout Error: The transformation took too long to generate a preview."
-        out["execution_stderr"] = e.stderr or ""
-
-    except FileNotFoundError:
-        out["status"] = "error"
-        out["execution_error"] = "System Error: Python executable not found."
+            out["execution_error"] = f"Script failed with exit status {ran.returncode}. Error: {stderr.strip()}"
 
     finally:
-        # Cleanup: Delete both the script and the temporary data file to keep the server clean
-        for file_to_remove in [temp_file_path, temp_data_path]:
-            if os.path.exists(file_to_remove):
-                os.remove(file_to_remove)
+        # Cleanup: delete the temporary data file to keep the server clean
+        if os.path.exists(temp_data_path):
+            os.remove(temp_data_path)
         shutil.rmtree(exec_home, ignore_errors=True)
 
     return out

@@ -203,8 +203,12 @@ async def resolve_github_config(user_id: Optional[str]) -> Optional[GitHubConfig
     if user_id:
         try:
             row = await asyncio.to_thread(get_integration_connection, user_id, "github")
-        except Exception:
-            logger.warning("[integrations] github connection lookup failed for %s", user_id, exc_info=True)
+        except Exception as exc:
+            from app.agents.sampling_persistence import SupabaseNotConfigured, log_supabase_skip
+            if isinstance(exc, SupabaseNotConfigured):
+                log_supabase_skip(logger, "[integrations] github connection lookup skipped", exc)
+            else:
+                logger.warning("[integrations] github connection lookup failed for %s", user_id, exc_info=True)
             row = None
 
         if row and row.get("enabled"):

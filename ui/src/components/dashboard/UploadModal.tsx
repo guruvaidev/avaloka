@@ -17,8 +17,8 @@ import { canReviewUpload, canStartSelection, initialSelection, isSkippedSheetNot
 import { CleaningRules, CompactDatasetRow, DatasetReviewIssues, EditableDatasetName, FileStatusBar, ReviewTooltip, UploadSummaryCard } from "@/components/dashboard/upload/UploadReviewPanels";
 import { Button as ReviewButton } from "@/components/ui/button";
 import { ConnectCloudModal } from "@/components/database/ConnectCloudModal";
-
-const ACCEPTED = [".csv", ".xlsx", ".xls", ".json"];
+import { UploadFormatHint } from "@/components/dashboard/UploadFormatHint";
+import { FALLBACK_FORMATS, isAccepted, uploadFormatsFrom, type UploadFormats } from "@/lib/upload-formats";
 /** Fallback limits while /api/limits is loading or unavailable. */
 const FALLBACK_MAX_BYTES = 100 * 1024 * 1024;
 
@@ -51,10 +51,12 @@ interface UploadResponse {
   [k: string]: unknown;
 }
 
-/** File TYPE check only — size is decided by checkLimits() from the plan limits. */
-function validate(file: File): string | null {
-  const ext = "." + (file.name.split(".").pop() ?? "").toLowerCase();
-  if (!ACCEPTED.includes(ext)) return "File type not supported. Use CSV, Excel or JSON.";
+/** File TYPE check only — size is decided by checkLimits() from the plan limits.
+ * The accepted list comes from /api/capabilities (see lib/upload-formats). */
+function validate(file: File, formats: UploadFormats): string | null {
+  if (!isAccepted(formats, file.name)) {
+    return `File type not supported. Use ${formats.accept.join(", ")}.`;
+  }
   return null;
 }
 
@@ -431,7 +433,7 @@ export function UploadModal({
       const seen = new Set(prev.map(fileKey));
       const accepted: File[] = [];
       for (const f of incoming) {
-        const v = validate(f);
+        const v = validate(f, formats);
         if (v) {
           toast.error(`${f.name}: ${v}`);
           continue;
@@ -452,6 +454,24 @@ export function UploadModal({
       return next;
     });
   };
+
+  // What the backend takes, and what it defers and why; the shipped list
+  // until the capabilities answer arrives or on an older backend.
+  const [formats, setFormats] = useState<UploadFormats>(FALLBACK_FORMATS);
+  useEffect(() => {
+    let cancelled = false;
+    // Resolved lazily: an older API module (or a partial test double) without
+    // getCapabilities is the "older backend" case, and keeps the shipped list.
+    Promise.resolve()
+      .then(() => backendApi.getCapabilities())
+      .then((caps) => {
+        if (!cancelled) setFormats(uploadFormatsFrom(caps));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // One request for the whole selection: re-runs whenever the selection changes.
   useEffect(() => {
@@ -519,7 +539,7 @@ export function UploadModal({
     if (!replacing) { addFiles(incoming); return; }
     const replacement = incoming[0];
     if (!replacement) return;
-    const error = validate(replacement);
+    const error = validate(replacement, formats);
     if (error) { toast.error(error); return; }
     const next = selectedFiles.map((f) => f === replacing ? replacement : f);
     const violation = checkLimits(next);
@@ -756,7 +776,7 @@ export function UploadModal({
           <p className="mt-2 text-xs text-tertiary" aria-label={`Step ${step} of 2`}><span className={step === 1 ? "font-semibold text-brand-secondary" : ""}>1 Upload</span><span className="mx-2">·</span><span className={step === 2 ? "font-semibold text-brand-secondary" : ""}>2 Review</span></p>
           <DialogDescription className="sr-only">Upload your files, then review dataset details and start analysis.</DialogDescription>
         </header>
-        <input ref={inputRef} type="file" multiple accept={ACCEPTED.join(",")} className="hidden" onChange={(event) => chooseFiles(Array.from(event.target.files ?? []))} />
+        <input ref={inputRef} type="file" multiple accept={formats.accept.join(",")} className="hidden" onChange={(event) => chooseFiles(Array.from(event.target.files ?? []))} />
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pb-5" data-upload-step={step}>
           {step === 1 ? <>
         {/* Dropzone */}
@@ -796,11 +816,12 @@ export function UploadModal({
               </button>{" "}
               <span className="text-tertiary">or drag and drop file</span>
             </p>
-            <p className="mt-1 text-xs text-tertiary">
-              {limits
-                ? `CSV, Excel or JSON (max. ${maxFileMb} MB per file)`
-                : "CSV, Excel or JSON (max. 100MB)"}
-            </p>
+            <UploadFormatHint
+              formats={formats}
+              limitsText={
+                limits ? `max. ${maxFileMb} MB per file` : "max. 100MB"
+              }
+            />
           </div>
 
         </div>

@@ -251,7 +251,7 @@ def test_execution_agent_node_uses_the_configured_service_and_parses_csv_and_set
         data_source_location="in.csv",
         output_location="out.csv",
     )
-    monkeypatch.setenv("AVALOKA_EXECUTE_SERVICE_URL", "http://203.0.113.4:8080")
+    monkeypatch.setenv("AVALOKA_EXECUTE_SERVICE_URL", "http://203.0.113.10:8080")
 
     def fake_infra_agent_node(s):
         raise AssertionError("execution provisioned infrastructure")
@@ -344,9 +344,11 @@ def test_execution_agent_node_failure_reports_short_reason(monkeypatch):
     new_state = exec_mod.execution_agent_node(state)
     msg = new_state["messages"][-1].content
     assert "I couldn't complete this step" in msg
-    # The real error line is surfaced…
-    assert "TypeError: read_csv() got an unexpected keyword argument 'errors'" in msg
-    # …but the traceback body never reaches the chat.
+    # Plain words, as #522 words a failed step; the error line is in the logs
+    # and on the trace step, not in the chat…
+    assert "Reason: the analysis code stopped with an error." in msg
+    assert "TypeError" not in msg
+    # …and neither is the traceback body.
     assert "Traceback (most recent call last)" not in msg
     assert 'File "x.py"' not in msg
 

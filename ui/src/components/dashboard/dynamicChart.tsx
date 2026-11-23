@@ -24,6 +24,7 @@ import {
 } from "recharts";
 import { getLineRenderData, getPieRenderData } from "@/lib/chart-points";
 import { chartAxisTitles } from "@/lib/chart-axis-titles";
+import { parseReplySegments, type ReplySegment } from "@/lib/reply-segments";
 
 export type ChartType = "line" | "area" | "bar" | "pie" | "donut" | "scatter";
 
@@ -39,6 +40,10 @@ export type Slide = {
   insights: string[];
   headline?: string | null;
   insightFacts?: string | null;
+  /** 2.0 commentary marking: which words of the title / headline / insight a model wrote. */
+  titleSegments?: ReplySegment[] | null;
+  headlineSegments?: ReplySegment[] | null;
+  insightSegments?: ReplySegment[] | null;
   /** Metadata from visualization_config (used by the Insights Avatar). */
   id?: string;
   chartKind?: "bar" | "line" | "pie" | "scatter" | "histogram";
@@ -269,6 +274,9 @@ export function normalizeChart(raw: any, samples?: any[], columns: ColumnProfile
     reason: str(raw?.reason),
     headline: str(raw?.headline),
     insightFacts: str(raw?.insight_facts),
+    titleSegments: parseReplySegments(raw?.title_segments),
+    headlineSegments: parseReplySegments(raw?.headline_segments),
+    insightSegments: parseReplySegments(raw?.insight_segments),
     xAxisTitle: str(raw?.xAxisTitle ?? raw?.x_axis_title ?? slide.xAxisTitle ?? slide.xLabel) ?? undefined,
     yAxisTitle: str(raw?.yAxisTitle ?? raw?.y_axis_title ?? slide.yAxisTitle ?? slide.yLabel) ?? undefined,
     yFormat: raw?.config?.y_format === "percent" || enc.y?.aggregate === "rate" ? "percent" : undefined,

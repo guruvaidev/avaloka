@@ -612,16 +612,20 @@ def test_planner_triggers_infra_on_csv_upload():
 
 def test_e2e_nl_pipeline(compiled_graph_e2e_tests):
 
+    # A data source is bound, as in every real analysis turn: with none, the
+    # agent says what data it needs instead of planning code on nothing.
     state = ETLState(messages=[HumanMessage(content="Aggregate sales per region")],
-                     planner_definition={})
+                     planner_definition={}, data_source_location="/data/sales.csv")
     graph, mock_coder = compiled_graph_e2e_tests
     result = graph.invoke(state)
     assert any("Code generated" in m.content for m in result["messages"])
     mock_coder.assert_called_once()
 
 def test_e2e_full_chain(compiled_graph_e2e_tests):
+    # A data source is bound, as in every real analysis turn: with none, the
+    # agent says what data it needs instead of planning code on nothing.
     state = ETLState(messages=[HumanMessage(content="Aggregate sales")],
-                     planner_definition={})
+                     planner_definition={}, data_source_location="/data/sales.csv")
     graph, mock_coder = compiled_graph_e2e_tests
     result = graph.invoke(state)
     assert any("Code generated" in m.content for m in result["messages"])

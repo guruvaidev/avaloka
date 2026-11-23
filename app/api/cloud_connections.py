@@ -737,7 +737,7 @@ async def normalize_storage_uri(storage_uri: str, conn: Dict[str, Any]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Sealed object-store credentials (hotfix/1.6-cloud-keys-sealed; 1.7's D15.3)
+# Sealed object-store credentials (D15.3, 15c)
 # ---------------------------------------------------------------------------
 #
 # A cloud_datasets row carries its keys sealed (AES-GCM under DB_ENCRYPTION_KEY,
@@ -745,14 +745,85 @@ async def normalize_storage_uri(storage_uri: str, conn: Dict[str, Any]) -> str:
 # refuses plaintext keys, so writes go through POST /api/cloud-connections,
 # which seals in this process, and rows written before that are sealed by
 # seal_plaintext_rows() at start-up. Reading stays as it was: get_cloud_connection
-# opens the ciphertext in memory, and every reader (rayjob_submitter,
-# k8s_secrets, the planner, the server routes) works on the opened dict.
+# opens the ciphertext in memory. For the connector contract, the opened row
+# becomes one avaloka.connectors.Credentials holding a JSON document of storage
+# options, revealed once when the filesystem is built and never stored again.
 
 CLOUD_PROVIDERS = {"aws": "s3", "s3": "s3", "aws_s3": "s3", "amazon_s3": "s3",
                    "gcp": "gcs", "gcs": "gcs", "gs": "gcs", "google": "gcs", "google_cloud_platform": "gcs",
                    "google_cloud_storage": "gcs",
                    "azure": "azure", "az": "azure", "azure_blob": "azure", "azure_blob_storage": "azure",
                    "microsoft_azure": "azure"}
+_SCHEME = {"s3": "s3", "gcs": "gs", "azure": "az"}
+
+
+def storage_options_from_row(conn: Dict[str, Any]) -> Dict[str, Any]:
+    """The provider-neutral options document for an opened cloud_datasets row.
+
+    ``conn`` is what get_cloud_connection returns (ciphertext already opened in
+    memory). GCP rows keep the project id in ``access_key`` and the service
+    account in ``secret_key``; Azure rows keep the account in ``access_key``
+    and a SAS token or account key in ``secret_key``; S3 rows keep the pair.
+    """
+    provider = CLOUD_PROVIDERS.get(str(conn.get("provider") or conn.get("backend") or "").lower())
+    if provider is None:
+        raise ValueError("cloud connection has no known provider")
+    clean = lambda v: (str(v).strip() or None) if v is not None else None  # noqa: E731
+    if provider == "s3":
+        options: Dict[str, Any] = {
+            "provider": "s3",
+            "access_key": clean(conn.get("access_key") or conn.get("aws_access_key_id")),
+            "secret_key": clean(conn.get("secret_key") or conn.get("aws_secret_access_key")),
+            "session_token": clean(conn.get("session_token") or conn.get("aws_session_token")),
+            "endpoint_url": clean(conn.get("endpoint_url") or conn.get("custom_endpoint_url")),
+            "region": clean(conn.get("region") or conn.get("aws_region")),
+        }
+        if not (options["access_key"] and options["secret_key"]):
+            raise ValueError("S3 connection has no key pair")
+    elif provider == "gcs":
+        sa = conn.get("service_account_json") or conn.get("gcp_service_account_json") or conn.get("secret_key")
+        if not sa:
+            raise ValueError("GCS connection has no service account")
+        options = {"provider": "gcs", "service_account_json": sa if isinstance(sa, dict) else str(sa),
+                   "project": clean(conn.get("project") or conn.get("gcp_project") or conn.get("access_key"))}
+    else:
+        account = clean(conn.get("account_name") or conn.get("azure_account") or conn.get("access_key"))
+        options = {"provider": "azure", "account_name": account,
+                   "account_key": clean(conn.get("account_key")),
+                   "sas_token": clean(conn.get("sas_token") or conn.get("sas") or conn.get("secret_key")),
+                   "connection_string": clean(conn.get("connection_string"))}
+        if not (account or options["connection_string"]):
+            raise ValueError("Azure connection names no account")
+    return {k: v for k, v in options.items() if v is not None}
+
+
+def object_store_credentials(conn: Dict[str, Any]):
+    """The row's options as one sealed-in-process ``Credentials`` object."""
+    import json as _json
+    from avaloka.connectors import Credentials
+    return Credentials(_json.dumps(storage_options_from_row(conn), sort_keys=True, default=str))
+
+
+def object_store_url(conn: Dict[str, Any], storage_uri: Optional[str] = None) -> str:
+    """``<scheme>://<bucket>/<prefix>`` for a row, from storage_uri when given."""
+    provider = CLOUD_PROVIDERS.get(str(conn.get("provider") or conn.get("backend") or "").lower())
+    if provider is None:
+        raise ValueError("cloud connection has no known provider")
+    if storage_uri:
+        parsed = urlparse(storage_uri)
+        if parsed.netloc:
+            return f"{_SCHEME[provider]}://{parsed.netloc}/{parsed.path.strip('/')}".rstrip("/")
+    raw = str(conn.get("bucket_name") or conn.get("bucket") or conn.get("container") or "").strip().strip("/")
+    if not raw:
+        raise ValueError("cloud connection names no bucket")
+    return f"{_SCHEME[provider]}://{raw}"
+
+
+def object_store_connector(conn: Dict[str, Any], storage_uri: Optional[str] = None):
+    """An ``ObjectStoreConnector`` for an opened row: the contract's shape for
+    a bucket (read, schema, sample, endpoints, source_version, receipts)."""
+    from avaloka.connectors.objectstore import ObjectStoreConnector
+    return ObjectStoreConnector(object_store_url(conn, storage_uri), object_store_credentials(conn))
 
 
 def seal_row(values: Dict[str, Any]) -> Dict[str, Any]:
@@ -929,7 +1000,9 @@ class CloudConnectionIn(BaseModel):
 
 def build_router(resolve_user_id) -> APIRouter:
     """``POST /api/cloud-connections``: the one place a cloud key enters the
-    database, sealed in this process. The UI posts here (ui/src/lib/api/backendApi.ts)."""
+    database, sealed in this process. The UI posts here (ui/src/lib/api/backendApi.ts).
+    (Module-level types: this file has ``from __future__ import annotations``,
+    so FastAPI must be able to resolve them from the module's globals.)"""
     router = APIRouter(prefix="/api/cloud-connections", tags=["cloud-connections"])
 
     @router.post("", status_code=status.HTTP_201_CREATED)
@@ -968,7 +1041,7 @@ def build_router(resolve_user_id) -> APIRouter:
             raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc))
         except ValueError as exc:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
-        assert sealed.get("access_key") is None and sealed.get("secret_key") is None
+        assert "access_key" not in {k for k, v in sealed.items() if v} and sealed.get("secret_key") is None
         try:
             from app.agents.sampling_persistence import get_supabase_client
             client = get_supabase_client()

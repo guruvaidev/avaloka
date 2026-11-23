@@ -1,0 +1,10 @@
+{
+  "question": "Did the treatment arm spend more minutes than control?",
+  "recipe": "ab_test",
+  "params": {
+    "arm": "arm",
+    "outcome": "minutes"
+  },
+  "confidence": 1.0,
+  "source": "fixture"
+}

@@ -19,6 +19,8 @@ import pytest
 from avaloka.benchmark.datasets import ensure_kaggle_dataset
 from avaloka.benchmark.runner import BenchmarkRunner
 from avaloka.benchmark.suite import kaggle_tasks
+from avaloka.coordinator import MainAvaloka
+from avaloka.swarm_limits import UNLIMITED
 
 pytestmark = pytest.mark.kaggle
 
@@ -59,3 +61,28 @@ def test_kaggle_dataset_benchmark(task, tmp_path):
     assert results, f"no gradable runs for {task.name}"
     for r in results:
         assert r.passed, r.as_dict()
+
+
+def test_kaggle_titanic_parallel_swarm_collects_one_answer(tmp_path):
+    """Real Kaggle smoke test for transfer -> parallel analysis -> collect."""
+    slug = "yasserh/titanic-dataset"
+    _reuse_existing_downloader(slug)
+    local = ensure_kaggle_dataset(slug, "Titanic-Dataset.csv")
+    if local is None:
+        pytest.skip(f"Kaggle dataset {slug} unavailable")
+
+    result = MainAvaloka(swarm_limits=UNLIMITED).coordinate(
+        str(local),
+        goal=(
+            "Explain survival patterns across passenger class, sex, age, fare and "
+            "family structure; preserve shard warnings and converge one answer."
+        ),
+        output_dir=tmp_path / "titanic-swarm",
+        workers=4,
+        max_parallel=4,
+    )
+
+    assert result.n_rows > 800
+    assert result.execution["parallelism"] == 4
+    assert result.converged_profile["n_partitions"] == 4
+    assert (tmp_path / "titanic-swarm" / "coordination.json").exists()

@@ -19,14 +19,16 @@ import numpy as np
 import pandas as pd
 import requests
 from langchain_core.messages import AIMessage
+from app.api import reply_segments as _rs
 from app.agents.infra_agent import infra_agent_node
-from app.agents.result_renderer import render_response
+from app.agents.result_renderer import render_response, render_response_segments
 from app.agents.lineage_hooks import record_analysis_lineage
 from app.analytics.schema import column_count_bucket, row_count_bucket
 from pathlib import Path
 
 from app.graph.etl_state import ETLState
 from app.utils import generate_filename_timestamp
+from app.executor.client import run_script
 from app.infra.ray_job_runner import run_rayjob_from_yaml
 from app.core import job_ledger
 
@@ -53,7 +55,6 @@ from urllib.parse import urlparse
 
 from app.api.cloud_connections import get_cloud_connection
 from app.infra.k8s_secrets import cloud_secret_env
-from app.executor.env import scrubbed_env
 from app.executor.execute_service import URL_ENV as EXECUTE_SERVICE_URL_ENV, auth_headers, configured_host_port
 
 logger = logging.getLogger(__name__)
@@ -161,32 +162,165 @@ def _resolve_read_paths(state) -> dict:
             mapping[str(meta["alias"])] = path
     return mapping
 
-def _brief_error(detail, limit: int = 220) -> str:
-    """One customer-readable line from an arbitrary error/traceback.
 
-    Customers must never see a wall of technical output in chat — the full
-    detail goes to the server logs. A Python traceback's LAST line is the
-    actual error, so surface that; otherwise the first non-empty line.
+def _resolve_read_sheets(state) -> dict:
+    """alias/file name -> sheet, for each dataset that is one sheet of a workbook
+    file the code reads directly (not a per-sheet CSV export)."""
+    sheets = {}
+    for meta in state.get("multi_dataset_state") or []:
+        path, sheet = meta.get("data_source_location"), meta.get("sheet_name")
+        if not (path and sheet) or _format_reader.input_kind(str(path)) != "excel":
+            continue
+        for key in (meta.get("alias"), meta.get("filename") and os.path.basename(str(meta["filename"]))):
+            if key:
+                sheets[str(key)] = str(sheet)
+    return sheets
+
+
+class ReadMapError(ValueError):
+    """Generated code reads a path that is none of the turn's datasets, or
+    reads one dataset under two names. Never resolved by guessing."""
+
+
+#: Names the coder is told the primary input has (app/agents/coder.py).
+_PRIMARY_PLACEHOLDERS = frozenset({"input.csv"})
+_AMBIGUOUS = object()
+
+
+def _read_lookup(read_path_map: Optional[dict], read_sheet_map: Optional[dict]) -> dict:
+    """Every name a read may use -> (path, sheet), or _AMBIGUOUS.
+
+    The multi-dataset prompt advertises each dataset's csv_path, so a read is
+    resolved by that path and its file name as well as by alias and file
+    name. Before this, ``/var/tmp/.../input_<id>.csv`` -- the path the prompt
+    itself gave -- was in no map, and both sheets of a workbook fell back to
+    the primary: one sheet read twice, every count doubled (rc3, 2026-10-19).
     """
-    text = str(detail or "").strip()
-    if not text:
-        return "an unknown error occurred"
-    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-    line = lines[-1] if "Traceback (most recent call last)" in text else lines[0]
-    if len(line) > limit:
-        line = line[:limit].rstrip() + "…"
-    return line
+    sheets = {str(k): v for k, v in (read_sheet_map or {}).items()}
+    lookup: dict = {}
+    by_path: Dict[str, set] = {}
+    for key, path in (read_path_map or {}).items():
+        if not path:
+            continue
+        sheet = sheets.get(str(key))
+        lookup[str(key)] = (str(path), sheet)
+        by_path.setdefault(str(path), set()).add(sheet)
+    for path, path_sheets in by_path.items():
+        target = (path, next(iter(path_sheets))) if len(path_sheets) == 1 else _AMBIGUOUS
+        for name in (path, os.path.basename(path)):
+            if lookup.get(name, target) != target:
+                target = _AMBIGUOUS     # a file name two different datasets share
+            lookup[name] = target
+    return lookup
+
+
+def _annotate_reads(state, reads) -> list:
+    """Each frame the run read, with the alias and sheet of its dataset: what
+    the basis statement and the claim verifier treat as "the data used"."""
+    metas = [m for m in state.get("multi_dataset_state") or [] if isinstance(m, dict)]
+    out = []
+    for read in reads or []:
+        entry = dict(read)
+        for meta in metas:
+            if str(meta.get("data_source_location")) == str(read.get("path")) and (
+                    read.get("sheet_name") is None or meta.get("sheet_name") == read.get("sheet_name")):
+                entry.setdefault("alias", meta.get("alias"))
+                entry.setdefault("dataset_id", meta.get("dataset_id"))
+                if entry.get("sheet_name") is None and meta.get("sheet_name"):
+                    entry["sheet_name"] = meta.get("sheet_name")
+                break
+        out.append(entry)
+    return out
+
+
+_READ_CALL_ON_NAME = re.compile(r"((?:pd\.read_csv|read_csv_best_effort)\(\s*)([A-Za-z_]\w*)(?=\s*[,)])")
+
+
+def _inline_path_variables(code: str) -> str:
+    """``p = '/var/tmp/.../input_<id>.csv'; pd.read_csv(p)`` read as
+    ``pd.read_csv('/var/tmp/.../input_<id>.csv')``, so the read map resolves
+    it and ``reads`` records it. A name bound more than once is left alone.
+
+    rc5 (groq): both sheets read through path variables; neither read was
+    recorded, and the basis said the second sheet was "not analysed"."""
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+    bound: Dict[str, int] = {}
+    literal: Dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            bound[node.id] = bound.get(node.id, 0) + 1
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            for arg in node.args.args + node.args.kwonlyargs:
+                bound[arg.arg] = bound.get(arg.arg, 0) + 1
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str)):
+            literal[node.targets[0].id] = node.value.value
+    paths = {k: v for k, v in literal.items() if bound.get(k) == 1}
+    if not paths:
+        return code
+    return _READ_CALL_ON_NAME.sub(
+        lambda m: m.group(1) + repr(paths[m.group(2)]) if m.group(2) in paths else m.group(0), code)
+
+
+def _main_reads_its_frame(code: str) -> Optional[bool]:
+    """Whether ``main(df)`` uses the frame it is handed: False when its body
+    rebinds the parameter before any statement reads it, or never reads it.
+    None when there is no such main to judge."""
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return None
+    main = next((n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "main"), None)
+    if main is None or not main.args.args:
+        return None
+    name = main.args.args[0].arg
+    for stmt in main.body:
+        if any(isinstance(n, ast.Name) and n.id == name and isinstance(n.ctx, ast.Load)
+               for n in ast.walk(stmt)):
+            return True
+        targets = stmt.targets if isinstance(stmt, ast.Assign) else (
+            [stmt.target] if isinstance(stmt, ast.AnnAssign) else [])
+        if any(isinstance(t, ast.Name) and t.id == name for t in targets):
+            return False
+    return False
+
+
+def _datasets_listing(read_path_map: Optional[dict]) -> str:
+    names = sorted({str(k) for k, v in (read_path_map or {}).items() if v})
+    return ", ".join(names) or "(none)"
+
+#: The chat reply when the code ran but its result could not be read back.
+#: Plain words only: the exception line ("No columns to parse from file") used
+#: to follow the colon, and it is in the logs and on the trace step instead.
+OUTPUT_PREP_FAILED = (
+    "The code ran, but I couldn't prepare its result. The technical details have "
+    "been recorded in the logs."
+)
 
 
 def _friendly_failure_message(reason_source) -> str:
-    """The standard short chat reply for a failed execution step."""
+    """The standard short chat reply for a failed execution step.
+
+    Plain words, as #522 words a failed training turn: what went wrong in the
+    user's terms ("I couldn't read the data file"), not the mechanism. The
+    exception line ("pandas.errors.ParserError: Error tokenizing data. C error:
+    Expected 2 fields in line 4, saw 4") is in the logs and on the trace step.
+    """
+    from app.agents.analysis_outcome import plain_failure_reason
+
     return (
         "❌ I couldn't complete this step.\n\n"
-        f"Reason: {_brief_error(reason_source)}\n\n"
+        f"Reason: {plain_failure_reason(reason_source)}.\n\n"
         "Please try again or rephrase the request — the technical details "
         "have been recorded in the logs."
     )
 
+#: The chat reply when the code ran but its output could not be read back.
+#: The exception is logged where it is caught.
 RAYJOB_TEMPLATE_PATH = os.getenv("RAYJOB_TEMPLATE_PATH", "app/infra/rayjob.yaml")
 
 
@@ -408,15 +542,48 @@ def render_rayjob_yaml(
 from file_handler import null_policy as _null_policy
 from file_handler.null_policy import read_csv_best_effort  # noqa: E402,F401
 
+from app.agents import input_reader as _format_reader
+
 _CSV_READER_SOURCE = inspect.getsource(_null_policy)
+
+# How main() receives more than one frame (a join written as
+# main(df_customers, df_orders)): app/agents/main_frames.py, spliced into the
+# driver the same way, because the script cannot import this repository.
+from app.agents import main_frames as _main_frames  # noqa: E402
+
+_MAIN_FRAMES_SOURCE = inspect.getsource(_main_frames)
 _CSV_READER_MARKER = "# <<AVALOKA_CSV_READER>>"
+
+# The input is read by its format, not always as CSV: app/agents/input_reader.py
+# is spliced in after the CSV reader, and read_csv_best_effort is rebound to
+# dispatch through it. That covers the harness's own read and every
+# read_csv_best_effort("<input>") the generated code makes, which the literal
+# rewrite in execute_code_on_local points at the real input -- a .parquet as
+# often as a .csv. The non-CSV readers live in this repository, so its root
+# goes on the script's path; a CSV analysis never imports anything from it.
+_REPO_ROOTS = sorted({
+    str(Path(_format_reader.__file__).resolve().parents[1]),
+    str(Path(__file__).resolve().parents[2]),
+})
+_INPUT_READER_SHIM = f'''
+import sys as _avaloka_sys
+for _avaloka_root in {_REPO_ROOTS!r}:
+    if _avaloka_root not in _avaloka_sys.path:
+        _avaloka_sys.path.append(_avaloka_root)
+
+_avaloka_read_csv = read_csv_best_effort
+read_csv_best_effort = format_aware(_avaloka_read_csv)
+'''
+_INPUT_READER_SOURCE = (
+    _CSV_READER_SOURCE + "\n\n" + inspect.getsource(_format_reader) + "\n" + _INPUT_READER_SHIM
+)
 
 
 def _with_csv_reader(script_template: str) -> str:
-    """``script_template`` with the reader module's source in place of its marker."""
+    """``script_template`` with the reader modules' source in place of its marker."""
     if script_template.count(_CSV_READER_MARKER) != 1:
         raise ValueError("script template must contain the CSV reader marker exactly once")
-    return script_template.replace(_CSV_READER_MARKER, _CSV_READER_SOURCE)
+    return script_template.replace(_CSV_READER_MARKER, _INPUT_READER_SOURCE)
 
 
 def _csv_has_data_rows(path: Optional[str]) -> bool:
@@ -429,6 +596,27 @@ def _csv_has_data_rows(path: Optional[str]) -> bool:
         return not pd.read_csv(path_obj, nrows=1).empty
     except Exception:
         return False
+
+
+def _local_input_options(state: Dict[str, Any], input_path: Optional[str]) -> Dict[str, Any]:
+    """The sheet and partition layout the session recorded for *input_path*.
+
+    The sampler reads a workbook's chosen sheet and a hive-partitioned folder
+    with these; the analysis must read the same table, not the first sheet or
+    the files without their partition column.
+    """
+    options: Dict[str, Any] = {}
+    sheet = None
+    for meta in state.get("multi_dataset_state") or []:
+        if isinstance(meta, dict) and input_path and str(meta.get("data_source_location")) == str(input_path):
+            sheet = meta.get("sheet_name")
+            break
+    sheet = sheet or state.get("sheet_name")
+    if sheet and _format_reader.input_kind(input_path or "") == "excel":
+        options["sheet_name"] = str(sheet)
+    if state.get("hive_partitioning") and _format_reader.input_kind(input_path or "") == "directory":
+        options["hive_partitioning"] = True
+    return options
 
 
 def _resolve_local_execution_input(state: Dict[str, Any], input_path: Optional[str], output_path: Optional[str]) -> Optional[str]:
@@ -735,7 +923,7 @@ def execution_agent_node(state: ETLState) -> ETLState:
         logger.error(message)
         new_state = state.copy()
         new_state.update({
-            "messages": new_state["messages"] + [AIMessage(content=message)],
+            "messages": new_state["messages"] + [_rs.plain_message(content=message)],
             "execution_result": {"status": "failed", "message": message}
         })
         _log_execution_result("k8s", "failed", started, error_class="NoCode")
@@ -759,7 +947,7 @@ def execution_agent_node(state: ETLState) -> ETLState:
         )
         new_state = state.copy()
         new_state.update({
-            "messages": new_state.get("messages", []) + [AIMessage(content=message)],
+            "messages": new_state.get("messages", []) + [_rs.plain_message(content=message)],
             "execution_result": {"status": "failed", "message": message},
         })
         _log_execution_result(
@@ -797,10 +985,10 @@ def execution_agent_node(state: ETLState) -> ETLState:
                 csv_str = base64.b64decode(output_data_str.split("base64,")[1]).decode()
                 output_data = pd.read_csv(StringIO(csv_str))
                 if not output_data.empty:
-                    ai_response = AIMessage(content=output_data.to_markdown())
+                    ai_response = _rs.plain_message(content=output_data.to_markdown())
                 else:
                     logger.info(f"Empty dataset returned")
-                    ai_response = AIMessage(f"The resulting output dataset is empty")
+                    ai_response = _rs.plain_message(f"The resulting output dataset is empty")
 
                 if execution_result.get("output_file"):
                     output_file_info = execution_result["output_file"]
@@ -821,14 +1009,12 @@ def execution_agent_node(state: ETLState) -> ETLState:
                     }
             else:
                 failure_message = "Code executed successfully but no valid CSV output received"
-                ai_response = AIMessage(content=failure_message)
+                ai_response = _rs.plain_message(content=failure_message)
                 execution_error = failure_message
                 error_class = "NoOutput"
         except Exception as e:
             logger.error(f"Failed to process output: {e}")
-            ai_response = AIMessage(content=(
-            f"The step ran, but I couldn't prepare the output: {_brief_error(e)}"
-        ))
+            ai_response = _rs.plain_message(content=OUTPUT_PREP_FAILED)
             failure_message = str(e)
             execution_error = failure_message
             error_class = type(e).__name__
@@ -839,7 +1025,7 @@ def execution_agent_node(state: ETLState) -> ETLState:
         stderr = execution_result.get("stderr") or ""
         if stderr:
             logger.error("Execution failed. stderr:\n%s", stderr)
-        ai_response = AIMessage(content=_friendly_failure_message(stderr or error_msg))
+        ai_response = _rs.plain_message(content=_friendly_failure_message(stderr or error_msg))
         failure_message = f"{error_msg}\n\n{stderr.strip()}" if stderr.strip() else error_msg
         execution_error = error_msg
         error_class = "ExecutionFailed"
@@ -873,6 +1059,9 @@ def execution_agent_node(state: ETLState) -> ETLState:
             "returncode": execution_result.get("returncode"),
             "output_file": None,
         }
+    # The executor pod does not report which frames the code read; empty means
+    # "not recorded", so nothing downstream treats a guess as a read.
+    result_for_state["reads"] = []
 
     new_state.update({
         "messages": new_state["messages"] + [ai_response],
@@ -959,7 +1148,7 @@ def _execution_agent_node_local(state: ETLState) -> ETLState:
         logger.error(message)
         new_state = state.copy()
         new_state.update({
-            "messages": new_state["messages"] + [AIMessage(content=message)],
+            "messages": new_state["messages"] + [_rs.plain_message(content=message)],
             "execution_result": {"status": "failed", "message": message}
         })
         _log_execution_result("local", "failed", started, error_class="NoCode")
@@ -971,6 +1160,13 @@ def _execution_agent_node_local(state: ETLState) -> ETLState:
     candidate_output_location = _make_candidate_output_path(output_location)
 
     read_path_map = _resolve_read_paths(state)
+    # A data step of the replan loop (app/agents/replan.py) ran this turn: read
+    # its repaired copy in place of the input it was made from. The code is
+    # the same; the source file is never changed.
+    overrides = state.get("replan_input_overrides") or {}
+    if overrides:
+        resolved_input_location = overrides.get(str(resolved_input_location), resolved_input_location)
+        read_path_map = {k: overrides.get(str(v), v) for k, v in read_path_map.items()}
     if read_path_map:
         logger.info("[local-exec] multi-file read map: %s", read_path_map)
 
@@ -979,6 +1175,8 @@ def _execution_agent_node_local(state: ETLState) -> ETLState:
         input_data_location=resolved_input_location,
         output_location=candidate_output_location,
         read_path_map=read_path_map,
+        input_options=_local_input_options(state, resolved_input_location),
+        read_sheet_map=_resolve_read_sheets(state),
     )
 
     new_state = state.copy()
@@ -993,7 +1191,7 @@ def _execution_agent_node_local(state: ETLState) -> ETLState:
             # message below carries only a one-line reason.
             logger.error("Execution failed. Details:\n%s", details)
             error_msg = f"{error_msg}\n\n{details}"
-        ai_response = AIMessage(content=_friendly_failure_message(details or error_msg))
+        ai_response = _rs.plain_message(content=_friendly_failure_message(details or error_msg))
         new_state.update({
             "messages": new_state.get("messages", []) + [ai_response],
             "output_location": output_location,
@@ -1008,6 +1206,7 @@ def _execution_agent_node_local(state: ETLState) -> ETLState:
                 "message": error_msg,
                 "returncode": execution_result.get("returncode"),
                 "output_file": None,
+                "reads": _annotate_reads(state, execution_result.get("reads")),
             },
         })
         _log_execution_result("local", "failed", started, error_class="ExecutionFailed")
@@ -1017,7 +1216,7 @@ def _execution_agent_node_local(state: ETLState) -> ETLState:
     if coder_message:
         existing_messages = new_state.get("messages", [])
         if not any(getattr(msg, "content", None) == coder_message for msg in existing_messages):
-            new_state["messages"] = existing_messages + [AIMessage(content=coder_message)]
+            new_state["messages"] = existing_messages + [_rs.commentary_message(content=coder_message)]
 
     if not new_state.get("generated_code"):
         generated_code = state.get("coder_definition", {}).get("code")
@@ -1070,14 +1269,12 @@ def _execution_agent_node_local(state: ETLState) -> ETLState:
             len(output_data.columns),
         )
 
-        ai_response = AIMessage(
-            content=render_response(
-                execution_result,
-                output_data,
-                _user_question,
-                _render_schema,
-            )
-        )
+        ai_response = _rs.message(render_response_segments(
+            execution_result,
+            output_data,
+            _user_question,
+            _render_schema,
+        ))
 
         # Atomically replace the previous canonical output.csv.
         if output_location:
@@ -1135,12 +1332,7 @@ def _execution_agent_node_local(state: ETLState) -> ETLState:
             "[local-output] failed to process fresh candidate"
         )
 
-        ai_response = AIMessage(
-            content=(
-                "The code ran, but the new output could not "
-                f"be prepared: {_brief_error(exc)}"
-            )
-        )
+        ai_response = _rs.plain_message(content=OUTPUT_PREP_FAILED)
 
         new_state.update({
             "messages": (
@@ -1164,6 +1356,7 @@ def _execution_agent_node_local(state: ETLState) -> ETLState:
                 "output_file": None,
                 "fresh_output": False,
                 "output_row_count": None,
+                "reads": _annotate_reads(state, execution_result.get("reads")),
             },
         })
         _log_execution_result(
@@ -1216,6 +1409,7 @@ def _execution_agent_node_local(state: ETLState) -> ETLState:
             ),
             "fresh_output": True,
             "output_row_count": len(output_data),
+            "reads": _annotate_reads(state, execution_result.get("reads")),
         },
     })
     _log_execution_result(
@@ -1649,7 +1843,7 @@ def execution_agent_node_ssh(state: ETLState, server: str) -> ETLState:
         logger.error(message)
         new_state = state.copy()
         new_state.update({
-            "messages": new_state["messages"] + [AIMessage(content=message)],
+            "messages": new_state["messages"] + [_rs.plain_message(content=message)],
             "execution_result": {"status": "failed", "message": message}
         })
         return new_state
@@ -1679,7 +1873,7 @@ def execution_agent_node_ssh(state: ETLState, server: str) -> ETLState:
     if coder_message:
         existing_messages = new_state.get("messages", [])
         if not any(getattr(msg, "content", None) == coder_message for msg in existing_messages):
-            new_state["messages"] = existing_messages + [AIMessage(content=coder_message)]
+            new_state["messages"] = existing_messages + [_rs.commentary_message(content=coder_message)]
 
     if not new_state.get("generated_code"):
         generated_code = state.get("coder_definition", {}).get("code")
@@ -1697,12 +1891,12 @@ def execution_agent_node_ssh(state: ETLState, server: str) -> ETLState:
             output_data = pd.read_csv(output_location)
             if not output_data.empty:
                 logger.info(f"output data is {output_data.head().to_markdown()}")
-                ai_response = AIMessage(content=render_response(
+                ai_response = _rs.message(render_response_segments(
                     execution_result, output_data, _user_question, _render_schema
                 ))
             else:
                 logger.info(f"Empty dataset returned")
-                ai_response = AIMessage(content=render_response(
+                ai_response = _rs.message(render_response_segments(
                     execution_result, output_data, _user_question, _render_schema
                 ))
 
@@ -1721,15 +1915,13 @@ def execution_agent_node_ssh(state: ETLState, server: str) -> ETLState:
             }
             logger.info(f"Prepared file data for download: {filename}")
         else:
-            ai_response = AIMessage(content=render_response(
+            ai_response = _rs.message(render_response_segments(
                 execution_result, None, _user_question, _render_schema
             ))
 
     except Exception as e:
         logger.error(f"Failed to process output file: {e}")
-        ai_response = AIMessage(content=(
-            f"The step ran, but I couldn't prepare the output: {_brief_error(e)}"
-        ))
+        ai_response = _rs.plain_message(content=OUTPUT_PREP_FAILED)
         new_state.update({
             "messages": new_state["messages"] + [ai_response],
             "output_location": output_location,
@@ -1744,7 +1936,7 @@ def execution_agent_node_ssh(state: ETLState, server: str) -> ETLState:
 
     if ai_response is None:
         logger.warning("ai_response is None after output file processing - using fallback message")
-        ai_response = AIMessage(content="Code executed but output processing result is unknown")
+        ai_response = _rs.plain_message(content="Code executed but output processing result is unknown")
 
     if file_data is not None:
         execution_status = "success"
@@ -2157,6 +2349,7 @@ def _build_interactive_sample_wrapper(data_uri: str, output_artifact_uri: str, o
         "from pathlib import Path",
         "import pandas as pd",
         "import fsspec",
+        "from avaloka.io import load_dataset",
         "",
         "sa_json = os.getenv('GCP_SERVICE_ACCOUNT_JSON', '').strip()",
         "if sa_json and not os.getenv('GOOGLE_APPLICATION_CREDENTIALS'):",
@@ -2203,6 +2396,11 @@ def _build_interactive_sample_wrapper(data_uri: str, output_artifact_uri: str, o
         "def _read_dataframe(uri):",
         "    opts = _storage_options(uri)",
         "    lower = uri.lower()",
+        "    complex_suffixes = ('.pdf', '.jpg', '.jpeg', '.png', '.tif', '.tiff',",
+        "                        '.bmp', '.webp', '.mp4', '.mov', '.mkv', '.avi',",
+        "                        '.webm', '.m4v')",
+        "    if lower.endswith(complex_suffixes) or ('://' not in uri and Path(uri).is_dir()):",
+        "        return load_dataset(uri).frame",
         "    if lower.endswith('.parquet'):",
         "        return pd.read_parquet(uri, storage_options=opts)",
         "    if lower.endswith('.json') or lower.endswith('.jsonl'):",
@@ -2603,7 +2801,7 @@ def execution_agent_node_ray(state: ETLState) -> ETLState:
     if not data_uri:
         msg = "Missing data_source_location_cloud for k8s-ray execution"
         ns_ = state.copy()
-        ns_["messages"] = state.get("messages", []) + [AIMessage(content=msg)]
+        ns_["messages"] = state.get("messages", []) + [_rs.plain_message(content=msg)]
         ns_["execution_result"] = {"mode": "k8s-ray", "status": "error", "message": msg}
         ns_["execution_error"] = msg
         return ns_
@@ -2617,7 +2815,7 @@ def execution_agent_node_ray(state: ETLState) -> ETLState:
     if not code.strip():
         msg = "Missing coder_definition.code for k8s-ray execution"
         ns_ = state.copy()
-        ns_["messages"] = state.get("messages", []) + [AIMessage(content=msg)]
+        ns_["messages"] = state.get("messages", []) + [_rs.plain_message(content=msg)]
         ns_["execution_result"] = {"mode": "k8s-ray", "status": "error", "message": msg}
         ns_["execution_error"] = msg
         return ns_
@@ -2774,7 +2972,7 @@ def execution_agent_node_ray(state: ETLState) -> ETLState:
         }
         new_state["execution_error"] = None
         new_state["messages"] = state.get("messages", []) + [
-            AIMessage(content=f"[DRYRUN] RayJob YAML rendered for {rayjob_name} (not submitted)")
+            _rs.plain_message(content=f"[DRYRUN] RayJob YAML rendered for {rayjob_name} (not submitted)")
         ]
         out_path = os.getenv("RAYJOB_DRYRUN_OUTPUT_PATH")
         if out_path:
@@ -2906,7 +3104,7 @@ def execution_agent_node_ray(state: ETLState) -> ETLState:
         }
         new_state["execution_error"] = str(e)
         new_state["messages"] = state.get("messages", []) + [
-            AIMessage(content=_friendly_failure_message(e))
+            _rs.plain_message(content=_friendly_failure_message(e))
         ]
         return new_state
 
@@ -3022,7 +3220,7 @@ def execution_agent_node_ray(state: ETLState) -> ETLState:
 
     new_state["output_file_data"] = output_file_data
     new_state["messages"] = state.get("messages", []) + [
-        AIMessage(content=ai_message_content)
+        _rs.plain_message(content=ai_message_content)
     ]
     if output_df is not None and outcome and outcome.status.upper() == "SUCCEEDED" and output_spec:
         # Checked before lineage and memory see the result: a refused table is
@@ -3172,13 +3370,18 @@ def _needs_local_main_harness(code: str) -> bool:
 def _build_local_main_harness(
     input_path: Optional[str],
     output_path: Optional[str],
+    read_path_map: Optional[dict] = None,
+    sheet_name: Optional[str] = None,
+    hive_partitioning: bool = False,
 ) -> str:
     if not input_path:
         raise ValueError("Local execution input path is missing")
     if not output_path:
         raise ValueError("Local execution output path is missing")
+    sources = {str(k): str(v) for k, v in (read_path_map or {}).items() if v}
 
-    return f'''
+    return _MAIN_FRAMES_SOURCE + f'''
+
 # Avaloka local execution driver.
 if __name__ == "__main__":
     import os as _avaloka_os
@@ -3186,9 +3389,20 @@ if __name__ == "__main__":
 
     _avaloka_input_path = {str(input_path)!r}
     _avaloka_output_path = {str(output_path)!r}
+    _avaloka_sources = {sources!r}
 
-    _avaloka_df = read_csv_best_effort(_avaloka_input_path)
-    _avaloka_result_value = main(_avaloka_df)
+    _avaloka_df = read_input_frame(
+        _avaloka_input_path,
+        _avaloka_read_csv,
+        sheet_name={sheet_name!r},
+        hive_partitioning={bool(hive_partitioning)!r},
+    )
+    # main(df), or one frame per parameter for a join (main_frames above).
+    # The other frames go through the format-aware read_csv_best_effort, so a
+    # parquet second dataset reads as parquet.
+    _avaloka_result_value = main(*bind_main_frames(
+        main, _avaloka_df, _avaloka_sources, read_csv_best_effort,
+        primary_source=_avaloka_input_path))
 
     if _avaloka_result_value is None:
         # Some generated functions write the output themselves.
@@ -3260,7 +3474,16 @@ def execute_code_on_local(
     input_data_location: Optional[np.ndarray] = None,
     output_location: Optional[str] = None,
     read_path_map: Optional[dict] = None,
+    input_options: Optional[dict] = None,
+    read_sheet_map: Optional[dict] = None,
 ) -> Dict[str, Any]:
+    """Run generated code locally on the analysis input.
+
+    ``input_options`` carries what the read needs beyond the path: the
+    workbook ``sheet_name`` and whether a directory is ``hive_partitioning``.
+    ``read_sheet_map`` names the sheet for a dataset that is one sheet of a
+    workbook file. The result's ``reads`` lists each frame the run read.
+    """
     out: Dict[str, Any] = {}
 
     # 1) Strip ``` fences if present
@@ -3276,6 +3499,22 @@ def execute_code_on_local(
         extracted_code
     )
 
+
+    # # 2) Replace ONLY pd.read_csv("literal_path", ...) with read_csv_best_effort(...)
+    # extracted_code = re.sub(
+    #     r"pd\.read_csv\(\s*([\"'][^\"']+[\"'])([^\)]*)\)",
+    #     r"read_csv_best_effort(\1\2)",
+    #     extracted_code,
+    #     flags=re.MULTILINE,
+    # )
+    # extracted_code = _replace_first_literal_arg(
+    #     extracted_code,
+    #     r"(read_csv_best_effort\(\s*)([\"'][^\"']+[\"'])",
+    #     str(input_data_location) if input_data_location is not None else None,
+    # )
+
+    extracted_code = _inline_path_variables(extracted_code)
+
     # 2) Replace ONLY pd.read_csv("literal_path", ...) with read_csv_best_effort(...)
     extracted_code = re.sub(
         r"pd\.read_csv\(\s*([\"'][^\"']+[\"'])([^\)]*)\)",
@@ -3284,33 +3523,83 @@ def execute_code_on_local(
         flags=re.MULTILINE,
     )
 
-    # Resolve each read to its OWN dataset path by basename/alias. Falling back
-    # to the single input path only on a miss preserves single-file behaviour;
-    # for a multi-file join this is what stops orders.csv and customers.csv
-    # collapsing onto one file (the self-join that produced KeyError: 'country').
+    # Resolve each read to its OWN dataset: by alias, file name, or the path
+    # the prompt advertised. With one dataset there is only one thing to read.
+    # With several, a read that names none of them is an error, never the
+    # primary: falling back silently read one workbook sheet twice and
+    # doubled every count. A sheet of a workbook file gets its sheet_name.
     _fallback_input = str(input_data_location) if input_data_location is not None else None
+    _primary_sheet = (input_options or {}).get("sheet_name")
+    _lookup = _read_lookup(read_path_map, read_sheet_map)
+    _one_dataset = len({str(v) for v in (read_path_map or {}).values() if v}) <= 1
+    _resolved: Dict[tuple, str] = {}             # (path, sheet) -> literal that read it
+    reads: list = []
 
     def _resolve_read(match):
         prefix = match.group(1)
         quoted = match.group(2)
         orig = quoted[1:-1]                      # strip the surrounding quotes
         base = os.path.basename(orig)
-        target = None
-        if read_path_map:
-            target = read_path_map.get(base) or read_path_map.get(orig)
-        if not target:
-            target = _fallback_input
-        if not target:
-            return match.group(0)                # nothing to substitute
-        return f"{prefix}{repr(str(target))}"
+        rest = match.string[match.end():match.string.find(")", match.end()) + 1]
+        names_sheet = "sheet_name" in rest
+        hit = _lookup.get(orig) or _lookup.get(base)
+        if hit is _AMBIGUOUS:
+            # One workbook file holding several of the turn's sheets: only a
+            # read that names its sheet says which one it means.
+            paths = {str(v) for v in (read_path_map or {}).values()
+                     if v and (str(v) == orig or os.path.basename(str(v)) == base)}
+            if not names_sheet or len(paths) != 1:
+                raise ReadMapError(
+                    f"the code reads {orig!r}, which names more than one dataset of this turn "
+                    f"({_datasets_listing(read_path_map)}); read each by its alias or name its sheet.")
+            hit = (paths.pop(), None)
+        if not hit:
+            if not _fallback_input:
+                return match.group(0)            # nothing to substitute
+            primary = (_fallback_input, _primary_sheet)
+            if _one_dataset or base in _PRIMARY_PLACEHOLDERS or orig == _fallback_input \
+                    or base == os.path.basename(_fallback_input):
+                hit = primary
+            else:
+                raise ReadMapError(
+                    f"the code reads {orig!r}, which is none of this turn's datasets "
+                    f"({_datasets_listing(read_path_map)}); read each dataset by its alias "
+                    "or the csv_path given for it.")
+        path, sheet = hit
+        if sheet is not None and names_sheet:
+            sheet = None                         # the code chose the sheet itself
+        # Two reads of one workbook naming different sheets are two datasets.
+        key = (path, sheet if not names_sheet else re.sub(r"\s+", "", rest))
+        if key in _resolved and _resolved[key] != orig:
+            raise ReadMapError(
+                f"the code reads {_resolved[key]!r} and {orig!r}, which are the same dataset; "
+                "combining them would count every row twice.")
+        if key not in _resolved:
+            _resolved[key] = orig
+            reads.append({"path": path, "sheet_name": sheet, "via": "code"})
+        extra = f", sheet_name={sheet!r}" if sheet is not None and _format_reader.input_kind(path) == "excel" else ""
+        return f"{prefix}{repr(str(path))}{extra}"
 
     if read_path_map or _fallback_input:
-        extracted_code = re.sub(
-            r"(read_csv_best_effort\(\s*)([\"'][^\"']+[\"'])",
-            _resolve_read,
-            extracted_code,
-            flags=re.MULTILINE,
-        )
+        try:
+            extracted_code = re.sub(
+                r"(read_csv_best_effort\(\s*)([\"'][^\"']+[\"'])",
+                _resolve_read,
+                extracted_code,
+                flags=re.MULTILINE,
+            )
+        except ReadMapError as exc:
+            # Reported like any pre-flight failure: a failed execution_result
+            # the repair loop can act on, with what was read and what exists.
+            logger.error("[local-exec] read map: %s", exc)
+            return {
+                "returncode": None,
+                "execution_stdout": "",
+                "execution_stderr": "",
+                "status": "error",
+                "execution_error": f"ReadMapError: {exc}",
+                "reads": [],
+            }
     extracted_code = _replace_first_literal_arg(
         extracted_code,
         r"(\.to_csv\(\s*)([\"'][^\"']+[\"'])",
@@ -3338,6 +3627,8 @@ def execute_code_on_local(
             harness = _build_local_main_harness(
                 input_data_location,
                 output_location,
+                read_path_map,
+                **(input_options or {}),
             )
         except ValueError as exc:
             message = str(exc)
@@ -3350,6 +3641,14 @@ def execute_code_on_local(
                 "execution_error": message,
             }
         script_parts.append(textwrap.dedent(harness).lstrip())
+        if input_data_location is not None:
+            # The harness loads the primary for main(df); a main that rebinds
+            # its frame before reading it never used that load.
+            main_read = {"path": str(input_data_location),
+                         "sheet_name": (input_options or {}).get("sheet_name"), "via": "main(df)"}
+            if _main_reads_its_frame(extracted_code) is False:
+                main_read["used"] = False
+            reads.insert(0, main_read)
 
     script_to_run = "\n\n".join(
         part for part in script_parts if part.strip()
@@ -3373,68 +3672,55 @@ def execute_code_on_local(
             "execution_error": message,
         }
 
-    # 4) Write temp script securely
-    fd, temp_script_path = tempfile.mkstemp(suffix=".py", prefix="avaloka_exec_")
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        f.write(script_to_run)
-
-    # Model-written code: the child gets the allowlisted environment and a
-    # private HOME/TMPDIR, never this process's provider keys, database
-    # passwords, DB_ENCRYPTION_KEY or MCP_SERVICE_TOKEN.
+    # 5) Run it. With an executor configured (compose, Helm) the script and
+    # exactly these input files go to the isolated executor and the output
+    # file comes back; otherwise it is a local child process. Either way its
+    # environment is the allowlist in app/executor/env.py, never this one.
+    # A local child also gets a private HOME/TMPDIR (deleted afterwards), so
+    # nothing it writes lands in this process's home; the executor has its own.
+    _timeout = int(os.getenv("AVALOKA_LOCAL_EXEC_TIMEOUT", "60"))
     exec_home = tempfile.mkdtemp(prefix="avaloka_exec_home_")
     try:
-        result = subprocess.run(
-            [sys.executable, temp_script_path],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=int(os.getenv("AVALOKA_LOCAL_EXEC_TIMEOUT", "60")),
-            env=scrubbed_env(extra={"HOME": exec_home, "TMPDIR": exec_home}),
+        ran = run_script(
+            script_to_run,
+            timeout=_timeout,
+            inputs=[input_data_location, *(read_path_map or {}).values()],
+            outputs=[output_location] if output_location else [],
+            extra_env={"HOME": exec_home, "TMPDIR": exec_home},
         )
-
-        stdout = result.stdout or ""
-        stderr = result.stderr or ""
-
-        out["returncode"] = result.returncode
-        out["execution_stdout"] = stdout
-        out["execution_stderr"] = stderr
-
-        if result.returncode == 0:
-            out["status"] = "success"
-            out["execution_error"] = None
-            out["output_location"] = output_location
-            if stdout:
-                logger.info("Output from interpreter:\n%s", stdout)
-            if stderr.strip():
-                logger.warning("Warnings from interpreter:\n%s", stderr)
-        else:
-            out["status"] = "error"
-            out["execution_error"] = f"Script failed with exit status {result.returncode}"
-            logger.error("Interpreter failed (rc=%s)", result.returncode)
-            logger.error("Stdout:\n%s", stdout)
-            logger.error("Stderr:\n%s", stderr)
-
-    except subprocess.TimeoutExpired as e:
-        out["returncode"] = None
-        out["execution_stdout"] = (e.stdout or "")
-        out["execution_stderr"] = (e.stderr or "")
-        out["status"] = "error"
-        out["execution_error"] = f"Script execution timed out after {int(os.getenv('AVALOKA_LOCAL_EXEC_TIMEOUT', '60'))} seconds"
-        logger.error(out["execution_error"])
-
-    except FileNotFoundError:
-        out["status"] = "error"
-        out["execution_error"] = f"Python executable not found at {sys.executable}"
-        logger.error(out["execution_error"])
-
     finally:
-        try:
-            if os.path.exists(temp_script_path):
-                os.remove(temp_script_path)
-        except Exception:
-            pass
         shutil.rmtree(exec_home, ignore_errors=True)
+    stdout = ran.stdout or ""
+    stderr = ran.stderr or ""
+    out["returncode"] = ran.returncode
+    out["execution_stdout"] = stdout
+    out["execution_stderr"] = stderr
 
+    if ran.timed_out:
+        out["returncode"] = None
+        out["status"] = "error"
+        out["execution_error"] = f"Script execution timed out after {_timeout} seconds"
+        logger.error(out["execution_error"])
+    elif ran.returncode is None:
+        out["status"] = "error"
+        out["execution_error"] = ran.error or "Script did not run"
+        logger.error(out["execution_error"])
+    elif ran.returncode == 0:
+        out["status"] = "success"
+        out["execution_error"] = None
+        out["output_location"] = output_location
+        if stdout:
+            logger.info("Output from interpreter:\n%s", stdout)
+        if stderr.strip():
+            logger.warning("Warnings from interpreter:\n%s", stderr)
+    else:
+        out["status"] = "error"
+        out["execution_error"] = f"Script failed with exit status {ran.returncode}"
+        logger.error("Interpreter failed (rc=%s)", ran.returncode)
+        logger.error("Stdout:\n%s", stdout)
+        logger.error("Stderr:\n%s", stderr)
+
+    out["reads"] = reads
     return out
 
 

@@ -306,6 +306,28 @@ def _operator_running(ns: str, deployment: str) -> bool:
                 pass
     return False
 
+def _version_tuple(v: str) -> tuple:
+    import re as _re
+    return tuple(int(x) for x in _re.findall(r"\d+", (v or "").split("-")[0])[:3])
+
+
+def _installed_kuberay_version(ns: str, release: str):
+    """The kuberay-operator chart version Helm installed as ``release``, or None."""
+    import json as _json
+    r = _probe([_helm(), "list", "-n", ns, "-o", "json", "--filter", f"^{release}$"])
+    if r.returncode != 0:
+        return None
+    try:
+        rows = _json.loads(r.stdout or "[]")
+    except ValueError:
+        return None
+    for row in rows:
+        chart = str(row.get("chart") or "")
+        if chart.startswith("kuberay-operator-"):
+            return chart[len("kuberay-operator-"):]
+    return None
+
+
 def ensure_kuberay_installed() -> dict:
     """
     Ensure KubeRay operator/CRDs exist.
@@ -318,14 +340,20 @@ def ensure_kuberay_installed() -> dict:
     release = os.environ.get("KUBERAY_HELM_RELEASE", "kuberay-operator")
     chart = os.environ.get("KUBERAY_HELM_CHART", "kuberay/kuberay-operator")
 
-    # If CRDs exist AND operator seems running, skip
+    from app.infra.ray_manager import KUBERAY_OPERATOR_VERSION, upgrade_kuberay_crds
+
+    # If CRDs exist AND operator seems running, skip -- unless Helm installed an
+    # operator older than the one Ray token auth needs (ray_manager), which
+    # would be refused by every token-authenticated dashboard it polls.
     if kuberay_crds_installed() and _operator_running(ns, release):
-        return {
-            "step_name": "Ensure KubeRay Installed",
-            "status": "SKIPPED",
-            "message": "KubeRay already installed (CRD present + operator running).",
-            "details": ""
-        }
+        installed = _installed_kuberay_version(ns, release)
+        if installed is None or _version_tuple(installed) >= _version_tuple(KUBERAY_OPERATOR_VERSION):
+            return {
+                "step_name": "Ensure KubeRay Installed",
+                "status": "SKIPPED",
+                "message": "KubeRay already installed (CRD present + operator running).",
+                "details": ""
+            }
 
     # Preferred: apply local manifest if provided
     manifest_path = os.environ.get("KUBERAY_MANIFEST_PATH")
@@ -367,8 +395,12 @@ def ensure_kuberay_installed() -> dict:
 
     _run_command([_helm(), "repo", "update"], "Helm repo update")
 
+    crds = upgrade_kuberay_crds()
+    if crds["status"] == "FAILED":
+        return crds
     install = _run_command(
-        [_helm(), "upgrade", "--install", release, chart, "-n", ns, "--create-namespace", "--wait", "--timeout", "180s"],
+        [_helm(), "upgrade", "--install", release, chart, "--version", KUBERAY_OPERATOR_VERSION,
+         "-n", ns, "--create-namespace", "--wait", "--timeout", "180s"],
         "Install KubeRay (helm)"
     )
     if install["status"] == "FAILED":

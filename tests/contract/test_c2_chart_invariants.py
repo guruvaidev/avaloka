@@ -69,14 +69,22 @@ SERVING_CHART_COMPONENTS = frozenset({"model-server", "model-server-gpu"})
 # Background execution. E6.08 was the defect that none of this shipped; celery.yaml
 # now runs a worker and a beat/RedBeat scheduler, so these are expected workloads.
 EXECUTOR_CHART_COMPONENTS = frozenset({"celery", "celery-executor", "celery-redbeat"})
+# Where model-written code runs (templates/executor.yaml): no egress, no
+# secrets, no ServiceAccount token. Not a task executor in the E6.08 sense --
+# it runs a script the API hands it, it does not consume a queue.
+SANDBOX_CHART_COMPONENTS = frozenset({"code-executor"})
 # Opt-in tiers, all disabled by default: the layer-4 vector store and its etcd,
-# the local inference server, the remaining Supabase pieces, the /execute
-# service for the k8s execution path (executeService.enabled), and the one-shot
-# Celery result backfill Job (ops.backfillCeleryResults).
+# the local inference server, the remaining Supabase pieces, and the /execute
+# service for the k8s execution path (executeService.enabled).
+# The one-shot Celery result backfill Job (ops.backfillCeleryResults) is opt-in too.
 OPTIONAL_CHART_COMPONENTS = frozenset(
     {"milvus", "etcd", "local-llm", "supabase-storage", "supabase-email-templates", "execute-service",
      "ops-backfill-celery-results"}
 )
+# Labels on objects that run nothing: the NetworkPolicy around the KubeRay pods
+# (`ray`) and the Secret holding their auth token (`ray-auth`). The Ray pods
+# themselves come from deploy/helm/ray, applied after the chart.
+RAY_AUTH_CHART_COMPONENTS = frozenset({"ray", "ray-auth"})
 
 _CELERY_WORKER_RE = re.compile(r"celery[^\n]{0,120}\b(worker|beat)\b", re.IGNORECASE)
 _NETWORK_POLICY_RE = re.compile(r"^\s*kind:\s*NetworkPolicy\s*$", re.MULTILINE)
@@ -178,8 +186,10 @@ def test_e1_02_pins_chart_workload_inventory() -> None:
         - UNPINNED_LEGACY_COMPONENTS
         - STORAGE_CHART_COMPONENTS
         - EXECUTOR_CHART_COMPONENTS
+        - SANDBOX_CHART_COMPONENTS
         - OPTIONAL_CHART_COMPONENTS
         - SERVING_CHART_COMPONENTS
+        - RAY_AUTH_CHART_COMPONENTS
     )
     assert not unexpected, (
         f"chart gained unpinned workload(s) {sorted(unexpected)}; decide whether they belong "
@@ -451,6 +461,73 @@ def test_e7_09_mlflow_backend_is_chart_managed() -> None:
     )
     assert "MLFLOW_TRACKING_URI" in _read(CHART_ROOT / "templates" / "configmap.yaml")
     assert "MLFLOW_BACKEND_STORE_URI" in _read(CHART_ROOT / "templates" / "secret.yaml")
+
+
+def _run_mlflow_entrypoint(script: str, tmp_path: pathlib.Path, fail_db: bool = False):
+    """Run the rendered MLflow container script with a stub `mlflow` on PATH.
+
+    The stub records each invocation's argv on one line and exits 1 for
+    `mlflow db ...` when fail_db is set. Returns (returncode, recorded calls).
+    """
+    import subprocess
+
+    bindir = tmp_path / "bin"
+    bindir.mkdir(exist_ok=True)
+    log = tmp_path / "calls.log"
+    stub = bindir / "mlflow"
+    stub.write_text(
+        '#!/bin/sh\n'
+        f'echo "$*" >> "{log}"\n'
+        'if [ "$1" = db ] && [ -n "$STUB_FAIL_DB" ]; then exit 1; fi\n'
+        'exit 0\n'
+    )
+    stub.chmod(0o755)
+    log.write_text("")
+    env = {
+        "PATH": f"{bindir}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+        "MLFLOW_BACKEND_STORE_URI": "postgresql://mlflow@db:5432/mlflow",
+        "MLFLOW_ARTIFACTS_DESTINATION": "s3://bucket/mlflow-artifacts",
+        "MLFLOW_PORT": "5000",
+        "MLFLOW_WORKERS": "1",
+        "MLFLOW_ALLOWED_HOSTS": "localhost",
+    }
+    if fail_db:
+        env["STUB_FAIL_DB"] = "1"
+    run = subprocess.run(["/bin/sh", "-c", script], env=env, capture_output=True, text=True)
+    return run.returncode, [line for line in log.read_text().splitlines() if line]
+
+
+def test_mlflow_migrates_schema_before_serving(tmp_path) -> None:
+    """The MLflow pod runs `mlflow db upgrade` on every start, before the server.
+
+    A newer mlflow in the API image meets a tracking database at the old alembic
+    head. MLflow migrates by itself only when the release adds tables; for one
+    that only alters existing tables the server refuses to start. The step must
+    come first, must stop the container when it fails, and must be the
+    idempotent upgrade -- nothing that stamps, downgrades or runs only once.
+    """
+    code, docs, err = _render()
+    assert code == 0, err
+    mlflow = next(d for d in docs if d.get("kind") == "Deployment"
+                  and d["metadata"]["labels"].get("app.kubernetes.io/component") == "mlflow")
+    container = mlflow["spec"]["template"]["spec"]["containers"][0]
+    assert container["command"] == ["/bin/sh", "-c"], container["command"]
+    script = container["args"][0]
+    db_calls = re.findall(r"mlflow db (\S+)", script)
+    assert db_calls == ["upgrade"], f"the only schema step must be `mlflow db upgrade`: {db_calls}"
+
+    uri = "postgresql://mlflow@db:5432/mlflow"
+    for attempt in (1, 2):  # every start runs the same two steps, in the same order
+        rc, calls = _run_mlflow_entrypoint(script, tmp_path)
+        assert rc == 0, (attempt, calls)
+        assert len(calls) == 2, (attempt, calls)
+        assert calls[0] == f"db upgrade {uri}", (attempt, calls)
+        assert calls[1].startswith(f"server --backend-store-uri {uri} "), (attempt, calls)
+
+    rc, calls = _run_mlflow_entrypoint(script, tmp_path, fail_db=True)
+    assert rc != 0 and calls == [f"db upgrade {uri}"], (
+        f"a failed migration must stop the container before `mlflow server`: rc={rc} calls={calls}"
+    )
 
 
 # --------------------------------------------------------------------------- E11.10

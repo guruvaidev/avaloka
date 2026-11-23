@@ -201,7 +201,9 @@ def test_a_clean_narrative_is_safe_to_present():
         "Delivery time is associated with repeat purchase rate.",
         {"n_rows": 4200, "correlation": 0.62})
     assert report.safe_to_present
-    assert report.claims_checked == 2
+    # 4200 is found in the evidence; the association has no figure a check
+    # can resolve (D13.2: only what a check resolved is counted).
+    assert report.claims_checked == 1 and report.claims_seen == 2
     assert not report.problems
 
 

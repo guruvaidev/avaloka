@@ -1,0 +1,7 @@
+{
+ "note": "an unknown column, then prose instead of JSON",
+ "replies": [
+  "{\"recipe\": \"trend\", \"params\": {\"measure\": \"sales\", \"time\": \"order_date\"}, \"flags\": [], \"confidence\": 0.8}",
+  "The best recipe is trend over revenue by month."
+ ]
+}

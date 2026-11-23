@@ -19,6 +19,16 @@ _CALLS = {"pipeline": []}
 
 
 @pytest.fixture(autouse=True)
+def _ray_executor_configured(monkeypatch):
+    """These tests drive the (mocked) Ray runner, so a Ray dashboard is configured.
+
+    The planner now checks for one before the pipeline can create a destination
+    table; with none it takes the no-Ray path (tests/test_dta_no_ray_transfer.py).
+    """
+    monkeypatch.setenv("RAY_DASHBOARD_URL", "http://127.0.0.1:8265")
+
+
+@pytest.fixture(autouse=True)
 def _wizard_env(monkeypatch):
     _CALLS["pipeline"].clear()
 
@@ -73,15 +83,18 @@ def _state(dst_alias=None, dst_entry=None):
 
 
 def _transfer(state, **kw):
+    """A transfer request; a confirmation question is answered "yes" (see dta_confirm)."""
     import app.agents.planner as planner
-    return planner._handle_initiate_transfer(state, planner.InitiateTransferParams(**kw))
+    from tests.dta_confirm import confirmed
+    return confirmed(state, planner._handle_initiate_transfer(state, planner.InitiateTransferParams(**kw)))
 
 
 def _resume(state, reply):
     import app.agents.planner as planner
+    from tests.dta_confirm import confirmed
     pending = state.get("pending_clarification")
     assert isinstance(pending, dict) and pending.get("type") == "dta_transfer", pending
-    return planner._resolve_pending_dta(state, pending, reply)
+    return confirmed(state, planner._resolve_pending_dta(state, pending, reply))
 
 
 def _pending(state):
@@ -105,7 +118,7 @@ def test_missing_destination_stores_pending_and_never_guesses(monkeypatch):
     msg = _transfer(state, destination_alias="", user_prompt="transfer keeping age == 29")
 
     assert "couldn't determine the destination" in msg.lower()
-    assert "**Cloud Storage**" in msg and "gcs_backup" in msg
+    assert "cloud storage: gcs_backup" in msg and "\n" not in msg   # one line
     assert _pending(state).get("awaiting") == "destination"
     assert not _CALLS["pipeline"], "must not run without a destination"
 
@@ -146,7 +159,7 @@ def test_db_unstated_table_lists_existing_and_resumes_without_create():
     msg = _transfer(state, destination_alias="warehouse_db",
                     user_prompt="transfer to warehouse_db")
     assert "which table" in msg.lower()
-    assert "- orders" in msg and "- customers" in msg      # reflected list shown
+    assert "orders" in msg and "customers" in msg and "\n" not in msg   # one line, choices inline
     assert _pending(state).get("awaiting") == "table_choice"
 
     _resume(state, "orders")
@@ -254,9 +267,29 @@ def test_cloud_missing_filename_asks_for_name():
 
 # ── Complete request runs immediately (no wizard turns) ───────────────────────
 
-def test_complete_db_request_runs_immediately():
+def test_complete_db_request_asks_once_naming_all_four_then_runs():
+    """A fully specified request still asks ONE confirmation before any write (J1)."""
+    import app.agents.planner as planner
     state = _state("warehouse_db", _DB_DST)
-    _transfer(state, destination_alias="warehouse_db", dest_table="orders",
-              user_prompt="transfer to warehouse_db, table orders")
-    assert _CALLS["pipeline"], "a fully-specified request should run without questions"
+    msg = planner._handle_initiate_transfer(state, planner.InitiateTransferParams(
+        destination_alias="warehouse_db", dest_table="orders",
+        user_prompt="transfer to warehouse_db, table orders"))
+    assert not _CALLS["pipeline"], "nothing runs before the user confirms"
+    assert _pending(state).get("awaiting") == "confirm_transfer"
+    assert "→ `warehouse_db.orders`" in msg and "\n" not in msg
+    _resume(state, "yes")
+    assert _CALLS["pipeline"], "the confirmed request runs"
     assert not state.get("pending_clarification")
+
+
+# Registry credentials these tests seed live in a stand-in sealed store, not in
+# state: the planner opens them by handle after the confirm gate (tests/dta_sealed.py).
+try:  # tests/ as a package, or tests/ on sys.path
+    from tests import dta_sealed as _dta_sealed
+except ImportError:  # pragma: no cover
+    import dta_sealed as _dta_sealed
+
+
+@pytest.fixture(autouse=True)
+def _sealed_store(monkeypatch):
+    return _dta_sealed.install(monkeypatch)

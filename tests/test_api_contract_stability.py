@@ -52,6 +52,15 @@ NEW_FIELDS = {
     "output_tables",
     "pending_kind",
     "pending_status",
+    # The agent trace (1.7): the turn this response recorded, and where to read
+    # it. Optional and None by default, so a response with no trace is
+    # byte-identical to before.
+    "trace_turn_id", "trace_url",
+    # Avaloka talking the user through each step (2.0): the short questions and
+    # quick replies after an upload or a turn, and the swarm told back in the
+    # chat. Optional and None by default; advertised under
+    # features.assistant_prompts in /api/capabilities.
+    "assistant_prompts",
     # Plan gates (data transfer / model training): set to "data_transfer" or
     # "model_training" when the hosted plan does not include the feature, so
     # the UI can show an upgrade prompt instead of parsing the chat message.

@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from pathlib import Path
 
 import pandas as pd
 import pandas.testing as pdt
@@ -116,8 +117,15 @@ def _parquet(tmp_path):
     return path
 
 
+def _stray_words(tmp_path):
+    # Typed columns with stray words, read as missing after the read: the
+    # script must repeat that coercion, not just the read arguments.
+    return Path(__file__).resolve().parents[1] / "fixtures" / "null_words" / "edge_cases.csv"
+
+
 FILES = {
     "planted null-label file": _null_labelled,
+    "stray words in typed columns": _stray_words,
     "semicolon-delimited": _semicolon,
     "tab-separated": _tab_separated,
     "latin-1": _latin_1,

@@ -12,6 +12,14 @@ def delete_ray_cluster(
 ):
     custom = client.CustomObjectsApi(api_client)
 
+    # The Ray auth token Secret create_ray_cluster() made for this cluster.
+    try:
+        client.CoreV1Api(api_client).delete_namespaced_secret(
+            name=f"{cluster_name}-ray-auth"[:253], namespace=namespace
+        )
+    except client.ApiException:
+        pass
+
     try:
         custom.delete_namespaced_custom_object(
             group="ray.io",

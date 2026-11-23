@@ -1,0 +1,18 @@
+{
+  "recipe": "segment",
+  "version_major": 1,
+  "verdict": "ask",
+  "reason": null,
+  "ask_parameter": "dimension",
+  "figures": [],
+  "caveats": [],
+  "must_not_say": [
+    "cause",
+    "causes",
+    "drives",
+    "because",
+    "effect of",
+    "leads to"
+  ],
+  "note": "customer has 200 distinct values (> 50) and region and channel are lower-cardinality dimensions, so the recipe asks which dimension to use instead; nothing is computed."
+}

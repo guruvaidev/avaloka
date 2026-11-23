@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { InlineMarkdown } from "@/components/analysis/ChartCarousel";
+import { CollectedInsight } from "@/components/chat/InsightLine";
 
 export const KEY_FINDINGS_OPEN_KEY = "avaloka.keyFindingsOpen";
 
@@ -50,7 +51,7 @@ export function KeyFindingsCard({ findings, children }: { findings?: string[]; c
           {children ?? (
             <ul className="list-disc space-y-1.5 pl-5">
               {findings!.map((text) => (
-                <li key={text}><InlineMarkdown content={text} /></li>
+                <li key={text}><CollectedInsight text={text} renderText={(t) => <InlineMarkdown content={t} />} /></li>
               ))}
             </ul>
           )}

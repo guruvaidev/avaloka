@@ -344,6 +344,7 @@ def test_the_install_notes_never_print_the_token(tmp_path) -> None:
     assert m and len(m.group(1)) >= 32, "the release Secret carries no generated token"
     assert TOKEN in notes, "NOTES does not say the token was generated"
     assert m.group(1) not in notes
+    assert run.stdout.count(m.group(1)) == 1, "the token appears outside the Secret (NOTES or another object)"
 
 
 # --------------------------------------------------------------------------- the server

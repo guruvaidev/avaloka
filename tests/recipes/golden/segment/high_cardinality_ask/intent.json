@@ -1,0 +1,10 @@
+{
+  "question": "Which customers matter most for revenue?",
+  "recipe": "segment",
+  "params": {
+    "measure": "revenue",
+    "dimension": "customer"
+  },
+  "confidence": 1.0,
+  "source": "fixture"
+}

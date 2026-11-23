@@ -34,6 +34,10 @@ DOCKER_DIR = os.path.join(_DEPLOY, "docker")
 HELM_VALUES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "manifests", "helm-values")
 
 API_IMAGE = "avaloka-api:latest"      # FastAPI backend — the chart's primary workload (R1)
+# The chart's langgraph pod (`langgraph dev`): Dockerfile.api built with
+# requirements-langgraph-server.txt. The chart derives its name from API_IMAGE
+# (avaloka-api -> avaloka-langgraph, same tag), so nothing extra is --set.
+LANGGRAPH_IMAGE = "avaloka-langgraph:latest"
 RAY_IMAGE = "avaloka-ray:latest"      # Ray head/worker + Serve image
 UI_IMAGE = "avaloka:latest"           # optional Streamlit UI (built only when with_ui)
 WEBUI_IMAGE = "avaloka-ui:latest"    # 1.6 TanStack SSR UI (chart 'webui.enabled')
@@ -81,7 +85,8 @@ def build_images(
 ) -> List[dict]:
     """Build the avaloka images; optionally side-load them into kind.
 
-    Builds the API image (chart's primary workload) and the Ray image by default.
+    Builds the API image (chart's primary workload), the LangGraph server image
+    (the chart's langgraph pod) and the Ray image by default.
     The Streamlit UI image (``avaloka:latest``) is built only when ``with_ui`` — the
     UI is opt-in (chart ``ui.enabled``), so most deploys don't need it.
     """
@@ -92,6 +97,13 @@ def build_images(
         "Build avaloka-api image",
     ))
     built.append(API_IMAGE)
+    outcomes.append(run_command(
+        ["docker", "build", "-f", os.path.join(DOCKER_DIR, "Dockerfile.api"),
+         "--build-arg", "REQUIREMENTS=requirements-langgraph-server.txt",
+         "-t", LANGGRAPH_IMAGE, _REPO_ROOT],
+        "Build avaloka-langgraph image",
+    ))
+    built.append(LANGGRAPH_IMAGE)
     outcomes.append(run_command(
         ["docker", "build", "-f", os.path.join(DOCKER_DIR, "Dockerfile.ray"), "-t", RAY_IMAGE, _REPO_ROOT],
         "Build avaloka-ray image",
@@ -193,9 +205,9 @@ def deploy_avaloka(
     elif provider == "azure":
         cmd += ["-f", os.path.join(AVALOKA_CHART, "values", "values-aks.yaml")]
 
-    # This is the self-hosted provisioner (`make up`). values-gke.yaml above is
-    # also a hosted service's overlay and declares avaloka_hosted; an install
-    # made here is the operator's own, so say so over whatever the overlay says.
+    # This is the self-hosted provisioner (`make up`). The GKE overlay above is
+    # also the hosted sites' overlay and declares avaloka_hosted; an install made
+    # here is the operator's own, so say so over whatever the overlay says.
     cmd += ["--set-string", "config.deployment=self_hosted"]
 
     if connect_existing and ray_address:

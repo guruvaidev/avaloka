@@ -344,7 +344,9 @@ def test_merge_with_a_single_even_chart_changes_nothing():
 def test_enrich_column_stats_adds_meaning_and_predictive_value():
     stats = [{"name": "Age"}, {"name": "Blood Type"}, {"name": "Room Number"}]
     va._enrich_column_stats(stats, PROFILE)
-    assert stats[0]["meaning"] == "Patient age in years at admission."
+    # The profiling model's meaning: commentary (c-strict).
+    assert stats[0]["meaning"] == "Patient age in years at admission. (commentary — not checked)"
+    assert stats[0]["meaning_segments"] == [{"text": "Patient age in years at admission.", "kind": "commentary"}]
     assert "predictive_value" not in stats[0]
     assert stats[1]["predictive_value"] == "low"
     assert stats[2] == {"name": "Room Number"}
@@ -386,7 +388,8 @@ def test_upload_message_uses_total_rows_not_the_sample():
                                   total_rows=55500, n_columns=15)
     assert "55,500 rows × 15 columns" in msg
     assert "**Healthcare** dataset" in msg
-    assert "**Data readiness: 78/100.**" in msg
+    # The score is the profiling model's: commentary, so marked inside the bold.
+    assert "**Data readiness: 78/100. (commentary — not checked)**" in msg
     assert "- Obesity patients are billed the most" in msg      # headline preferred over insight
     assert "**Watch out for**" in msg and "108 negative billing amounts" in msg
     assert "**Try asking**" in msg
@@ -424,11 +427,13 @@ def test_builder_with_profile_adds_overview_message_and_context(no_llm):
     assert cfg["visualization_status"] == "ready"
     assert cfg["dataset_context"]["domain"] == "Healthcare"
     assert cfg["profile_overview"]["domain"] == "Healthcare"
-    assert cfg["upload_message"].startswith("**Healthcare** dataset · 55,500 rows")
+    # PROFILE's domain records no provenance, so a model chose it: commentary.
+    assert cfg["upload_message"].startswith(
+        "**Healthcare** dataset (commentary — not checked) · 55,500 rows")
     assert cfg["dataset"]["total_rows"] == 55500
     assert cfg["dataset"]["rows_sampled"] == 120
     age = next(c for c in cfg["column_stats"] if c["name"] == "Age")
-    assert age["meaning"] == "Patient age in years at admission."
+    assert age["meaning"] == "Patient age in years at admission. (commentary — not checked)"
     assert cfg["insight_model"]["used"] is False
 
 
@@ -666,7 +671,7 @@ def test_builder_on_outcome_data_keeps_meaning_and_predictive_value(no_llm):
     cfg = va.build_visualization_config_from_sample(
         dataset_id="icu", sample_rows=_icu_rows(), profiling_result=profile)
     stats = {c["name"]: c for c in cfg["column_stats"]}
-    assert stats["age"]["meaning"] == "Patient's age in years at admission."
+    assert stats["age"]["meaning"] == "Patient's age in years at admission. (commentary — not checked)"
     assert stats["age"]["predictive_value"] == "high"
     assert stats["ethnicity"]["predictive_value"] == "low"
     flag = cfg["profile_overview"]["red_flags"][0]

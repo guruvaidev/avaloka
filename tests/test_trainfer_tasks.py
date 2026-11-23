@@ -108,7 +108,9 @@ def test_chat_start_service_without_a_worker_fails_the_job_and_says_so(store):
     from app.agents.mta_v2.agent import ModelTrainingAgent
     with _maybe_patch("app.infra.training_tasks._worker_available", return_value=False):
         out = ModelTrainingAgent()._configure_inference_service(_service_state("start"))
-    assert "no background worker" in out["messages"][-1].content.lower()
+    text = out["messages"][-1].content.lower()
+    assert "background worker" in text and "isn't running" in text
+    assert out["agent_errors"][-1]["error_class"] == "InferenceServiceConfigureFailed"
     assert store is not None
     jobs = store.list_jobs("user-1", kind="deploy_endpoint")
     assert jobs and jobs[0].status == "failed"

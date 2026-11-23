@@ -1,0 +1,9 @@
+{
+  "question": "What is the typical fee?",
+  "recipe": "describe",
+  "params": {
+    "measure": "fee"
+  },
+  "confidence": 1.0,
+  "source": "fixture"
+}

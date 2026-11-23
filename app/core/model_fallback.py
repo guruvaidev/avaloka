@@ -363,6 +363,10 @@ class _OpenRouterCompat(Runnable):
     Groq payload. This adapter is the seam where they become an OpenRouter one.
     """
 
+    #: Read by callers that invoke a backup directly (the MTA's no-tool-call
+    #: retry) to pick the tool_choice this backup accepts.
+    provider = "openrouter"
+
     def __init__(self, inner: Any, model: str, *, primary_model: Optional[str] = None,
                  primary_provider: str = "groq", provider: str = "openrouter") -> None:
         self.inner = inner
@@ -403,6 +407,21 @@ class _OpenRouterCompat(Runnable):
             )
         if "tools" in adapted:
             adapted["tools"] = normalise_tools_for_openrouter(adapted["tools"])
+        if adapted.get("tool_choice") in ("required", "any"):
+            # The primary's forcing value, chosen for the PRIMARY's provider.
+            # This adapter only ever wraps an OpenRouter backup (attach_fallback
+            # builds no other), and the decision is read from the provider
+            # tables rather than restated here: OpenRouter has no accepted
+            # forcing value (forced_tool_choice_for_provider -> None; "required"
+            # gets finish_reason="error" and no tool call), so it is sent the
+            # portable choice for its provider instead. The caller's kwargs are
+            # copied above, so the primary -- Groq, Ollama -- keeps its value.
+            # A named-function dict is left alone: it is not measured here.
+            from app.core.inference import (forced_tool_choice_for_provider,
+                                            tool_choice_for_provider)
+
+            if forced_tool_choice_for_provider(self.provider) is None:
+                adapted["tool_choice"] = tool_choice_for_provider(self.provider)
         return adapted
 
     def _failed(self, exc: BaseException) -> BackupFailed:
@@ -478,6 +497,15 @@ def attach_fallback(primary: Any, model: str, *, temperature: float = 0.0,
         logger.warning("[models] %s backup could not be constructed; "
                        "running without one", label)
         return primary
+    try:
+        # The backup's calls are recorded on the agent trace like the primary's,
+        # so a failover shows as a failed call followed by the one that answered.
+        from app.trace.recorder import instrument
+
+        backup = instrument(backup, agent=label.lower(), provider="openrouter",
+                            model=plan.backup_model)
+    except Exception:  # noqa: BLE001
+        pass
     logger.info("[models] %s: OpenRouter backup armed (%s -> %s)",
                 label, plan.primary_model, plan.backup_model)
     from app.core import model_tiers
@@ -488,6 +516,27 @@ def attach_fallback(primary: Any, model: str, *, temperature: float = 0.0,
                            primary_provider="groq")],
         failover_exception_types(),
     )
+
+
+def fallback_models(llm: Any) -> List[Any]:
+    """The backups armed behind *llm*, in policy order, or [] when there are none.
+
+    For callers that get a *reply* they cannot use rather than an exception:
+    ``with_fallbacks`` only fails over on the exception types it was given, so
+    a 200 with no tool call never reaches the backup on its own. Honours the
+    kill switch at call time as well as at construction, so
+    ``AVALOKA_DISABLE_MODEL_FALLBACK=1`` set after the model was built still
+    keeps the backup out of the conversation.
+    """
+    if llm is None or not backup_enabled():
+        return []
+    try:
+        from langchain_core.runnables import RunnableWithFallbacks
+    except Exception:  # noqa: BLE001
+        return []
+    if not isinstance(llm, RunnableWithFallbacks):
+        return []
+    return list(getattr(llm, "fallbacks", None) or [])
 
 
 def describe_backup() -> Dict[str, object]:

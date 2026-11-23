@@ -31,6 +31,11 @@ def test_db07_selected_tables_become_thread_datasets(client: TestClient, monkeyp
     async def fake_mcp(customer_id, api_key, sql):
         sent_sql.append((customer_id, sql))
         table = sql.split(" FROM ", 1)[1].split()[0]
+        if sql.startswith("SELECT COUNT(*)"):
+            # The row count the sampler asks for first (app/core/db_sampling).
+            return {"columns": ["row_count"], "rows": [[len(TABLES[table]["rows"])]]}
+        if "WHERE 1 = 0" in sql:                                   # the column probe
+            return {"columns": TABLES[table]["columns"], "rows": []}
         return TABLES[table]
 
     monkeypatch.setattr(server, "_run_mcp_db_query", fake_mcp, raising=False)
@@ -43,9 +48,16 @@ def test_db07_selected_tables_become_thread_datasets(client: TestClient, monkeyp
     assert resp.status_code == 200, resp.text
     out = resp.json()
 
-    # One query per table, against the caller's connection, row-limited.
-    assert [c for c, _ in sent_sql] == ["cust_db07", "cust_db07"]
-    assert all(s.startswith("SELECT * FROM ") and " LIMIT " in s for _, s in sent_sql)
+    # Every query goes to the caller's connection. On 1.7 each table is read as
+    # an honest sample (app/core/db_sampling.draw_table_sample): a column probe,
+    # the row count, then -- because these tables fit under the row cap -- the
+    # whole table in one read. Never a head read of a table that does not fit.
+    assert {c for c, _ in sent_sql} == {"cust_db07"}
+    for table in TABLES:
+        mine = [s for _, s in sent_sql if f" FROM {table}" in s]
+        assert mine == [f"SELECT * FROM {table} WHERE 1 = 0",
+                        f"SELECT COUNT(*) AS row_count FROM {table}",
+                        f"SELECT * FROM {table}"], mine
 
     by_alias = {d["alias"]: d for d in out["datasets"]}
     assert set(by_alias) == {"customers", "orders"}

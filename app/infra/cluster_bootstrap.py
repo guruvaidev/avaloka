@@ -63,6 +63,8 @@ def provision(args) -> int:
         kp = LocalKindProvider()
         for img in (
             deploy_stack.API_IMAGE,
+            # The langgraph pod's image (avaloka-api -> avaloka-langgraph in the chart).
+            deploy_stack.LANGGRAPH_IMAGE,
             deploy_stack.RAY_IMAGE,
             deploy_stack.WEBUI_IMAGE,
             # supabase.functions pulls this IfNotPresent, so it must reach the node.
@@ -161,7 +163,8 @@ def _finish(results: List[dict], provider: str | None = None) -> int:
             print("  • Ray dashboard:  http://localhost:8265  (kind NodePort)")
         else:
             print("  • Avaloka API:    kubectl port-forward svc/avaloka 9000:9000  (try /health, /docs)")
-            print("  • Ray dashboard:  kubectl port-forward svc/avaloka-raycluster-head-svc 8265:8265")
+            print("  • Ray dashboard:  kubectl port-forward svc/avaloka-raycluster-head-svc 8265:8265"
+                  "  (token: Secret avaloka-ray-auth, key auth_token)")
         print("  • Inference:      kubectl port-forward svc/avaloka-inference-serve-svc 8000:8000")
         print("  • Pods:           kubectl get pods")
     print("=" * 60)

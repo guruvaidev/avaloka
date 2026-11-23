@@ -4,10 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "avaloka"
-version = "1.0.0"
+version = "2.0.0"
 description = "CLI-first agentic data-science execution platform that turns datasets and business objectives into validated reports, reproducible models and deployable inference services within explicit time and cost budgets."
 readme = "README_CLI.md"
-# Capped, not open-ended: pyarrow==16.1.0 publishes cp38-cp312 wheels only.
+# Capped, not open-ended. The cap was set when pyarrow==16.1.0 (cp38-cp312 wheels
+# only) was pinned; pyarrow is now 23.0.1, and lifting the cap is a separate change.
 # Without the ceiling, pip on a 3.13+ interpreter tries to build Arrow C++
 # from source and fails a long way from the actual cause.
 # 3.11 is the floor: session_service.py uses `async with asyncio.timeout(...)`,
@@ -54,7 +55,7 @@ dependencies = [
     "pandas>=2.0,<3",
     "numpy>=1.24",
     "scikit-learn>=1.3",
-    "pyarrow>=12.0",
+    "pyarrow>=23.0.1",
     "PyYAML>=6.0",
     "jinja2>=3.1",
 ]
@@ -71,7 +72,30 @@ Changelog = "https://github.com/guruvaidev/avaloka/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 llm = ["anthropic>=0.40"]
-dev = ["pytest>=8.0"]
+sources = ["SQLAlchemy>=2.0", "fsspec>=2023.0", "pymongo>=4.6", "pyarrow>=14", "sqlglot>=25"]
+documents = [
+    "pypdf>=5.0",
+    "Pillow>=10.0",
+    "pytesseract>=0.3.10",
+    "PyMuPDF>=1.24",
+]
+video = ["opencv-python-headless>=4.10"]
+rlds = ["tensorflow>=2.15", "tensorflow-datasets>=4.9"]
+complex = [
+    "pypdf>=5.0",
+    "Pillow>=10.0",
+    "pytesseract>=0.3.10",
+    "PyMuPDF>=1.24",
+    "opencv-python-headless>=4.10",
+    "tensorflow>=2.15",
+    "tensorflow-datasets>=4.9",
+]
+# moto[s3] + flask + flask-cors: moto's in-process S3 server for the s3-moto
+# cases of tests/avaloka/test_connector_conformance.py. Test-only, so here and
+# not in requirements.txt, which the application images install. Pinned: a
+# moto release follows botocore, and requirements.txt pins boto3.
+dev = ["pytest==9.1.1", "SQLAlchemy>=2.0", "fsspec>=2023.0", "pymongo>=4.6", "moto[s3]==5.2.5", "flask>=3.0",
+       "flask-cors>=4.0"]
 # Readers for declared formats that the base eight do not cover.
 #
 # pandas and pyarrow already decode JSON, XML, Parquet and ORC -- XML via the
@@ -86,6 +110,19 @@ dev = ["pytest>=8.0"]
 #
 #   pip install 'avaloka[formats]'
 formats = ["openpyxl>=3.1", "fastavro>=1.9", "lxml>=5.0"]
+# The Analysis Recipe Library (avaloka/recipes): DuckDB runs the SQL, scipy and
+# statsmodels the statistics. An extra rather than base dependencies because
+# the CLI's eight are contractually fixed (S1.09); a recipe that needs one
+# reports this install command in plain words when it is absent.
+#
+#   pip install 'avaloka[recipes]'
+recipes = ["duckdb>=1.1", "scipy>=1.11", "statsmodels>=0.14"]
+# Executes a recipe's generated notebook in a kernel so the parity test can
+# check it reproduces the report (avaloka/recipes/notebook_exec.py). A test
+# extra: nothing at run time executes a notebook.
+#
+#   pip install 'avaloka[recipes-test]'
+recipes-test = ["nbclient>=0.10", "nbformat>=5.10", "ipykernel>=6"]
 # The benchmark needs the same readers, to write the fixtures as well as read
 # them. Kept as its own name so `[formats]` stays the one a user installs.
 # It also re-publishes each dataset through the sources it grades: SQLite needs
@@ -101,7 +138,10 @@ avaloka = "avaloka.cli:main"
 include = ["avaloka*"]
 
 [tool.setuptools.package-data]
-avaloka = ["reports/templates/*.html.j2", "examples/*.csv"]
+avaloka = ["reports/templates/*.html.j2", "examples/*.csv",
+           "outcomes/*.schema.json", "outcomes/assets/*.js", "outcomes/assets/*.json",
+           "outcomes/assets/*.csv", "outcomes/assets/NOTICE", "outcomes/assets/SHA256SUMS",
+           "outcomes/assets/licenses/*.txt"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests/avaloka"]
@@ -109,4 +149,5 @@ addopts = "-q -m 'not kaggle'"
 markers = [
     "kaggle: end-to-end benchmark over downloaded Kaggle datasets (needs the Kaggle CLI + data; opt in with -m kaggle)",
     "slow: long-running benchmark/e2e tests",
+    "kaggle_efficiency: paired local CPU/runtime benchmark over downloaded Kaggle datasets",
 ]

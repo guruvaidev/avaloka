@@ -9,10 +9,16 @@ def no_llm_key(monkeypatch):
 
     ``--llm`` is exercised for its *degradation* contract -- the run must
     complete and produce an identical bundle when no key is configured. A
-    developer's exported ANTHROPIC_API_KEY would turn that into a live,
-    billable call and make the assertions depend on network and model output.
+    developer's exported provider key (GROQ_API_KEY, OLLAMA_HOST, ...) would turn
+    that into a live, possibly billable call and make the assertions depend on network and model output.
     """
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    for name in ("ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "GROQ_API_KEY", "OPENROUTER_API_KEY",
+                 "OPENAI_API_KEY", "OPENAI_BASE_URL", "OLLAMA_HOST", "INFERENCE_LOCAL_BASE_URL",
+                 "INFERENCE_LOCAL_API_KEY", "AVALOKA_LOCAL_MODEL", "AVALOKA_LLM_PROVIDER",
+                 "AVALOKA_LLM_MODEL", "AVALOKA_LLM_BASE_URL", "AVALOKA_MODEL_PRICES",
+                 "AVALOKA_LLM_PRICE_IN", "AVALOKA_LLM_PRICE_OUT"):
+        # Every variable that selects, aims or prices a provider (avaloka.llm.providers).
+        monkeypatch.delenv(name, raising=False)
 
 
 def write_churn_csv(path, n: int = 400, seed: int = 7):
@@ -60,7 +66,9 @@ def trained_package(tmp_path_factory):
     out = base / "model"
     ctx = MissionContext(kind=MissionKind.TRAIN, goal="Predict churn", data_source=str(data),
                          output_dir=out, budget=Budget(), target="churned", metric="roc_auc",
-                         deployable=True)
+                         deployable=True, ensemble=True)
+    # ensemble=True: the bundle tests read the ensemble verdict, which the
+    # default (no budget, no flag) path no longer trains.
     run_train(ctx)
     return out
 

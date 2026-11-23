@@ -103,6 +103,18 @@ def test_materialize_memory_object(csv):
     assert pd.read_csv(r.local_path).shape[0] == 300
 
 
+
+def test_materialize_memory_object_enforces_streaming_byte_limit():
+    import fsspec
+
+    uri = "memory://tests/oversized.bin"
+    with fsspec.open(uri, "wb") as fh:
+        fh.write(b"0123456789")
+
+    with pytest.raises(SourceError, match="limit of 5 bytes"):
+        materialize(uri, max_bytes=5)
+
+
 def test_object_storage_missing_backend_raises():
     # s3fs is not installed in this environment → a clear SourceError, not a crash.
     pytest.importorskip("fsspec")

@@ -120,9 +120,22 @@ def build_scope(
     }
 
 
+def _plain_detail(detail: Any) -> str:
+    """The detail as a reason sentence may carry it: code-written text as it is;
+    a traceback, a stack frame or a raw exception line (the executor's stderr,
+    a node's ``execution_error``) replaced by what went wrong in the user's
+    terms. The raw text stays where it was logged."""
+    from app.core.user_errors import looks_like_raw_error
+    text = " ".join(str(detail or "").split())
+    if looks_like_raw_error(text):
+        from app.agents.analysis_outcome import plain_failure_reason
+        text = plain_failure_reason(text)
+    return text[:500] or "no detail was reported"
+
+
 def make(reason_code: str, *, kind: str, scope: Optional[Mapping[str, Any]] = None,
          detail: Optional[str] = None) -> RunOutcome:
-    detail = " ".join(str(detail or "").split())[:500] or "no detail was reported"
+    detail = _plain_detail(detail)
     return RunOutcome(
         outcome=OUTCOME_OF_REASON[reason_code],
         reason_code=reason_code,
@@ -306,3 +319,76 @@ def classify_turn(final: Any, *, deferred: bool = False,
         return make("ok", kind=kind, scope=build_scope(
             engine="ray" if tr.get("ray_job_id") else None)).to_dict()
     return make("reply_only", kind=kind, scope=build_scope()).to_dict()
+
+
+# ---------------------------------------------------------------------------
+# 2.x additions, not in the 1.6 closed list. Appended only: everything above
+# is byte-identical to develop-1.6 (7f0f4a5c + 153a75c5), so a port of later
+# 1.6 changes merges cleanly. The replan loop after a failed local run
+# (app/agents/replan.py) ends a turn in three ways 1.6 has no word for.
+# ---------------------------------------------------------------------------
+
+REASON_TEMPLATES.update({
+    # Recovered, but rows the question covered were left out of the result.
+    "rows_excluded": "The run left out rows to finish: {detail}",
+    # Every attempt to repair a failed run failed too.
+    "recovery_exhausted": "The run failed, and repairing it did not work: {detail}",
+    # A repair would have gone past a limit; the user was asked instead.
+    "needs_decision": "The run stopped for a decision before changing the data: {detail}",
+})
+OUTCOME_OF_REASON.update({
+    "rows_excluded": PARTIAL, "recovery_exhausted": FAILED, "needs_decision": FAILED,
+})
+REASON_CODES = frozenset(REASON_TEMPLATES)
+
+
+def with_recovery(record: Dict[str, Any], final: Any) -> Dict[str, Any]:
+    """*record* (a classifier's result), plus the replan loop's ``recovery`` record.
+
+    The record (``app.agents.replan.recovery_block``) lists each attempt: the
+    error class, the diagnosis, the action and the transforms, and the
+    outcome. It is read from the code-written ``replan_*`` keys only; a
+    ``recovery`` already present in the state is ignored, as ``run_truth`` is.
+    A turn the loop never touched comes back unchanged. Three endings get the
+    2.x reason codes above: a question the user has to answer, every repair
+    failing, and a recovery that left rows out of the result.
+    """
+    if not isinstance(final, Mapping):
+        return record
+    from app.agents.replan import EXCLUDE_ROWS, recovery_block
+
+    recovery = recovery_block(final)
+    if not recovery:
+        return record
+    kind, scope = record["kind"], record["scope"]
+    n = len(recovery["attempts"])
+    tries = f"{n} attempt{'s' if n != 1 else ''}"
+    if recovery["final"] == "needs_user":
+        record = failed("needs_decision", kind=kind, scope=scope,
+                        detail="a repair would have gone past a limit on how much data is changed")
+    elif recovery["final"] == "exhausted":
+        record = failed("recovery_exhausted", kind=kind, scope=scope, detail=f"{tries} to repair it failed")
+    elif recovery["final"] == "recovered" and record["outcome"] == SUCCEEDED:
+        excluded = [t for a in recovery["attempts"] for t in a.get("transforms") or []
+                    if t.get("op") == EXCLUDE_ROWS]
+        if excluded:
+            left = sum(int(t.get("rows_affected") or 0) for t in excluded)
+            total = max(int(t.get("rows_total") or 0) for t in excluded)
+            record = make("rows_excluded", kind=kind, scope=scope,
+                          detail=f"{left:,} of {total:,} rows had no usable value and were left out").to_dict()
+    record["recovery"] = recovery
+    return record
+
+
+def classify_turn_with_recovery(final: Any, **kwargs: Any) -> Dict[str, Any]:
+    """:func:`classify_turn` with the ``recovery`` record (:func:`with_recovery`)."""
+    return with_recovery(classify_turn(final, **kwargs), final)
+
+
+def classify_scheduled_with_recovery(final: Any, **kwargs: Any) -> Dict[str, Any]:
+    """:func:`classify_scheduled` with the ``recovery`` record (:func:`with_recovery`).
+
+    A scheduled local run goes through ``replan.run_scheduled_local``, so its
+    run record says what the loop did and how it ended, as a chat turn's does.
+    """
+    return with_recovery(classify_scheduled(final, **kwargs), final)

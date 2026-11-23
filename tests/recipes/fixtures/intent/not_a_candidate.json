@@ -1,0 +1,7 @@
+{
+ "note": "a valid id the caller did not offer, twice",
+ "replies": [
+  "{\"recipe\": \"anomalies\", \"params\": {\"measure\": \"revenue\"}, \"flags\": [], \"confidence\": 0.7}",
+  "{\"recipe\": \"anomalies\", \"params\": {\"measure\": \"revenue\"}, \"flags\": [], \"confidence\": 0.7}"
+ ]
+}

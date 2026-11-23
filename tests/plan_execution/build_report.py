@@ -15,8 +15,15 @@ WHEN = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 cases = list(csv.DictReader(open(os.path.join(S, "cases.csv"))))
 DEFECTS = json.load(open(os.path.join(S, "defect_map.json"))) \
     if os.path.exists(os.path.join(S, "defect_map.json")) else {}
-FINDINGS = json.load(open(os.path.join(S, "findings.json"))) \
-    if os.path.exists(os.path.join(S, "findings.json")) else {}
+# An absent register and an empty register are different facts and used to
+# render identically here. The register also moved to docs/defects/, so this
+# resolves against the repo root rather than S.
+_REGISTER = os.path.join(os.path.dirname(os.path.dirname(S)), "docs", "defects", "findings.json")
+if os.path.exists(_REGISTER):
+    FINDINGS = json.load(open(_REGISTER))
+else:
+    print(f"WARNING: defect register not found at {_REGISTER}; findings omitted")
+    FINDINGS = {}
 results = {}
 for f in ("pod_results.json", "host_results.json"):
     p = os.path.join(S, f)

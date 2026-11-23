@@ -7,6 +7,11 @@ published value, saved to .env (the release Secret on Helm), and reused on every
 later start. A service refuses to start only when, after that, it still has no
 key. docs/INSTALL.md's parameter table and .env.example list the same names.
 
+2.x port of 1.6's tests (hotfix/1.6-chat-connection-sealing d0737d14), plus
+2.x's quickstart (which generates into .env.quickstart) and the container rule
+(a container never generates its own secret unless opted in). Every test here
+fails on c3b27651, the 2.x tip this was branched from.
+
 Every value here is generated per test; none is real, and no assertion prints one.
 The tests reach the code through the installer's entry point (a subprocess), the
 services' startup and the chart, so on a tree without the change they fail on
@@ -296,3 +301,155 @@ def test_the_guide_marks_exactly_the_generated_secrets_as_generated():
     example = (ROOT / ".env.example").read_text()
     for n in GENERATED:
         assert re.search(rf"^{n}=\s*$", example, re.M), f".env.example ships a value for generated {n}"
+
+
+# ── 2.x: a container never generates its own key (each would get a different one) ─
+
+def test_a_container_adopts_the_env_file_key_but_never_generates_one(tmp_path, monkeypatch):
+    import app.mcp_server.multi_tenant_mcp_server as mts
+    try:
+        import app.core.provisioning as prov
+    except ImportError:
+        prov = None
+    assert prov is not None, "there is no provisioning (app.core.provisioning) to keep containers from generating"
+    env_file = tmp_path / ".env"
+    monkeypatch.setenv("AVALOKA_ENV_FILE", str(env_file))
+    monkeypatch.delenv("AVALOKA_AUTO_PROVISION", raising=False)
+    monkeypatch.delenv("KUBERNETES_SERVICE_HOST", raising=False)
+    monkeypatch.setattr(prov, "in_container", lambda: True)
+    for n in GENERATED:  # empty, not deleted: monkeypatch then restores what the start sets
+        monkeypatch.setenv(n, "")
+    monkeypatch.setattr(cc, "DB_ENCRYPTION_KEY", None, raising=False)
+    monkeypatch.setattr(cc, "_AESGCM_KEY", None, raising=False)
+    monkeypatch.setattr(mts, "CUSTOMERS_FILE", str(tmp_path / "customers.json"))
+    err = _start(mts.app)
+    assert err is not None, "a container with no key generated one of its own and started"
+    assert not env_file.exists(), "a container wrote a generated secret"
+    shared = "shared-" + secrets.token_hex(24)
+    env_file.write_text(f"DB_ENCRYPTION_KEY={shared}\n")
+    err = _start(mts.app)
+    assert err is None and cc.DB_ENCRYPTION_KEY == shared, "a container did not adopt the shared key"
+
+
+# ── 2.x quickstart: .env.quickstart gets every generated secret, published values replaced ─
+
+QUICKSTART = ROOT / "scripts" / "quickstart.sh"
+
+
+def _quickstart_ensure_env(checkout: Path, env_file_text=None):
+    """The real ensure_env of a copy of quickstart.sh, rooted at ``checkout`` (as
+    tests/test_quickstart_service_token.py runs it); docker is a stub reporting no volumes."""
+    (checkout / "scripts").mkdir(parents=True, exist_ok=True)
+    text = QUICKSTART.read_text("utf-8")
+    dispatch = text.rindex('case "${1:-}" in')
+    (checkout / "scripts" / "quickstart.sh").write_text(text[:dispatch] + "ensure_env\n", "utf-8")
+    bindir = checkout / "bin"
+    bindir.mkdir(exist_ok=True)
+    stub = bindir / "docker"
+    stub.write_text("#!/bin/sh\nexit 0\n", "utf-8")
+    stub.chmod(0o755)
+    if env_file_text is not None:
+        (checkout / ".env.quickstart").write_text(env_file_text, "utf-8")
+        (checkout / ".env.quickstart").chmod(0o600)
+    env = {k: v for k, v in os.environ.items() if k not in GENERATED}
+    env["PATH"] = f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}"
+    return subprocess.run(["bash", str(checkout / "scripts" / "quickstart.sh")],
+                          cwd=checkout, env=env, capture_output=True, text=True, timeout=60)
+
+
+def test_the_quickstart_generates_every_generated_secret_and_keeps_them(tmp_path):
+    out = _quickstart_ensure_env(tmp_path)
+    first = _env_values(tmp_path / ".env.quickstart")
+    missing = [n for n in GENERATED if not _usable(first.get(n))]
+    assert out.returncode == 0 and not missing, f"the quickstart did not generate: {missing}"
+    assert not any(first[n] in out.stdout + out.stderr for n in GENERATED), "a generated secret was printed"
+    _quickstart_ensure_env(tmp_path)
+    second = _env_values(tmp_path / ".env.quickstart")
+    assert all(second[n] == first[n] for n in GENERATED), "a second quickstart run regenerated a secret"
+
+
+def test_the_quickstart_replaces_a_published_secret_with_a_warning(tmp_path):
+    out = _quickstart_ensure_env(tmp_path, f"DB_ENCRYPTION_KEY={PUBLISHED}\nMCP_SERVICE_TOKEN=changeme\n")
+    values = _env_values(tmp_path / ".env.quickstart")
+    assert _usable(values.get("DB_ENCRYPTION_KEY")), "the quickstart kept the published DB_ENCRYPTION_KEY"
+    assert values.get("MCP_SERVICE_TOKEN") != "changeme", "the quickstart kept a published MCP_SERVICE_TOKEN"
+    assert "WARNING" in out.stdout and "published" in out.stdout, "no warning that a published value was replaced"
+
+
+def test_the_quickstart_hands_the_pii_key_to_the_backend_services():
+    compose = yaml.safe_load((ROOT / "docker-compose.quickstart.yml").read_text())
+    backend = compose.get("x-backend-env") or {}
+    assert "AVALOKA_PII_KEY" in backend, "the quickstart's backend services do not get AVALOKA_PII_KEY"
+
+
+
+# ── every replacement warning says what the replacement costs, and the remedy ─
+
+_CONSEQUENCE = "can no longer be opened"
+_REMEDY = "Register those connections again"
+
+
+def test_the_installer_warning_says_sealed_connections_must_be_registered_again(tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"DB_ENCRYPTION_KEY={PUBLISHED}\n")
+    out = _provision_cli(env_file)
+    assert _CONSEQUENCE in out.stdout and _REMEDY in out.stdout, \
+        "the installer replaced the key without saying sealed connections are lost and must be registered again"
+
+
+def test_the_service_start_warning_says_sealed_connections_must_be_registered_again(tmp_path, monkeypatch, caplog):
+    import app.mcp_server.multi_tenant_mcp_server as mts
+    caplog.set_level("WARNING")
+    monkeypatch.setenv("AVALOKA_ENV_FILE", str(tmp_path / ".env"))
+    monkeypatch.delenv("KUBERNETES_SERVICE_HOST", raising=False)
+    monkeypatch.setenv("AVALOKA_AUTO_PROVISION", "1")
+    for n in GENERATED:
+        monkeypatch.setenv(n, "")
+    monkeypatch.setenv("DB_ENCRYPTION_KEY", PUBLISHED)
+    monkeypatch.setattr(cc, "DB_ENCRYPTION_KEY", PUBLISHED, raising=False)
+    monkeypatch.setattr(cc, "_AESGCM_KEY", None, raising=False)
+    monkeypatch.setattr(mts, "CUSTOMERS_FILE", str(tmp_path / "customers.json"))
+    assert _start(mts.app) is None
+    assert _CONSEQUENCE in caplog.text and _REMEDY in caplog.text, \
+        "the service replaced the key without saying sealed connections are lost and must be registered again"
+
+
+def test_the_quickstart_warning_says_sealed_connections_must_be_registered_again(tmp_path):
+    out = _quickstart_ensure_env(tmp_path, f"DB_ENCRYPTION_KEY={PUBLISHED}\n")
+    assert _CONSEQUENCE in out.stdout and _REMEDY in out.stdout, \
+        "the quickstart replaced the key without saying sealed connections are lost and must be registered again"
+
+
+def _render_notes(tmp_path, *args, old_secret=None):
+    """NOTES.txt, rendered (helm template skips NOTES, so it is rendered through tpl in a
+    copy of the chart); lookup stubbed with ``old_secret`` (the Secret an install left)."""
+    chart = tmp_path / "avaloka"
+    shutil.copytree(CHART, chart)
+    notes = (chart / "templates" / "NOTES.txt").read_text()
+    lookup = 'lookup "v1" "Secret" .Release.Namespace (include "avaloka.secretName" .)'
+    assert lookup in notes, "NOTES.txt does not look at the release's existing Secret"
+    data = " ".join(f'"{k}" "{base64.b64encode(v.encode()).decode()}"' for k, v in (old_secret or {}).items())
+    notes = notes.replace(lookup, f'(dict "data" (dict {data}))' if old_secret else "(dict)")
+    (chart / "notes.txt").write_text(notes)
+    (chart / "templates" / "zz-notes-test.yaml").write_text(
+        'apiVersion: v1\nkind: ConfigMap\nmetadata: {name: notes-under-test}\n'
+        'data:\n  notes: {{ tpl (.Files.Get "notes.txt") . | quote }}\n')
+    for d in yaml.safe_load_all(_helm(chart, *args)):
+        if d and d.get("metadata", {}).get("name") == "notes-under-test":
+            return " ".join(d["data"]["notes"].split())  # wrapped lines, compared as prose
+    return ""
+
+
+def test_helm_notes_warn_about_lost_connections_for_a_given_published_key(tmp_path):
+    notes = _render_notes(tmp_path, "--set-string", f"secrets.dbEncryptionKey={PUBLISHED}")
+    assert "WARNING" in notes and _CONSEQUENCE in notes and _REMEDY in notes, \
+        "helm install replaces a given published key without saying connections must be registered again"
+
+
+def test_helm_notes_warn_when_an_upgraded_secret_held_the_published_key(tmp_path):
+    """The 2.0 upgrade case: bundled Supabase's default left the published key in the Secret."""
+    notes = _render_notes(tmp_path, old_secret={"DB_ENCRYPTION_KEY": PUBLISHED})
+    assert "WARNING" in notes and _CONSEQUENCE in notes and _REMEDY in notes, \
+        "an upgrade replaces the Secret's published key without saying connections must be registered again"
+    quiet = _render_notes(tmp_path / "ok", old_secret={"DB_ENCRYPTION_KEY": "private-" + secrets.token_hex(16)})
+    assert "WARNING" not in quiet, "NOTES warns on a private key"

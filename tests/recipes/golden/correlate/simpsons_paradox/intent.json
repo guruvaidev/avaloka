@@ -1,0 +1,13 @@
+{
+  "question": "Does spend cause revenue to rise?",
+  "recipe": "correlate",
+  "params": {
+    "measures": [
+      "spend",
+      "revenue"
+    ],
+    "dimension": "segment"
+  },
+  "confidence": 1.0,
+  "source": "fixture"
+}

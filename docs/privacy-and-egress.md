@@ -8,8 +8,8 @@ and what happens when that provider is unavailable.
 
 | Tier | Model | Through | Upstream providers allowed |
 |---|---|---|---|
-| 1, the default (large) | `openai/gpt-oss-120b` | OpenRouter, cheapest listed provider first | DeepInfra (bf16), Together, Crusoe, Parasail |
-| 1, the default (small) | `openai/gpt-oss-20b` | OpenRouter, cheapest listed provider first | DeepInfra (bf16), Parasail (the two of the four that serve it) |
+| 1, the default (large) | `openai/gpt-oss-120b` | OpenRouter, fastest listed provider first | DeepInfra (bf16), Together, Crusoe, Parasail |
+| 1, the default (small) | `openai/gpt-oss-20b` | OpenRouter, fastest listed provider first | DeepInfra (bf16), Parasail (the two of the four that serve it) |
 | 2 | `openai/gpt-6-luna` | OpenRouter | Azure |
 | 3, last | `openai/gpt-oss-120b` | Groq, directly | Groq |
 
@@ -22,7 +22,7 @@ Each OpenRouter request carries these
   "allow_fallbacks": false,
   "data_collection": "deny",
   "zdr": true,
-  "sort": "price"
+  "sort": "throughput"
 }
 ```
 
@@ -38,7 +38,9 @@ backup and the visualization agent's own client.
 * **`zdr: true`**: only Zero Data Retention endpoints
   ([ZDR](https://openrouter.ai/docs/features/zdr); live list
   `https://openrouter.ai/api/v1/endpoints/zdr`).
-* **`sort: "price"`**: the cheapest listed provider first.
+* **`sort: "throughput"`**: the fastest listed provider first. Sorting only orders
+  the allowed providers; it never adds one. `AVALOKA_OPENROUTER_SORT=price` puts the
+  cheapest listed provider first instead.
 
 Tier 3 is called on Groq's own API, outside OpenRouter, so OpenRouter's
 preferences do not apply to it. Groq states that it does not retain customer
@@ -80,14 +82,17 @@ model's ZDR endpoint on OpenRouter's list.
 
 ## A swap is never silent
 
-When a tier other than the configured model answers, the reply says so. Under the
-answer the UI shows which model answered and why. For example:
+When a tier other than the configured model answers, the reply says so: the turn
+carries a plain, code-written line before its result, and under the answer the UI
+shows which model answered and why. For example:
 
 > openai/gpt-4o did not answer (no allowed zero-retention provider serves
 > openai/gpt-4o); openai/gpt-6-luna via openrouter answered instead.
 
-The reason comes from the recorded HTTP status and provider message, never from a
-model's text. The model screen (Configurations, then Models, then Language models)
+The agent trace shows the same thing on the step: the failed call with its reason,
+then "configured … → answered by …". The reason comes from the recorded HTTP status
+and provider message, never from a model's text. The model screen (Configurations,
+then Models, then Language models)
 shows each agent role's configured model and the full chain behind it, including
 a tier that is configured but has no key.
 
@@ -107,7 +112,7 @@ On OpenRouter's list of 2026-11-01, `openai/gpt-4o` has only Azure, and
 | `AVALOKA_OPENROUTER_ALLOW_FALLBACKS` / `openrouter.allowFallbacks` | `false` | `true` lets OpenRouter leave the list when it is busy |
 | `AVALOKA_OPENROUTER_DATA_COLLECTION` / `openrouter.dataCollection` | `deny` | `allow` admits providers that train on prompts |
 | `AVALOKA_OPENROUTER_ZDR` / `openrouter.zdr` | `true` | `false` admits endpoints that retain prompts |
-| `AVALOKA_OPENROUTER_SORT` | `price` | `throughput` or `latency` instead |
+| `AVALOKA_OPENROUTER_SORT` | `throughput` | `price` or `latency` instead; the allowlist and ZDR still apply |
 | `AVALOKA_OPENROUTER_FALLBACK_MODEL` / `openrouter.fallbackModel` | `openai/gpt-6-luna` | tier 2; `none` disables it |
 | `AVALOKA_OPENROUTER_FALLBACK_ONLY` / `openrouter.fallbackProvidersOnly` | unset: that model's own list | replaces tier 2's list |
 | `AVALOKA_GROQ_FALLBACK_MODEL` | `openai/gpt-oss-120b` | tier 3, armed when a Groq key is set; `none` disables it |

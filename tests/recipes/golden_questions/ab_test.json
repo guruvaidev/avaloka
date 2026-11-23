@@ -1,0 +1,209 @@
+[
+ {
+  "question": "Did variant B convert better than variant A?",
+  "columns": {
+   "user_id": "id",
+   "variant": "dimension",
+   "converted": "measure",
+   "revenue": "measure",
+   "assigned_at": "time"
+  },
+  "expected": {
+   "recipe": "ab_test",
+   "params": {
+    "arm": "variant",
+    "outcome": "converted"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Results of the A/B test on revenue",
+  "columns": {
+   "user_id": "id",
+   "variant": "dimension",
+   "converted": "measure",
+   "revenue": "measure",
+   "assigned_at": "time"
+  },
+  "expected": {
+   "recipe": "ab_test",
+   "params": {
+    "outcome": "revenue"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Was the experiment a win for conversion?",
+  "columns": {
+   "user_id": "id",
+   "variant": "dimension",
+   "converted": "measure",
+   "revenue": "measure",
+   "assigned_at": "time"
+  },
+  "expected": {
+   "recipe": "ab_test",
+   "params": {
+    "outcome": "converted"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "treatment vs control on revenue",
+  "columns": {
+   "user_id": "id",
+   "variant": "dimension",
+   "converted": "measure",
+   "revenue": "measure",
+   "assigned_at": "time"
+  },
+  "expected": {
+   "recipe": "ab_test",
+   "params": {
+    "outcome": "revenue"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Did the test variant lift converted?",
+  "columns": {
+   "user_id": "id",
+   "variant": "dimension",
+   "converted": "measure",
+   "revenue": "measure",
+   "assigned_at": "time"
+  },
+  "expected": {
+   "recipe": "ab_test",
+   "params": {
+    "arm": "variant",
+    "outcome": "converted"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Is the difference between the variants significant?",
+  "columns": {
+   "user_id": "id",
+   "variant": "dimension",
+   "converted": "measure",
+   "revenue": "measure",
+   "assigned_at": "time"
+  },
+  "expected": {
+   "recipe": "ab_test",
+   "params": {
+    "arm": "variant"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "ab test readout",
+  "columns": {
+   "user_id": "id",
+   "variant": "dimension",
+   "converted": "measure",
+   "revenue": "measure",
+   "assigned_at": "time"
+  },
+  "expected": {
+   "recipe": "ab_test",
+   "params": {},
+   "flags": []
+  }
+ },
+ {
+  "question": "Compare the control group with the treatment on revenue",
+  "columns": {
+   "user_id": "id",
+   "variant": "dimension",
+   "converted": "measure",
+   "revenue": "measure",
+   "assigned_at": "time"
+  },
+  "expected": {
+   "recipe": "ab_test",
+   "params": {
+    "outcome": "revenue"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Which variant won on conversion?",
+  "columns": {
+   "user_id": "id",
+   "variant": "dimension",
+   "converted": "measure",
+   "revenue": "measure",
+   "assigned_at": "time"
+  },
+  "expected": {
+   "recipe": "ab_test",
+   "params": {
+    "arm": "variant",
+    "outcome": "converted"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Did the holdout differ on revenue?",
+  "columns": {
+   "user_id": "id",
+   "variant": "dimension",
+   "converted": "measure",
+   "revenue": "measure",
+   "assigned_at": "time"
+  },
+  "expected": {
+   "recipe": "ab_test",
+   "params": {
+    "outcome": "revenue"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Did the experiment cause more revenue?",
+  "columns": {
+   "user_id": "id",
+   "variant": "dimension",
+   "converted": "measure",
+   "revenue": "measure",
+   "assigned_at": "time"
+  },
+  "expected": {
+   "recipe": "ab_test",
+   "params": {
+    "outcome": "revenue"
+   },
+   "flags": [
+    "causal_question"
+   ]
+  }
+ },
+ {
+  "question": "Was the split test balanced and did converted go up?",
+  "columns": {
+   "user_id": "id",
+   "variant": "dimension",
+   "converted": "measure",
+   "revenue": "measure",
+   "assigned_at": "time"
+  },
+  "expected": {
+   "recipe": "ab_test",
+   "params": {
+    "outcome": "converted"
+   },
+   "flags": []
+  }
+ }
+]

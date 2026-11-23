@@ -150,6 +150,8 @@ def test_k8s_success_writes_a_well_formed_execution_result():
         "output_file": state_in["output_location"],
         "fresh_output": True,
         "output_row_count": 3,
+        # The frames the code read: the executor pod does not report them.
+        "reads": [],
     }
     assert out["fresh_output_produced"] is True
     assert out["execution_error"] is None
@@ -170,7 +172,7 @@ def test_k8s_runtime_failure_writes_a_failed_execution_result():
 
     result = out["execution_result"]
     assert result["status"] == "failed"
-    assert set(result) == {"status", "message", "returncode", "output_file"}
+    assert set(result) == {"status", "message", "returncode", "output_file", "reads"}
     assert result["output_file"] is None
     # The state keeps the detail for the repair loop; only the log line may not.
     assert COLUMN_A in result["message"]
@@ -202,6 +204,7 @@ def test_k8s_reply_that_is_not_a_csv_is_a_failure_not_a_success():
         "output_file": None,
         "fresh_output": False,
         "output_row_count": None,
+        "reads": [],
     }
 
 

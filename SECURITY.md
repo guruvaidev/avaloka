@@ -7,15 +7,15 @@ release line and published on `main`. Older versions are not maintained.
 
 | Version | Supported |
 | ------- | --------- |
-| 1.0.x (`main`) | ✅ |
-| < 1.0 (untagged builds of `main`) | ❌ |
+| 1.6.x (`main`) | ✅ |
+| < 1.6   | ❌        |
 
 ## Advisories
 
 ### 2026-11: The /execute service ran code without authentication
 
-**Affected:** every build of `main` published from 2026-09-15 until 1.0.0, and the images built from them. Those builds carried no release tag and report their version as `1.6.0`. **1.0.0 is not affected.**
-**Fixed in:** 1.0.0. The service is replaced; see **What changed** below.
+**Affected:** every release up to and including 1.6.0, and `develop-1.6` before #687.
+**Fixed in:** `develop-1.6` from 2026-11-03 (#687).
 
 `app/infra/python_app` ran `exec()` on the body of every request it received,
 with no authentication. It was exposed through a Service of
@@ -62,9 +62,9 @@ Questions about this advisory: **support@avaloka.ai**.
 
 ### 2026-10: MCP server onboarding and admin routes were unauthenticated
 
-**Affected:** every build of `main` before the sync of 2026-10-29, and the
-images built from it. Those builds carried no release tag and report their version as `1.6.0`, as do later builds of `main` up to 1.0.0, so go by the date, not the number. **1.0.0 is not affected.**
-**Fixed in:** 1.0.0, the first tagged release, and `main` from 2026-10-29.
+**Affected:** every release up to and including 1.6.0, and `main` before the
+sync of 2026-10-29.
+**Fixed in:** `main` from 2026-10-29.
 
 The MCP server (port 8010 in the Helm chart) served its customer-onboarding
 routes (`/customers/*`) and its admin routes (`/admin/customers`, `/connect`,
@@ -79,7 +79,7 @@ immediately.
 
 **What you need to do:**
 
-1. Upgrade to 1.0.0 or later.
+1. Upgrade to the current `main`.
 2. Set `MCP_SERVICE_TOKEN` to the same random value on the API and on the MCP
    server (`openssl rand -hex 32`; the Helm value is `secrets.mcpServiceToken`).
    If it is unset, no credentials are released and database-to-database

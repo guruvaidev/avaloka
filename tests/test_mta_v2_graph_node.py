@@ -155,9 +155,10 @@ class TestGraphNode:
 
         broken_llm.invoke.assert_called_once()
         assert [type(message) for message in result["messages"]] == [AIMessage]
-        assert result["messages"][-1].content == (
-            "Sorry, something went wrong while processing your request. Please try again."
-        )
+        # Plain words, and the failure recorded where the chat response and the
+        # trace read it (tests/test_mta_no_tool_calls.py covers every such site).
+        assert result["messages"][-1].content.startswith("I ran into a problem")
+        assert result["agent_errors"][-1]["error_class"] == "RuntimeError"
         assert result["enable_training"] is False
         assert result["skip_to_training"] is False
         assert result["training_task"] is None

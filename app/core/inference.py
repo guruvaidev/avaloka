@@ -56,7 +56,7 @@ Per-agent override (highest precedence), e.g. the planner::
 
 OpenRouter routing (applies to EVERY agent on the OpenRouter path)::
 
-    AVALOKA_OPENROUTER_SORT=price             # default; "throughput"/"latency", or "none"
+    AVALOKA_OPENROUTER_SORT=throughput        # default; "price"/"latency", or "none"
     AVALOKA_<AGENT>_OPENROUTER_SORT=latency   # per-agent override
     AVALOKA_OPENROUTER_PROVIDERS=Groq,Cerebras  # optional preferred providers, in order
 
@@ -180,10 +180,15 @@ def _default_provider_with_a_usable_key(groq_api_key: Optional[str] = None) -> s
 def _canonical_provider(raw: Optional[str], groq_api_key: Optional[str] = None) -> str:
     """Resolve a provider name, defaulting to OpenRouter.
 
-    OpenRouter is the default the Helm chart ships, and the code default
-    matches it (MP-01, owner decision 2026-11-01: gpt-oss-120b via OpenRouter,
-    the cheapest per correct answer in the 2026-11-01 DAB/DS/integrity runs).
-    Groq remains fully supported but is not the default: set
+    The default was Groq, which meant a first run required a Groq account
+    specifically. OpenRouter fronts many providers behind one key -- including
+    Groq itself -- so one credential reaches whatever model a user already has
+    access to, which is the better default for an open-source install. The
+    owner's decision of 2026-11-01 keeps it: openai/gpt-oss-120b via OpenRouter
+    (the cheapest per correct answer), pinned to a provider allowlist, with
+    GPT-6 Luna as the optional higher tier; the Helm chart now ships the same.
+
+    Groq remains fully supported and is still the fastest path: set
     INFERENCE_PROVIDER=groq, or AVALOKA_<AGENT>_PROVIDER=groq per agent.
     """
     key = (raw or "").strip().lower()
@@ -229,6 +234,50 @@ def tool_choice_for_provider(provider: str, client_name: str = "") -> str:
     if provider == OPENROUTER:
         return "auto"
     return "required"
+
+
+#: The strongest tool_choice each provider ACCEPTS when a reply came back with
+#: no tool call and the caller wants to insist. None means the provider has no
+#: accepted forcing value (or none has been measured), so the caller keeps the
+#: portable value from :func:`tool_choice_for_provider` and relies on the
+#: prompt instead.
+#:
+#: Accepting a value and enforcing it are different things, and the table only
+#: promises the first:
+#:
+#:   groq        "required"  accepted and enforced (dispatch relies on it)
+#:   openai      "required"  accepted (OpenAI spec)
+#:   local       "required"  accepted by Ollama, NOT enforced: gemma4:e4b on
+#:                           Ollama answered "what predicts a stroke?" in prose
+#:                           under "required" and under a named function
+#:                           (measured 2026-10-17). An explicit instruction
+#:                           that a tool call is mandatory, sent with it, got
+#:                           a tool call 2/2.
+#:   vertex      "any"       Vertex's spelling
+#:   openrouter  None        "required" -> finish_reason="error", 0 tool calls
+#:                           (see tool_choice_for_provider)
+#:   bedrock/azure           not measured; None, never a guess
+_FORCED_TOOL_CHOICE = {
+    GROQ: "required",
+    OPENAI: "required",
+    LOCAL: "required",
+    VERTEX: "any",
+    OPENROUTER: None,
+}
+
+
+def forced_tool_choice_for_provider(provider: str, client_name: str = "") -> Optional[str]:
+    """The tool_choice to retry with when a provider returned no tool call.
+
+    Returns None when the provider rejects every forcing value or none has
+    been measured for it; the caller then retries with the portable choice
+    and an explicit instruction, which is the part that actually moved Ollama.
+    """
+    if client_name == "ChatVertexAI":
+        return "any"
+    return _FORCED_TOOL_CHOICE.get(provider)
+
+
 def resolve_provider(*, role: str, agent: str, groq_api_key: Optional[str] = None) -> str:
     """
     Resolve the active provider for an agent, most specific wins:
@@ -426,9 +475,11 @@ def _openrouter_routing(agent: str, model: str = "", *, fallback: bool = False) 
     sort = (_env_first(
         f"AVALOKA_{agent.upper()}_OPENROUTER_SORT",
         "AVALOKA_OPENROUTER_SORT",
-        # Owner ruling 2026-11-02: the cheapest listed provider first (it was
-        # "throughput"). AVALOKA_OPENROUTER_SORT=throughput restores the old order.
-        default="price",
+        # Owner ruling 2026-11-04: the fastest listed provider first. It was
+        # "price" from 2026-11-02; a smoke sample showed price-sorted calls about
+        # 4x slower and one of three chat turns without its tool call.
+        # AVALOKA_OPENROUTER_SORT=price still selects the cheapest listed host.
+        default="throughput",
     ) or "").strip().lower()
     order = [
         p.strip()
@@ -700,6 +751,19 @@ def _with_fallback(llm, *, model: str, temperature: float, agent: str,
     return attach_fallback(llm, model, temperature=temperature, agent=(agent or "").lower())
 
 
+def _instrument(llm, *, agent: str, provider: str, model: str):
+    """Record each call's provider, model, tokens, cost and latency on the
+    agent-trace step that made it (app/trace). A no-op outside a graph node, and
+    never fatal: a model that cannot take a callback is returned as built."""
+    if llm is None:
+        return None
+    try:
+        from app.trace.recorder import instrument
+    except Exception:  # noqa: BLE001
+        return llm
+    return instrument(llm, agent=(agent or "").lower(), provider=provider, model=model)
+
+
 #: The last tier, outside OpenRouter (owner ruling 2026-11-02): it answers when
 #: OpenRouter itself cannot -- out of credit (402), an account-level 429, an outage.
 DEFAULT_GROQ_LAST_TIER_MODEL = "openai/gpt-oss-120b"
@@ -734,6 +798,15 @@ def openrouter_chain(model: str) -> list:
     return chain
 
 
+def _instrument_tier(llm, *, agent: str, provider: str, model: str, configured_model: str):
+    try:
+        from app.trace.recorder import instrument
+    except Exception:  # noqa: BLE001
+        return llm
+    return instrument(llm, agent=(agent or "").lower(), provider=provider, model=model,
+                      configured_model=configured_model, primary_provider=OPENROUTER)
+
+
 def _with_openrouter_tier(llm, *, model: str, temperature: float, agent: str):
     """*llm* with the fallback tiers behind it, or *llm* unchanged.
 
@@ -758,6 +831,10 @@ def _with_openrouter_tier(llm, *, model: str, temperature: float, agent: str):
             backup = _build_groq(model=tier_model, temperature=temperature, api_key=_groq_tier_key(),
                                  reasoning_effort=None, reasoning_format=None)
         if backup is not None:
+            # On the agent trace like the primary: a failover shows as the failed
+            # call, then the tier that answered and why (app/trace/recorder.py).
+            backup = _instrument_tier(backup, agent=agent, provider=provider, model=tier_model,
+                                      configured_model=model)
             tiers.append(_TierCompat(backup, tier_model, primary_model=model,
                                      primary_provider=OPENROUTER, provider=provider))
     if not tiers:
@@ -868,6 +945,7 @@ def build_chat_model(
                 model,
                 reasoning_effort if (reasoning_effort and supports_reasoning(model)) else "off",
             )
+        llm = _instrument(llm, agent=agent, provider=provider, model=model)
         return _with_fallback(llm, model=model, temperature=temperature, agent=agent, provider=provider)
 
     # ---- non-Groq providers -------------------------------------------------
@@ -901,4 +979,5 @@ def build_chat_model(
     # model_desc, not model: the Azure branch never assigns `model` because Azure
     # addresses a deployment name rather than a model id, and referencing it here
     # raised UnboundLocalError on that path alone.
+    llm = _instrument(llm, agent=agent, provider=provider, model=model_desc)
     return _with_fallback(llm, model=model_desc, temperature=temperature, agent=agent, provider=provider)

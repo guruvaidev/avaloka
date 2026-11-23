@@ -202,7 +202,14 @@ def _run_scheduled(tmp_path, question, code=None, mode="k8s-ray", local_result=N
     for p in ps:
         p.start()
     try:
-        final = celery_app.agent_task(state)
+        # On 1.7 a run that failed -- a refused output contract included -- is a
+        # Celery FAILURE (ScheduledRunFailed), raised after the run row and the
+        # ledger are written; the final state is what the task recorded.
+        with patch.object(celery_app, "_record_run_finish", wraps=celery_app._record_run_finish) as rec:
+            try:
+                final = celery_app.agent_task(state)
+            except celery_app.ScheduledRunFailed:
+                final = rec.call_args.args[2] if rec.call_args else None
         if final_out is not None:
             final_out.append(final)
     finally:

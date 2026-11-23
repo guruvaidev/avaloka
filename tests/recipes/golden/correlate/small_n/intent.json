@@ -1,0 +1,12 @@
+{
+  "question": "Do spend and revenue move together?",
+  "recipe": "correlate",
+  "params": {
+    "measures": [
+      "spend",
+      "revenue"
+    ]
+  },
+  "confidence": 1.0,
+  "source": "fixture"
+}

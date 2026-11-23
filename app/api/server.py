@@ -29,12 +29,13 @@ import asyncio
 from asyncio import sleep
 from pathlib import Path
 from contextlib import asynccontextmanager
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple, Union
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, SystemMessage
 import httpx
 from botocore.exceptions import ClientError
 from fastapi import (
+    Depends,
     FastAPI,
     UploadFile,
     File,
@@ -176,15 +177,19 @@ def _json_safe_payload(value: Any) -> Any:
 from app.core.settings import Settings
 from app.core.storage import ResourceNotFoundError, IBlobStore, GCSBlobStore, S3BlobStore
 from app.agents.sampling_agent import sample_data_from_source, DEFAULT_SAMPLE_MAX_ROWS
-from app.agents.sampling_agent_daft import sample_with_profiling
+from app.agents.sampling_agent_daft import COMPLEX_SOURCE_TYPES, sample_with_profiling
 from file_handler.excel_connector import describe_sheet_choice, export_workbook_sheets_to_csv
 from app.agents.sampling_async import sample_quick
-from app.agents.profiling_agent import profile_full
+from app.agents.profiling_agent import profile_full, usable_full_profile
 from app.agents.sampling_persistence import persist_full_profile, load_portfolio, load_profile, upsert_profile
 from app.agents.execution_agent import execution_agent_node_local, execution_agent_node_ray
 from app.agents.execution_agent import RAY_NO_CONNECTION_REASON
 from app.agents.planner import review_edited_code
-from app.agents.validator import run_code_validation
+from app.agents.validator import database_write_errors, run_code_validation
+from app.agents.analysis_outcome import failure_detail, plain_failure_reason
+from app.core.user_errors import looks_like_raw_error, plain_or, scrub_run_logs
+from app.agents.claim_verifier import presentable_segments
+from app.api import reply_segments
 from app.core.celery_app import (
     AvalokaScheduler,
     AvalokaEntry,
@@ -194,6 +199,7 @@ from app.core.celery_app import (
     _run_outcome_from_final,
     _run_status_from_final,
     _training_failure_from_final,
+    scheduled_failure_message,
 )
 from app.agents.mta_v2.failure_diagnostics import (
     TRAINING_FAILURE_MESSAGE,
@@ -201,9 +207,25 @@ from app.agents.mta_v2.failure_diagnostics import (
     format_training_failure,
 )
 from app.core.task_metadata import scheduled_task_metadata
+from app.core.db_sampling import (
+    ANALYSIS_MAX_ROWS,
+    DbSample,
+    DbSampleError,
+    draw_table_sample,
+    sample_context_line,
+    sample_scope,
+)
+from app.agents.drivers_route import (STATE_KEY as DRIVERS_STATE_KEY, answer_drivers_turn, inputs_from_session,
+                                      is_drivers_question)
+from app.core.db_pushdown import (
+    parse_aggregate_intent,
+    pushdown_output_table,
+    render_pushdown_answer,
+    run_pushdown,
+)
 from app.core import run_truth
-from app.core import celery_results
 from app.utils import convert_message_dicts_to_objects
+from app.core import celery_results
 from celery.result import AsyncResult
 from celery.schedules import crontab
 from redbeat.schedulers import get_redis
@@ -227,7 +249,8 @@ from app.services.session_service import (
     get_session,
     refresh_session_ttl,
     find_session_by_dataset_for_user,
-    find_active_db_customer_for_user,
+    db_credential_handles_for_user,
+    db_credential_handle_for_user,
     bind_thread_session,
     get_thread_session,
     _user_datasets,
@@ -258,6 +281,26 @@ from app.api.config import (
 )
 
 from app.api.helpers import suggest_join_keys
+from app.api.database_compat import (
+    database_query_text,
+    legacy_connect_fields,
+    legacy_query_fields,
+)
+from app.api.legacy_database_connections import (
+    LegacyConnectionResolutionError,
+    resolve_legacy_database_credentials,
+)
+from app.api import chat_swarm, swarm_gate
+from app.api.swarm_bridge import (
+    build_swarm_state,
+    consume_connection_event,
+    database_connection_event,
+)
+from app.api.ui_contract import (
+    api_capabilities as _api_capabilities,
+    build_execution_context as _build_execution_context,
+    build_execution_context_from_state as _build_execution_context_from_state,
+)
 from app.api.helpers import (
     THREAD_META,
     _filename_ext,
@@ -332,6 +375,8 @@ from app.services.persistence_service import (
 from app.agents.visualization_agent import build_visualization_config_from_sample
 from app.agents.chart_explainer import explain_charts
 from app.core.plan_limits import resolve_plan, limits_for, check_sizes, limit_error
+from app.core.plan_limits import PLAN_FREE, PLAN_ENTERPRISE, PLAN_PROFESSIONAL
+
 
 # Data transfer, model training and model inference are COST gates in
 # app/core/editions.py; app/core/plan_gate.py decides them (planner.py in chat,
@@ -353,6 +398,9 @@ async def _require_premium_plan(user_id: str, feature: str) -> None:
     if decision.allowed:
         return
     if decision.unavailable:
+        # The failed lookup is cached for _FAILURE_TTL_S (plan_limits), so that
+        # is when a retry can first get a different answer.
+        from app.core.plan_limits import _FAILURE_TTL_S
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE,
             {
@@ -360,6 +408,7 @@ async def _require_premium_plan(user_id: str, feature: str) -> None:
                 "feature": feature,
                 "message": unavailable_message(decision),
             },
+            headers={"Retry-After": str(int(_FAILURE_TTL_S))},
         )
     raise HTTPException(
         status.HTTP_403_FORBIDDEN,
@@ -388,8 +437,19 @@ _jwks_client = (
 # start the server anyway (every request stays unauthenticated / 401).
 ALLOW_INSECURE_AUTH = os.getenv("AVALOKA_ALLOW_INSECURE_AUTH", "").lower() in ("1", "true", "yes")
 
+from app.core import local_auth as _local_auth
+
 
 def _validate_auth_config() -> None:
+    # AVALOKA_AUTH_MODE=local (app/core/local_auth.py) is refused outright on a
+    # deployment that is not explicitly self-hosted: raise, even with
+    # AVALOKA_ALLOW_INSECURE_AUTH, so a hosted install cannot boot with it.
+    if _local_auth.load() is not None:
+        logger.warning(
+            "[auth] AVALOKA_AUTH_MODE=local: one local account, tokens signed by this "
+            "server. For a self-hosted laptop install only; Supabase tokens are not accepted."
+        )
+        return
     if not JWT_SECRET:
         msg = (
             "SUPABASE_JWT_SECRET is not set. HS256 verification against an empty "
@@ -422,12 +482,15 @@ def _read_version() -> str:
     env = (os.getenv("APP_VERSION") or "").strip()
     if env:
         return env
-    # The OSS distribution ships its own line: this is the first public
-    # release, so it is 1.0.x there while the internal branch stays on the 1.6
-    # line. AVALOKA_EDITION is already how the build tells the two apart.
+    # The OSS distribution used to carry its own line (1.0.x while the internal
+    # branch was on 1.6). From 2.0 the public release and the internal branch
+    # are the same version, so the OSS edition reads the VERSION file like
+    # every other build. AVALOKA_OSS_VERSION remains an explicit override for
+    # a public build that must identify itself differently.
     if (os.getenv("AVALOKA_EDITION") or "").strip().lower() in ("oss", "community"):
-        oss = (os.getenv("AVALOKA_OSS_VERSION") or "1.0.0").strip()
-        return oss
+        oss = (os.getenv("AVALOKA_OSS_VERSION") or "").strip()
+        if oss:
+            return oss
     for candidate in (
         os.path.join(os.path.dirname(__file__), "..", "..", "VERSION"),
         "/app/VERSION",
@@ -444,16 +507,70 @@ def _read_version() -> str:
 
 APP_VERSION = _read_version()
 
-# Supported file formats
-SUPPORTED_UPLOAD_EXTS = {"csv", "tsv", "json", "xml", "parquet", "avro", "orc", "xls", "xlsx"}
+# Supported file formats. jsonl/ndjson joined on 2026-10-17: the CLI loader
+# read them already and the sampler's JSON reader is line-delimited, so the
+# only thing refusing them was this set.
+SUPPORTED_UPLOAD_EXTS = {
+    "csv", "tsv", "json", "jsonl", "ndjson", "xml", "parquet", "avro", "orc", "xls", "xlsx",
+    "pdf",
+    "jpg", "jpeg", "png", "tif", "tiff", "bmp", "webp",
+    "mp4", "mov", "mkv", "avi", "webm", "m4v",
+}
+
+#: Formats the product knows about but POST /api/upload does not take, each
+#: with the one-line reason /api/capabilities shows. A deferral belongs here,
+#: next to the accepted set, so the two cannot drift apart unnoticed. These
+#: are table and dataset layouts Daft can read (0.7.25) that no entry point
+#: serves yet; a multi-file layout cannot arrive as one multipart file.
+DEFERRED_UPLOAD_FORMATS: Dict[str, str] = {
+    "iceberg": "a table directory, not a file: register it through the existing-folder route, which detects Iceberg metadata",
+    "delta": "a table directory with a transaction log; Daft reads it but no upload or folder route serves it yet",
+    "hudi": "a table directory with a timeline; Daft reads it but no upload or folder route serves it yet",
+    "lance": "a columnar dataset directory; Daft reads it but no upload or folder route serves it yet",
+    "paimon": "a lake table directory; Daft reads it but no upload or folder route serves it yet",
+    "mcap": "a robotics bag of typed channels, not a table; Daft reads it but the row contract (one row per message?) is undecided",
+    "warc": "a web archive of records; Daft reads it but no entry point serves it and no benchmark truth exists",
+    "webdataset": "a tar of samples; Daft reads it but no entry point serves it and no benchmark truth exists",
+    "huggingface": "a hub dataset id, not a file: needs a source URI route, not an upload",
+}
+
+
+def upload_format_status() -> Dict[str, Dict[str, Any]]:
+    """Per-format status for /api/capabilities.
+
+    Every accepted extension is ``enabled``; ``statistics`` says whether the
+    sampler's statistics contract (data_shape, column_statistics,
+    data_quality, source) is produced for it -- the bounded complex formats
+    return rows but no statistics. Every deferral carries its reason.
+    """
+    status: Dict[str, Dict[str, Any]] = {
+        ext: {"status": "enabled", "statistics": ext not in COMPLEX_SOURCE_TYPES, "reason": None}
+        for ext in SUPPORTED_UPLOAD_EXTS
+    }
+    for ext, reason in DEFERRED_UPLOAD_FORMATS.items():
+        status[ext] = {"status": "deferred", "statistics": False, "reason": reason}
+    return status
+
 
 CONTENT_TYPE_TO_EXT: Dict[str, Optional[str]] = {
     "text/csv": "csv",
     "application/vnd.ms-excel": "xlsx",
     "text/tab-separated-values": "tsv",
     "application/json": "json",
+    "application/x-ndjson": "ndjson",
+    "application/jsonl": "jsonl",
     "application/xml": "xml",
     "text/xml": "xml",
+    "application/pdf": "pdf",
+    "image/jpeg": "jpeg",
+    "image/png": "png",
+    "image/tiff": "tiff",
+    "image/bmp": "bmp",
+    "image/webp": "webp",
+    "video/mp4": "mp4",
+    "video/quicktime": "mov",
+    "video/webm": "webm",
+    "video/x-msvideo": "avi",
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
     # parquet/avro/orc often come as octet-stream; rely on filename in those cases
     "application/octet-stream": None,
@@ -713,7 +830,8 @@ def _cap_portfolio(portfolio: Any, n: int = PREVIEW_RESPONSE_ROWS) -> Any:
     return {k: (v[:n] if isinstance(v, list) else v) for k, v in portfolio.items()}
 
 
-MAX_DB_SAMPLE_ROWS = 1000
+# Rows read from a database table for analysis; see db_sampling.ANALYSIS_MAX_ROWS.
+MAX_DB_SAMPLE_ROWS = ANALYSIS_MAX_ROWS
 SMALL_FILE_PERSISTENCE_MAX_WORKERS = int(os.getenv("AVALOKA_SMALL_FILE_PERSISTENCE_MAX_WORKERS", "2"))
 SMALL_FILE_PERSISTENCE_MAX_INFLIGHT = int(os.getenv("AVALOKA_SMALL_FILE_PERSISTENCE_MAX_INFLIGHT", "2"))
 
@@ -732,6 +850,7 @@ DATASET_SESSION_SNAPSHOT_KEYS = (
     "ddl_schema",
     "file_size_bytes",
     "file_size_mb",
+    "complex_structure",
 )
 
 LATEST_OUTPUT_SESSION_KEYS = (
@@ -799,6 +918,41 @@ def _restore_original_dataset_session(sess: Dict[str, Any]) -> bool:
     return changed
 
 
+def _merge_session_with_drops(
+    cur: Dict[str, Any],
+    sess: Dict[str, Any],
+    baseline: Dict[str, Any],
+    drop: Iterable[str] = (),
+) -> None:
+    """Merge a turn's session copy into the stored one, deletions included.
+
+    ``cur.update(sess)`` adds and overwrites but never deletes, so a key the
+    turn popped from ``sess`` (a resolved clarification, cleared training
+    state, a restored dataset's keys) survived in the stored session and was
+    read back next turn. A key in ``baseline`` (the session as the turn read
+    it) that ``sess`` no longer has is dropped from ``cur`` while ``cur``
+    still holds the value the turn read, so a value written meanwhile by
+    another writer is kept. Keys in ``drop`` that ``sess`` lacks are dropped
+    whatever ``cur`` holds.
+
+    The deferred-turn keys (``_PENDING_TURN_KEYS``) are never merged: only
+    their own mutators write them. The turn's copy was read before its running
+    record existed, so merging it back restored the previous turn's record, and
+    the poll for this turn answered "superseded" while it was finishing.
+    """
+    cur.update({k: v for k, v in sess.items() if k not in _PENDING_TURN_KEYS})
+    for key, old in baseline.items():
+        if key in _PENDING_TURN_KEYS:
+            continue
+        if key not in sess and key in cur and cur[key] == old:
+            cur.pop(key, None)
+    for key in drop:
+        if key in _PENDING_TURN_KEYS:
+            continue
+        if key not in sess:
+            cur.pop(key, None)
+
+
 def _training_finished_successfully(final_state: Dict[str, Any]) -> bool:
     if not final_state.get("training_completed"):
         return False
@@ -808,6 +962,12 @@ def _training_finished_successfully(final_state: Dict[str, Any]) -> bool:
     if result.get("error") or result.get("execution_error"):
         return False
     return bool(result.get("mlflow_run_id"))
+
+
+def _replan_fresh_state() -> Dict[str, Any]:
+    from app.agents.replan import fresh_state
+
+    return fresh_state()
 
 
 def _friendly_turn_error(exc: BaseException) -> str:
@@ -888,7 +1048,7 @@ try:
             decision = _fallback_decide(user_text)
             out = dict(state)
             if decision.get("ai_message"):
-                out["messages"] = msgs + [AIMessage(content=decision["ai_message"])]
+                out["messages"] = msgs + [_said(decision["ai_message"])]
             if decision.get("infrastructure_request"):
                 out["infrastructure_request"] = decision["infrastructure_request"]
             out["ready_to_summarize"] = bool(decision.get("ready_to_summarize", False))
@@ -1193,6 +1353,19 @@ async def _ensure_dataset_local_sample(ds_sess: Dict[str, Any]) -> Optional[str]
 
     return _posix(sample_path) if sample_ok else None
 
+def _assistant_entry(content: str, segments: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
+    """The assistant entry of a chat response: the reply with its commentary
+    marked, and its segments (app/api/reply_segments.py). Without *segments*
+    the server wrote *content* itself: plain."""
+    return {"role": "assistant", **reply_segments.presented(
+        segments if segments is not None else reply_segments.plain(content))}
+
+
+def _said(content: str) -> AIMessage:
+    """A reply the server writes itself (a guard, a prompt, a notice): plain."""
+    return reply_segments.tag(AIMessage(content=content), reply_segments.PLAIN)
+
+
 def _assistant_messages_from_state(state: Dict[str, Any]) -> List[Dict[str, str]]:
     messages = state.get("messages") or []
     if messages and isinstance(messages[0], dict):
@@ -1201,7 +1374,8 @@ def _assistant_messages_from_state(state: Dict[str, Any]) -> List[Dict[str, str]
     result: List[Dict[str, str]] = []
     for message in messages:
         if isinstance(message, AIMessage):
-            result.append({"role": "assistant", "content": str(message.content or "")})
+            segs = reply_segments.of_message(message)
+            result.append(_assistant_entry(reply_segments.text_of(segs), segs))
     return result
 
 async def lg_request(method: str, path: str, **kw) -> httpx.Response:
@@ -1277,47 +1451,112 @@ TURN_SYNC_DEADLINE_S = float(os.getenv("AVALOKA_TURN_SYNC_DEADLINE_S", "70"))
 _deferred_turn_tasks: set[asyncio.Task] = set()
 
 
+# A thread's deferred turns. ``pending_turn`` is the newest turn (what a poll
+# without an id answers). ``pending_turns`` keeps the turns it displaced, by id,
+# so a turn that finishes after a newer one started is still answered by id:
+# one slot let the newer turn's "running" (or a stale session copy) hide a
+# finished answer, and the poll called it "superseded".
+_PENDING_TURNS_KEEP = 4
+# Written only by the _pending_turn_* mutators. A turn's own session copy was
+# read before its running record existed, so merging that copy back must never
+# carry these keys (it restored the previous turn and lost this one).
+_PENDING_TURN_KEYS = ("pending_turn", "pending_turns")
+
+
+def _pending_turn_slots(cur: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
+    pt = cur.get("pending_turn")
+    pt = _maybe_json_load(pt) if isinstance(pt, str) else pt
+    turns = cur.get("pending_turns")
+    turns = _maybe_json_load(turns) if isinstance(turns, str) else turns
+    return (pt if isinstance(pt, dict) else None), dict(turns) if isinstance(turns, dict) else {}
+
+
+def _store_pending_turns(cur: Dict[str, Any], pt: Optional[Dict[str, Any]], turns: Dict[str, Any]) -> None:
+    if pt is not None:
+        cur["pending_turn"] = pt
+        turns.pop(pt.get("id"), None)
+    for stale in list(turns)[: max(0, len(turns) - _PENDING_TURNS_KEEP)]:
+        turns.pop(stale, None)
+    if turns:
+        cur["pending_turns"] = turns
+    else:
+        cur.pop("pending_turns", None)
+
+
+def _find_pending_turn(cur: Dict[str, Any], turn_id: str) -> Optional[Dict[str, Any]]:
+    pt, turns = _pending_turn_slots(cur)
+    if pt is not None and pt.get("id") == turn_id:
+        return pt
+    rec = turns.get(turn_id)
+    return rec if isinstance(rec, dict) else None
+
+
 def _pending_turn_running(deferred_id: str, kind: str = "analysis", queued: bool = False):
     """``queued`` says the turn is waiting for a slot on the long-jobs pool
     (app/core/long_jobs.py) rather than running; the poll shows it."""
     def _apply(cur: Dict[str, Any]) -> None:
-        pt = cur.get("pending_turn")
-        pt = _maybe_json_load(pt) if isinstance(pt, str) else pt
-        if isinstance(pt, dict) and pt.get("id") == deferred_id and pt.get("status") in ("done", "error"):
+        pt, turns = _pending_turn_slots(cur)
+        known = _find_pending_turn(cur, deferred_id)
+        if known is not None and known.get("status") in ("done", "error"):
             return
-        cur["pending_turn"] = {
+        if pt is not None and pt.get("id") != deferred_id:
+            turns[pt.get("id")] = pt    # displaced, not lost: still answerable by id
+        _store_pending_turns(cur, {
             "id": deferred_id, "status": "running", "queued": bool(queued),
             "kind": kind, "created_at": _now_iso(),
-        }
+        }, turns)
     return _apply
 
 
-def _carry_pending_kind(cur: Dict[str, Any]) -> str:
-    prev = cur.get("pending_turn")
-    prev = _maybe_json_load(prev) if isinstance(prev, str) else prev
+def _carry_pending_kind(cur: Dict[str, Any], deferred_id: Optional[str] = None) -> str:
+    if deferred_id is not None:
+        prev = _find_pending_turn(cur, deferred_id)
+    else:
+        prev, _ = _pending_turn_slots(cur)
     return (prev.get("kind") if isinstance(prev, dict) else None) or "analysis"
+
+
+def _finish_pending_turn(cur: Dict[str, Any], record: Dict[str, Any]) -> None:
+    """File a finished turn: newest slot if it is the newest turn, else by id."""
+    pt, turns = _pending_turn_slots(cur)
+    prev = _find_pending_turn(cur, record["id"]) or {}
+    if prev.get("created_at"):
+        record["created_at"] = prev["created_at"]
+    newer_elsewhere = (
+        pt is not None and pt.get("id") != record["id"]
+        and (pt.get("status") == "running"
+             or not record.get("created_at")
+             or str(pt.get("created_at") or "") > str(record["created_at"]))
+    )
+    if newer_elsewhere:
+        turns[record["id"]] = record
+        _store_pending_turns(cur, None, turns)
+        return
+    if pt is not None and pt.get("id") != record["id"]:
+        turns[pt.get("id")] = pt
+    _store_pending_turns(cur, record, turns)
 
 
 def _pending_turn_done(deferred_id: str, result: Dict[str, Any]):
     # "done" means the turn returned; outcome says whether its run succeeded.
     truth = (result or {}).get("run_truth") or {}
     def _apply(cur: Dict[str, Any]) -> None:
-        cur["pending_turn"] = {
-            "id": deferred_id, "status": "done", "kind": _carry_pending_kind(cur),
+        _finish_pending_turn(cur, {
+            "id": deferred_id, "status": "done", "kind": _carry_pending_kind(cur, deferred_id),
             "outcome": truth.get("outcome"),
             "result": _json_safe_payload(result), "finished_at": _now_iso(),
-        }
+        })
     return _apply
 
 
 def _pending_turn_error(deferred_id: str, message: str):
     truth = run_truth.failed("exception", kind="deferred", detail=message)
     def _apply(cur: Dict[str, Any]) -> None:
-        cur["pending_turn"] = {
-            "id": deferred_id, "status": "error", "kind": _carry_pending_kind(cur),
+        _finish_pending_turn(cur, {
+            "id": deferred_id, "status": "error", "kind": _carry_pending_kind(cur, deferred_id),
             "outcome": truth["outcome"], "run_truth": truth,
             "message": message, "finished_at": _now_iso(),
-        }
+        })
     return _apply
 
 
@@ -1331,17 +1570,29 @@ _PENDING_TURN_MEM: Dict[str, Dict[str, Any]] = {}
 _PENDING_TURN_MEM_MAX = 500
 
 
+def _pending_turn_mem_session(entry: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """The in-process entry in the session's shape, for the mutators and the poll."""
+    if not isinstance(entry, dict):
+        return {}
+    pt = {k: v for k, v in entry.items() if k not in ("user_id", "turns")}
+    cur: Dict[str, Any] = {"pending_turn": pt} if pt else {}
+    if entry.get("turns"):
+        cur["pending_turns"] = dict(entry["turns"])
+    return cur
+
+
 def _remember_pending_turn(thread_id: str, user_id: Optional[str], mutator) -> None:
     """Apply a _pending_turn_* mutator to the in-process copy too."""
     if not thread_id:
         return
     try:
-        prev = _PENDING_TURN_MEM.get(thread_id)
-        cur: Dict[str, Any] = {"pending_turn": dict(prev)} if prev else {}
+        cur = _pending_turn_mem_session(_PENDING_TURN_MEM.get(thread_id))
         mutator(cur)
         pt = cur.get("pending_turn")
         if isinstance(pt, dict):
-            _PENDING_TURN_MEM[thread_id] = {**pt, "user_id": user_id}
+            _PENDING_TURN_MEM[thread_id] = {
+                **pt, "user_id": user_id, "turns": dict(cur.get("pending_turns") or {}),
+            }
             if len(_PENDING_TURN_MEM) > _PENDING_TURN_MEM_MAX:
                 # Drop the oldest entries (dicts keep insertion order).
                 for key in list(_PENDING_TURN_MEM)[: len(_PENDING_TURN_MEM) - _PENDING_TURN_MEM_MAX]:
@@ -1470,6 +1721,14 @@ def _resolve_user_id(req: Request) -> Optional[str]:
     if not auth_header.startswith("Bearer "):
         return None
 
+    # Local auth mode: only this server's own tokens count, and nothing falls
+    # through to the Supabase path below. active_config() is None whenever the
+    # mode is off or refused, so every other mode is untouched.
+    local_cfg = _local_auth.active_config()
+    if local_cfg is not None:
+        claims = _local_auth.verify(auth_header.split(" ", 1)[1].strip(), local_cfg)
+        return claims.get("sub") if claims else None
+
     if not JWT_SECRET:
         # Fail closed: never verify against an empty secret (forgeable).
         logger.error("Rejecting request: SUPABASE_JWT_SECRET is not configured.")
@@ -1530,8 +1789,9 @@ async def server_lifespan(app: FastAPI):
     global small_file_persistence_executor, small_file_persistence_semaphore, small_file_persistence_inflight
 
     _validate_auth_config()
-    # Every sealed credential is AES-GCM under DB_ENCRYPTION_KEY: no key, or a
-    # published one, and nothing is sealed. Refuse to start rather than run so.
+    # Every sealed credential is AES-GCM under DB_ENCRYPTION_KEY. Provisioned
+    # from .env when missing (app/core/provisioning.py); the API refuses to start
+    # only if it still has none (app/core/encryption_key.py).
     from app.core.encryption_key import require_db_encryption_key
     require_db_encryption_key("The Avaloka API")
     # A service-role key for the wrong project answers every request with
@@ -1593,22 +1853,54 @@ from app.core.typed_secrets import RedactRepliesMiddleware, install_model_scrub 
 install_model_scrub()
 app.add_middleware(RedactRepliesMiddleware)
 
-# Auth before body: an anonymous POST/PUT/PATCH/DELETE gets 401 before FastAPI
-# parses and validates the body, so a 422 can never reveal a route's schema to a
-# caller with no token. Added before CORS so the 401 still carries CORS headers.
-# The resolver is looked up per request so tests that patch it are honoured.
-from app.api.auth_gate import AuthBeforeBodyMiddleware  # noqa: E402
+# Auth before validation: an anonymous request gets 401 before FastAPI parses and
+# validates its body or query, so a 422 (or a router's own 200/400 store and body
+# checks) can never answer a caller with no token. Unlike 1.6 it gates reads too:
+# a GET with a required query field leaks its schema the same way. Added before
+# CORS so the 401 still carries CORS headers. The resolver is looked up per
+# request so tests that patch it are honoured.
+from app.api.auth_gate import GATED_METHODS, AuthBeforeBodyMiddleware  # noqa: E402
+from app.core import editions as _editions  # noqa: E402
 
+_AUTH_GATE_ANY = ("GET", "POST", "PUT", "PATCH", "DELETE")
 AUTH_GATE_EXEMPT = {
-    # Known fail-open (plan E2.05a, pinned by strict xfails in
-    # tests/e2e/test_e2_auth.py): it never checks the caller. Closing it changes
-    # thread creation for its callers, so it is its own fix, not this gate's.
-    ("POST", "/threads"),
+    # Liveness and readiness probes (Helm, compose) and the release string.
+    ("GET", "/health"),
+    ("GET", "/version"),
+    # Public by owner ruling, on hosted and self-hosted alike: feature discovery
+    # a client may read before signing in. An anonymous caller is told the
+    # least-privileged plan's limits (_caller_edition) and nothing user-specific.
+    ("GET", "/api/capabilities"),
+    # Tells a signed-out browser enabled=false, reason="unauthenticated", so the
+    # UI stops rather than retrying (app/analytics/collector.py).
+    ("GET", "/analytics/config"),
+    # The GoTrue subset for AVALOKA_AUTH_MODE=local is how a caller gets a token,
+    # so it cannot require one. Every route 404s unless local mode is on, and the
+    # routes that need a session check the bearer themselves and answer in the
+    # GoTrue shape supabase-js parses (app/api/local_auth_routes.py).
+    *((m, "/local-auth/{rest:path}") for m in _AUTH_GATE_ANY),
+}
+# Public everywhere except on the hosted deployment, where they need a login (owner
+# ruling). Self-hosted and undeclared deployments keep them public, as before the
+# deployment could be declared. Asked per request (editions.deployment_state).
+AUTH_GATE_EXEMPT_UNLESS_HOSTED = {
+    # FastAPI's schema and docs pages. Nothing depends on reading them without a
+    # token: the tests that read the schema send one.
+    ("GET", "/openapi.json"),
+    ("GET", "/docs"),
+    ("GET", "/docs/oauth2-redirect"),
+    ("GET", "/redoc"),
+    # Answers {"user_id": null} to an anonymous caller: it reports who the token
+    # resolves to.
+    ("GET", "/debug/whoami"),
 }
 app.add_middleware(
     AuthBeforeBodyMiddleware,
     resolve_user_id=lambda req: _resolve_user_id(req),
     exempt=AUTH_GATE_EXEMPT,
+    methods=GATED_METHODS,
+    conditional_exempt=AUTH_GATE_EXEMPT_UNLESS_HOSTED,
+    conditional_applies=lambda: _editions.deployment_state() != "hosted",
 )
 
 app.add_middleware(
@@ -1626,6 +1918,30 @@ from app.analytics.collector import build_router as _build_analytics_router
 
 app.include_router(_build_analytics_router(_resolve_user_id))
 
+# GoTrue subset for AVALOKA_AUTH_MODE=local; every route 404s when it is off.
+from app.api.local_auth_routes import router as _local_auth_router
+
+app.include_router(_local_auth_router)
+
+# Saved database connections: the UI's only way to list, save and delete them,
+# in every auth mode (app/api/db_connections.py).
+from app.api import db_connections as _db_connections
+
+app.include_router(_db_connections.build_router(_resolve_user_id))
+# The personal dataset catalog: /catalog/datasets (docs/design/1.7-DATA-PLATFORM.md part C).
+from app.catalog.api import build_router as _build_catalog_router  # noqa: E402
+app.include_router(_build_catalog_router(_resolve_user_id))
+# Cloud connections: the one route that stores an object-store key, sealed in
+# this process (app/api/cloud_connections.py; migration 20261116130000 refuses
+# plaintext keys). At start-up, rows written before that migration are sealed.
+from app.api import cloud_connections as _cloud_connections  # noqa: E402
+
+app.include_router(_cloud_connections.build_router(_resolve_user_id))
+
+
+# Rows written before migration 20261116130000 are sealed at start-up by
+# server_lifespan (seal_at_startup), not here.
+
 # Ray jobs panel: the caller's own Ray jobs (status, list, detail, logs, stop).
 # The browser never reaches Ray directly; see app/api/ray_jobs.py.
 from app.api.ray_jobs import build_router as _build_ray_jobs_router
@@ -1637,14 +1953,6 @@ app.include_router(_build_ray_jobs_router(_resolve_user_id, _require_premium_pla
 from app.api.models_routes import build_router as _build_models_router
 
 app.include_router(_build_models_router(_resolve_user_id, _require_premium_plan))
-
-# Cloud connections: the one route that stores an object-store key, sealed in
-# this process (app/api/cloud_connections.py; migration 20261116130000 refuses
-# plaintext keys). Rows written before that migration are sealed at start-up
-# (server_lifespan).
-from app.api import cloud_connections as _cloud_connections
-
-app.include_router(_cloud_connections.build_router(_resolve_user_id))
 
 # ---------- PNA preflight ----------
 @app.middleware("http")
@@ -1754,6 +2062,123 @@ async def health():
 @app.get("/version")
 async def get_version():
     return {"version": APP_VERSION}
+
+
+async def _caller_edition(request: Request) -> str:
+    """The edition whose limits apply to this caller.
+
+    An open-source install is ``oss``. Otherwise the caller's plan decides, and
+    an anonymous caller gets the least-privileged hosted plan.
+    """
+    if (os.getenv("AVALOKA_EDITION") or "").strip().lower() in ("oss", "community"):
+        return "oss"
+    user_id = _resolve_user_id(request)
+    if not user_id:
+        return "free"
+    return await asyncio.to_thread(resolve_plan, user_id)
+
+
+#: The swarm console gate (app/api/swarm_gate.py): 401 without a user, 403 on
+#: oss/free, the caller's user_id on Professional and Enterprise. Every
+#: swarm/trace route takes it as ``user_id: str = Depends(require_swarm_console)``.
+require_swarm_console = swarm_gate.dependency(_resolve_user_id, _caller_edition)
+
+
+async def _note_thread_mission(thread_id: str, mission_id: str) -> bool:
+    """Record a swarm mission on the thread's session so the next chat turn
+    tells the team's story. The one hook for every path that fans out on a
+    thread's dataset: the /swarm page today, the planner's own fan-out next."""
+    try:
+        sid = await get_thread_session(thread_id)
+        if not sid:
+            return False
+        await update_session(sid, lambda cur: chat_swarm.remember(cur, mission_id, told=False))
+        return True
+    except Exception:  # noqa: BLE001 - the story is additive; the mission is not
+        logger.warning("[chat-swarm] could not note mission %s on thread %s", mission_id, thread_id)
+        return False
+
+
+async def _swarm_stories(sess: Dict[str, Any], user_id: str, edition: Optional[str],
+                         dataset_label: Optional[str]) -> tuple[List[Dict[str, Any]], bool]:
+    """The team stories owed to this chat: one ``swarm`` prompt per mission that
+    ran for the thread's dataset and has not been told. Marks finished ones
+    told; an unfinished one is told so far and stays pending. Returns the
+    prompts and whether the session's record changed."""
+    prompts: List[Dict[str, Any]] = []
+    changed = False
+    for mid in chat_swarm.pending_missions(sess):
+        try:
+            mission = await chat_swarm.records_for(user_id, mid)
+        except Exception:  # noqa: BLE001
+            logger.warning("[chat-swarm] could not read mission %s", mid, exc_info=True)
+            continue
+        if mission is None:  # nothing serves it any more: forget it
+            chat_swarm.remember(sess, mid, told=True)
+            changed = True
+            continue
+        prompts.append(chat_swarm.summary_prompt(
+            mission["records"], edition=edition, mission_id=mid,
+            finished=mission["finished"], dataset_label=dataset_label))
+        if mission["finished"]:
+            chat_swarm.remember(sess, mid, told=True)
+            changed = True
+    return prompts, changed
+
+
+def _voice_after_upload(**kwargs) -> Optional[List[Dict[str, Any]]]:
+    """Avaloka's first word after the auto-insights (app/api/chat_voice.py).
+    Never fails an upload: a gap in the statistics means she says nothing."""
+    try:
+        from app.api import chat_voice
+
+        return chat_voice.prompts_after_upload(**kwargs) or None
+    except Exception:  # noqa: BLE001 - the prompts are additive
+        logger.warning("[chat-voice] could not build the upload prompts", exc_info=True)
+        return None
+
+
+def _voice_after_turn(final: Mapping[str, Any], *, question: str,
+                      execution_context: Optional[Mapping[str, Any]],
+                      sess: Mapping[str, Any],
+                      profile_meta: Optional[Mapping[str, Any]] = None,
+                      datasets: Optional[List[Dict[str, Any]]] = None) -> Optional[List[Dict[str, Any]]]:
+    """Avaloka talking through the steps the turn took (app/api/chat_voice.py),
+    grounded in the dataset's statistics: the session's when it carries them
+    (register-existing does), else this process's upload profile
+    (``_profile_meta``). Never fails a chat turn."""
+    try:
+        from app.api import chat_voice
+
+        meta = dict(profile_meta or {})
+        stats = (_maybe_json_load(sess.get("sample_statistics")) or sess.get("sample_statistics")
+                 or meta.get("sample_statistics"))
+        schema = _maybe_json_load(sess.get("uploaded_csv_columns")) or sess.get("uploaded_csv_columns")
+        return chat_voice.prompts_after_turn(
+            final, question=question, execution_context=execution_context,
+            sample_statistics=stats if isinstance(stats, dict) else None,
+            profiling_result=(sess.get("full_profiling_result") or sess.get("profiling_result")
+                              or meta.get("full_profiling_result") or meta.get("profiling_result")),
+            schema=schema if isinstance(schema, list) else None,
+            datasets=datasets,
+        ) or None
+    except Exception:  # noqa: BLE001 - the prompts are additive
+        logger.warning("[chat-voice] could not build the turn prompts", exc_info=True)
+        return None
+
+
+@app.get("/api/capabilities")
+async def get_api_capabilities(request: Request):
+    """Feature discovery for new clients; the 1.5.2 UI need not call it."""
+    from app.core.editions import swarm_limits
+
+    edition = await _caller_edition(request)
+    return _api_capabilities(
+        upload_formats=SUPPORTED_UPLOAD_EXTS,
+        upload_format_status=upload_format_status(),
+        swarm_limits=swarm_limits(edition).as_dict(),
+        swarm_console=swarm_gate.console_capability(edition),
+    )
 
 
 @app.get("/api/limits")
@@ -1969,6 +2394,216 @@ def _spawn_upload_finalizer(
     _upload_storage_tasks.add(t)
     t.add_done_callback(_upload_storage_tasks.discard)
 
+
+# ---- Deferred profile for uploads (D5) --------------------------------------
+# The semantic profile (three LLM calls) and the model-written Auto Insights
+# ran inside the upload request; on a local model a ~50 MB file took over
+# 600 s. The route now starts both as one background job and waits only a
+# short soft deadline for it. A job that finishes in time is returned in the
+# response as before; one that does not leaves data-only charts in the
+# response, profiling_status="pending", and lands its result on the dataset
+# session (GET /api/datasets/{id}/profile) when it finishes.
+UPLOAD_PROFILE_SYNC_DEADLINE_S = float(os.getenv("AVALOKA_UPLOAD_PROFILE_SYNC_DEADLINE_S", "2"))
+
+PROFILE_PENDING = "pending"
+PROFILE_READY = "full_profile"
+PROFILE_FAILED = "failed"
+PROFILE_SKIPPED = "skipped"
+
+_PROFILE_FAILED_MSG = (
+    "The data profile could not be built, so Auto Insights describe the data "
+    "without it. Charts, tables and questions still work."
+)
+_INSIGHTS_FAILED_MSG = (
+    "The data profile is ready, but Auto Insights could not be rewritten with "
+    "it. The charts shown are built from the data alone."
+)
+
+# Strong refs so landers aren't garbage-collected after the response is sent.
+_upload_profile_tasks: set = set()
+
+
+async def _run_upload_profile(
+    *,
+    dsid: str,
+    schema_list: List[str],
+    schema_any: Any,
+    samples: List[Dict[str, Any]],
+    sample_statistics: Optional[Dict[str, Any]],
+    used_agent: bool,
+    input_path: str,
+    ext: str,
+) -> Dict[str, Any]:
+    """The profile, then the charts written with it. Never raises: a failure
+    comes back as profiling_status="failed" with a message for the user."""
+    out: Dict[str, Any] = {
+        "profiling_status": PROFILE_SKIPPED,
+        "full_profiling_result": None,
+        "profiling_error": None,
+        "visualization_config": None,
+        "visualization_status": None,
+    }
+    prof: Optional[Dict[str, Any]] = None
+    if used_agent and sample_statistics:
+        try:
+            with _stage("profile_full", dsid):
+                res = await asyncio.to_thread(
+                    profile_full, schema=schema_list, sample_rows=samples,
+                    sample_statistics=sample_statistics,
+                ) or {}
+            result = res.get("full_profiling_result")
+            if res.get("profiling_status") == PROFILE_SKIPPED:
+                pass  # no profiling model configured: nothing failed
+            elif (
+                res.get("profiling_status") == "error"
+                or not isinstance(result, dict)
+                or result.get("status") == "error"
+            ):
+                logger.warning(
+                    "[upload-profile] %s profile_full returned an error: %s",
+                    dsid, (result or {}).get("reason") if isinstance(result, dict) else result,
+                )
+                out.update(profiling_status=PROFILE_FAILED, profiling_error=_PROFILE_FAILED_MSG)
+            else:
+                prof = result
+                out.update(profiling_status=PROFILE_READY, full_profiling_result=result)
+        except Exception as e:
+            logger.warning("[upload-profile] %s profile_full failed: %s", dsid, e, exc_info=True)
+            out.update(profiling_status=PROFILE_FAILED, profiling_error=_PROFILE_FAILED_MSG)
+
+    # Auto Insights are written in the dataset's domain terms, so the charts
+    # wait for the profile. A failed profile must not cost the charts.
+    try:
+        with _stage("viz", dsid):
+            viz = await asyncio.to_thread(
+                build_visualization_config_from_sample,
+                dataset_id=dsid, sample_rows=samples, schema=schema_any,
+                task_type="unsupervised", target_column=None,
+                # Charts chosen from the sample, numbers computed on the
+                # whole local file (only the charted columns are read).
+                full_data_path=input_path if used_agent else None,
+                full_data_type=ext,
+                total_rows=((sample_statistics or {}).get("data_shape") or {}).get("rows"),
+                profiling_result=prof,
+            )
+        out["visualization_config"] = viz or {}
+        out["visualization_status"] = (viz or {}).get("visualization_status", "ready")
+    except Exception as e:
+        logger.warning("[upload-profile] %s visualization failed: %s", dsid, e, exc_info=True)
+        if out["profiling_status"] == PROFILE_READY:
+            out.update(profiling_status=PROFILE_FAILED, profiling_error=_INSIGHTS_FAILED_MSG)
+    return out
+
+
+def _deferred_profile_fields(r: Dict[str, Any]) -> Dict[str, Any]:
+    """What a landed job writes on the dataset session."""
+    fields: Dict[str, Any] = {
+        "profiling_status": r.get("profiling_status"),
+        "profiling_error": r.get("profiling_error"),
+        "full_profiling_result": (
+            _jsonify(r["full_profiling_result"]) if r.get("full_profiling_result") else None
+        ),
+        "profiling_finished_at": _now_iso(),
+    }
+    if r.get("visualization_config"):
+        fields["visualization_config"] = _jsonify(r["visualization_config"])
+        fields["visualization_status"] = r.get("visualization_status") or "ready"
+    return fields
+
+
+async def _notify_deferred_profile(
+    *, user_id: Optional[str], dsid: str, thread_id: Optional[str],
+    filename: str, r: Dict[str, Any],
+) -> None:
+    status_ = r.get("profiling_status")
+    if status_ == PROFILE_READY:
+        n_type, title = "insights.generated", "Auto Insights ready"
+        body = f"The data profile for {filename} is ready." if filename else "The data profile is ready."
+    elif status_ == PROFILE_FAILED:
+        n_type, title = "insights.failed", "Data profile failed"
+        body = (f"{filename}: " if filename else "") + (r.get("profiling_error") or _PROFILE_FAILED_MSG)
+    else:
+        return
+    await notification_service.create_notification(
+        user_id, n_type, title, body,
+        thread_id=thread_id or None, dataset_id=dsid, ref=f"upload-profile:{dsid}",
+    )
+
+
+async def _land_upload_profile(
+    job: "asyncio.Future",
+    *,
+    session_id: str,
+    dsid: str,
+    user_id: Optional[str],
+    thread_id: Optional[str],
+    filename: str,
+) -> None:
+    try:
+        r = await job
+    except asyncio.CancelledError:
+        logger.warning("[upload-profile] %s job was cancelled", dsid)
+        return
+    except Exception as e:  # _run_upload_profile catches its own errors
+        logger.error("[upload-profile] %s job failed: %s", dsid, e, exc_info=True)
+        r = {"profiling_status": PROFILE_FAILED, "profiling_error": _PROFILE_FAILED_MSG}
+
+    meta = _profile_meta.get(dsid) or {}
+    meta["deferred_profile"] = dict(r)
+    if r.get("full_profiling_result"):
+        meta["full_profiling_result"] = r["full_profiling_result"]
+    _profile_meta[dsid] = meta
+
+    fields = _deferred_profile_fields(r)
+    logger.info("[upload-profile] %s landed: %s", dsid, fields["profiling_status"])
+
+    # Same re-assert as the storage finalizer: a request that read the session
+    # while the job ran and saves it back would put "pending" back.
+    for attempt, delay in enumerate((0, *_UPLOAD_REASSERT_DELAYS_S)):
+        if delay:
+            await asyncio.sleep(delay)
+        try:
+            sess = await get_session(session_id)
+        except Exception:
+            logger.debug("[upload-profile] session read failed for %s", session_id, exc_info=True)
+            continue
+        if not isinstance(sess, dict) or sess.get("dataset_id") != dsid:
+            return  # dataset deleted (or upload rolled back) before the job finished
+        if attempt and sess.get("profiling_status") != PROFILE_PENDING:
+            continue
+
+        def _apply(cur: Dict[str, Any]) -> None:
+            if cur.get("dataset_id") == dsid:
+                cur.update(fields)
+
+        try:
+            await update_session(session_id, _apply)
+        except Exception:
+            logger.warning("[upload-profile] could not record the profile for %s", dsid, exc_info=True)
+            continue
+        if attempt == 0:
+            if r.get("full_profiling_result"):
+                try:
+                    await asyncio.to_thread(
+                        upsert_profile, dataset_id=dsid, phase="semantic_profile",
+                        profiling_result=r["full_profiling_result"],
+                    )
+                except Exception:
+                    logger.warning("[upload-profile] could not persist the profile for %s", dsid, exc_info=True)
+            try:
+                await _notify_deferred_profile(
+                    user_id=user_id, dsid=dsid, thread_id=thread_id, filename=filename, r=r,
+                )
+            except Exception:
+                logger.warning("[upload-profile] could not notify for %s", dsid, exc_info=True)
+
+
+def _spawn_upload_profile_lander(job: "asyncio.Future", **kw: Any) -> None:
+    t = asyncio.create_task(_land_upload_profile(job, **kw))
+    _upload_profile_tasks.add(t)
+    t.add_done_callback(_upload_profile_tasks.discard)
+
+
 @app.post("/api/upload", response_model=Union[UploadResponse, MultiUploadResponse])
 async def upload_csv(
     request: Request,
@@ -2090,7 +2725,10 @@ async def upload_csv(
     first_available_samples: Optional[List[str]] = None
     first_profiling_result: Optional[Dict[str, Any]] = None
     first_full_profiling_result: Optional[Dict[str, Any]] = None
+    first_profiling_status: Optional[str] = None
+    first_profiling_error: Optional[str] = None
     first_sample_statistics: Optional[Dict[str, Any]] = None
+    first_complex_structure: Optional[Dict[str, Any]] = None
 
     # Track created resources so we can rollback if a later file fails
     created_session_ids: List[str] = []
@@ -2098,6 +2736,10 @@ async def upload_csv(
     created_tmp_uploads: List[Path] = []
     # CHANGED: in-flight background storage pushes, with what the finalizer needs
     pending_puts: List[Dict[str, Any]] = []
+    # Background profile jobs: every one started (cancelled on rollback), and
+    # the ones still running when the response goes out (landed afterwards).
+    profile_jobs: List["asyncio.Future"] = []
+    pending_profiles: List[Dict[str, Any]] = []
     total_bytes_written = 0
     try:
         # ---- Stage A: materialize each incoming file to a tmp path and expand
@@ -2311,6 +2953,7 @@ async def upload_csv(
             available_samples: Optional[List[str]] = None
             profiling_result: Optional[Dict[str, Any]] = None
             sample_statistics: Optional[Dict[str, Any]] = None
+            complex_structure: Optional[Dict[str, Any]] = None
 
             try:
                 with _stage("sample", dsid):
@@ -2326,6 +2969,7 @@ async def upload_csv(
                     ddl = agent_res.get("ddl_schema") or ""
                     profiling_result = agent_res.get("profiling_result")
                     sample_statistics = agent_res.get("sample_statistics")
+                    complex_structure = agent_res.get("complex_structure")
                     portfolio_samples = agent_res.get("portfolio_samples") or {}
                     available_samples = list(portfolio_samples.keys()) if portfolio_samples else []
                     samples = (portfolio_samples.get("random_baseline") or [])[:DEFAULT_SAMPLE_MAX_ROWS]
@@ -2367,40 +3011,29 @@ async def upload_csv(
                 except Exception:
                     logger.warning("schema_json parse failed; ignoring override", exc_info=True)
 
-            # ---- semantic profile + viz config run concurrently ----
+            # ---- semantic profile + model-written charts: a background job ----
             schema_list = list(schema_any.keys()) if isinstance(schema_any, dict) else list(schema_any)
 
-            async def _profile():
-                if not (used_agent and sample_statistics):
-                    return None
-                with _stage("profile_full", dsid):
-                    res = await asyncio.to_thread(
-                        profile_full, schema=schema_list, sample_rows=samples,
-                        sample_statistics=sample_statistics,
-                    )
-                return (res or {}).get("full_profiling_result")
+            # The profile and the insight model can take minutes on a local
+            # model (D5), so they run as one job raced against a soft
+            # deadline. Data-only charts from the sample are built meanwhile
+            # and returned if the job is still running.
+            _profile_deadline = time.monotonic() + UPLOAD_PROFILE_SYNC_DEADLINE_S
+            profile_job = asyncio.ensure_future(_run_upload_profile(
+                dsid=dsid, schema_list=schema_list, schema_any=schema_any,
+                samples=samples, sample_statistics=sample_statistics,
+                used_agent=used_agent, input_path=str(input_copy), ext=ext,
+            ))
+            profile_jobs.append(profile_job)
 
-                        # Auto Insights are written in the dataset's domain terms, so the
-            # viz step waits for the profile (domain, column meanings, red
-            # flags). Profiling takes ~3s on throughput-routed OpenRouter.
-            prof_task = asyncio.ensure_future(_profile())
-
-            async def _viz():
-                try:
-                    prof_for_viz = await asyncio.shield(prof_task)
-                except Exception:
-                    prof_for_viz = None  # a failed profile must not cost the charts
-                with _stage("viz", dsid):
+            async def _data_only_viz():
+                with _stage("viz_data_only", dsid):
                     return await asyncio.to_thread(
                         build_visualization_config_from_sample,
                         dataset_id=dsid, sample_rows=samples, schema=schema_any,
                         task_type="unsupervised", target_column=None,
-                        # Charts chosen from the sample, numbers computed on the
-                        # whole local file (only the charted columns are read).
-                        full_data_path=str(input_copy) if used_agent else None,
-                        full_data_type=ext,
                         total_rows=((sample_statistics or {}).get("data_shape") or {}).get("rows"),
-                        profiling_result=prof_for_viz,
+                        use_llm=False,
                     )
 
             output_path = work_dir / "output.csv"
@@ -2410,17 +3043,28 @@ async def upload_csv(
                 with _stage("sample_csv", dsid):
                     await asyncio.to_thread(_write_rows_to_csv, samples, sample_input_path)
 
-            prof_out, viz_out, csv_out = await asyncio.gather(
-                prof_task, _viz(), _write_sample(), return_exceptions=True
+            viz_out, csv_out = await asyncio.gather(
+                _data_only_viz(), _write_sample(), return_exceptions=True
             )
             if isinstance(csv_out, Exception):
                 logger.warning("Failed to write sample_input.csv; continuing: %s", csv_out)
+            await asyncio.wait(
+                {profile_job}, timeout=max(0.0, _profile_deadline - time.monotonic())
+            )
 
-            full_profiling_result: Optional[Dict[str, Any]] = None
-            if isinstance(prof_out, Exception):
-                logger.warning("[upload] profile_full failed (non-fatal): %s", prof_out)
+            profile_deferred = not profile_job.done()
+            if profile_deferred:
+                profiling_status: Optional[str] = PROFILE_PENDING
+                profiling_error: Optional[str] = None
+                full_profiling_result: Optional[Dict[str, Any]] = None
+                logger.info("[upload-profile] %s still running; deferred past the response", dsid)
             else:
-                full_profiling_result = prof_out
+                _job = profile_job.result()
+                profiling_status = _job["profiling_status"]
+                profiling_error = _job["profiling_error"]
+                full_profiling_result = _job["full_profiling_result"]
+                if _job["visualization_config"] is not None:
+                    viz_out = _job["visualization_config"]
 
             if isinstance(viz_out, Exception):
                 logger.warning("Failed to build visualization_config: %s", viz_out)
@@ -2435,6 +3079,7 @@ async def upload_csv(
                 "profiling_result": profiling_result,
                 "full_profiling_result": full_profiling_result,
                 "sample_statistics": sample_statistics,
+                "complex_structure": complex_structure,
             }
 
             if used_agent and agent_res:
@@ -2506,15 +3151,17 @@ async def upload_csv(
                 "portfolio_samples": None,
                 "profiling_result": _jsonify(profiling_result) if profiling_result else None,
                 "full_profiling_result": _jsonify(full_profiling_result) if full_profiling_result else None,
+                "complex_structure": _jsonify(complex_structure) if complex_structure else None,
                 "available_samples": available_samples,
                 "analysis_fidelity": FIDELITY_PORTFOLIO,
                 # Without these, send_message sees sample_status="" -> portfolio
                 # "not ready" -> demotes to QUICK -> runs on sample_input.csv
                 # (7,013 rows) instead of the full local file (91,713 rows).
                 "sample_status": "full_sample" if used_agent else "quick_sample",
-                "profiling_status": (
-                    "full_profile" if (used_agent and full_profiling_result) else None
-                ),
+                # "pending" while the background profile job runs; it sets
+                # full_profile, failed (with profiling_error) or skipped.
+                "profiling_status": profiling_status,
+                "profiling_error": profiling_error,
                 "total_rows_exact": (
                     ((sample_statistics or {}).get("data_shape") or {}).get("rows")
                     if used_agent else None
@@ -2524,9 +3171,23 @@ async def upload_csv(
                     if (available_samples and DEFAULT_SAMPLE_NAME in available_samples)
                     else (available_samples[0] if available_samples else None)
                 ),
+                # Picked up by avaloka_agent on the next chat turn for proactive
+                # onboarding, then cleared by send_message once consumed.
+                "connection_event": {
+                    "kind": "upload",
+                    "dataset_id": dsid,
+                    "filename": filename,
+                    "alias": alias,
+                    "input_data_type": ext,
+                    "schema_columns": cols[:32] if isinstance(cols, list) else [],
+                    "created_at": _now_iso(),
+                },
             }
             if uri:
                 session_data["data_source_location"] = uri
+                # Same rule as the session: the location is recorded only once
+                # known, never as a placeholder.
+                session_data["connection_event"]["data_source_location"] = uri
             with _stage("session_save", dsid):
                 _saved = await save_session(session_id, session_data)
             if not _saved:
@@ -2583,6 +3244,11 @@ async def upload_csv(
 
             dataset_ids.append(dsid)
             dataset_session_map[dsid] = session_id
+            if profile_deferred:
+                pending_profiles.append({
+                    "job": profile_job, "session_id": session_id, "dsid": dsid,
+                    "filename": filename,
+                })
 
             datasets_out.append(
                 UploadedDatasetOut(
@@ -2596,7 +3262,10 @@ async def upload_csv(
                     portfolio_samples=_cap_portfolio(portfolio_samples),
                     available_samples=available_samples,
                     profiling_result=full_profiling_result,
+                    profiling_status=profiling_status,
+                    profiling_error=profiling_error,
                     sample_statistics=sample_statistics,
+                    complex_structure=complex_structure,
                     analysis_fidelity=FIDELITY_PORTFOLIO,
                     selected_sample_name=(
                         DEFAULT_SAMPLE_NAME
@@ -2619,7 +3288,10 @@ async def upload_csv(
                 first_available_samples = available_samples
                 first_profiling_result = profiling_result
                 first_full_profiling_result = full_profiling_result
+                first_profiling_status = profiling_status
+                first_profiling_error = profiling_error
                 first_sample_statistics = sample_statistics
+                first_complex_structure = complex_structure
 
     except HTTPException:
         for p in created_tmp_uploads:
@@ -2637,6 +3309,8 @@ async def upload_csv(
                 await delete_session(sid)
             except Exception:
                 pass
+        for job in profile_jobs:
+            job.cancel()
         # CHANGED: sessions are gone now, so each finalizer sees no session
         # and deletes any object its push still uploads (no GCS orphans).
         for p in pending_puts:
@@ -2660,6 +3334,8 @@ async def upload_csv(
                 await delete_session(sid)
             except Exception:
                 pass
+        for job in profile_jobs:
+            job.cancel()
         for p in pending_puts:                           # CHANGED
             _spawn_upload_finalizer(p["task"], p["session_id"], p["dsid"], p["object_name"])
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Upload failed")
@@ -2684,6 +3360,12 @@ async def upload_csv(
 
     for p in pending_puts:
         _spawn_upload_finalizer(p["task"], p["session_id"], p["dsid"], p["object_name"])
+    # Last, so no later save in this handler can overwrite what a job lands.
+    for p in pending_profiles:
+        _spawn_upload_profile_lander(
+            p["job"], session_id=p["session_id"], dsid=p["dsid"], user_id=user_id,
+            thread_id=thread_id, filename=p["filename"],
+        )
 
     logger.info("[upload-timing] handler_total  %.2fs", time.monotonic() - _t_handler)
 
@@ -2705,7 +3387,10 @@ async def upload_csv(
             portfolio_samples=_cap_portfolio(first_portfolio_samples),
             available_samples=first_available_samples,
             profiling_result=first_full_profiling_result,
+            profiling_status=first_profiling_status,
+            profiling_error=first_profiling_error,
             sample_statistics=first_sample_statistics,
+            complex_structure=first_complex_structure,
             analysis_fidelity=FIDELITY_PORTFOLIO,
             selected_sample_name=(
                 DEFAULT_SAMPLE_NAME
@@ -2714,6 +3399,12 @@ async def upload_csv(
             ),
             datasets=datasets_out if len(datasets_out) > 1 else None,
             notes=(datasets_out[0].notes if datasets_out else None),
+            assistant_prompts=_voice_after_upload(
+                sample_statistics=first_sample_statistics, profiling_result=first_full_profiling_result,
+                schema=(list(first_schema_any.keys()) if isinstance(first_schema_any, dict) else first_schema_any),
+                filename=(datasets_out[0].filename if datasets_out else None),
+                total_rows=((first_sample_statistics or {}).get("data_shape") or {}).get("rows"),
+            ),
         )
 
     return MultiUploadResponse(
@@ -2783,6 +3474,7 @@ async def register_existing(
     available_samples: Optional[List[str]] = None
     profiling_result: Optional[Dict[str, Any]] = None
     sample_statistics: Optional[Dict[str, Any]] = None
+    complex_structure: Optional[Dict[str, Any]] = None
     agent_res: Optional[Dict[str, Any]] = None
     sampling_path = local_input
     sampler_source_path = str(local_input)
@@ -2791,7 +3483,10 @@ async def register_existing(
     persistence_source_path = str(local_input)
     full_cloud_uri: Optional[str] = None
 
-    if body.storage_uri.startswith("gs://") or body.storage_uri.startswith("gcs://"):
+    if (
+        ext in {"csv", "tsv"}
+        and (body.storage_uri.startswith("gs://") or body.storage_uri.startswith("gcs://"))
+    ):
         try:
             _sa_json = conn.get("secret_key") or conn.get("service_account_json") or ""
 
@@ -2929,7 +3624,11 @@ async def register_existing(
             )
             file_size_bytes = 0
 
-    _is_large_file = file_size_bytes >= LARGE_DATASET_THRESHOLD_BYTES
+    _is_complex_file = ext in {
+        "pdf", "jpg", "jpeg", "png", "tif", "tiff", "bmp", "webp",
+        "mp4", "mov", "mkv", "avi", "webm", "m4v",
+    }
+    _is_large_file = file_size_bytes >= LARGE_DATASET_THRESHOLD_BYTES and not _is_complex_file
     background_task_id: Optional[str] = None
     _sample_status: Optional[str] = None
     _profiling_status: Optional[str] = None
@@ -2955,6 +3654,7 @@ async def register_existing(
                 ddl = agent_res.get("ddl_schema") or ""
                 profiling_result = agent_res.get("profiling_result")
                 sample_statistics = agent_res.get("sample_statistics")
+                complex_structure = agent_res.get("complex_structure")
                 samples = (agent_res.get("rows") or [])[:DEFAULT_SAMPLE_MAX_ROWS]
                 portfolio_samples = agent_res.get("portfolio_samples") or {}
                 if not portfolio_samples and samples:
@@ -3036,6 +3736,7 @@ async def register_existing(
                 ddl = agent_res.get("ddl_schema") or ""
                 profiling_result = agent_res.get("profiling_result")
                 sample_statistics = agent_res.get("sample_statistics")
+                complex_structure = agent_res.get("complex_structure")
                 portfolio_samples = agent_res.get("portfolio_samples") or {}
                 available_samples = list(portfolio_samples.keys()) if portfolio_samples else []
                 samples = (portfolio_samples.get("random_baseline") or [])[:DEFAULT_SAMPLE_MAX_ROWS]
@@ -3104,7 +3805,8 @@ async def register_existing(
                 profile_full, schema=schema_list, sample_rows=samples,
                 sample_statistics=sample_statistics,
             )
-        return (res or {}).get("full_profiling_result")
+        # profile_full returns its error in the profile's place; that is no profile.
+        return usable_full_profile(res)
 
         # The viz step waits for the profile so insights use its domain context.
     prof_task = asyncio.ensure_future(_profile())
@@ -3150,6 +3852,7 @@ async def register_existing(
         "profiling_result": profiling_result,
         "full_profiling_result": full_profiling_result,
         "sample_statistics": sample_statistics,
+        "complex_structure": complex_structure,
     }
 
     if used_agent and agent_res and not _is_large_file:
@@ -3216,6 +3919,7 @@ async def register_existing(
         "profiling_result": _jsonify(profiling_result) if profiling_result else None,
         "full_profiling_result": _jsonify(full_profiling_result) if full_profiling_result else None,
         "sample_statistics": _jsonify(sample_statistics) if sample_statistics else None,
+        "complex_structure": _jsonify(complex_structure) if complex_structure else None,
         "sample_status": _sample_status,
         "profiling_status": _profiling_status,
         "available_samples": available_samples,
@@ -3230,6 +3934,19 @@ async def register_existing(
         "fidelity_prompt": (_build_fidelity_prompt(file_size_bytes) if _is_large_file else None),
         "estimated_runtime_hint": (_estimated_runtime_hint(file_size_bytes) if _is_large_file else None),
         "fidelity_prompt_shown": bool(_is_large_file),
+        # Picked up by avaloka_agent on the next chat turn for proactive
+        # onboarding, then cleared by send_message once consumed.
+        "connection_event": {
+            "kind": "cloud_storage",
+            "dataset_id": dsid,
+            "connection_id": body.connection_id,
+            "input_data_type": ext,
+            "data_source_location": storage_uri_normalized,
+            "file_size_mb": round((file_size_bytes or 0) / (1024 * 1024), 2),
+            "schema_columns": (cols[:32] if isinstance(cols, list) else []),
+            "is_large_file": bool(_is_large_file),
+            "created_at": _now_iso(),
+        },
     }
 
     ok = await save_session(session_id, session_data)
@@ -3304,6 +4021,7 @@ async def register_existing(
         available_samples=available_samples,
         profiling_result=full_profiling_result,
         sample_statistics=sample_statistics,
+        complex_structure=complex_structure,
         sample_status=_sample_status,
         profiling_status=_profiling_status,
         background_task_id=background_task_id,
@@ -3316,6 +4034,11 @@ async def register_existing(
         requires_fidelity_choice=bool(_is_large_file),
         fidelity_prompt=(_build_fidelity_prompt(file_size_bytes) if _is_large_file else None),
         estimated_runtime_hint=(_estimated_runtime_hint(file_size_bytes) if _is_large_file else None),
+        assistant_prompts=_voice_after_upload(
+            sample_statistics=sample_statistics, profiling_result=full_profiling_result,
+            schema=cols, filename=Path(object_name).name if object_name else None,
+            total_rows=((sample_statistics or {}).get("data_shape") or {}).get("rows"),
+        ),
     )
 
 
@@ -3460,7 +4183,7 @@ async def register_existing_folder(
                 sample_rows=samples,
                 sample_statistics=sample_statistics,
             )
-            full_profiling_result = prof_res.get("full_profiling_result")
+            full_profiling_result = usable_full_profile(prof_res)
         except Exception as e:
             logger.warning("[register-folder] profile_full failed (non-fatal): %s", e)
 
@@ -3615,6 +4338,10 @@ async def register_existing_folder(
             DEFAULT_SAMPLE_NAME
             if (available_samples and DEFAULT_SAMPLE_NAME in available_samples)
             else (available_samples[0] if available_samples else None)
+        ),
+        assistant_prompts=_voice_after_upload(
+            sample_statistics=sample_statistics, profiling_result=full_profiling_result, schema=cols,
+            total_rows=((sample_statistics or {}).get("data_shape") or {}).get("rows"),
         ),
     )
 
@@ -3873,6 +4600,17 @@ async def attach_datasets_to_thread(request: Request, thread_id: str, body: Atta
 
 @app.post("/threads", response_model=ThreadOut)
 async def create_thread(request: Request, body: ThreadCreateIn):
+    # Same check as every other /threads route. Without it an anonymous caller
+    # (model code in the executor could reach api:9000) created LangGraph
+    # threads and bound them to whatever X-Avaloka-Session it named.
+    user_id = _resolve_user_id(request)
+    if not user_id:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing or invalid auth token")
+    sid = _resolve_session_id(request, None)
+    if sid:
+        sess = await get_session(sid)
+        if sess and sess.get("user_id") != user_id:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "Session belongs to another user")
     data = await lg_json(
         "POST",
         "/threads",
@@ -3885,7 +4623,6 @@ async def create_thread(request: Request, body: ThreadCreateIn):
             "LangGraph did not return a thread_id",
         )
     _ensure_thread_local(thread_id, body.metadata or {})
-    sid = _resolve_session_id(request, None)
     if sid:
         await bind_thread_session(thread_id, sid)
     return ThreadOut(
@@ -3957,86 +4694,11 @@ async def list_threads(
     owned_flags = await asyncio.gather(*(_owned_by_caller(t) for t in out))
     return [t for t, owned in zip(out, owned_flags) if owned]
 
-_EXEC_OK = ("success", "succeeded", "completed", "done")
-
-
-async def _finished_run_view(final: Any, execution_id: Optional[str], task_metadata: Dict[str, Any]) -> Dict[str, Any]:
-    """What a finished (SUCCESS) run returns to the UI.
-
-    A result stored as a summary (app/core/celery_results.py) holds no
-    messages and no inline output; the run's reply, output table, logs and run
-    truth come from its durable scheduled_runs row. A result stored before
-    summaries (the full state) is read as it always was.
-    """
-    chat_only = _scheduled_task_has_chat_result_only(task_metadata)
-    task_type = task_metadata.get("task_type")
-    if not celery_results.is_summary(final):
-        final = dict(final) if isinstance(final, dict) else {}
-        final["messages"] = convert_message_dicts_to_objects(final.get("messages", []))
-        assistant_messages = _assistant_messages_from_state(final)
-        output_file_data, output_json = get_output_from_state(final)
-        er = final.get("execution_result") or {}
-        if chat_only or (str(er.get("status", "")).lower() not in _EXEC_OK and not final.get("output_file_data")):
-            output_file_data = output_json = None
-        run_status, error = (_run_status_from_final(final, task_type="training")
-                             if task_type == "training" else (None, None))
-        return {
-            "final": final,
-            "assistant_messages": assistant_messages,
-            "output_file_data": output_file_data,
-            "output_json": output_json,
-            "completion_message": _scheduled_task_completion_message(final, assistant_messages, task_metadata),
-            "run_truth": _scheduled_task_run_truth(final, task_metadata),
-            "output_contract": er.get("output_contract"),
-            "logs": _logs_from_final(final),
-            "ray_job": _ray_job_from_final(final),
-            "run_status": run_status,
-            "error": error,
-        }
-    run = await asyncio.to_thread(celery_results.load_scheduled_run, execution_id) or {}
-    run_result = run.get("result") or {}
-    assistant_messages = celery_results.assistant_messages_from_logs(run_result.get("logs"))
-    output_json = run_result.get("output_json") if isinstance(run_result.get("output_json"), list) else None
-    output_file_data = celery_results.output_file_data_from_rows(output_json, final.get("output_location"))
-    if chat_only:
-        output_file_data = output_json = None
-    run_status = str(run.get("status") or "").lower() or None
-    if task_type == "training" and run_status == "failure":
-        completion_message = run_result.get("message") or TRAINING_FAILURE_MESSAGE
-    elif task_type in {"start_inference", "stop_inference"} and assistant_messages:
-        completion_message = assistant_messages[-1]["content"]
-    else:
-        completion_message = str(task_metadata.get("success_message") or "The scheduled task is complete.")
-    return {
-        "final": {"output_location": final.get("output_location")},
-        "assistant_messages": assistant_messages,
-        "output_file_data": output_file_data,
-        "output_json": output_json,
-        "completion_message": completion_message,
-        "run_truth": run_result.get("run_truth"),
-        "output_contract": run_result.get("output_contract"),
-        "logs": run_result.get("logs"),
-        "ray_job": run_result.get("ray_job"),
-        "run_status": run_status if task_type == "training" else None,
-        "error": run.get("error") if task_type == "training" else None,
-    }
-
-
-def _run_finished_state(execution_id: Optional[str]) -> Optional[str]:
-    """SUCCESS/FAILURE when the run's durable record says it is over, else None.
-
-    For a Celery state that is not final: a result that is no longer stored
-    reads as PENDING, which must not be shown as "running".
-    """
-    return celery_results.finished_run_state(celery_results.load_scheduled_run(execution_id))
-
-
-#: The SSE checks the durable run record every this many polls while a task
-#: is not final, so a run that ended without a stored result ends the stream.
-_SSE_DURABLE_CHECK_EVERY = 15
-
-
-async def task_sse_iter(task_id: str, redbeat_key: str):
+async def task_sse_iter(
+    task_id: str,
+    redbeat_key: str,
+    session: Optional[Dict[str, Any]] = None,
+):
     try:
         entry = AvalokaEntry.from_key(redbeat_key, celery_app)
         task_metadata = _scheduled_task_metadata_from_entry(entry)
@@ -4087,14 +4749,24 @@ async def task_sse_iter(task_id: str, redbeat_key: str):
             "next_due_at": next_due_at, **task_metadata,
         }) + "\n\n"
     elif task.state == "REVOKED":
-        yield "event: message\ndata: " + json.dumps({"status": "CANCELLED", "traceback": str(task.traceback), "next_due_at": next_due_at, **task_metadata}) + "\n\n"
+        yield "event: message\ndata: " + json.dumps({"status": "CANCELLED", "message": _SCHEDULED_CANCELLED_TEXT, "next_due_at": next_due_at, **task_metadata}) + "\n\n"
     elif task.failed():
-        yield "event: message\ndata: " + json.dumps({"status": "FAILED", "traceback": str(task.traceback), "next_due_at": next_due_at, **task_metadata}) + "\n\n"
+        # The Celery traceback is the worker's log, never the user's message.
+        _failed_msg = _scheduled_failure_text(task, task_metadata)
+        _details = await asyncio.to_thread(_failed_run_details, task, task_id, task_metadata)
+        yield "event: message\ndata: " + json.dumps({"status": "FAILED", "message": _failed_msg, "error": _failed_msg, "traceback": _failed_msg, "next_due_at": next_due_at, **task_metadata, **_details}) + "\n\n"
+    elif _scheduled_run_failed(task.result, task_metadata):
+        _failed_msg = _scheduled_task_completion_message(task.result or {}, [], task_metadata)
+        _details = await asyncio.to_thread(_failed_run_details, task, task_id, task_metadata)
+        yield "event: message\ndata: " + json.dumps({"status": "FAILED", "message": _failed_msg, "error": _failed_msg, "traceback": _failed_msg, "next_due_at": next_due_at, **task_metadata, **_details}) + "\n\n"
     else:
         view = await _finished_run_view(task.result, task_id, task_metadata)
+        final = view["final"]
         assistant_messages = view["assistant_messages"]
         output_file_data, output_json = view["output_file_data"], view["output_json"]
         completion_message = view["completion_message"]
+        # Same builder as the synchronous response and /tasks/{id}/result.
+        execution_context = _build_execution_context_from_state(final, session=session)
         # The outcome _record_run_finish writes for this run (item 8a): Celery
         # SUCCESS only means the task returned, not that it answered.
         _task_truth = view["run_truth"]
@@ -4113,6 +4785,7 @@ async def task_sse_iter(task_id: str, redbeat_key: str):
                 "assistant_message": assistant_messages[-1] if assistant_messages else None,
                 "message": completion_message,
                 "completion_message": completion_message,
+                "execution_context": execution_context,
                 "run_truth": _task_truth,
                 "output_contract": view["output_contract"],
             },
@@ -4287,9 +4960,17 @@ def _sample_fidelity_note(
     sample_rows: Any,
     sample_name: Optional[str],
     total_rows: Optional[int] = None,
+    db_sample: Optional[DbSample] = None,
 ) -> str:
     """One-line disclosure appended to numeric answers computed on a partial sample."""
     n = len(sample_rows) if isinstance(sample_rows, list) else 0
+    if db_sample is not None:
+        return (
+            f"\n\n> Note: these figures were computed from {sample_scope(db_sample)}, not the "
+            f"entire table, so counts, rates, distinct values and min/max are sample estimates. "
+            f"Ask for a rate, mean or count by one column and the database computes it "
+            f"exactly over every row."
+        )
     if effective_fidelity == FIDELITY_PORTFOLIO:
         scope = f"a portfolio sample ({sample_name})" if sample_name else "a portfolio sample"
     elif n and total_rows and total_rows > n:
@@ -4303,12 +4984,7 @@ def _sample_fidelity_note(
     )
 DEFAULT_SAMPLE_NAME = "random_baseline"
 LARGE_DATASET_THRESHOLD_BYTES = 1 * 1024 * 1024 * 1024  # 1 GB
-
-_FIDELITY_LABELS = {
-    FIDELITY_QUICK: "Quick Sample",
-    FIDELITY_PORTFOLIO: "Portfolio Samples",
-    FIDELITY_ENTIRE: "Entire Dataset",
-}
+# Fidelity labels and the execution_context builder live in app.api.ui_contract.
 
 
 # ── Byte-aware routing config ────────────────────────────────────────────────
@@ -4387,6 +5063,56 @@ def _is_metadata_only_question(text: str) -> bool:
     if _METADATA_EXCLUDE.search(t) or _METADATA_QUALIFIED.search(t):
         return False
     return any(p.search(t) for p in _METADATA_PATTERNS)
+
+
+async def _db_pushdown_answer(
+    user_id: str, sess: Dict[str, Any], question: str,
+) -> Optional[Tuple[str, Dict[str, Any]]]:
+    """``(answer, output_table)`` for a plain group aggregate run on the whole DB table.
+
+    Only for a session made from a table (``db_pushdown_table``), whose
+    database the caller connected themselves: the api_key comes from the
+    caller's own saved connection or connect session (#535's handles), never
+    from the dataset session, so a collaborator on a shared analysis gets
+    nothing. None means
+    "not a question this can answer exactly"; the turn then runs on the
+    sample and says so.
+    """
+    table = sess.get("db_pushdown_table")
+    customer_id = (sess.get("customer_id") or "").strip()
+    sample = DbSample.from_session(_maybe_json_load(sess.get("db_sample")) or sess.get("db_sample"))
+    if not (table and customer_id and sample and _DB_IDENT_RE.match(str(table))):
+        return None
+    columns = _maybe_json_load(sess.get("uploaded_csv_columns")) or sess.get("uploaded_csv_columns") or []
+    intent = parse_aggregate_intent(question, [str(c) for c in columns])
+    if intent is None:
+        return None
+    try:
+        handle = await db_credential_handle_for_user(user_id, customer_id)
+    except Exception:
+        handle = None
+    api_key = decrypt_secret(handle) if handle else None
+    if not api_key:
+        return None
+
+    async def _query(sql: str) -> Dict[str, Any]:
+        return await _run_mcp_db_query(customer_id, api_key, sql)
+
+    try:
+        result = await run_pushdown(_query, str(table), intent, sample.dialect)
+    except Exception as exc:
+        logger.warning("[db-pushdown] aggregate not run: %s", type(exc).__name__)
+        return None
+    if result is None:
+        return None
+    return render_pushdown_answer(result, str(table)), pushdown_output_table(result)
+
+
+def _drivers_inputs(sess: Dict[str, Any], datasets: int) -> Dict[str, Any]:
+    """The rows this thread holds, for the one drivers routing decision
+    (app/agents/drivers_route.answer_drivers_turn) the graph's first node
+    makes too: the fast path below and that node read the same inputs."""
+    return inputs_from_session(sess, total_rows=_session_total_rows(sess), datasets=datasets)
 
 
 def _build_metadata_answer(sess: Dict[str, Any], question: str) -> Optional[str]:
@@ -4557,26 +5283,6 @@ def _estimated_inmemory_bytes(sess: Dict[str, Any]) -> Tuple[int, float, str]:
     if file_bytes > 0:
         return int(file_bytes * expansion), 0.0, "expansion"
     return 0, 0.0, "none"
-
-def _build_execution_context(
-    fidelity: Optional[str],
-    sample_name: Optional[str],
-    rows_analyzed: Optional[int] = None,
-    total_rows: Optional[int] = None,
-) -> Dict[str, Any]:
-    return {
-        "mode": fidelity or FIDELITY_QUICK,
-        "mode_label": _FIDELITY_LABELS.get(fidelity or "", fidelity or "Quick Sample"),
-        "sample": sample_name,
-        # Frontend badge: "Analyzed 91,713 of 91,713 rows" / "Sample: 7,013 of 91,713"
-        "rows_analyzed": rows_analyzed,
-        "total_rows": total_rows,
-        "is_sampled": (
-            rows_analyzed is not None and total_rows is not None
-            and rows_analyzed < total_rows
-        ),
-    }
-
 
 def _human_size(num_bytes: int) -> str:
     size = float(max(int(num_bytes or 0), 0))
@@ -4844,11 +5550,152 @@ def _scheduled_task_completion_message(
         status, error = _run_status_from_final(final, task_type="training")
         if status == "failure":
             return TRAINING_FAILURE_MESSAGE
-    if task_metadata.get("task_type") in {"start_inference", "stop_inference"} and assistant_messages:
+    task_type = task_metadata.get("task_type") or "execute"
+    status, error = _run_status_from_final(final, task_type=task_type)
+    if status == "failure":
+        # A failed or empty run is never "complete" (celery_app decides, once).
+        return scheduled_failure_message(final, task_type, error)
+    if task_type in {"start_inference", "stop_inference"} and assistant_messages:
         latest = assistant_messages[-1].get("content")
         if latest:
             return latest
     return str(task_metadata.get("success_message") or "The scheduled task is complete.")
+
+
+def _scheduled_run_failed(final: Dict[str, Any], task_metadata: Dict[str, Any]) -> bool:
+    """A Celery SUCCESS whose final state is a failed or empty run.
+
+    A failed run now raises ScheduledRunFailed and lands in FAILURE; results
+    stored before that still read SUCCESS, and must not be sent as one.
+    """
+    if celery_results.is_summary(final):
+        # Stored as a summary: a failed run is FAILURE (ScheduledRunFailed).
+        return False
+    status, _ = _run_status_from_final(final, task_type=task_metadata.get("task_type") or "execute")
+    return status == "failure"
+
+
+_SCHEDULED_CANCELLED_TEXT = "This run was cancelled. No output was produced."
+
+
+def _scheduled_failure_text(task: Any, task_metadata: Dict[str, Any]) -> str:
+    """The plain message for a run Celery recorded as FAILURE."""
+    result = getattr(task, "result", None)
+    if type(result).__name__ == "ScheduledRunFailed":
+        if str(result):
+            return str(result)
+        # Loaded back from the durable store, which keeps the class only: the
+        # plain-words message is the run record's error.
+        run = celery_results.load_scheduled_run(getattr(task, "id", None)) or {}
+        if run.get("error"):
+            return str(run["error"])
+    if task_metadata.get("task_type") == "training":
+        return TRAINING_FAILURE_MESSAGE
+    return "The scheduled task failed."
+
+
+def _failed_run_details(task: Any, task_id: Optional[str], task_metadata: Dict[str, Any]) -> Dict[str, Any]:
+    """What a FAILED answer carries besides its message: the run truth
+    _record_run_finish wrote for this run and the output contract's reasons
+    (MAJ-030 / item 8a), from the Celery result when it still holds the final
+    state, else from the durable scheduled_runs row. The route and the run
+    record say the same thing; no rows are returned for a refused result."""
+    final = getattr(task, "result", None)
+    truth: Optional[Dict[str, Any]] = None
+    contract: Optional[Dict[str, Any]] = None
+    if isinstance(final, dict) and not celery_results.is_summary(final):
+        truth = _scheduled_task_run_truth(final, task_metadata)
+        contract = (final.get("execution_result") or {}).get("output_contract") if isinstance(final.get("execution_result"), dict) else None
+    else:
+        run = celery_results.load_scheduled_run(task_id) or {}
+        run_result = run.get("result") or {}
+        truth = run_result.get("run_truth") if isinstance(run_result.get("run_truth"), dict) else None
+        contract = run_result.get("output_contract") if isinstance(run_result.get("output_contract"), dict) else None
+    return {
+        "run_truth": truth,
+        "result": {"output_file_data": None, "output_json": None, "output_contract": contract,
+                   "run_truth": truth},
+    }
+
+
+_EXEC_OK = ("success", "succeeded", "completed", "done")
+
+
+async def _finished_run_view(final: Any, execution_id: Optional[str], task_metadata: Dict[str, Any]) -> Dict[str, Any]:
+    """What a finished (SUCCESS) run returns to the UI.
+
+    A result stored as a summary (app/core/celery_results.py) holds no
+    messages and no inline output; the run's reply, output table, logs and run
+    truth come from its durable scheduled_runs row. A result stored before summaries (the
+    full state) is read as it always was.
+    """
+    chat_only = _scheduled_task_has_chat_result_only(task_metadata)
+    task_type = task_metadata.get("task_type")
+    if not celery_results.is_summary(final):
+        final = dict(final) if isinstance(final, dict) else {}
+        final["messages"] = convert_message_dicts_to_objects(final.get("messages", []))
+        assistant_messages = _assistant_messages_from_state(final)
+        output_file_data, output_json = get_output_from_state(final)
+        er = final.get("execution_result") or {}
+        if chat_only or (str(er.get("status", "")).lower() not in _EXEC_OK and not final.get("output_file_data")):
+            output_file_data = output_json = None
+        run_status, error = (_run_status_from_final(final, task_type="training")
+                             if task_type == "training" else (None, None))
+        return {
+            "final": final,
+            "assistant_messages": assistant_messages,
+            "output_file_data": output_file_data,
+            "output_json": output_json,
+            "completion_message": _scheduled_task_completion_message(final, assistant_messages, task_metadata),
+            "run_truth": _scheduled_task_run_truth(final, task_metadata),
+            "output_contract": er.get("output_contract"),
+            "logs": _logs_from_final(final),
+            "ray_job": _ray_job_from_final(final),
+            "run_status": run_status,
+            "error": error,
+        }
+    run = await asyncio.to_thread(celery_results.load_scheduled_run, execution_id) or {}
+    run_result = run.get("result") or {}
+    assistant_messages = celery_results.assistant_messages_from_logs(run_result.get("logs"))
+    output_json = run_result.get("output_json") if isinstance(run_result.get("output_json"), list) else None
+    output_file_data = celery_results.output_file_data_from_rows(output_json, final.get("output_location"))
+    if chat_only:
+        output_file_data = output_json = None
+    run_status = str(run.get("status") or "").lower() or None
+    if task_type == "training" and run_status == "failure":
+        completion_message = run_result.get("message") or TRAINING_FAILURE_MESSAGE
+    elif task_type in {"start_inference", "stop_inference"} and assistant_messages:
+        completion_message = assistant_messages[-1]["content"]
+    else:
+        completion_message = str(task_metadata.get("success_message") or "The scheduled task is complete.")
+    return {
+        # The summary carries what the execution context reads (fidelity, sample).
+        "final": dict(final),
+        "assistant_messages": assistant_messages,
+        "output_file_data": output_file_data,
+        "output_json": output_json,
+        "completion_message": completion_message,
+        "run_truth": run_result.get("run_truth"),
+        "output_contract": run_result.get("output_contract"),
+        "logs": run_result.get("logs"),
+        "ray_job": run_result.get("ray_job"),
+        "run_status": run_status if task_type == "training" else None,
+        "error": run.get("error") if task_type == "training" else None,
+    }
+
+
+def _run_finished_state(execution_id: Optional[str]) -> Optional[str]:
+    """SUCCESS/FAILURE when the run's durable record says it is over, else None.
+
+    For a Celery state that is not final: a result that is no longer stored
+    reads as PENDING, which must not be shown as "running".
+    """
+    return celery_results.finished_run_state(celery_results.load_scheduled_run(execution_id))
+
+
+#: The SSE checks the durable run record every this many polls while a task
+#: is not final, so a run that ended without a stored result ends the stream.
+_SSE_DURABLE_CHECK_EVERY = 15
 
 
 def _scheduled_task_run_truth(final: Dict[str, Any], task_metadata: Dict[str, Any]) -> Dict[str, Any]:
@@ -5409,6 +6256,9 @@ async def send_message(
 
     # PRIMARY dataset for actual code execution
     primary_dsid, primary_sid, primary_sess = dataset_sessions[0]
+    # The session as this turn read it: what a merge compares against to
+    # carry the turn's deletions into the stored copy.
+    _primary_baseline = dict(primary_sess)
     active_local_source = (
         primary_sess.get("active_data_source_location_local")
         or primary_sess.get("active_data_source_location")
@@ -5491,11 +6341,11 @@ async def send_message(
             )
             lc_seed = THREAD_META[thread_id].get("lc_msgs", [])
             lc_seed.append(HumanMessage(body.content))
-            lc_seed.append(AIMessage(content=msg))
+            lc_seed.append(_said(msg))
             THREAD_META[thread_id]["lc_msgs"] = _limit_messages(_compact_messages(lc_seed), MAX_CONTEXT_TURNS)
             await persist_thread_history(thread_id)
             return ChatResponse(
-                messages=[{"role": "user", "content": body.content}, {"role": "assistant", "content": msg}],
+                messages=[{"role": "user", "content": body.content}, _assistant_entry(msg)],
                 datasets=[{"dataset_id": x[0], "filename": x[2].get("filename"), "alias": x[2].get("alias")} for x in dataset_sessions],
                 active_dataset_ids=[dsid for dsid, _, _ in dataset_sessions],
                 analysis_fidelity=_current_fidelity,
@@ -5538,6 +6388,71 @@ async def send_message(
     _mode_switch_message = _is_mode_switch_message(body.content)
     _sample_switch_message = bool(_text_requested_sample_name)
 
+    # ── The team, from the chat (app/api/chat_swarm.py) ──
+    # "Swarm this", "send your team", "clone yourself": start a coordinated
+    # mission on this thread's dataset through the same service the console
+    # uses, capped by the caller's edition, and tell the story back from the
+    # mission's own records. The live page is Professional and Enterprise; the
+    # chat summary is every edition's.
+    if chat_swarm.wants_swarm(body.content, body.metadata):
+        _swarm_edition = await _caller_edition(request)
+        _swarm_prompt: Optional[Dict[str, Any]] = None
+        _swarm_text: Optional[str] = None
+        _swarm_label = primary_sess.get("alias") or primary_sess.get("filename") or None
+        _pending_mid = chat_swarm.pending_mission(primary_sess)
+        if _pending_mid:
+            _mission = await chat_swarm.records_for(user_id, _pending_mid)
+            if _mission is None:
+                chat_swarm.remember(primary_sess, _pending_mid, told=True)
+            else:
+                _swarm_prompt = chat_swarm.summary_prompt(
+                    _mission["records"], edition=_swarm_edition, mission_id=_pending_mid,
+                    finished=_mission["finished"], dataset_label=_swarm_label)
+                chat_swarm.remember(primary_sess, _pending_mid, told=_mission["finished"])
+        if _swarm_prompt is None and chat_swarm.is_status_ask(body.content):
+            # Asked after the team with nothing pending: say so, start nothing.
+            _swarm_text = chat_swarm.NOTHING_PENDING
+        elif _swarm_prompt is None:
+            _swarm_path = next((p for p in (
+                primary_sess.get("work_local_input"),
+                primary_sess.get("active_data_source_location_local"),
+                primary_sess.get("sample_local_input"),
+            ) if p and Path(str(p)).is_file()), None)
+            if not _swarm_path:
+                _swarm_text = ("I'd love to send the team, but I can't find a local working copy of this "
+                               "dataset to shard. Upload it again and ask me once more.")
+            else:
+                _goal = chat_swarm.mission_goal(body.content)
+                try:
+                    _mission = await chat_swarm.run_mission(
+                        user_id, dataset_path=str(_swarm_path), goal=_goal, edition=_swarm_edition)
+                    _swarm_prompt = chat_swarm.summary_prompt(
+                        _mission["records"], edition=_swarm_edition, mission_id=_mission["mission_id"],
+                        finished=_mission["finished"], goal=_goal, dataset_label=_swarm_label)
+                    chat_swarm.remember(primary_sess, _mission["mission_id"], told=_mission["finished"])
+                except Exception as exc:  # noqa: BLE001 - the service refused, or the run died
+                    logger.warning("[chat-swarm] mission did not start: %s", type(exc).__name__)
+                    _swarm_text = ("I tried to send the team out, but the mission could not start on this "
+                                   "dataset. Ask me for a plain analysis and I'll do it myself.")
+        if _swarm_prompt is not None:
+            _swarm_text = chat_swarm.summary_text(_swarm_prompt)
+        await update_session(primary_sid, lambda cur: cur.update(
+            {chat_swarm.SESSION_KEY: primary_sess.get(chat_swarm.SESSION_KEY)}))
+        lc_seed = THREAD_META[thread_id].get("lc_msgs", [])
+        lc_seed.append(HumanMessage(body.content))
+        lc_seed.append(_said(_swarm_text or ""))
+        THREAD_META[thread_id]["lc_msgs"] = _limit_messages(_compact_messages(lc_seed), MAX_CONTEXT_TURNS)
+        await persist_thread_history(thread_id)
+        return ChatResponse(
+            messages=[{"role": "user", "content": body.content}, _assistant_entry(_swarm_text or "")],
+            datasets=[{"dataset_id": x[0], "filename": x[2].get("filename"), "alias": x[2].get("alias")} for x in dataset_sessions],
+            active_dataset_ids=[dsid for dsid, _, _ in dataset_sessions],
+            analysis_fidelity=_current_fidelity,
+            selected_sample_name=primary_sess.get("selected_sample_name"),
+            execution_context=_build_execution_context(_current_fidelity, primary_sess.get("selected_sample_name")),
+            assistant_prompts=[_swarm_prompt] if _swarm_prompt is not None else None,
+        )
+
     # Ask once before triggering heavy cluster work for large datasets.
     # Under byte routing the prompt has no branch left to serve: below cap
     # "entire" is the only sensible option, above cap we defer — so skip it.
@@ -5550,11 +6465,11 @@ async def send_message(
         prompt_msg = _build_fidelity_prompt(_file_size_bytes)
         lc_seed = THREAD_META[thread_id].get("lc_msgs", [])
         lc_seed.append(HumanMessage(body.content))
-        lc_seed.append(AIMessage(content=prompt_msg))
+        lc_seed.append(_said(prompt_msg))
         THREAD_META[thread_id]["lc_msgs"] = _limit_messages(_compact_messages(lc_seed), MAX_CONTEXT_TURNS)
         await persist_thread_history(thread_id)
         return ChatResponse(
-            messages=[{"role": "user", "content": body.content}, {"role": "assistant", "content": prompt_msg}],
+            messages=[{"role": "user", "content": body.content}, _assistant_entry(prompt_msg)],
             datasets=[{"dataset_id": x[0], "filename": x[2].get("filename"), "alias": x[2].get("alias")} for x in dataset_sessions],
             active_dataset_ids=[dsid for dsid, _, _ in dataset_sessions],
             analysis_fidelity=_current_fidelity,
@@ -5611,11 +6526,11 @@ async def send_message(
         if _early_msg is not None:
             lc_seed = THREAD_META[thread_id].get("lc_msgs", [])
             lc_seed.append(HumanMessage(body.content))
-            lc_seed.append(AIMessage(content=_early_msg))
+            lc_seed.append(_said(_early_msg))
             THREAD_META[thread_id]["lc_msgs"] = _limit_messages(_compact_messages(lc_seed), MAX_CONTEXT_TURNS)
             await persist_thread_history(thread_id)
             return ChatResponse(
-                messages=[{"role": "user", "content": body.content}, {"role": "assistant", "content": _early_msg}],
+                messages=[{"role": "user", "content": body.content}, _assistant_entry(_early_msg)],
                 datasets=[{"dataset_id": x[0], "filename": x[2].get("filename"), "alias": x[2].get("alias")} for x in dataset_sessions],
                 active_dataset_ids=[dsid for dsid, _, _ in dataset_sessions],
                 analysis_fidelity=_current_fidelity,
@@ -5629,11 +6544,11 @@ async def send_message(
         await update_session(primary_sid, lambda cur: cur.update(primary_sess))
         lc_seed = THREAD_META[thread_id].get("lc_msgs", [])
         lc_seed.append(HumanMessage(body.content))
-        lc_seed.append(AIMessage(content=msg))
+        lc_seed.append(_said(msg))
         THREAD_META[thread_id]["lc_msgs"] = _limit_messages(_compact_messages(lc_seed), MAX_CONTEXT_TURNS)
         await persist_thread_history(thread_id)
         return ChatResponse(
-            messages=[{"role": "assistant", "content": msg}],
+            messages=[_assistant_entry(msg)],
             datasets=[{"dataset_id": x[0], "filename": x[2].get("filename"), "alias": x[2].get("alias")} for x in dataset_sessions],
             active_dataset_ids=[dsid for dsid, _, _ in dataset_sessions],
             analysis_fidelity=_current_fidelity,
@@ -5712,11 +6627,11 @@ async def send_message(
         msg = _planner_build_mode_switch_confirmation(FIDELITY_PORTFOLIO, _file_size_bytes)
         lc_seed = THREAD_META[thread_id].get("lc_msgs", [])
         lc_seed.append(HumanMessage(body.content))
-        lc_seed.append(AIMessage(content=msg))
+        lc_seed.append(_said(msg))
         THREAD_META[thread_id]["lc_msgs"] = _limit_messages(_compact_messages(lc_seed), MAX_CONTEXT_TURNS)
         await persist_thread_history(thread_id)
         return ChatResponse(
-            messages=[{"role": "user", "content": body.content}, {"role": "assistant", "content": msg}],
+            messages=[{"role": "user", "content": body.content}, _assistant_entry(msg)],
             datasets=[{"dataset_id": x[0], "filename": x[2].get("filename"), "alias": x[2].get("alias")} for x in dataset_sessions],
             active_dataset_ids=[dsid for dsid, _, _ in dataset_sessions],
             analysis_fidelity=_current_fidelity,
@@ -5731,11 +6646,11 @@ async def send_message(
         )
         lc_seed = THREAD_META[thread_id].get("lc_msgs", [])
         lc_seed.append(HumanMessage(body.content))
-        lc_seed.append(AIMessage(content=msg))
+        lc_seed.append(_said(msg))
         THREAD_META[thread_id]["lc_msgs"] = _limit_messages(_compact_messages(lc_seed), MAX_CONTEXT_TURNS)
         await persist_thread_history(thread_id)
         return ChatResponse(
-            messages=[{"role": "user", "content": body.content}, {"role": "assistant", "content": msg}],
+            messages=[{"role": "user", "content": body.content}, _assistant_entry(msg)],
             datasets=[{"dataset_id": x[0], "filename": x[2].get("filename"), "alias": x[2].get("alias")} for x in dataset_sessions],
             active_dataset_ids=[dsid for dsid, _, _ in dataset_sessions],
             analysis_fidelity=_current_fidelity,
@@ -5747,11 +6662,11 @@ async def send_message(
         msg = _planner_build_mode_switch_confirmation(_current_fidelity, _file_size_bytes)
         lc_seed = THREAD_META[thread_id].get("lc_msgs", [])
         lc_seed.append(HumanMessage(body.content))
-        lc_seed.append(AIMessage(content=msg))
+        lc_seed.append(_said(msg))
         THREAD_META[thread_id]["lc_msgs"] = _limit_messages(_compact_messages(lc_seed), MAX_CONTEXT_TURNS)
         await persist_thread_history(thread_id)
         return ChatResponse(
-            messages=[{"role": "user", "content": body.content}, {"role": "assistant", "content": msg}],
+            messages=[{"role": "user", "content": body.content}, _assistant_entry(msg)],
             datasets=[{"dataset_id": x[0], "filename": x[2].get("filename"), "alias": x[2].get("alias")} for x in dataset_sessions],
             active_dataset_ids=[dsid for dsid, _, _ in dataset_sessions],
             analysis_fidelity=_current_fidelity,
@@ -5764,8 +6679,8 @@ async def send_message(
     if _RESET_DATASET_RE.search(body.content or ""):
         if _restore_original_dataset_session(primary_sess):
             def _merge_restored(cur):
-                cur.update(primary_sess)
-                cur.pop("original_dataset_snapshot", None)
+                _merge_session_with_drops(cur, primary_sess, _primary_baseline,
+                                          drop=("original_dataset_snapshot",))
 
             await update_session(primary_sid, _merge_restored)
             msg = (
@@ -5776,11 +6691,11 @@ async def send_message(
             msg = "You're already working with the original uploaded dataset."
         lc_seed = THREAD_META[thread_id].get("lc_msgs", [])
         lc_seed.append(HumanMessage(body.content))
-        lc_seed.append(AIMessage(content=msg))
+        lc_seed.append(_said(msg))
         THREAD_META[thread_id]["lc_msgs"] = _limit_messages(_compact_messages(lc_seed), MAX_CONTEXT_TURNS)
         await persist_thread_history(thread_id)
         return ChatResponse(
-            messages=[{"role": "user", "content": body.content}, {"role": "assistant", "content": msg}],
+            messages=[{"role": "user", "content": body.content}, _assistant_entry(msg)],
             datasets=[{"dataset_id": x[0], "filename": x[2].get("filename"), "alias": x[2].get("alias")} for x in dataset_sessions],
             active_dataset_ids=[dsid for dsid, _, _ in dataset_sessions],
             analysis_fidelity=_current_fidelity,
@@ -5803,12 +6718,69 @@ async def send_message(
         if _meta_msg:
             lc_seed = THREAD_META[thread_id].get("lc_msgs", [])
             lc_seed.append(HumanMessage(body.content))
-            lc_seed.append(AIMessage(content=_meta_msg))
+            lc_seed.append(_said(_meta_msg))
             THREAD_META[thread_id]["lc_msgs"] = _limit_messages(_compact_messages(lc_seed), MAX_CONTEXT_TURNS)
             await persist_thread_history(thread_id)
             return ChatResponse(
                 messages=[{"role": "user", "content": body.content},
-                          {"role": "assistant", "content": _meta_msg}],
+                          _assistant_entry(_meta_msg)],
+                datasets=[{"dataset_id": x[0], "filename": x[2].get("filename"), "alias": x[2].get("alias")} for x in dataset_sessions],
+                active_dataset_ids=[dsid for dsid, _, _ in dataset_sessions],
+                analysis_fidelity=_current_fidelity,
+                selected_sample_name=primary_sess.get("selected_sample_name"),
+                execution_context=_build_execution_context(_current_fidelity, primary_sess.get("selected_sample_name")),
+            )
+
+    # ── What predicts X: the shared driver ranking, said from a template ──
+    #    (app/agents/drivers_route.py). Upload and DB-table threads alike; no
+    #    coder, no LLM, so every figure shown is the ranking's own. A question
+    #    that asks for a model ("train a random forest ...") falls through.
+    #    The decision is the graph's first node's (answer_drivers_turn); this
+    #    only answers before the graph state is built.
+    if is_drivers_question(body.content):
+        _drivers = await asyncio.to_thread(
+            answer_drivers_turn, _drivers_inputs(primary_sess, len(dataset_sessions)), body.content)
+        if _drivers:
+            _drv_msg, _drv_table = _drivers
+            lc_seed = THREAD_META[thread_id].get("lc_msgs", [])
+            lc_seed.append(HumanMessage(body.content))
+            lc_seed.append(_said(_drv_msg))
+            THREAD_META[thread_id]["lc_msgs"] = _limit_messages(_compact_messages(lc_seed), MAX_CONTEXT_TURNS)
+            await persist_thread_history(thread_id)
+            return ChatResponse(
+                messages=[{"role": "user", "content": body.content},
+                          _assistant_entry(_drv_msg)],
+                output_tables=[_drv_table],
+                output_json=_drv_table["rows"],
+                datasets=[{"dataset_id": x[0], "filename": x[2].get("filename"), "alias": x[2].get("alias")} for x in dataset_sessions],
+                active_dataset_ids=[dsid for dsid, _, _ in dataset_sessions],
+                analysis_fidelity=_current_fidelity,
+                selected_sample_name=primary_sess.get("selected_sample_name"),
+                execution_context=_build_execution_context(_current_fidelity, primary_sess.get("selected_sample_name")),
+            )
+
+    # ── Database aggregate pushdown: a rate / mean / count by one group column,
+    #    asked of a table analysed from a database, is computed by the database
+    #    over every row instead of estimated from the analysis sample.
+    if (
+        len(dataset_sessions) == 1
+        and primary_sess.get("db_pushdown_table")
+        and not _truthy_session_value(primary_sess.get("data_source_was_modified"))
+        and not (_maybe_json_load(primary_sess.get("pending_clarification")) or primary_sess.get("pending_clarification"))
+    ):
+        _pushdown = await _db_pushdown_answer(user_id, primary_sess, body.content)
+        if _pushdown:
+            _push_msg, _push_table = _pushdown
+            lc_seed = THREAD_META[thread_id].get("lc_msgs", [])
+            lc_seed.append(HumanMessage(body.content))
+            lc_seed.append(_said(_push_msg))
+            THREAD_META[thread_id]["lc_msgs"] = _limit_messages(_compact_messages(lc_seed), MAX_CONTEXT_TURNS)
+            await persist_thread_history(thread_id)
+            return ChatResponse(
+                messages=[{"role": "user", "content": body.content},
+                          _assistant_entry(_push_msg)],
+                output_tables=[_push_table],
+                output_json=_push_table["rows"],
                 datasets=[{"dataset_id": x[0], "filename": x[2].get("filename"), "alias": x[2].get("alias")} for x in dataset_sessions],
                 active_dataset_ids=[dsid for dsid, _, _ in dataset_sessions],
                 analysis_fidelity=_current_fidelity,
@@ -5962,12 +6934,12 @@ async def send_message(
 
         # keep thread history consistent
         lc_msgs.append(HumanMessage(body.content))
-        lc_msgs.append(AIMessage(content=msg))
+        lc_msgs.append(_said(msg))
         tmeta["lc_msgs"] = _limit_messages(_compact_messages(lc_msgs), MAX_CONTEXT_TURNS)
         await persist_thread_history(thread_id)
 
         return ChatResponse(
-            messages=[{"role": "user", "content": body.content}, {"role": "assistant", "content": msg}],
+            messages=[{"role": "user", "content": body.content}, _assistant_entry(msg)],
             datasets=datasets_dropdown,
             active_dataset_ids=[dsid for dsid, _, _ in dataset_sessions],
             visualization_configs=visualization_configs,
@@ -5989,12 +6961,12 @@ async def send_message(
 
         # keep thread history consistent
         lc_msgs.append(HumanMessage(body.content))
-        lc_msgs.append(AIMessage(content=msg))
+        lc_msgs.append(_said(msg))
         tmeta["lc_msgs"] = _limit_messages(_compact_messages(lc_msgs), MAX_CONTEXT_TURNS)
         await persist_thread_history(thread_id)
 
         return ChatResponse(
-            messages=[{"role": "user", "content": body.content}, {"role": "assistant", "content": msg}],
+            messages=[{"role": "user", "content": body.content}, _assistant_entry(msg)],
             datasets=datasets_dropdown,
             active_dataset_ids=[dsid for dsid, _, _ in dataset_sessions],
             visualization_configs=visualization_configs,
@@ -6019,6 +6991,10 @@ async def send_message(
         f"Resolved analysis source: {_effective_analysis_source_label}; "
         f"Dataset size bytes: {int(primary_sess.get('file_size_bytes') or 0)}"
     )
+    _ctx_db_sample = DbSample.from_session(
+        _maybe_json_load(primary_sess.get("db_sample")) or primary_sess.get("db_sample"))
+    if _ctx_db_sample:
+        augmented_parts[-1] += "; " + sample_context_line(_ctx_db_sample)
 
     if len(multi_dataset_state) > 1:
         augmented_parts.extend(
@@ -6149,25 +7125,32 @@ async def send_message(
                     _active_db_customer_id = _db_loc_match.group(1)
                     _active_db_source_table = primary_sess.get("source_table") or None
                     break
-    # Fallback: the db:// sample session is orphaned from the chat thread's dataset
-    # group, so a "blind" transfer often lands on a non-DB (e.g. CSV) session. When the
-    # active session yields NO source (no DB customer_id AND no cloud connection_id),
-    # use the user's most-recent active database so D2D/C2D still find the DB they were
-    # analyzing. Gated on the absence of a cloud connection so cloud sources are never
-    # overridden.
-    if not _active_db_customer_id and not (primary_sess.get("connection_id") or "").strip():
-        try:
-            _fallback = await find_active_db_customer_for_user(user_id)
-        except Exception as _e:
-            _fallback = None
-            logger.warning("DTA source bridge: active-DB fallback failed: %s", _e)
-        if _fallback:
-            _active_db_customer_id, _active_db_source_table = _fallback
-            logger.info(
-                "DTA source bridge: active session had no source; fell back to the "
-                "user's most-recent active database customer_id=%r table=%r",
-                _active_db_customer_id, _active_db_source_table,
-            )
+    # No fallback to "the user's most-recent active database" from another
+    # session: a transfer's source is what THIS thread analysed or what the user
+    # names. That scan picked a database the user was not looking at, a silent
+    # default on a write path (the same class as the J1 ghost copy).
+    # The onboarding API's credential routes answer only the customer's own
+    # api_key, so the planner carries it sealed (ciphertext under
+    # DB_ENCRYPTION_KEY, the same blob the DB session stores) and opens it in
+    # process when it calls. Nothing in state is a plaintext credential.
+    # Every database the CALLER connected gets a handle, so a transfer can name
+    # a destination (or a source) other than the active one; the map is built
+    # from the caller's own saved connections (/api/connections, what the UI
+    # saves) and connect sessions only. ``user_id`` is the requester,
+    # not ``owner_user_id``: a collaborator on a shared analysis gets no handle
+    # for the owner's databases, the owner's session blob included.
+    _db_credential_handles: Dict[str, Any] = {}
+    try:
+        _db_credential_handles = await db_credential_handles_for_user(user_id) or {}
+    except Exception as _e:
+        logger.warning("DTA source bridge: credential handle lookup failed: %s", type(_e).__name__)
+    _active_db_credential_handle: Optional[Dict[str, Any]] = None
+    if _active_db_customer_id:
+        if (_sess_customer == _active_db_customer_id and primary_sess.get("api_key_enc")
+                and primary_sess.get("user_id") == user_id):
+            _active_db_credential_handle = primary_sess.get("api_key_enc")
+        else:
+            _active_db_credential_handle = _db_credential_handles.get(_active_db_customer_id)
     _tmark("dta_bridge")
     logger.info(
         "DTA source bridge: input_data_type=%s data_source_location=%r customer_id=%r "
@@ -6197,15 +7180,21 @@ async def send_message(
     # ----------------------------------------------------
     state_in: Dict[str, Any] = {
         "user_id": user_id,
+        # session_id and thread_id stay distinct (avaloka_agent loads Redis
+        # context by thread id), plus the one-shot connection_event left by
+        # upload / register-existing-storage / database/connect.
+        **build_swarm_state(
+            thread_id=thread_id, session_id=sid, session=primary_sess
+        ),
         "user_plan": _user_plan,
-        "session_id": sid,
-        "thread_id": thread_id,
         "messages": lc_msgs,
         "sample_data": _resolved_rows or _fallback_preview or [],
         "uploaded_csv_columns": _maybe_json_load(primary_sess.get("uploaded_csv_columns"))
         or primary_sess.get("uploaded_csv_columns"),
         "uploaded_csv_preview": _resolved_rows or _fallback_preview or [],
         "schema": schema_for_state,
+        "complex_structure": _maybe_json_load(primary_sess.get("complex_structure"))
+        or primary_sess.get("complex_structure"),
         "ddl_schema": primary_sess.get("ddl_schema"),
         "sample_data_location": sample_local_input and _posix(sample_local_input),
         "full_data_location": work_local_input and _posix(work_local_input),
@@ -6241,6 +7230,10 @@ async def send_message(
         "connection_id": primary_sess.get("connection_id"),
         "active_db_customer_id": _active_db_customer_id,
         "active_db_source_table": _active_db_source_table,
+        "active_db_credential_handle": _active_db_credential_handle,
+        # Set on every turn (empty when none) so a checkpointed thread never
+        # keeps a handle for a database the caller has since disconnected.
+        "db_credential_handles": _db_credential_handles,
         "dataset_id": primary_dsid,
         "file_size_bytes": primary_sess.get("file_size_bytes", 0),
         "dataset_size_bytes": primary_sess.get("file_size_bytes", 0),
@@ -6275,6 +7268,8 @@ async def send_message(
         "execution_stderr": None,
         "execution_error": None,
         "fresh_output_produced": None,
+        # The replan loop's record is this turn's only (app/agents/replan.py).
+        **_replan_fresh_state(),
         "output_file_data": None,
         "output_json": None,
         "output_tables": None,
@@ -6358,6 +7353,8 @@ async def send_message(
         existing_tasks = []
 
     state_in["task_list"] = existing_tasks
+    # The graph's first node decides "what predicts X" from these same inputs.
+    state_in[DRIVERS_STATE_KEY] = _drivers_inputs(primary_sess, len(dataset_sessions))
 
     # Byte-aware routing signals: decided once (pre-planner, above); downstream
     # nodes must read these from state instead of recomputing.
@@ -6747,6 +7744,15 @@ async def send_message(
                     primary_sess[k] = _jsonify(final[k])
                 changed = True
 
+        # The agent clears connection_event once it has onboarded the user.
+        # Persist that, or every later turn re-reads the event from Redis and
+        # onboards again.
+        _consumed_event = primary_sess.get("connection_event")
+        changed = consume_connection_event(primary_sess, final) or changed
+        _drop_consumed_event = (
+            _consumed_event is not None and "connection_event" not in primary_sess
+        )
+
         task_info = final.get("task_info") or {}
         task_id = task_info.get("task_id")
         # True when this turn was a byte-gated deferral (scheduled, not executed).
@@ -6769,7 +7775,21 @@ async def send_message(
             changed = True
 
         if changed:
-            await update_session(primary_sid, lambda cur: cur.update(primary_sess))
+            def _merge_primary(cur: Dict[str, Any]) -> None:
+                # Deletions too: a clarification left in the stored session
+                # read every later question's first word as a table name, and
+                # cleared training state came back on the next turn.
+                _merge_session_with_drops(
+                    cur, primary_sess, _primary_baseline,
+                    drop=training_state_keys if final.get("clear_training_state") else (),
+                )
+                # update() never deletes, so a consumed event would survive the
+                # merge. Drop it only if it is still the one this turn
+                # consumed, so an event written meanwhile is kept.
+                if _drop_consumed_event and cur.get("connection_event") == _consumed_event:
+                    cur.pop("connection_event", None)
+
+            await update_session(primary_sid, _merge_primary)
 
         # ----------------------------------------------------
         # 16) Update artifacts: coding agent
@@ -6782,6 +7802,16 @@ async def send_message(
         # ----------------------------------------------------
         final_all = final.get("messages", [])
         ai_msg = next((m for m in reversed(final_all) if isinstance(m, AIMessage)), None)
+        # The claim verifier's verdict is enforced here, where the reply is
+        # assembled: a claim it found contradicted or overreaching is withheld
+        # (and the reply says so), in the response and in the thread history.
+        # Each sentence keeps the kind the node that wrote it recorded; the
+        # verifier's notes are plain; every commentary sentence is marked in
+        # the text the response and the history carry (reply_segments).
+        if ai_msg is not None and isinstance(ai_msg.content, str):
+            _written = reply_segments.of_message(ai_msg)
+            ai_msg = reply_segments.as_message(presentable_segments(
+                reply_segments.text_of(_written), final.get("verification_report"), _written))
 
         if not ai_msg and final.get("ready_to_train") and not final.get("training_completed"):
             training_task = final.get("training_task")
@@ -6867,7 +7897,7 @@ Ready to proceed with model training!"""
         output_from_markdown = False
 
         if output_json is None and ai_msg and isinstance(ai_msg.content, str):
-            blocks = re.findall(r"(?:^\|.*\|\s*\n?)+", ai_msg.content, flags=re.MULTILINE)
+            blocks = re.findall(r"(?:^\|.*\|\s*\n?)+", reply_segments.unmarked(ai_msg), flags=re.MULTILINE)
             if blocks:
                 lines = [ln.strip() for ln in blocks[0].strip().splitlines()]
                 if len(lines) >= 3:
@@ -6985,7 +8015,7 @@ Ready to proceed with model training!"""
 
         execution_status = str(((final.get("execution_result") or {}).get("status")) or "").lower()
         produced_fresh_output = (
-            execution_status in ("success", "succeeded", "dryrun")
+            execution_status in ("success", "succeeded", "dryrun", "partial")
             or _is_rayjob_response
             or output_from_markdown
         )
@@ -7055,7 +8085,10 @@ Ready to proceed with model training!"""
                 _job_card = _build_deferred_job_card(
                     task_id=str(task_id),
                     dataset_name=str(primary_sess.get("alias") or primary_sess.get("filename") or primary_dsid),
-                    interpreted_question=str(final.get("plan") or body.content),
+                    # The user's own words, as the in-flight card (above) shows
+                    # them: final["plan"] is the planner model's prose, and the
+                    # card is plain.
+                    interpreted_question=str(body.content),
                     eta_hint=_estimated_runtime_hint(_file_size_bytes),
                 )
             else:
@@ -7065,7 +8098,7 @@ Ready to proceed with model training!"""
                     f"({_sched_err}). No partial or sampled results are shown for "
                     "datasets above the in-memory analysis budget — please retry."
                 )
-            ai_msg = AIMessage(content=_job_card)
+            ai_msg = _said(_job_card)
             output_json = None
             output_file_data = None
             # Thread history was already persisted (section 17) with the graph's
@@ -7074,9 +8107,9 @@ Ready to proceed with model training!"""
             try:
                 _lc = THREAD_META[thread_id].get("lc_msgs", [])
                 if _lc and isinstance(_lc[-1], AIMessage):
-                    _lc[-1] = AIMessage(content=_job_card)
+                    _lc[-1] = _said(_job_card)
                 else:
-                    _lc.append(AIMessage(content=_job_card))
+                    _lc.append(_said(_job_card))
                 THREAD_META[thread_id]["lc_msgs"] = _lc
                 await persist_thread_history(thread_id)
             except Exception as exc:
@@ -7180,9 +8213,12 @@ Ready to proceed with model training!"""
                     primary_sess["training_plan_reply_action"] = "none"
 
                     def _merge_clearing_training(cur):
-                        cur.update(primary_sess)
-                        for k in training_state_keys:
-                            cur.pop(k, None)
+                        # Also drops active_data_source_location_cloud, popped
+                        # above; it used to survive and outrank the new local
+                        # source. enable_training / training_plan_reply_action
+                        # are set in primary_sess, so they are kept, not popped.
+                        _merge_session_with_drops(cur, primary_sess, _primary_baseline,
+                                                  drop=training_state_keys)
 
                     await update_session(primary_sid, _merge_clearing_training)
                     logger.info(
@@ -7225,7 +8261,13 @@ Ready to proceed with model training!"""
                 or "Training failed."
             )
             if not ai_msg:
-                ai_msg = AIMessage(content=f"Model training failed: {_err_text}")
+                # The raw error is for the log; the user gets the scheduled
+                # path's wording (failure_diagnostics).
+                logger.warning("[chat] model training failed: %s", _err_text)
+                _failure = training_result.get("failure")
+                ai_msg = _said(format_training_failure(
+                    _failure if isinstance(_failure, dict) else build_training_failure(_err_text)
+                ))
                 lc_msgs.append(ai_msg)
                 THREAD_META[thread_id]["lc_msgs"] = _limit_messages(_compact_messages(lc_msgs), MAX_CONTEXT_TURNS)
                 await persist_thread_history(thread_id)
@@ -7254,7 +8296,15 @@ Ready to proceed with model training!"""
             is_large_dataset=_is_large_dataset,
             entire_on_head=_entire_on_head,
         )
+        # A database session knows exactly what its rows are: the whole table,
+        # or a random sample of N of M rows. That record decides, not the file
+        # heuristics above (which never fired for a DB sample: no row total).
+        _db_sample = DbSample.from_session(
+            _maybe_json_load(primary_sess.get("db_sample")) or primary_sess.get("db_sample"))
+        if _db_sample is not None:
+            _ran_on_partial_sample = produced_fresh_output and _db_sample.is_partial
         _assistant_text = ai_msg.content if ai_msg else None
+        _assistant_segments = reply_segments.of_message(ai_msg) if ai_msg else None
         _structured = bool(final.get("structured_action_plan"))
         _multi_status = final.get("multi_action_status") if _structured else None
         _multi_actions = (final.get("multi_action_actions") or []) if _structured else []
@@ -7279,7 +8329,11 @@ Ready to proceed with model training!"""
                     "Please check the source values and column types; data cleansing or clarification may be needed."
                 )
             else:
-                _assistant_text = _completed_text + "All requested metrics are complete. The results are in the tables below."
+                # Code checked that every planned metric was calculated; whether the
+                # plan covers the request was the model reviewer's call, not claimed.
+                _assistant_text = _completed_text + (
+                    f"All {len(_multi_actions)} metrics in the plan were calculated. "
+                    "The results are in the tables below.")
             if _multi_notes:
                 _assistant_text += " Data preparation: " + " ".join(_multi_notes)
         elif _structured:
@@ -7289,15 +8343,21 @@ Ready to proceed with model training!"""
         _ray_fallback_note = ((final.get("execution_result") or {}).get("ray_fallback") or {}).get("note")
         if _ray_fallback_note and isinstance(_assistant_text, str) and _ray_fallback_note.strip() not in _assistant_text:
             _assistant_text = _assistant_text.rstrip() + _ray_fallback_note
+        if _structured:
+            # Written here from the action records: plain.
+            _assistant_segments = reply_segments.plain(_assistant_text)
         if _ran_on_partial_sample and isinstance(_assistant_text, str) and _assistant_text.strip():
-            _assistant_text = _assistant_text.rstrip() + _sample_fidelity_note(
-                _effective_fidelity, _resolved_rows, primary_sess.get("selected_sample_name"),
-                total_rows=_total_rows,
-            )
+            _assistant_segments = reply_segments.join(
+                reply_segments.rstrip(_assistant_segments or reply_segments.plain(_assistant_text)),
+                reply_segments.plain(_sample_fidelity_note(
+                    _effective_fidelity, _resolved_rows, primary_sess.get("selected_sample_name"),
+                    total_rows=_total_rows, db_sample=_db_sample,
+                )))
+            _assistant_text = reply_segments.render(_assistant_segments)
 
         resp = ChatResponse(
             messages=[{"role": "user", "content": body.content}]
-            + ([{"role": "assistant", "content": _assistant_text}] if _assistant_text else []),
+            + ([_assistant_entry(_assistant_text, _assistant_segments)] if _assistant_text else []),
             reasoning=final.get("reasoning_trace"),
             answered_by=final.get("answered_by"),
             plan_upgrade_required=final.get("plan_upgrade_required"),
@@ -7345,6 +8405,8 @@ Ready to proceed with model training!"""
                     if produced_fresh_output else None
                 ),
                 total_rows=_total_rows,
+                swarm=final.get("avaloka_swarm"),
+                swarm_message=final.get("avaloka_swarm_message"),
             ),
             analysis_task_id=(task_info or {}).get("task_id"),
             integrity_report=final.get("integrity_report"),
@@ -7360,6 +8422,46 @@ Ready to proceed with model training!"""
             verification_safe_to_present=final.get("verification_safe_to_present"),
             verification_report=final.get("verification_report"),
         )
+
+        # Avaloka talks the user through the steps this turn took, grounded in
+        # the session's statistics (app/api/chat_voice.py). Additive.
+        resp.assistant_prompts = _voice_after_turn(
+            final, question=body.content, execution_context=resp.execution_context, sess=primary_sess,
+            profile_meta=_profile_meta.get(primary_dsid),
+            # The turn's datasets, primary first: the basis names each one
+            # the code read (a workbook's sheets combined), not only the first.
+            datasets=[{"dataset_id": _dsid, "alias": ds_sess.get("alias"), "filename": ds_sess.get("filename"),
+                       "sheet_name": ds_sess.get("sheet_name"),
+                       "source_workbook": ds_sess.get("source_workbook"),
+                       "rows": _session_total_rows(ds_sess)}
+                      for _dsid, _sid, ds_sess in dataset_sessions],
+        )
+        # And the team's story, for any mission that ran on this thread's
+        # dataset since the last turn, whatever started it (chat_swarm).
+        if chat_swarm.pending_missions(primary_sess):
+            _stories, _stories_changed = await _swarm_stories(
+                primary_sess, user_id, await _caller_edition(request),
+                primary_sess.get("alias") or primary_sess.get("filename") or None,
+            )
+            if _stories:
+                resp.assistant_prompts = (resp.assistant_prompts or []) + _stories
+            if _stories_changed:
+                await update_session(primary_sid, lambda cur: cur.update(
+                    {chat_swarm.SESSION_KEY: primary_sess.get(chat_swarm.SESSION_KEY)}))
+
+        # ----------------------------------------------------
+        # 20a) Agent trace: persist this turn (app/trace)
+        # ----------------------------------------------------
+        from app.trace.service import persist_from_state as _persist_trace
+
+        _trace_turn = await _persist_trace(
+            thread_id, user_id, final,
+            execution_context=resp.execution_context, question=body.content,
+            dataset_name=primary_sess.get("alias") or primary_sess.get("filename"),
+        )
+        if _trace_turn:
+            resp.trace_turn_id = _trace_turn
+            resp.trace_url = f"/threads/{thread_id}/trace?turn={_trace_turn}"
 
         # ----------------------------------------------------
         # 20b) Asset persistence (non-blocking background task)
@@ -7387,7 +8489,12 @@ Ready to proceed with model training!"""
                 json.dumps(output_json or [], sort_keys=True, default=str).encode()
             ).hexdigest()
             primary_sess["last_output_fingerprint"] = _new_fingerprint
-            await save_session(primary_sid, primary_sess)
+            # A merge, not save_session(primary_sess): that whole-dict write put
+            # back the pending-turn record this turn read at its start.
+            await update_session(
+                primary_sid,
+                lambda cur: _merge_session_with_drops(cur, primary_sess, _primary_baseline),
+            )
 
             asyncio.create_task(
                 _persist_assets_background(
@@ -7415,7 +8522,8 @@ Ready to proceed with model training!"""
         _deferred = (time.monotonic() - _t0) >= TURN_SYNC_DEADLINE_S
         # Run truth comes from code-written fields only; any run_truth the
         # graph state carries is ignored, and this replaces it on the response.
-        resp.run_truth = run_truth.classify_turn(
+        # The replan loop's record rides on it (app/agents/replan.py).
+        resp.run_truth = run_truth.classify_turn_with_recovery(
             final,
             deferred=_deferred,
             scope_defaults={
@@ -7478,7 +8586,7 @@ Ready to proceed with model training!"""
             _friendly = _friendly_turn_error(exc)
             try:
                 _lc = THREAD_META[thread_id].get("lc_msgs", [])
-                _lc.append(AIMessage(content=_friendly))
+                _lc.append(_said(_friendly))
                 THREAD_META[thread_id]["lc_msgs"] = _limit_messages(
                     _compact_messages(_lc), MAX_CONTEXT_TURNS
                 )
@@ -7489,7 +8597,7 @@ Ready to proceed with model training!"""
             _err_notes_batch = await _deliver_job_notes(thread_id, user_id)
             resp = ChatResponse(
                 messages=[{"role": "user", "content": body.content},
-                          {"role": "assistant", "content": _friendly}],
+                          _assistant_entry(_friendly)],
                 datasets=datasets_dropdown,
                 active_dataset_ids=[dsid for dsid, _, _ in dataset_sessions],
                 visualization_configs=visualization_configs,
@@ -7564,7 +8672,7 @@ Ready to proceed with model training!"""
         resp = ChatResponse(
             messages=[
                 {"role": "user", "content": body.content},
-                {"role": "assistant", "content": _pending_text},
+                _assistant_entry(_pending_text),
             ],
             # training_status is now a TRAINING-ONLY signal. The generic
             # "keep polling" signal is pending_status; pending_kind says what it is.
@@ -7618,28 +8726,42 @@ async def get_pending_turn(
     sess = await get_session(sid) if sid else None
     mem = _PENDING_TURN_MEM.get(thread_id)
     mem = mem if (isinstance(mem, dict) and mem.get("user_id") == user_id) else None
+    mem_cur = _pending_turn_mem_session(mem)
 
     if sid and sess:
         if sess.get("user_id") != user_id:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown thread_id")
-        pt = sess.get("pending_turn")
-        pt = _maybe_json_load(pt) if isinstance(pt, str) else pt
-        # The finished result may only be in memory, when the Redis write
-        # failed; prefer it over a stale "running" for the same turn.
-        if mem and (not isinstance(pt, dict)
-                    or (pt.get("id") == mem.get("id") and pt.get("status") == "running"
-                        and mem.get("status") in ("done", "error"))):
-            pt = mem
+        stores = [sess, mem_cur]
     elif mem:
         # Redis unreachable: answer from this process's copy.
-        pt = mem
+        stores = [mem_cur]
     else:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown thread_id")
 
-    if not isinstance(pt, dict):
-        return {"status": "none"}
-    if deferred_id and pt.get("id") != deferred_id:
-        return {"status": "superseded"}   # a newer turn replaced this one
+    if deferred_id:
+        # Answer for THIS turn wherever it is filed. A finished record beats a
+        # "running" one: the session can hold a stale running record when its
+        # done write failed, and the in-process copy then has the result.
+        found = [rec for rec in (_find_pending_turn(c, deferred_id) for c in stores) if rec]
+        pt = next((r for r in found if r.get("status") in ("done", "error")), None) or (found[0] if found else None)
+        if pt is None:
+            newest = next((p for p in (_pending_turn_slots(c)[0] for c in stores) if p), None)
+            if newest is None:
+                return {"status": "none"}
+            # Not filed anywhere, and another turn is the newest: that turn
+            # replaced it. Name it so the client can show its result instead.
+            return {"status": "superseded", "superseded_by": newest.get("id")}
+    else:
+        pt = _pending_turn_slots(stores[0])[0]
+        mem_pt = _pending_turn_slots(mem_cur)[0]
+        # The finished result may only be in memory, when the Redis write
+        # failed; prefer it over a stale "running" for the same turn.
+        if mem_pt and (pt is None
+                       or (pt.get("id") == mem_pt.get("id") and pt.get("status") == "running"
+                           and mem_pt.get("status") in ("done", "error"))):
+            pt = mem_pt
+        if not isinstance(pt, dict):
+            return {"status": "none"}
 
     status_val = pt.get("status")
     kind = pt.get("kind") or "analysis"
@@ -7700,8 +8822,261 @@ async def read_notification(request: Request, notification_id: str):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown notification")
     return {"ok": True}
 
+async def _require_owned_thread(request: Request, thread_id: str) -> str:
+    """401 without a user, 503 without Redis, 404 unless the thread is theirs."""
+    user_id = _resolve_user_id(request)
+    if not user_id:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing or invalid auth token")
+    if not session_service.cache:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
+                            "Session storage (Redis) is not available.")
+    sid = await get_thread_session(thread_id)
+    sess = await get_session(sid) if sid else None
+    if not sid or not sess or sess.get("user_id") != user_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown thread_id")
+    return user_id
+
+
+def _checkpoint_values(thread_id: str) -> Optional[Dict[str, Any]]:
+    """The thread's latest graph state from the in-process checkpointer, if any."""
+    try:
+        snap = GRAPH.get_state({"configurable": {"thread_id": f"ui:{thread_id}"}})
+        return dict(getattr(snap, "values", None) or {}) or None
+    except Exception:  # noqa: BLE001 - echo graph, no checkpointer, unknown thread
+        return None
+
+
+@app.get("/threads/{thread_id}/trace")
+async def get_thread_trace(request: Request, thread_id: str, turn: Optional[str] = None):
+    """Every agent step of this analysis: decisions, calculations, inference, handoffs.
+
+    The caller's own analysis, so it carries their columns and values. Agent
+    timings, tokens and outcomes are aggregated under ``agents``. Open in every
+    edition: this is how a user sees their prompt acted upon, not the swarm
+    console (app/api/swarm_gate.py).
+    """
+    from app.trace.service import pick_turn, swarm_limits_for, thread_trace
+
+    await _require_owned_thread(request, thread_id)
+    doc = await thread_trace(
+        thread_id,
+        checkpoint_state=_checkpoint_values(thread_id),
+        swarm_limits=swarm_limits_for(await _caller_edition(request)),
+    )
+    if turn:
+        chosen = pick_turn(doc["turns"], turn)
+        if chosen is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown turn for this thread")
+        doc["turns"] = [chosen]
+    return doc
+
+
+@app.get("/api/agent-metrics")
+async def get_agent_metrics(request: Request, user_id: str = Depends(require_swarm_console)):
+    """Per-agent calls, latency, tokens, cost, outcomes and retries across the
+    caller's analyses. Read from their stored traces; nothing leaves the cluster."""
+    from app.trace.service import user_agent_metrics
+
+    return await user_agent_metrics(user_id)
+
+
+# ---------------------------------------------------------------------------
+# Swarm missions: one trace per clone, served live (AGENT_TRACE.md §6).
+# Owner-only like the thread trace: 401 without a user, 403 outside Professional
+# and Enterprise (require_swarm_console), 404 for a mission that is not the
+# caller's, so another user cannot learn that it exists.
+# ---------------------------------------------------------------------------
+class SwarmMissionIn(BaseModel):
+    source: Dict[str, str]
+    goal: str
+    kind: str = "analyze"
+    workers: Optional[int] = None
+    max_parallel: Optional[int] = None
+    target: Optional[str] = None
+    metric: Optional[str] = None
+
+
+async def _thread_dataset_path(thread_id: str, user_id: str) -> Optional[str]:
+    """The local file the chat path would analyse for this thread, if the
+    thread is the caller's: the working copy of the upload, else its sample."""
+    if not session_service.cache:
+        return None
+    sid = await get_thread_session(thread_id)
+    sess = await get_session(sid) if sid else None
+    if not sid or not sess or sess.get("user_id") != user_id:
+        return None
+    for key in ("work_local_input", "active_data_source_location_local", "sample_local_input"):
+        candidate = sess.get(key)
+        if candidate and Path(str(candidate)).is_file():
+            return str(candidate)
+    return None
+
+
+def _swarm_404() -> HTTPException:
+    return HTTPException(status.HTTP_404_NOT_FOUND, "Unknown mission_id")
+
+
+@app.post("/api/swarm/missions")
+async def post_swarm_mission(request: Request, body: SwarmMissionIn,
+                             user_id: str = Depends(require_swarm_console)):
+    """Start a coordinated mission on a bundled sample, a thread's dataset or
+    (only with AVALOKA_SWARM_ALLOW_PATHS=1) a server path. Returns at once;
+    poll ``/api/swarm/missions/{id}/records?after=`` for the live trace."""
+    from app.trace import swarm_service
+
+    edition = await _caller_edition(request)
+    try:
+        started = await swarm_service.start_mission(
+            user_id, source=body.source, goal=body.goal, kind=body.kind, workers=body.workers,
+            max_parallel=body.max_parallel, target=body.target, metric=body.metric,
+            edition=edition,
+            thread_resolver=lambda tid: _thread_dataset_path(tid, user_id),
+        )
+    except swarm_service.SwarmRequestError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
+    # A mission on a thread's dataset is told back in that thread's chat on
+    # its next turn, whatever started it (app/api/chat_swarm.py).
+    if isinstance(body.source, dict) and body.source.get("thread_id"):
+        await _note_thread_mission(str(body.source["thread_id"]), started["mission_id"])
+    return started
+
+
+@app.get("/api/swarm/missions")
+async def list_swarm_missions(request: Request,
+                              user_id: str = Depends(require_swarm_console)):
+    from app.trace import swarm_service
+
+    return {"missions": await swarm_service.list_missions(user_id)}
+
+
+@app.get("/api/swarm/missions/{mission_id}")
+async def get_swarm_mission(request: Request, mission_id: str, records: int = 0,
+                            user_id: str = Depends(require_swarm_console)):
+    """The mission document: grant, clones with their steps, merge. Add
+    ``?records=1`` for the raw append-only records too."""
+    from app.trace import swarm_service
+
+    doc = await swarm_service.get_mission(user_id, mission_id, records=bool(records))
+    if doc is None:
+        raise _swarm_404()
+    return doc
+
+
+@app.get("/api/swarm/missions/{mission_id}/records")
+async def get_swarm_mission_records(request: Request, mission_id: str, after: int = 0,
+                                    limit: int = 500,
+                                    user_id: str = Depends(require_swarm_console)):
+    """The live endpoint. Records with ``seq > after`` (seq starts at 1, so
+    the first poll omits ``after``); ``cursor`` is the last seq returned and
+    ``done`` says the mission finished and nothing is left past the cursor."""
+    from app.trace import swarm_service
+
+    page = await swarm_service.records_after(user_id, mission_id, after=after, limit=limit)
+    if page is None:
+        raise _swarm_404()
+    return page
+
+
+@app.get("/api/swarm/missions/{mission_id}/clones/{clone_id}")
+async def get_swarm_clone(request: Request, mission_id: str, clone_id: str,
+                          user_id: str = Depends(require_swarm_console)):
+    from app.trace import swarm_service
+
+    doc = await swarm_service.get_clone(user_id, mission_id, clone_id)
+    if doc is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown mission_id or clone_id")
+    return doc
+
+
+@app.get("/api/swarm/missions/{mission_id}/episodes")
+async def get_swarm_episodes(request: Request, mission_id: str,
+                             user_id: str = Depends(require_swarm_console)):
+    """The RL view: one episode per clone, reward left null for the learned layer."""
+    from app.trace import swarm_service
+
+    doc = await swarm_service.get_episodes(user_id, mission_id)
+    if doc is None:
+        raise _swarm_404()
+    return doc
+
+
+@app.get("/api/swarm/missions/{mission_id}/telemetry")
+async def get_swarm_telemetry(request: Request, mission_id: str,
+                              user_id: str = Depends(require_swarm_console)):
+    """Exactly the metadata-only records telemetry would send for this
+    mission, so a reviewer can read them. Nothing is sent by this route."""
+    from app.trace import swarm_service
+
+    doc = await swarm_service.get_telemetry(user_id, mission_id)
+    if doc is None:
+        raise _swarm_404()
+    return doc
+
+
+@app.get("/api/swarm/missions/{mission_id}/understanding")
+async def get_swarm_understanding(request: Request, mission_id: str, after: int = 0,
+                                  limit: int = 500, user_id: str = Depends(require_swarm_console)):
+    """What each agent understood about the data and decided, and the fleet's
+    summary (``agent.understanding`` / ``swarm.understanding`` records), paged
+    like ``/records``: ``seq > after``, ``cursor``, ``done``. The full-fidelity
+    layer: it may name the caller's own columns and files."""
+    from app.trace import swarm_service
+
+    page = await swarm_service.understanding_after(user_id, mission_id, after=after, limit=limit)
+    if page is None:
+        raise _swarm_404()
+    return page
+
+
+@app.get("/api/swarm/missions/{mission_id}/understanding/telemetry")
+async def get_swarm_understanding_telemetry(request: Request, mission_id: str,
+                                            user_id: str = Depends(require_swarm_console)):
+    """The metadata-only projection of the understanding records: buckets,
+    histograms and counts, exactly as telemetry would send them. Nothing is
+    sent by this route."""
+    from app.trace import swarm_service
+
+    doc = await swarm_service.get_understanding_telemetry(user_id, mission_id)
+    if doc is None:
+        raise _swarm_404()
+    return doc
+
+
+@app.delete("/api/swarm/missions/{mission_id}")
+async def delete_swarm_mission(request: Request, mission_id: str,
+                               user_id: str = Depends(require_swarm_console)):
+    from app.trace import swarm_service
+
+    if not await swarm_service.delete_mission(user_id, mission_id):
+        raise _swarm_404()
+    return {"mission_id": mission_id, "deleted": True}
+
+
+async def _planner_graph_json(request: Request, thread_id: str, turn: Optional[str]) -> Dict[str, Any]:
+    from app.trace.service import graph_for, pick_turn, thread_trace
+
+    await _require_owned_thread(request, thread_id)
+    doc = await thread_trace(thread_id, checkpoint_state=_checkpoint_values(thread_id))
+    chosen = pick_turn(doc["turns"], turn)
+    if chosen is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No recorded turn for this thread")
+    plan_steps = None
+    defn = (_checkpoint_values(thread_id) or {}).get("planner_definition")
+    if isinstance(defn, dict):
+        plan_steps = defn.get("transformations") or defn.get("steps") or None
+    graph = graph_for(chosen, plan_steps=plan_steps)
+    graph["thread_id"] = thread_id
+    return graph
+
+
 @app.get("/threads/{thread_id}/planner-graph")
-async def get_planner_graph_image(request: Request, thread_id: str):
+async def get_planner_graph_image(request: Request, thread_id: str,
+                                  format: str = "png", turn: Optional[str] = None):
+    """The planner graph. ``format=json`` returns the granular, typed graph of a
+    recorded turn (agents, decisions, data operations, checks, evidence);
+    the default stays the rendered PNG the shipped UI reads."""
+    if format == "json":
+        return await _planner_graph_json(request, thread_id, turn)
     # ---- 1) Auth: require a valid user ----
     user_id = _resolve_user_id(request)
     if not user_id:
@@ -7997,11 +9372,16 @@ async def get_task_result(request: Request, task_id: str, index: int):
     if task.state == "REVOKED":
         if sess.get("analysis_task_id") == scheduled_task_id:
             await update_session(sid, _clear_scheduled_task)
-        return {"status": "CANCELLED", "traceback": str(task.traceback), "next_due_at": next_due_at, **task_metadata}
-    elif task.failed():
+        return {"status": "CANCELLED", "message": _SCHEDULED_CANCELLED_TEXT, "next_due_at": next_due_at, **task_metadata}
+    elif task.failed() or (task.state == "SUCCESS" and _scheduled_run_failed(task.result, task_metadata)):
         if sess.get("analysis_task_id") == scheduled_task_id:
             await update_session(sid, _clear_scheduled_task)
-        return {"status": "FAILED", "traceback": str(task.traceback), "next_due_at": next_due_at, **task_metadata}
+        # The Celery traceback is the worker's log, never the user's message.
+        _failed_msg = (_scheduled_failure_text(task, task_metadata) if task.failed()
+                       else _scheduled_task_completion_message(task.result or {}, [], task_metadata))
+        _details = await asyncio.to_thread(_failed_run_details, task, task_id, task_metadata)
+        return {"status": "FAILED", "message": _failed_msg, "error": _failed_msg, "traceback": _failed_msg,
+                "next_due_at": next_due_at, **task_metadata, **_details}
     elif task.state not in ("SUCCESS",):
         finished = await asyncio.to_thread(_run_finished_state, task_id)
         if finished:
@@ -8059,6 +9439,8 @@ async def get_task_result(request: Request, task_id: str, index: int):
             )
 
         completion_message = view["completion_message"]
+        # Same builder as the synchronous response and the task SSE stream.
+        execution_context = _build_execution_context_from_state(final, session=sess)
         # The outcome _record_run_finish writes for this run (item 8a): Celery
         # SUCCESS only means the task returned, not that it answered.
         _task_truth = view["run_truth"]
@@ -8077,6 +9459,7 @@ async def get_task_result(request: Request, task_id: str, index: int):
                 "assistant_message": assistant_messages[-1] if assistant_messages else None,
                 "message": completion_message,
                 "completion_message": completion_message,
+                "execution_context": execution_context,
                 "run_truth": _task_truth,
                 "output_contract": view["output_contract"],
             },
@@ -8101,6 +9484,25 @@ def _run_iso(value) -> Optional[str]:
             value = value.replace(tzinfo=datetime.timezone.utc)
         return value.isoformat()
     return str(value)
+
+
+def _public_run(run: Any) -> Any:
+    """A run-history row as the user may see it: no traceback in its error,
+    message or log lines. The raw text stays on the row and in the worker log."""
+    if not isinstance(run, dict):
+        return run
+    run = dict(run)
+    if looks_like_raw_error(run.get("error")):
+        run["error"] = "The scheduled run failed."
+    result = run.get("result")
+    if isinstance(result, dict):
+        result = dict(result)
+        if "logs" in result:
+            result["logs"] = scrub_run_logs(result.get("logs"))
+        if looks_like_raw_error(result.get("message")):
+            result["message"] = "The scheduled run failed."
+        run["result"] = result
+    return run
 
 
 async def _load_scheduled_runs(schedule_id: str) -> Optional[List[Dict[str, Any]]]:
@@ -8149,9 +9551,11 @@ async def get_task_runs(request: Request, task_id: str):
     task_metadata = _scheduled_task_metadata_from_entry(entry)
 
     # Prefer the durable table (it outlives the Redis result, CELERY_RESULT_EXPIRES).
+    # Rows written before the run log was scrubbed still hold tracebacks, so
+    # every row is cleaned on the way out.
     durable = await _load_scheduled_runs(task_id)
     if durable is not None:
-        return durable
+        return [_public_run(run) for run in durable]
 
     # Fallback: RedBeat run list + live Celery result backend.
     runs_with_ts = list(AvalokaScheduler.get_task_ids_with_timestamp(redbeat_key, False))
@@ -8197,12 +9601,9 @@ async def get_task_runs(request: Request, task_id: str):
                     if run_status == "failure":
                         result_payload["logs"] = None
         elif state == "FAILURE":
-            raw_error = task.traceback or task.result or "Task failed"
-            error = (
-                TRAINING_FAILURE_MESSAGE
-                if task_metadata.get("task_type") == "training"
-                else str(raw_error)
-            )
+            # The traceback is the worker's log; the row carries plain words.
+            logger.info("[runs] run %s failed: %s", exec_id, task.traceback or task.result)
+            error = _scheduled_failure_text(task, task_metadata)
         elif state == "REVOKED":
             error = "Run was cancelled."
 
@@ -8217,7 +9618,7 @@ async def get_task_runs(request: Request, task_id: str):
             "error":       error,
         })
 
-    return out
+    return [_public_run(run) for run in out]
 
 @app.get("/tasks/{task_id}/status")
 async def get_task_status(request: Request, task_id: str):
@@ -8286,7 +9687,7 @@ async def get_task_status(request: Request, task_id: str):
         )
 
     return StreamingResponse(
-        task_sse_iter(task_id, redbeat_key),
+        task_sse_iter(task_id, redbeat_key, session=sess),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -8447,8 +9848,13 @@ async def list_datasets(request: Request):
             "Could not load datasets, please retry.",
         )
 
+    # The catalog is durable where the session store is not: its file and
+    # derived datasets join the list, Redis items first (app/catalog/compat.py).
+    from app.catalog.compat import catalog_items as _catalog_items, merge_dataset_items as _merge_items
+
     if not sids:
-        return []  # genuinely no sessions for this user
+        extra = await asyncio.to_thread(_catalog_items, user_id, ())
+        return _merge_items([], extra, DatasetListItem)  # no sessions: the catalog alone
 
     # ---- 2) Read every session blob ONCE (no per-dataset re-MGET, no
     #         get_session() so the circuit breaker can't blank the list) ----
@@ -8498,9 +9904,8 @@ async def list_datasets(request: Request):
             )
         )
     # Newest first. created_at is ISO-8601, so lexical sort == chronological.
-    items.sort(key=lambda it: it.created_at or "", reverse=True)
-
-    return items
+    extra = await asyncio.to_thread(_catalog_items, user_id, seen)
+    return _merge_items(items, extra, DatasetListItem)
 
 @app.get(
     "/datasets/{dataset_id}",
@@ -9005,8 +10410,46 @@ async def preview_dataset(
         estimated_runtime_hint=_preview_runtime_hint,
         visualization_config=_preview_viz_config,
         visualization_status=_preview_viz_status,
+        profiling_status=(sess_for_ds or {}).get("profiling_status"),
+        profiling_error=(sess_for_ds or {}).get("profiling_error"),
     )
-     
+
+
+@app.get("/api/datasets/{dataset_id}/profile")
+async def get_dataset_profile(request: Request, dataset_id: str):
+    """The upload's background profile job: its status and, once landed, the
+    profile and the charts written with it. The UI polls this while
+    profiling_status is "pending"."""
+    user_id = _resolve_user_id(request)
+    if not user_id:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing or invalid auth token")
+    sid = await find_session_by_dataset_for_user(dataset_id, user_id)
+    sess = await get_session(sid, bypass_circuit=True) if sid else None
+    if not isinstance(sess, dict) or sess.get("user_id") != user_id or sess.get("dataset_id") != dataset_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Dataset not found for this user")
+
+    out = {
+        "dataset_id": dataset_id,
+        "profiling_status": sess.get("profiling_status"),
+        "profiling_error": sess.get("profiling_error"),
+        "profiling_result": _maybe_json_load(sess.get("full_profiling_result")) or sess.get("full_profiling_result"),
+        "visualization_config": _maybe_json_load(sess.get("visualization_config")) or sess.get("visualization_config"),
+        "visualization_status": sess.get("visualization_status"),
+    }
+    # A stale session save can put "pending" back before the lander re-asserts;
+    # this process's copy of the landed job is the fresher answer then.
+    landed = (_profile_meta.get(dataset_id) or {}).get("deferred_profile")
+    if out["profiling_status"] == PROFILE_PENDING and isinstance(landed, dict):
+        out.update(
+            profiling_status=landed.get("profiling_status"),
+            profiling_error=landed.get("profiling_error"),
+            profiling_result=landed.get("full_profiling_result"),
+        )
+        if landed.get("visualization_config"):
+            out["visualization_config"] = landed["visualization_config"]
+            out["visualization_status"] = landed.get("visualization_status") or "ready"
+    return out
+
 
 @app.get("/api/datasets/{dataset_id}/background-task-status")
 async def get_background_task_status(request: Request, dataset_id: str):
@@ -9582,13 +11025,17 @@ async def db_tables_to_analysis(request: Request, response: Response, body: Tabl
     seen_aliases: Dict[str, int] = {}
 
     try:
+        async def _query(sql: str) -> Dict[str, Any]:
+            return await _run_mcp_db_query(customer_id, api_key, sql)
+
         for idx, table in enumerate(tables):
-            result = await _run_mcp_db_query(customer_id, api_key, f"SELECT * FROM {table} LIMIT {limit}")
-            if not isinstance(result, dict) or result.get("error") or "columns" not in result or "rows" not in result:
-                raise HTTPException(status.HTTP_400_BAD_REQUEST,
-                                    f"Failed to read '{table}': {(result or {}).get('error', 'no rows')}")
-            cols = result.get("columns") or []
-            rows = result.get("rows") or []
+            # A random sample (or the whole table when it fits), never the
+            # first rows: a head sample of a sorted table answered 0.50 for a
+            # rate whose true value is 0.13. See app/core/db_sampling.py.
+            try:
+                cols, rows, db_sample = await draw_table_sample(_query, table, limit, table=table)
+            except DbSampleError as exc:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Failed to read '{table}': {exc}")
             if not cols or not rows:
                 raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"Table '{table}' returned no rows.")
 
@@ -9630,6 +11077,10 @@ async def db_tables_to_analysis(request: Request, response: Response, body: Tabl
                 "data_source_location": f"db://{customer_id}/{dsid}?sample=true",
                 "customer_id": customer_id,
                 "source_table": table,
+                "db_sample": db_sample.as_session(),
+                # These rows came from the whole table, so a plain aggregate can
+                # be pushed down to it (see _db_pushdown_answer).
+                "db_pushdown_table": table,
                 "created_at": _now_iso(),
                 "object_name": None,
                 "work_local_input": None,
@@ -9679,7 +11130,7 @@ async def db_tables_to_analysis(request: Request, response: Response, body: Tabl
             dataset_session_map[dsid] = session_id
             datasets_out.append(UploadedDatasetOut(
                 dataset_id=dsid, filename=table, alias=alias,
-                columns=cols, rows=_jsonify(dict_rows),
+                columns=cols, rows=_jsonify(_cap_rows(dict_rows)),
                 visualization_config=viz, visualization_status=viz_status,
             ))
     except HTTPException:
@@ -9737,6 +11188,35 @@ async def list_database_tables(customer_id: str, api_key: str) -> Dict[str, Any]
         return {"error": f"Error listing tables: {str(e)}"}
 
 
+async def _bind_mcp_customer_owner(customer_id: Optional[str], user_id: str, api_key: Optional[str]) -> None:
+    """Bind a registered database to the user who holds its api_key.
+
+    The onboarding API scopes every /customers route to an owner, and releases a
+    password to the planner only for a customer bound to the user it names (or
+    to nobody yet). The UI registers anonymously, so this is where the binding
+    happens: here the user is verified and the api_key is in hand. Best-effort;
+    never fails the caller's request.
+    """
+    token = os.getenv("MCP_SERVICE_TOKEN", "")
+    if not (token and customer_id and user_id and api_key):
+        return
+    base = os.getenv("ONBOARDING_API_URL", "http://localhost:8081").rstrip("/")
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.post(
+                f"{base}/customers/{customer_id}/owner",
+                headers={
+                    "X-Avaloka-Service-Token": token,
+                    "X-Avaloka-User": str(user_id),
+                    "Authorization": f"Bearer {api_key}",
+                },
+            )
+        if resp.status_code != 200:
+            logger.warning("[mcp-creds] owner bind for %s -> HTTP %s", customer_id, resp.status_code)
+    except Exception as exc:
+        logger.warning("[mcp-creds] owner bind for %s failed: %s", customer_id, exc)
+
+
 @app.post("/api/database/connect")
 async def connect_database(
     request: Request,
@@ -9751,8 +11231,33 @@ async def connect_database(
             "Session storage (Redis) is not available.",
         )
 
-    customer_id = body.customer_id
-    api_key = body.api_key
+    customer_id = str(body.customer_id or "").strip()
+    api_key = str(body.api_key or "").strip()
+    connection_id = str(body.connection_id or "").strip()
+    database_type_hint: Optional[str] = None
+
+    if not (customer_id and api_key):
+        if customer_id or api_key:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "customer_id and api_key must be supplied together.",
+            )
+        if not connection_id:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "Provide customer_id and api_key, or a saved connection_id.",
+            )
+        try:
+            legacy_credentials = await resolve_legacy_database_credentials(
+                connection_id, user_id
+            )
+        except LegacyConnectionResolutionError as exc:
+            raise HTTPException(exc.status_code, str(exc)) from exc
+        customer_id = legacy_credentials.customer_id
+        api_key = legacy_credentials.api_key
+        database_type_hint = legacy_credentials.database_type
+
+    response_connection_id = connection_id or customer_id
 
     test_result = await list_database_tables(customer_id, api_key)
     if "error" in test_result:
@@ -9766,28 +11271,53 @@ async def connect_database(
     await _bind_mcp_customer_owner(customer_id, user_id, api_key)
 
     session_id = _new_id()
+    thread_id = _new_id()
     # Persist the api_key encrypted at rest so /api/v1/database/query can reuse
     # this session without the client resending raw credentials on every call.
     session_data = {
         "user_id": user_id,
         "type": "database",
         "customer_id": customer_id,
+        "connection_id": response_connection_id,
+        "thread_id": thread_id,
         "database_info": test_result.get("meta", {}),
         "created_at": _now_iso(),
+        # Picked up by avaloka_agent on the next chat turn for proactive
+        # onboarding. Carries no credential: api_key is stored only encrypted,
+        # below, and never enters the event the agent puts in its prompt.
+        # 1.6's connect takes customer_id + api_key only. When the legacy
+        # saved-connection path (#248) lands, pass its connection_id and the
+        # saved connection's database_type here as database_type_hint.
+        "connection_event": database_connection_event(
+            customer_id=customer_id,
+            test_result=test_result,
+            created_at=_now_iso(),
+        ),
     }
     api_key_enc = encrypt_secret(api_key)
     if api_key_enc:
         session_data["api_key_enc"] = api_key_enc
     if not await save_session(session_id, session_data):
         raise HTTPException(500, "Failed to persist DB session")
-    return {
+    out = {
         "session_id": session_id,
         "customer_id": customer_id,
         "status": "connected",
         "credentials_saved": bool(api_key_enc),
         "tables_available": len(test_result.get("tables", [])),
-        "database_type": test_result.get("meta", {}).get("database_type"),
+        "database_type": (
+            test_result.get("meta", {}).get("database_type") or database_type_hint
+        ),
     }
+    out.update(
+        legacy_connect_fields(
+            session_id=session_id,
+            thread_id=thread_id,
+            connection_id=response_connection_id,
+            expires_in=SESSION_TTL_SECONDS,
+        )
+    )
+    return out
 
 
 def _source_table_from_sql(sql: str) -> Optional[str]:
@@ -9813,24 +11343,61 @@ async def chat_db_sample_only(
     if not user_id:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing or invalid auth token")
 
+    query_started = time.perf_counter()
+    query_text = database_query_text(body.content, body.query)
+    if not query_text:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Provide database query text in content or query.",
+        )
     customer_id = body.customer_id or body.metadata.get("customer_id")
     api_key = (body.metadata or {}).get("api_key")
+    connection_id = str(
+        body.connection_id or body.metadata.get("connection_id") or ""
+    ).strip()
+    sid = _resolve_session_id(
+        request, body.session_id or body.metadata.get("session_id")
+    )
+    db_sess = await get_session(sid) if sid else None
+    owned_db_sess = (
+        db_sess
+        if db_sess
+        and db_sess.get("user_id") == user_id
+        and db_sess.get("type") == "database"
+        else None
+    )
+    response_session_id = sid if owned_db_sess else None
+    if (
+        owned_db_sess
+        and connection_id
+        and owned_db_sess.get("connection_id")
+        and connection_id != str(owned_db_sess["connection_id"])
+    ):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "The saved database session belongs to a different connection_id.",
+        )
 
     # Fall back to credentials saved by /api/database/connect so a client that
     # followed the connect-then-query flow doesn't resend raw creds each call.
     if not (customer_id and api_key):
-        sid = _resolve_session_id(
-            request, body.session_id or body.metadata.get("session_id")
-        )
-        db_sess = await get_session(sid) if sid else None
-        if (
-            db_sess
-            and db_sess.get("user_id") == user_id
-            and db_sess.get("type") == "database"
-        ):
-            customer_id = customer_id or db_sess.get("customer_id")
+        if owned_db_sess:
+            customer_id = customer_id or owned_db_sess.get("customer_id")
+            connection_id = connection_id or str(
+                owned_db_sess.get("connection_id") or ""
+            ).strip()
             if not api_key:
-                api_key = decrypt_secret(db_sess.get("api_key_enc"))
+                api_key = decrypt_secret(owned_db_sess.get("api_key_enc"))
+
+    if not (customer_id and api_key) and connection_id:
+        try:
+            legacy_credentials = await resolve_legacy_database_credentials(
+                connection_id, user_id
+            )
+        except LegacyConnectionResolutionError as exc:
+            raise HTTPException(exc.status_code, str(exc)) from exc
+        customer_id = customer_id or legacy_credentials.customer_id
+        api_key = api_key or legacy_credentials.api_key
 
     if not (customer_id and api_key):
         raise HTTPException(
@@ -9840,15 +11407,15 @@ async def chat_db_sample_only(
             "session_id.",
         )
 
-    content_lower = (body.content or "").lower().strip()
+    content_lower = query_text.lower()
     tool_name = "query"
-    arguments: Dict[str, Any] = {"sql": (body.content or "").strip()}
+    arguments: Dict[str, Any] = {"sql": query_text}
     if content_lower in ["list tables", "show tables"]:
         tool_name = "list_tables"
         arguments = {}
     elif content_lower.startswith("describe table"):
         tool_name = "describe_table"
-        arguments = {"table_name": body.content.strip().split()[-1]}
+        arguments = {"table_name": query_text.split()[-1]}
 
     try:
         async with httpx.AsyncClient() as client:
@@ -9874,19 +11441,37 @@ async def chat_db_sample_only(
         )
         return DatabaseChatResponse(
             messages=[
-                {"role": "user", "content": body.content},
-                {"role": "assistant", "content": msg},
+                {"role": "user", "content": query_text},
+                _assistant_entry(msg),
             ],
             query_result={"error": msg},
+            connection_id=connection_id or None,
+            session_id=response_session_id,
+            thread_id=(
+                owned_db_sess.get("thread_id") if owned_db_sess else None
+            ),
+            **legacy_query_fields(
+                {"columns": [], "rows": []},
+                execution_time_ms=round(
+                    (time.perf_counter() - query_started) * 1000
+                ),
+            ),
         )
 
     out = DatabaseChatResponse(
-        messages=[{"role": "user", "content": body.content}],
+        messages=[{"role": "user", "content": query_text}],
         query_result=result,
+        connection_id=connection_id or None,
+        session_id=response_session_id,
+        thread_id=(owned_db_sess.get("thread_id") if owned_db_sess else None),
         database_info={
             "customer_id": customer_id,
-            "query_executed": (body.content or "").strip(),
+            "query_executed": query_text,
         },
+        **legacy_query_fields(
+            result if isinstance(result, dict) else {},
+            execution_time_ms=round((time.perf_counter() - query_started) * 1000),
+        ),
     )
 
     if (
@@ -9897,6 +11482,27 @@ async def chat_db_sample_only(
     ):
         cols: List[str] = result.get("columns") or []
         rows: List[List[Any]] = result.get("rows") or []
+        _row_limit = ((result.get("meta") or {}).get("row_limit")) or 0
+        query_sample: Optional[DbSample] = DbSample(
+            "full", len(rows), len(rows), False,
+            str((result.get("meta") or {}).get("database_type") or ""),
+        )
+        if rows and (len(rows) > MAX_DB_SAMPLE_ROWS or (_row_limit and len(rows) >= _row_limit)):
+            # The result was cut at a row cap, so what came back is its head.
+            # Analyse a random sample of the whole result instead.
+            async def _q(sql: str) -> Dict[str, Any]:
+                return await _run_mcp_db_query(customer_id, api_key, sql)
+            try:
+                cols, rows, query_sample = await draw_table_sample(
+                    _q, f"({query_text.strip().rstrip(';')}) AS _avk_q",
+                    MAX_DB_SAMPLE_ROWS, source_is_table=False,
+                )
+            except DbSampleError as exc:
+                logger.warning("[db-sample] no random sample of a capped result: %s", type(exc).__name__)
+                out.messages.append(_assistant_entry(
+                    "This result was larger than the analysis row cap and " + str(exc)
+                    + " Narrow the query and try again."))
+                cols, rows, query_sample = [], [], None
 
         if cols and rows:
             dsid, sid, tid = await _create_or_update_db_sample_session(
@@ -9906,7 +11512,12 @@ async def chat_db_sample_only(
                 columns=cols,
                 rows=rows,
                 preferred_dataset_id=body.dataset_id,
-                source_table=_source_table_from_sql(body.content),
+                preferred_session_id=response_session_id,
+                preferred_thread_id=(
+                    owned_db_sess.get("thread_id") if owned_db_sess else None
+                ),
+                source_table=_source_table_from_sql(query_text),
+                db_sample=query_sample,
             )
 
             secure_cookie_env = os.getenv("COOKIE_SECURE", "").lower()
@@ -9959,27 +11570,12 @@ async def chat_db_sample_only(
             out.visualization_status = viz_status
 
 
-            out.messages.append(
-                {
-                    "role": "assistant",
-                    "content": "Query executed. Sample materialized for preview & chat.",
-                }
-            )
+            out.messages.append(_assistant_entry("Query executed. Sample materialized for preview & chat."))
         else:
-            out.messages.append(
-                {
-                    "role": "assistant",
-                    "content": "Query executed successfully (no rows).",
-                }
-            )
+            out.messages.append(_assistant_entry("Query executed successfully (no rows)."))
 
     else:
-        out.messages.append(
-            {
-                "role": "assistant",
-                "content": f"{tool_name} executed successfully.",
-            }
-        )
+        out.messages.append(_assistant_entry(f"{tool_name} executed successfully."))
 
     return out
 
@@ -10030,24 +11626,36 @@ async def _create_or_update_db_sample_session(
     columns: List[str],
     rows: List[List[Any]],
     preferred_dataset_id: Optional[str] = None,
+    preferred_session_id: Optional[str] = None,
+    preferred_thread_id: Optional[str] = None,
     source_table: Optional[str] = None,
+    db_sample: Optional[DbSample] = None,
 ) -> Tuple[str, str, str]:
     sample_rows = rows[:MAX_DB_SAMPLE_ROWS]
     dict_rows = _rows_list_to_dicts(columns, sample_rows)
 
-    dsid = preferred_dataset_id or _new_id()
-    sid = (
-        await find_session_by_dataset_for_user(dsid, user_id)
-        if preferred_dataset_id
-        else None
-    )
+    sid = preferred_session_id
     sess = await get_session(sid) if sid else None
+    if sess and sess.get("user_id") != user_id:
+        sid = None
+        sess = None
+    if not sess and preferred_dataset_id:
+        sid = await find_session_by_dataset_for_user(
+            preferred_dataset_id, user_id
+        )
+        sess = await get_session(sid) if sid else None
+
+    dsid = (
+        preferred_dataset_id
+        or (sess.get("dataset_id") if sess else None)
+        or _new_id()
+    )
 
     if sess and sess.get("work_dir") and Path(sess["work_dir"]).exists():
         work_dir = Path(sess["work_dir"])
         session_id = sid
     else:
-        session_id = _new_id()
+        session_id = sid or _new_id()
         work_dir = (TMP_ROOT / session_id).resolve()
         work_dir.mkdir(parents=True, exist_ok=True)
 
@@ -10075,18 +11683,21 @@ async def _create_or_update_db_sample_session(
         visualization_status = "error"
 
     session_data = {
+        **(sess or {}),
         "user_id": user_id,
         "dataset_id": dsid,
         "work_dir": str(work_dir),
         "data_source_location": f"db://{customer_id}/{dsid}?sample=true",
         # Persist the source database explicitly so a DTA transfer can use it as the
         # implicit source without having to re-parse the db:// URI (see the source
-        # bridge in send_message). `created_at` lets the bridge pick the most-recent
-        # active database when it has to fall back to a user-session scan.
+        # bridge in send_message), for this thread only.
         "customer_id": customer_id,
         # The table the user analyzed (parsed from their query), so a DTA transfer
         # uses it as the implicit source instead of the auto-detected first table.
         "source_table": source_table,
+        # What these rows are relative to the query's whole result (the answer
+        # discloses a partial sample as "N of M rows").
+        "db_sample": db_sample.as_session() if db_sample else None,
         "created_at": _now_iso(),
         "object_name": None,
         "work_local_input": None,
@@ -10110,7 +11721,9 @@ async def _create_or_update_db_sample_session(
 
     thread_id = ""
     try:
-        saved_tid = sess.get("thread_id") if sess else None
+        saved_tid = preferred_thread_id or (
+            sess.get("thread_id") if sess else None
+        )
         if saved_tid:
             thread_id = saved_tid
         else:
@@ -10138,6 +11751,17 @@ async def _create_or_update_db_sample_session(
         logger.warning(
             "[db-sample] upstream /threads create failed (soft): %s", e.detail
         )
+
+    if not thread_id:
+        thread_id = f"ui:{session_id}"
+        await bind_thread_session(thread_id, session_id)
+        saved = (await get_session(session_id)) or {}
+        saved["thread_id"] = thread_id
+        if not await save_session(session_id, saved):
+            raise HTTPException(
+                status.HTTP_500_INTERNAL_SERVER_ERROR,
+                "Failed to persist DB sample thread binding",
+            )
 
     return dsid, session_id, thread_id
 
@@ -10709,7 +12333,8 @@ async def persist_session_snapshot(thread_id: str, sess: Dict[str, Any]) -> int:
     try:
         return await asyncio.to_thread(_update)
     except Exception as exc:
-        logger.warning("[snapshot] persist failed for thread %s: %s", thread_id, exc)
+        from app.agents.sampling_persistence import log_supabase_skip
+        log_supabase_skip(logger, f"[snapshot] persist failed for thread {thread_id}", exc)
         return 0
 
 def _is_supabase_auth_failure(exc: BaseException) -> bool:
@@ -10730,6 +12355,18 @@ def _is_supabase_auth_failure(exc: BaseException) -> bool:
     return ("invalid api key" in text
             or "supabase env vars not set" in text
             or "jwt" in text and "invalid" in text)
+
+
+def _is_supabase_unconfigured(exc: BaseException) -> bool:
+    """True when the Supabase credentials are unset, so nothing was sent.
+
+    _is_supabase_auth_failure() counts this as a credential problem too (the
+    fix is in the deployment either way), but the message must not say the
+    credentials were rejected: none were offered.
+    """
+    from app.agents.sampling_persistence import SupabaseNotConfigured
+    return (isinstance(exc, SupabaseNotConfigured)
+            or "supabase env vars not set" in f"{exc}".lower())
 
 
 async def _resolve_session_from_aid(analysis_id: str, user_id: str) -> Optional[Dict[str, Any]]:
@@ -10763,7 +12400,17 @@ async def _resolve_session_from_aid(analysis_id: str, user_id: str) -> Optional[
         # None still means "queried successfully, nothing there". A lookup that
         # could not run raises, and 503 says the honest thing: unknown, try again.
         detail = "Analysis lookup is temporarily unavailable."
-        if _is_supabase_auth_failure(exc):
+        if _is_supabase_unconfigured(exc):
+            # Unset is not rejected: nothing was sent, so there is no key to
+            # check against the project -- the variables need setting.
+            logger.error(
+                "[aid-resolve] Supabase is not configured while resolving %s: %s "
+                "(values are read from the RUNNING process's environment).",
+                analysis_id, exc,
+            )
+            detail = ("Analysis lookup is unavailable: the backend's Supabase "
+                      "credentials are not set (SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY).")
+        elif _is_supabase_auth_failure(exc):
             logger.error(
                 "[aid-resolve] Supabase REJECTED the service-role credentials while "
                 "resolving %s. Check SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY: the "
@@ -11447,8 +13094,49 @@ async def restore_analysis_version(
 class SaveAndExecuteIn(BaseModel):
     code: str
     # Set false to skip the deterministic validators after the planner review
-    # (advanced escape hatch); the planner review always runs.
+    # (advanced escape hatch); the planner review always runs, and so does the
+    # NoDatabaseWrites safety rule.
     run_validation: Optional[bool] = True
+
+
+#: What save-and-execute tells the user when a validation stage stops the edit.
+_VALIDATION_STAGE_MESSAGES = {
+    "syntax": "Your code has a Python syntax error, so it was not run. Check the lines you changed.",
+    "static_semantic": "Your code didn't pass the safety and correctness checks, so it was not run.",
+    "sample_execution": (
+        "Your code stopped with an error when it was tried on a small sample of your data, "
+        "so it was not run on the full data. Check the lines you changed."
+    ),
+}
+_VALIDATION_FALLBACK = "Your code couldn't be checked, so it was not run."
+
+
+def _plain_validation_feedback(stage: Optional[str], feedback: Any) -> str:
+    """The validator's verdict on an edit, in words the user can be shown.
+
+    The sample run's feedback is the exception text itself (str(e): data
+    values, column names), so that stage always gets the plain sentence. The
+    other stages' findings are code-written and are kept unless they carry a
+    raw error. The raw feedback is in the server log.
+    """
+    plain = _VALIDATION_STAGE_MESSAGES.get(stage or "", _VALIDATION_FALLBACK)
+    if stage == "sample_execution":
+        return plain
+    return plain_or(feedback, plain)
+
+
+def _save_and_execute_failure_message(final: Dict[str, Any]) -> str:
+    """What save-and-execute tells the user when the edited code did not run.
+
+    The stderr traceback stays in the server log; the user hears the reason
+    in her terms, the way a failed chat turn words it (analysis_outcome).
+    """
+    detail = failure_detail(final) if isinstance(final, dict) else ""
+    if not detail:
+        return ("Your code finished without producing a new result, so nothing was saved. "
+                "The current version is unchanged.")
+    return (f"Your code didn't finish: {plain_failure_reason(detail)}. Nothing was saved, "
+            "and the current version is unchanged.")
 
 
 @app.post("/analysis/{analysis_id}/save-and-execute", tags=["insights"])
@@ -11519,6 +13207,30 @@ async def save_and_execute_analysis(
     # The planner-reviewed edit is the authoritative execution source.
     code_to_run = reviewed_code
 
+    # NoDatabaseWrites is a safety rule, not a quality check, so it runs even
+    # when the caller turned the validators off: run_validation=false used to
+    # skip the whole validator, and with it the only thing between edited code
+    # and a database write outside the transfer path.
+    db_write_errors = database_write_errors(reviewed_code)
+    if db_write_errors:
+        logger.warning("[save-and-execute] aid=%s rejected by NoDatabaseWrites (run_validation=%s)",
+                       analysis_id, body.run_validation)
+        return {
+            "available": False,
+            "status": "validation_failed",
+            "analysis_id": analysis_id,
+            "session_id": session_id,
+            "planner_status": planner_status,
+            "planner_notes": planner_notes,
+            "corrected_code": reviewed_code if planner_status == "corrected" else None,
+            "validation_passed": False,
+            "validation_stage": "static_semantic",
+            "validation_feedback": "\n".join(db_write_errors),
+            "output_json": None,
+            "output_file_data": None,
+            "checkpoint_created": False,
+        }
+
     if body.run_validation:
         coding_state = {
             "generated_code": reviewed_code,
@@ -11567,7 +13279,9 @@ async def save_and_execute_analysis(
                 ),
                 "validation_passed": False,
                 "validation_stage": validation.get("stage"),
-                "validation_feedback": validation.get("feedback"),
+                "validation_feedback": _plain_validation_feedback(
+                    validation.get("stage"), validation.get("feedback")
+                ),
                 "output_json": None,
                 "output_file_data": None,
                 "checkpoint_created": False,
@@ -11713,10 +13427,9 @@ async def save_and_execute_analysis(
                 else None
             ),
             "validation_passed": True,
-            "execution_message": _exec_result.get(
-                "message",
-                "Execution did not produce fresh output",
-            ),
+            # Plain words only: the message on the result carries the
+            # script's stderr (a traceback), which is logged above.
+            "execution_message": _save_and_execute_failure_message(final),
             "output_json": None,
             "output_file_data": None,
             "output_row_count": None,
@@ -11910,8 +13623,6 @@ async def save_and_execute_analysis(
 # compared directly against the JWT sub — no _resolve_profile_id() hop here.
 # -------------------------------------------------------------------
 
-SUPABASE_MCP_CONN_TABLE = os.getenv("SUPABASE_MCP_CONNECTIONS_TABLE", "mcp_connections")
-
 _MCP_SECRET_FIELDS = ("api_key", "username")
 
 
@@ -11921,59 +13632,16 @@ class McpCredentialsIn(BaseModel):
     username: Optional[str] = None
 
 
-def _mcp_conn_select(connection_id: str) -> Optional[Dict[str, Any]]:
-    client = get_supabase_client()
-    res = (
-        client.table(SUPABASE_MCP_CONN_TABLE)
-        .select(
-            "id,user_id,customer_id,api_key_ciphertext,api_key_iv,"
-            "username_ciphertext,username_iv"
-        )
-        .eq("id", connection_id)
-        .limit(1)
-        .execute()
-    )
-    data = getattr(res, "data", None) or []
-    return data[0] if data else None
-
-
+# Rows live wherever app.api.db_connections decides (Supabase when hosted, the
+# API's own file in local auth mode), so these routes work in both.
 def _mcp_conn_update(connection_id: str, patch: Dict[str, Any]) -> None:
-    client = get_supabase_client()
-    client.table(SUPABASE_MCP_CONN_TABLE).update(patch).eq("id", connection_id).execute()
+    _db_connections.connection_store().update(connection_id, patch)
 
 
-async def _bind_mcp_customer_owner(customer_id: Optional[str], user_id: str, api_key: Optional[str]) -> None:
-    """Bind a registered database to the user who holds its api_key.
-
-    The onboarding API scopes every /customers route to an owner, and releases a
-    password to the planner only for a customer bound to the user it names (or
-    to nobody yet). The UI registers anonymously, so this is where the binding
-    happens: here the user is verified and the api_key is in hand. Best-effort;
-    never fails the caller's request.
-    """
-    token = os.getenv("MCP_SERVICE_TOKEN", "")
-    if not (token and customer_id and user_id and api_key):
-        return
-    base = os.getenv("ONBOARDING_API_URL", "http://localhost:8011").rstrip("/")
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.post(
-                f"{base}/customers/{customer_id}/owner",
-                headers={
-                    "X-Avaloka-Service-Token": token,
-                    "X-Avaloka-User": str(user_id),
-                    "Authorization": f"Bearer {api_key}",
-                },
-            )
-        if resp.status_code != 200:
-            logger.warning("[mcp-creds] owner bind for %s -> HTTP %s", customer_id, resp.status_code)
-    except Exception as exc:
-        logger.warning("[mcp-creds] owner bind for %s failed: %s", customer_id, exc)
-
-
-# mcp_connections.id is a uuid column. PostgREST rejects any other string with
-# 22P02, which supabase-py raises, so a malformed id must stop here: it can
-# match no row, and letting it through turned "not found" into a 500.
+# Connection ids are uuids in both stores (the Supabase column is uuid; the file
+# store mints uuid4). PostgREST rejects any other string with 22P02, which
+# supabase-py raises, so a malformed id must stop here: it can match no row,
+# and letting it through turned "not found" into a 500.
 _MCP_CONN_ID_RE = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE
 )
@@ -11984,24 +13652,61 @@ def _mcp_conn_not_found() -> HTTPException:
 
 
 async def _mcp_conn_owned_row(connection_id: str, user_id: str) -> Dict[str, Any]:
-    """Fetch an mcp_connections row and enforce ownership (service role bypasses RLS).
+    """The caller's own connection row (the service role bypasses RLS).
 
-    Another user's connection and a missing one get the same 404 and body, so
-    the response never says whether an id exists.
+    Ownership is db_connections.owned_row, the rule /api/connections already
+    follows: another user's connection, a missing one and a malformed id all
+    get the same 404 and body, so the response never says whether an id exists.
     """
     if not _MCP_CONN_ID_RE.fullmatch(connection_id or ""):
         raise _mcp_conn_not_found()
     try:
-        row = await asyncio.to_thread(_mcp_conn_select, connection_id)
+        row = await asyncio.to_thread(_db_connections.owned_row, connection_id, user_id)
     except Exception as exc:
         logger.error("[mcp-creds] lookup failed for %s: %s", connection_id, exc, exc_info=True)
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Connection lookup failed")
     if not row:
-        raise _mcp_conn_not_found()
-    if str(row.get("user_id") or "") != str(user_id):
-        logger.warning("[mcp-creds] connection %s is not owned by requester %s", connection_id, user_id)
+        logger.warning("[mcp-creds] connection %s not found for requester %s", connection_id, user_id)
         raise _mcp_conn_not_found()
     return row
+
+
+@app.post("/customers/register", tags=["mcp"])
+async def register_customer_database(request: Request):
+    """Register a database with the onboarding API, as the authenticated user.
+
+    The web UI's connect modal posts here (the backend proxy forwards to this
+    service only). The onboarding API accepts a registration only for a user
+    it can verify, so the user resolved from the JWT is forwarded as a signed
+    assertion and the customer is recorded as theirs. The body passes through
+    untouched and is never logged: it carries the database password.
+    """
+    user_id = _resolve_user_id(request)
+    if not user_id:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing or invalid auth token")
+    import app.mcp_server.client as onboarding_client
+
+    headers = onboarding_client.user_headers(user_id)
+    if not headers:
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "DB_ENCRYPTION_KEY is not configured; cannot register a database.",
+        )
+    headers["Content-Type"] = "application/json"
+    try:
+        async with httpx.AsyncClient() as client:
+            upstream = await client.post(
+                f"{onboarding_client.ONBOARDING_API_URL}/customers/register",
+                content=await request.body(), headers=headers, timeout=60.0,
+            )
+    except httpx.HTTPError as exc:
+        logger.warning("[mcp-register] onboarding API unreachable: %s", type(exc).__name__)
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Registration service unavailable")
+    try:
+        payload = upstream.json()
+    except ValueError:
+        payload = {"detail": f"Registration service answered HTTP {upstream.status_code}"}
+    return JSONResponse(status_code=upstream.status_code, content=payload)
 
 
 @app.post("/api/mcp-connections/{connection_id}/encrypt", tags=["mcp"])
@@ -12350,9 +14055,9 @@ if __name__ == "__main__":
     uvicorn.run(
         "app.api.server:app",
         host="0.0.0.0",
-        port=int(os.getenv("PORT", "8010")),
+        port=int(os.getenv("PORT", "9000")),
         reload=DEBUG,
         proxy_headers=True,
-        # Not uvloop: see the CMD note in deploy/docker/Dockerfile.api.
+        # Same loop as the image CMD (deploy/docker/Dockerfile.api).
         loop="asyncio",
     )

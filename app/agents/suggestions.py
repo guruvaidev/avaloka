@@ -191,7 +191,7 @@ def resolve_pick_with_recovery(user_input: str, state) -> Optional[str]:
 MAX_OFFERED_SUGGESTIONS = 5
 
 
-def render_suggestions(suggestions) -> str:
+def render_suggestion_segments(suggestions) -> list:
     """Render analysis suggestions as a numbered list that INVITES a choice.
 
     This used to be a bare `"Here are some suggestions:\n- " + join(...)`, so the
@@ -203,11 +203,13 @@ def render_suggestions(suggestions) -> str:
     short to point at. "Run 3" is a reply anyone will type; re-describing a
     bullet in their own words is not.
     """
+    from app.api import reply_segments as rs
+
     items = [str(s).strip() for s in (suggestions or []) if str(s).strip()]
     if not items:
-        return ("I could not think of a useful analysis for this dataset yet. "
-                "Tell me what you are trying to find out and I will work from "
-                "that.")
+        return rs.plain("I could not think of a useful analysis for this dataset yet. "
+                        "Tell me what you are trying to find out and I will work from "
+                        "that.")
 
     # Three to five. Seven numbered options is a menu to work through, not a
     # recommendation, and it pushes the reader to skim rather than choose --
@@ -215,9 +217,12 @@ def render_suggestions(suggestions) -> str:
     # ideas first, so truncating keeps the strongest and drops the filler.
     items = items[:MAX_OFFERED_SUGGESTIONS]
 
-    lines = ["Here is what I would look at first:", ""]
-    lines += [f"{n}. {item}" for n, item in enumerate(items, 1)]
-    lines += [
+    # The frame is ours; each suggestion is the model's own words (commentary).
+    segs = rs.plain("Here is what I would look at first:\n")
+    for n, item in enumerate(items, 1):
+        segs = rs.join(segs, rs.plain(f"\n{n}. "), rs.commentary(item))
+    lines = [
+        "",
         "",
         f"Would you like me to start with one of these? Say the number "
         f"(\u201c{1 if len(items) == 1 else '2'}\u201d, or \u201crun "
@@ -225,4 +230,11 @@ def render_suggestions(suggestions) -> str:
         f"or tell me in your own words what you are after and I will plan from "
         f"that instead.",
     ]
-    return "\n".join(lines)
+    return rs.join(segs, rs.plain("\n".join(lines)))
+
+
+def render_suggestions(suggestions) -> str:
+    """:func:`render_suggestion_segments` as the reply text."""
+    from app.api import reply_segments as rs
+
+    return rs.text_of(render_suggestion_segments(suggestions))

@@ -81,6 +81,23 @@ def test_a_rejected_key_is_a_503_not_a_404(monkeypatch):
     assert "credentials" in ei.value.detail.lower()
 
 
+def test_unset_credentials_are_a_503_that_says_unset_not_rejected(monkeypatch):
+    """rc11: with SUPABASE_SERVICE_ROLE_KEY unset, save-and-execute answered
+    503 "credentials were rejected". Nothing was sent, so nothing was rejected;
+    the operator needs to set a variable, not rotate a key."""
+    monkeypatch.setattr(sp, "SUPABASE_URL", None, raising=False)
+    monkeypatch.setattr(sp, "SUPABASE_SERVICE_ROLE_KEY", None, raising=False)
+    monkeypatch.setenv("SUPABASE_URL", "https://proj.supabase.co")
+    monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
+    # The real client factory, so the real "not configured" error is what arrives.
+    monkeypatch.setattr(server, "get_supabase_client", sp.get_supabase_client, raising=False)
+    with pytest.raises(HTTPException) as ei:
+        asyncio.run(server._resolve_session_from_aid("aid-1", "user-1"))
+    assert ei.value.status_code == 503
+    assert "not set" in ei.value.detail
+    assert "rejected" not in ei.value.detail
+
+
 def test_any_lookup_failure_is_a_503(monkeypatch):
     """Not just auth: if the query could not run, 'not found' is unknowable."""
     with pytest.raises(HTTPException) as ei:

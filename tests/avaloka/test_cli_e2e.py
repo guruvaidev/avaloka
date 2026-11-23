@@ -18,6 +18,10 @@ from pathlib import Path
 
 import pytest
 
+#: The release version, read from the file the package itself reads, so a
+#: VERSION bump does not need a matching edit here.
+_VERSION = (Path(__file__).resolve().parents[2] / "VERSION").read_text().strip()
+
 
 def test_e2e_cli_process_help_and_version():
     """True external process invocation of CLI version and help."""

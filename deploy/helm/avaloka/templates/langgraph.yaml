@@ -1,7 +1,8 @@
 {{- if .Values.langgraph.enabled }}
 # LangGraph runs-API server (`langgraph dev`) hosting the avaloka agent graph
 # (langgraph.json -> app/api/langgraph_app.py:graph). The API's /threads endpoints
-# proxy here. Runs from the same avaloka-api image with a different command.
+# proxy here. Runs the avaloka-langgraph image (avaloka.langgraphImage): the API
+# image's build plus langgraph-cli, which the API image no longer carries.
 #
 # Internal only. The API is its only caller (app/api/server.py lg_request: the
 # thread registry), so:
@@ -37,8 +38,8 @@ spec:
       serviceAccountName: {{ include "avaloka.serviceAccountName" . }}
       containers:
         - name: langgraph
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          image: {{ include "avaloka.langgraphImage" . | quote }}
+          imagePullPolicy: {{ default .Values.image.pullPolicy (dig "image" "pullPolicy" "" (.Values.langgraph | default dict)) }}
           command: ["langgraph", "dev", "--host", "0.0.0.0", "--port", "{{ .Values.langgraph.port }}", "--no-browser"]
           ports:
             - name: http

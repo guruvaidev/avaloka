@@ -201,14 +201,39 @@ class InferenceServiceManager:
             raise RuntimeError(f"model server returned an invalid response: {result!r}")
         return result
 
+    def _run_algorithm(self, mlflow_run_id: str) -> str:
+        """The model family the run trained (``algorithm`` run param on 1.7); ``mlp`` when unknown."""
+        try:
+            import mlflow
+            from mlflow.tracking import MlflowClient
+
+            from app.agents.mta_v2.tracking import resolve_tracking_uri
+
+            mlflow.set_tracking_uri(resolve_tracking_uri(None))
+            return str(MlflowClient().get_run(mlflow_run_id).data.params.get("algorithm") or "mlp").lower()
+        except Exception:  # noqa: BLE001 - an unreadable run is treated as the MLP it always was
+            return "mlp"
+
     def _prepare_modelserver(self, mlflow_run_id: str) -> Dict[str, Any]:
-        """Ready-on-demand: validate the artifact, record the details, load nothing."""
-        self._ensure_self_contained_onnx(mlflow_run_id)
+        """Ready-on-demand: validate the artifact, record the details, load nothing.
+
+        1.7's scikit-learn families (gradient_boosting, random_forest, linear) have
+        no ONNX graph: they are logged with mlflow.sklearn under ``model`` and the
+        model server loads them through mlflow.pyfunc, so the ONNX self-containment
+        check applies to the MLP only and the fallback URI is the model directory.
+        """
+        algorithm = self._run_algorithm(mlflow_run_id)
+        if algorithm == "mlp":
+            self._ensure_self_contained_onnx(mlflow_run_id)
         hint = self._registry_hint(mlflow_run_id)
-        model_uri = (f"models:/{hint['registered_name']}/{hint['version']}" if hint
-                     else self._resolve_model_uri(mlflow_run_id))
+        if hint:
+            model_uri = f"models:/{hint['registered_name']}/{hint['version']}"
+        elif algorithm == "mlp":
+            model_uri = self._resolve_model_uri(mlflow_run_id)
+        else:
+            model_uri = f"runs:/{mlflow_run_id}/model"
         details = {"backend": "modelserver", "endpoint": MODEL_SERVER_URL, "model_uri": model_uri,
-                   "run_id": mlflow_run_id, "warm": False, **hint}
+                   "run_id": mlflow_run_id, "warm": False, "algorithm": algorithm, **hint}
         self._persist_details(mlflow_run_id, details)
         return details
 

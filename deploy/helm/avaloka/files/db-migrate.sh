@@ -95,8 +95,10 @@ fi
 
 # Detection runs in the same transaction that creates the table, so a second run
 # (or a retried pod) always takes the "tracked" branch. The marker objects are the
-# ones created by the newest baseline migrations, plus the early user_roles table:
-# all of them exist only if the old Job ran a chart that already carried those files.
+# ones created by this chart's newest baseline migrations (notifications, from
+# 20261009094500_notifications_backend; ray_jobs, from 20261025120000_ray_jobs;
+# and integration_connections), plus the early user_roles table: all of them
+# exist only if the old Job ran a chart that already carried every baseline file.
 # Query output is discarded (set_config echoes its value); NOTICEs go to stderr.
 $PSQL -v baseline="$baseline" >/dev/null <<'SQL'
 BEGIN;
@@ -124,6 +126,7 @@ BEGIN
 
   IF to_regclass('public.ray_jobs') IS NOT NULL
      AND to_regclass('public.notifications') IS NOT NULL
+     AND to_regclass('public.integration_connections') IS NOT NULL
      AND to_regclass('public.user_roles') IS NOT NULL
      AND current_setting('avaloka.baseline') <> '' THEN
     INSERT INTO avaloka_meta.schema_migrations (version, how)

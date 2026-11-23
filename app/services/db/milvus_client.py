@@ -140,8 +140,8 @@ class MilvusClientImpl:
     def _check_embedding_space(self, vector: Optional[List[float]]) -> None:
         """Warn, once, when stored vectors come from a different embedding space.
 
-        Before this change embeddings went to OpenAI whenever OPENAI_API_KEY was set;
-        they are now local by default. Both are padded to the collection's dimension,
+        Before 2.0 embeddings went to OpenAI whenever OPENAI_API_KEY was set; they
+        are now local by default. Both are padded to the collection's dimension,
         so nothing fails -- but a local query scored against an OpenAI-embedded
         row is noise. Milvus scores server-side, so rows cannot be skipped per
         query here; this samples the stored rows and says what to do instead.

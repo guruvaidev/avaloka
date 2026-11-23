@@ -195,7 +195,8 @@ class TestTheTwoSchemasAgree:
 
     def test_the_process_types_are_untouched(self):
         assert accepted.EVENT_TYPES - {_wire_type(n) for n in produced.EVENTS} == {
-            "install", "agent.started", "agent.completed", "dataset"}
+            "install", "agent.started", "agent.completed", "dataset", "swarm.completed",
+            "agent.understanding", "swarm.understanding"}
 
     @pytest.mark.parametrize("name", sorted(produced.EVENTS))
     def test_this_type_accepts_exactly_the_fields_the_producer_can_export(self, name):

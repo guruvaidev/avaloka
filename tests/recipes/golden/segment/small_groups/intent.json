@@ -1,0 +1,10 @@
+{
+  "question": "Which channels matter most for revenue?",
+  "recipe": "segment",
+  "params": {
+    "measure": "revenue",
+    "dimension": "channel"
+  },
+  "confidence": 1.0,
+  "source": "fixture"
+}

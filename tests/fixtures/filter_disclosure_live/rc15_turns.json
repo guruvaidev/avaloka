@@ -1,0 +1,278 @@
+{
+ "_source": "rweb15 (rc15 b526a97d, web chat, Groq): results/<run>/related/ask_seg.json and results/rw7c/nullxlsx/reply.json as the API returned them. graph_human_message is the message the graph held at verify time, verbatim from logs/final-api.log ('[app.agents.planner] last message is'); read_map from the same log ('[local-exec] multi-file read map'). narrative is the shown reply with the withheld claim put back: what the narrator wrote before presentable_reply.",
+ "turns": {
+  "rw7": {
+   "question": "How does the average order amount differ by customer segment?",
+   "graph_human_message": "How does the average order amount differ by customer segment?\n\n[Analysis context] Current fidelity: portfolio_samples; Effective fidelity for this request: portfolio_samples; Selected sample: random_baseline; Resolved analysis source: random_baseline; Dataset size bytes: 45282\n\n\n[Context] Multiple datasets are available in this session. You can load and join/compare them using pandas by reading from the CSV paths below. Use the dataset aliases when reasoning about them.\n\n[Dataset: customers]\n  filename: customers.csv\n  csv_path: /var/tmp/avaloka/46cd32bc-01a3-40c6-9cc0-14d368dc025d/input_47141559-70e9-49b8-8f9e-0317f251bfa6.csv\n  columns: customer_id, region, signup_year, segment\n  preview: [{\"customer_id\": 1, \"region\": \"West\", \"signup_year\": 2022, \"segment\": \"consumer\"}, {\"customer_id\": 2, \"region\": \"East\", \"signup_year\": 2024, \"segment\": \"consumer\"}, {\"customer_id\": 3, \"region\": \"East\", \"signup_year\": 2019, \"segment\": \"enterprise\"}, {\"customer_id\": 4, \"region\": \"West\", \"signup_year\": 2024, \"segment\": \"smb\"}, {\"customer_id\": 5, \"region\": \"East\", \"signup_year\": 2018, \"segment\": \"consumer\"}]\n\n[Dataset: orders]\n  filename: orders.csv\n  csv_path: /var/tmp/avaloka/49d1ec27-426f-41a9-aefa-0118350a3254/input_5eeeb30f-3627-409c-a019-016298dc4353.csv\n  columns: order_id, customer_id, order_date, amount, returned\n  preview: [{\"order_id\": 1, \"customer_id\": 1010, \"order_date\": \"2024-07-31\", \"amount\": 175.67, \"returned\": false}, {\"order_id\": 2, \"customer_id\": 1630, \"order_date\": \"2024-08-04\", \"amount\": 327.43, \"returned\": false}, {\"order_id\": 3, \"customer_id\": 904, \"order_date\": \"2024-07-12\", \"amount\": 11.99, \"returned\": false}, {\"order_id\": 4, \"customer_id\": 469, \"order_date\": \"2024-08-09\", \"amount\": 872.03, \"returned\": false}, {\"order_id\": 5, \"customer_id\": 1336, \"order_date\": \"2024-11-19\", \"amount\": 40.57, \"returned\": false}]\n\n[Suggested join keys]\n- customers.customer_id ↔ orders.customer_id (confidence=0.9, match_rate=0.0)\n- customers.signup_year ↔ orders.order_date (confidence=0.7, transform=Create `year` from `order_date` using pd.to_datetime(...).dt.year, then join `signup_year` ↔ `year`.)",
+   "shown_on_rc15": "Enterprise customers spend the most on average, with $545.08 per order, compared to SMBs at $182.27 and consumers at $59.77.  \n\n- Enterprise leads by a factor of roughly 3× SMB and 9× consumers.  \n- SMB orders are about three times larger than consumer orders.  \n- Consumer orders are the smallest, under $60 on average.\n\nI've held back 1 statement from this answer because the numbers from the analysis don't support it.",
+   "code": "import pandas as pd\n\ndef main(df):\n    df_customers = pd.read_csv('customers.csv')\n    df_orders = pd.read_csv('orders.csv')\n    df_customers['customer_id'] = pd.to_numeric(df_customers['customer_id'], errors='coerce').astype('Int64')\n    df_orders['customer_id'] = pd.to_numeric(df_orders['customer_id'], errors='coerce').astype('Int64')\n    if 'order_date' in df_orders.columns:\n        df_orders['order_date'] = pd.to_datetime(df_orders['order_date'], errors='coerce')\n    if 'returned' in df_orders.columns:\n        df_orders = df_orders[df_orders['returned'] == False]\n    df_customers = df_customers.dropna(subset=['customer_id', 'segment'])\n    df_orders = df_orders.dropna(subset=['customer_id', 'amount'])\n    df_customers['segment'] = df_customers['segment'].astype(str).str.strip().str.lower()\n    df_merged = pd.merge(df_orders, df_customers, on='customer_id', how='inner', validate='many_to_one')\n    result = df_merged.groupby('segment', as_index=False)['amount'].mean().rename(columns={'amount': 'average_order_amount'})\n    result['average_order_amount'] = result['average_order_amount'].round(2)\n    result = result.sort_values(by='average_order_amount', ascending=False).reset_index(drop=True)\n    return result\nif __name__ == '__main__':\n    df = pd.read_csv('input.csv') if pd.io.common.file_exists('input.csv') else pd.DataFrame()\n    df = main(df)\n    df.to_csv('output.csv', index=False)",
+   "planner_definition": {
+    "job_name": "Average Order Amount by Customer Segment",
+    "source": "customers.csv and orders.csv",
+    "transformations": [
+     {
+      "name": "Join on customer_id",
+      "type": "filter",
+      "columns": [
+       "customer_id"
+      ],
+      "aggregation": null
+     },
+     {
+      "name": "Group by Segment",
+      "type": "aggregation",
+      "columns": [
+       "segment"
+      ],
+      "aggregation": "avg"
+     },
+     {
+      "name": "Select amount",
+      "type": "aggregation",
+      "columns": [
+       "amount"
+      ],
+      "aggregation": "avg"
+     }
+    ],
+    "destination": "segment_avg_amounts.csv",
+    "schedule": null,
+    "notes": null
+   },
+   "output_json": [
+    {
+     "segment": "enterprise",
+     "average_order_amount": "545.08"
+    },
+    {
+     "segment": "smb",
+     "average_order_amount": "182.27"
+    },
+    {
+     "segment": "consumer",
+     "average_order_amount": "59.77"
+    }
+   ],
+   "read_map": {
+    "customers": "/var/tmp/avaloka/46cd32bc-01a3-40c6-9cc0-14d368dc025d/input_47141559-70e9-49b8-8f9e-0317f251bfa6.csv",
+    "orders": "/var/tmp/avaloka/49d1ec27-426f-41a9-aefa-0118350a3254/input_5eeeb30f-3627-409c-a019-016298dc4353.csv"
+   },
+   "verification_report_on_rc15": {
+    "safe_to_present": true,
+    "claims_checked": 5,
+    "n_problems": 1,
+    "findings": [
+     {
+      "claim": "- The gap between enterprise and SMB is the widest, over $360.",
+      "verdict": "unsupported",
+      "check": "invented_number",
+      "detail": "cites 360, which does not appear in the computed evidence within tolerance",
+      "evidence_ref": null
+     }
+    ],
+    "analysis": "answered",
+    "goal_answered": true,
+    "claims_reconciled": false,
+    "verified": false
+   },
+   "narrative": "Enterprise customers spend the most on average, with $545.08 per order, compared to SMBs at $182.27 and consumers at $59.77.  \n\n- Enterprise leads by a factor of roughly 3× SMB and 9× consumers.  \n- The gap between enterprise and SMB is the widest, over $360.  \n- SMB orders are about three times larger than consumer orders.  \n- Consumer orders are the smallest, under $60 on average."
+  },
+  "rw7b": {
+   "question": "How does the average order amount differ by customer segment?",
+   "graph_human_message": "How does the average order amount differ by customer segment?\n\n[Analysis context] Current fidelity: portfolio_samples; Effective fidelity for this request: portfolio_samples; Selected sample: random_baseline; Resolved analysis source: random_baseline; Dataset size bytes: 45282\n\n\n[Context] Multiple datasets are available in this session. You can load and join/compare them using pandas by reading from the CSV paths below. Use the dataset aliases when reasoning about them.\n\n[Dataset: customers]\n  filename: customers.csv\n  csv_path: /var/tmp/avaloka/2cd0e27d-090c-44ee-9149-4fd3c5f05b06/input_efc2536b-abab-4a21-b5ff-48157bc8390b.csv\n  columns: customer_id, region, signup_year, segment\n  preview: [{\"customer_id\": 1, \"region\": \"West\", \"signup_year\": 2022, \"segment\": \"consumer\"}, {\"customer_id\": 2, \"region\": \"East\", \"signup_year\": 2024, \"segment\": \"consumer\"}, {\"customer_id\": 3, \"region\": \"East\", \"signup_year\": 2019, \"segment\": \"enterprise\"}, {\"customer_id\": 4, \"region\": \"West\", \"signup_year\": 2024, \"segment\": \"smb\"}, {\"customer_id\": 5, \"region\": \"East\", \"signup_year\": 2018, \"segment\": \"consumer\"}]\n\n[Dataset: orders]\n  filename: orders.csv\n  csv_path: /var/tmp/avaloka/cf9d963e-580c-4f09-b308-db6b3d39765d/input_3c383251-1d1f-4ee9-967d-e89170c047f2.csv\n  columns: order_id, customer_id, order_date, amount, returned\n  preview: [{\"order_id\": 1, \"customer_id\": 1010, \"order_date\": \"2024-07-31\", \"amount\": 175.67, \"returned\": false}, {\"order_id\": 2, \"customer_id\": 1630, \"order_date\": \"2024-08-04\", \"amount\": 327.43, \"returned\": false}, {\"order_id\": 3, \"customer_id\": 904, \"order_date\": \"2024-07-12\", \"amount\": 11.99, \"returned\": false}, {\"order_id\": 4, \"customer_id\": 469, \"order_date\": \"2024-08-09\", \"amount\": 872.03, \"returned\": false}, {\"order_id\": 5, \"customer_id\": 1336, \"order_date\": \"2024-11-19\", \"amount\": 40.57, \"returned\": false}]\n\n[Suggested join keys]\n- customers.customer_id ↔ orders.customer_id (confidence=0.9, match_rate=0.0)\n- customers.signup_year ↔ orders.order_date (confidence=0.7, transform=Create `year` from `order_date` using pd.to_datetime(...).dt.year, then join `signup_year` ↔ `year`.)",
+   "shown_on_rc15": "Enterprise customers spend the most on average, with $545.33 per order, followed by SMBs at $182.17, while consumers average only $59.79.  \n\n- Enterprise leads by a wide margin, roughly 3× the SMB average.  \n- SMB orders are about 3× higher than consumer orders.  \n- No other segments are present, so the ranking is clear.\n\nI've held back 1 statement from this answer because the numbers from the analysis don't support it.",
+   "code": "import pandas as pd\n\ndef main(df):\n    customers = pd.read_csv('customers.csv')\n    orders = pd.read_csv('orders.csv')\n    customers.columns = customers.columns.str.lower()\n    orders.columns = orders.columns.str.lower()\n    orders['order_date'] = pd.to_datetime(orders['order_date'], errors='coerce')\n    customers['segment'] = customers['segment'].astype(str).str.strip().str.lower()\n    orders = orders.dropna(subset=['amount'])\n    customers = customers.dropna(subset=['segment'])\n    merged = pd.merge(customers, orders, on='customer_id', how='inner')\n    result = merged.groupby('segment', as_index=False)['amount'].mean()\n    result = result.rename(columns={'amount': 'average_amount'})\n    result['average_amount'] = result['average_amount'].round(2)\n    result = result.sort_values('average_amount', ascending=False).reset_index(drop=True)\n    return result\nif __name__ == '__main__':\n    df = pd.DataFrame()\n    df = main(df)\n    df.to_csv('output.csv', index=False)",
+   "planner_definition": {
+    "job_name": "Average Order Amount by Customer Segment",
+    "source": "customers.csv + orders.csv",
+    "transformations": [
+     {
+      "name": "Join on customer_id",
+      "type": "aggregation",
+      "columns": [
+       "customer_id"
+      ],
+      "aggregation": null
+     },
+     {
+      "name": "Group by segment",
+      "type": "aggregation",
+      "columns": [
+       "segment"
+      ],
+      "aggregation": "avg"
+     },
+     {
+      "name": "Aggregate amount",
+      "type": "aggregation",
+      "columns": [
+       "amount"
+      ],
+      "aggregation": "avg"
+     }
+    ],
+    "destination": null,
+    "schedule": null,
+    "notes": null
+   },
+   "output_json": [
+    {
+     "segment": "enterprise",
+     "average_amount": "545.33"
+    },
+    {
+     "segment": "smb",
+     "average_amount": "182.17"
+    },
+    {
+     "segment": "consumer",
+     "average_amount": "59.79"
+    }
+   ],
+   "read_map": {
+    "customers": "/var/tmp/avaloka/2cd0e27d-090c-44ee-9149-4fd3c5f05b06/input_efc2536b-abab-4a21-b5ff-48157bc8390b.csv",
+    "orders": "/var/tmp/avaloka/cf9d963e-580c-4f09-b308-db6b3d39765d/input_3c383251-1d1f-4ee9-967d-e89170c047f2.csv"
+   },
+   "verification_report_on_rc15": {
+    "safe_to_present": true,
+    "claims_checked": 5,
+    "n_problems": 1,
+    "findings": [
+     {
+      "claim": "- The gap between enterprise and consumer is over $480.",
+      "verdict": "unsupported",
+      "check": "invented_number",
+      "detail": "cites 480, which does not appear in the computed evidence within tolerance",
+      "evidence_ref": null
+     }
+    ],
+    "analysis": "answered",
+    "goal_answered": true,
+    "claims_reconciled": false,
+    "verified": false
+   },
+   "narrative": "Enterprise customers spend the most on average, with $545.33 per order, followed by SMBs at $182.17, while consumers average only $59.79.  \n\n- Enterprise leads by a wide margin, roughly 3× the SMB average.  \n- SMB orders are about 3× higher than consumer orders.  \n- No other segments are present, so the ranking is clear.  \n- The gap between enterprise and consumer is over $480."
+  },
+  "rw7c": {
+   "question": "How does the average order amount differ by customer segment?",
+   "graph_human_message": "How does the average order amount differ by customer segment?\n\n[Analysis context] Current fidelity: portfolio_samples; Effective fidelity for this request: portfolio_samples; Selected sample: random_baseline; Resolved analysis source: random_baseline; Dataset size bytes: 45282\n\n\n[Context] Multiple datasets are available in this session. You can load and join/compare them using pandas by reading from the CSV paths below. Use the dataset aliases when reasoning about them.\n\n[Dataset: customers]\n  filename: customers.csv\n  csv_path: /var/tmp/avaloka/7f33870b-d187-489d-8586-d1d5bb737b68/input_b2efd80c-abce-4e3a-a05c-d723e439470f.csv\n  columns: customer_id, region, signup_year, segment\n  preview: [{\"customer_id\": 1, \"region\": \"West\", \"signup_year\": 2022, \"segment\": \"consumer\"}, {\"customer_id\": 2, \"region\": \"East\", \"signup_year\": 2024, \"segment\": \"consumer\"}, {\"customer_id\": 3, \"region\": \"East\", \"signup_year\": 2019, \"segment\": \"enterprise\"}, {\"customer_id\": 4, \"region\": \"West\", \"signup_year\": 2024, \"segment\": \"smb\"}, {\"customer_id\": 5, \"region\": \"East\", \"signup_year\": 2018, \"segment\": \"consumer\"}]\n\n[Dataset: orders]\n  filename: orders.csv\n  csv_path: /var/tmp/avaloka/f74138b7-815a-4f0c-9a35-5cdc0088d663/input_f163da66-069a-4cc8-8e73-6975bbe2198c.csv\n  columns: order_id, customer_id, order_date, amount, returned\n  preview: [{\"order_id\": 1, \"customer_id\": 1010, \"order_date\": \"2024-07-31\", \"amount\": 175.67, \"returned\": false}, {\"order_id\": 2, \"customer_id\": 1630, \"order_date\": \"2024-08-04\", \"amount\": 327.43, \"returned\": false}, {\"order_id\": 3, \"customer_id\": 904, \"order_date\": \"2024-07-12\", \"amount\": 11.99, \"returned\": false}, {\"order_id\": 4, \"customer_id\": 469, \"order_date\": \"2024-08-09\", \"amount\": 872.03, \"returned\": false}, {\"order_id\": 5, \"customer_id\": 1336, \"order_date\": \"2024-11-19\", \"amount\": 40.57, \"returned\": false}]\n\n[Suggested join keys]\n- customers.customer_id ↔ orders.customer_id (confidence=0.9, match_rate=0.0)\n- customers.signup_year ↔ orders.order_date (confidence=0.7, transform=Create `year` from `order_date` using pd.to_datetime(...).dt.year, then join `signup_year` ↔ `year`.)",
+   "shown_on_rc15": "Enterprise customers spend the most on average, with $545.08 per order, followed by SMBs at $182.27, while consumers average only $59.77.  \n\n$182.27).  \n- SMB is roughly three times higher than consumers ($182.27 vs. $59.77).  \n- The gap between enterprise and consumer is the largest ($485.31).  \n- No other segments are present in the data.\n\nI've held back 1 statement from this answer because the numbers from the analysis don't support it.\n\nWhy: 545.08 is enterprise's average_amount, not smb's (182.3).",
+   "code": "import pandas as pd\n\ndef main(df):\n    customers_path = '/var/tmp/avaloka/7f33870b-d187-489d-8586-d1d5bb737b68/input_b2efd80c-abce-4e3a-a05c-d723e439470f.csv'\n    orders_path = '/var/tmp/avaloka/f74138b7-815a-4f0c-9a35-5cdc0088d663/input_f163da66-069a-4cc8-8e73-6975bbe2198c.csv'\n    customers = pd.read_csv(customers_path, dtype={'customer_id': 'Int64', 'region': 'string', 'signup_year': 'Int64', 'segment': 'string'})\n    orders = pd.read_csv(orders_path, dtype={'order_id': 'Int64', 'customer_id': 'Int64', 'order_date': 'object', 'amount': 'object', 'returned': 'object'})\n    for col in ['region', 'segment']:\n        customers[col] = customers[col].astype(str).str.strip().str.lower()\n    orders['order_date'] = pd.to_datetime(orders['order_date'], errors='coerce')\n    customers = customers.dropna(subset=['customer_id'])\n    orders = orders.dropna(subset=['customer_id', 'amount'])\n    orders['amount'] = pd.to_numeric(orders['amount'], errors='coerce')\n    orders = orders.dropna(subset=['amount'])\n    orders['returned'] = orders['returned'].astype(str).str.strip().str.lower()\n    orders = orders[orders['returned'].isin(['false', '0', 'no', 'n'])]\n    merged = pd.merge(orders, customers, on='customer_id', how='inner')\n    avg_by_segment = merged.groupby('segment', as_index=False)['amount'].mean().rename(columns={'amount': 'average_amount'})\n    avg_by_segment['average_amount'] = avg_by_segment['average_amount'].round(2)\n    avg_by_segment = avg_by_segment.sort_values(by='average_amount', ascending=False).reset_index(drop=True)\n    return avg_by_segment\nif __name__ == '__main__':\n    df = read_csv_best_effort('input.csv')\n    df = main(df)\n    df.to_csv('output.csv', index=False)",
+   "planner_definition": {
+    "job_name": "Average Order Amount by Customer Segment",
+    "source": "customers.csv and orders.csv",
+    "transformations": [
+     {
+      "name": "Join Customers and Orders",
+      "type": "aggregation",
+      "columns": [
+       "customer_id"
+      ],
+      "aggregation": null
+     },
+     {
+      "name": "Filter Returned Orders",
+      "type": "filter",
+      "columns": [
+       "returned"
+      ],
+      "aggregation": null
+     },
+     {
+      "name": "Group by Segment and Compute Avg Amount",
+      "type": "aggregation",
+      "columns": [
+       "segment"
+      ],
+      "aggregation": "avg"
+     }
+    ],
+    "destination": "segment_avg_amounts.csv",
+    "schedule": "daily at 2am",
+    "notes": null
+   },
+   "output_json": [
+    {
+     "segment": "enterprise",
+     "average_amount": "545.08"
+    },
+    {
+     "segment": "smb",
+     "average_amount": "182.27"
+    },
+    {
+     "segment": "consumer",
+     "average_amount": "59.77"
+    }
+   ],
+   "read_map": {
+    "customers": "/var/tmp/avaloka/7f33870b-d187-489d-8586-d1d5bb737b68/input_b2efd80c-abce-4e3a-a05c-d723e439470f.csv",
+    "orders": "/var/tmp/avaloka/f74138b7-815a-4f0c-9a35-5cdc0088d663/input_f163da66-069a-4cc8-8e73-6975bbe2198c.csv"
+   },
+   "verification_report_on_rc15": {
+    "safe_to_present": false,
+    "claims_checked": 5,
+    "n_problems": 1,
+    "findings": [
+     {
+      "claim": "- Enterprise leads by a wide margin over SMB ($545.08 vs.",
+      "verdict": "contradicted",
+      "check": "figure_misattributed",
+      "detail": "545.08 is enterprise's average_amount, not smb's (182.3)",
+      "evidence_ref": "data.segment"
+     }
+    ],
+    "analysis": "answered",
+    "goal_answered": true,
+    "claims_reconciled": false,
+    "verified": false
+   },
+   "narrative": "Enterprise customers spend the most on average, with $545.08 per order, followed by SMBs at $182.27, while consumers average only $59.77.  \n\n- Enterprise leads by a wide margin over SMB ($545.08 vs. $182.27).  \n- SMB is roughly three times higher than consumers ($182.27 vs. $59.77).  \n- The gap between enterprise and consumer is the largest ($485.31).  \n- No other segments are present in the data."
+  },
+  "rw7c_nullxlsx": {
+   "question": "What drives Outcome?",
+   "shown_on_rc15": "Readmitted patients (4) have higher average glucose (108.5 mg/dL) and a longer average stay (10.5 months) than Recovered patients (16) whose mean glucose is 103.8 mg/dL and average stay is 6 months.  \n- The month‑to‑outcome correlation is also identical (–0.501).  \n- The larger patient count in the Recovered group masks the slightly higher glucose and longer stay seen in the Readmitted group.  \n- No other variable in the table differentiates the outcomes.\n\nI've held back 1 statement from this answer because the numbers from the analysis don't support it.\n\nWhy: It gives Glucose –0.086, but Glucose's association with Outcome is eta=0.153; ranked by association: Notes (Cramer's V=0.158), Glucose (eta=0.153).",
+   "narrative": "Readmitted patients (4) have higher average glucose (108.5 mg/dL) and a longer average stay (10.5 months) than Recovered patients (16) whose mean glucose is 103.8 mg/dL and average stay is 6 months.  \n- The month‑to‑outcome correlation is also identical (–0.501).  \n- The larger patient count in the Recovered group masks the slightly higher glucose and longer stay seen in the Readmitted group.  \n- No other variable in the table differentiates the outcomes.",
+   "code": "import pandas as pd\nimport numpy as np\n\ndef main(df):\n    path_2022 = '/var/tmp/avaloka/ca3407f2-e116-4c9b-9f42-9608cf4779d5/input_ef24180c-6307-4421-a1ac-e96a409aa9f5.csv'\n    path_2023 = '/var/tmp/avaloka/16aa7ea8-8c26-436b-a5cd-6857c31ffdc5/input_0ca6e84e-6a74-4bf3-b5dc-ff5dec882182.csv'\n    df2022 = pd.read_csv(path_2022, dtype=str, keep_default_na=False)\n    df2023 = pd.read_csv(path_2023, dtype=str, keep_default_na=False)\n    df = pd.concat([df2022, df2023], ignore_index=True)\n    df['Outcome'] = df['Outcome'].astype('string').str.strip().str.title()\n    df['Notes'] = df['Notes'].replace({'NULL': '', 'null': ''}, regex=True).astype('string').str.strip()\n    df['Glucose'] = pd.to_numeric(df['Glucose'].astype(str), errors='coerce')\n    df['visit_date'] = pd.to_datetime(df['visit_date'].astype(str), errors='coerce')\n    df['month'] = df['visit_date'].dt.month\n    df_clean = df.dropna(subset=['Outcome', 'Glucose', 'month'])\n    outcome_stats = df_clean.groupby('Outcome', as_index=False).agg(patient_count=('patient_id', 'size'), mean_glucose=('Glucose', 'mean'), std_glucose=('Glucose', 'std'), avg_month=('month', 'mean'))\n    outcome_codes = df_clean['Outcome'].astype('category').cat.codes\n    corr_glucose = df_clean['Glucose'].corr(outcome_codes)\n    corr_month = df_clean['month'].corr(outcome_codes)\n    outcome_stats['outcome_glucose_corr'] = corr_glucose\n    outcome_stats['outcome_month_corr'] = corr_month\n    outcome_stats = outcome_stats.dropna(subset=['Outcome', 'patient_count', 'mean_glucose'])\n    outcome_stats = outcome_stats.sort_values(by='Outcome').reset_index(drop=True)\n    return outcome_stats\nif __name__ == '__main__':\n    try:\n        df = read_csv_best_effort('input.csv')\n    except Exception:\n        df = pd.DataFrame()\n    df = main(df)\n    df.to_csv('output.csv', index=False)",
+   "planner_definition": {},
+   "output_json": [
+    {
+     "Outcome": "Readmitted",
+     "patient_count": "4",
+     "mean_glucose": "108.5",
+     "std_glucose": "37.52776749732568",
+     "avg_month": "10.5",
+     "outcome_glucose_corr": "-0.08623811228491363",
+     "outcome_month_corr": "-0.5013558033798176"
+    },
+    {
+     "Outcome": "Recovered",
+     "patient_count": "16",
+     "mean_glucose": "103.75",
+     "std_glucose": "18.99298115971617",
+     "avg_month": "6.0",
+     "outcome_glucose_corr": "-0.08623811228491363",
+     "outcome_month_corr": "-0.5013558033798176"
+    }
+   ],
+   "verification_report_on_rc15": {
+    "safe_to_present": false,
+    "claims_checked": 5,
+    "n_problems": 1,
+    "findings": [
+     {
+      "claim": "- The glucose‑to‑outcome correlation is identical for both groups (–0.086).",
+      "verdict": "contradicted",
+      "check": "driver_figure_mismatch",
+      "detail": "it gives Glucose –0.086, but Glucose's association with Outcome is eta=0.153; ranked by association: Notes (Cramer's V=0.158), Glucose (eta=0.153)",
+      "evidence_ref": "data"
+     }
+    ],
+    "analysis": "answered",
+    "goal_answered": true,
+    "claims_reconciled": false,
+    "verified": false
+   }
+  }
+ }
+}

@@ -3,6 +3,9 @@ import os
 import uuid
 import sqlalchemy as sa
 from typing import Iterator
+from app.core.thirdparty_optout import disable_thirdparty_telemetry
+
+disable_thirdparty_telemetry()  # before daft: its import-time usage beacon
 from daft.io import DataSink
 from daft.io.sink import WriteResult
 from daft.recordbatch import MicroPartition

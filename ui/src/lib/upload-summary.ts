@@ -119,6 +119,8 @@
 
 
 
+import { parseReplySegments, type ReplySegment } from "@/lib/reply-segments";
+
 /**
  * Builds the first assistant chat message shown when an analysis opens right
  * after an upload or cloud import (or is reopened with an empty thread).
@@ -236,4 +238,20 @@ export function buildUploadSummaryMessage(up: any, fallbackName?: string): strin
   });
 
   return blocks.length ? blocks.join("\n\n") : null;
+}
+
+/**
+ * Which words of the backend's upload message a model wrote (2.0 commentary
+ * marking): `upload_message_segments`, or null when the backend sent none or
+ * no backend message is used (the message is then built here, from the
+ * suffixed strings, and shown as-is).
+ */
+export function buildUploadSummarySegments(up: any): ReplySegment[] | null {
+  if (!up || typeof up !== "object") return null;
+  return safe(() => {
+    const cfg = vizConfig(up);
+    const message = cfg?.upload_message;
+    if (typeof message !== "string" || !message.trim()) return null;
+    return parseReplySegments(cfg?.upload_message_segments);
+  }, null);
 }

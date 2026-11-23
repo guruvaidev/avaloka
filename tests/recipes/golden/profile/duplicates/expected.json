@@ -1,0 +1,53 @@
+{
+  "recipe": "profile",
+  "version_major": 1,
+  "verdict": "qualified",
+  "reason": null,
+  "figures": [
+    {
+      "id": "/rows",
+      "value": 500.0,
+      "decimals": 0,
+      "unit": "count"
+    },
+    {
+      "id": "/columns",
+      "value": 4.0,
+      "decimals": 0,
+      "unit": "count"
+    },
+    {
+      "id": "/duplicates/rows",
+      "value": 40.0,
+      "decimals": 0,
+      "unit": "count"
+    },
+    {
+      "id": "/duplicates/share",
+      "value": 8.0,
+      "decimals": 1,
+      "unit": "percent"
+    },
+    {
+      "id": "/quality/score",
+      "value": 94.0,
+      "decimals": 0,
+      "unit": "unitless"
+    },
+    {
+      "id": "/constant_columns",
+      "value": 0.0,
+      "decimals": 0,
+      "unit": "count"
+    }
+  ],
+  "caveats": [
+    "data_quality"
+  ],
+  "must_not_say": [
+    "causes",
+    "drives",
+    "because",
+    "proves"
+  ]
+}

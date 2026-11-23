@@ -1,0 +1,178 @@
+{
+ "_about": "Three rweb18b turns (rc18b @ 438656fe) whose result-contract refusal was false, and one reply whose scope line named the pandas module as a column. Minimum fields: the user's question, the blueprint contract and the executed code as logged by the API (final-api.log), with each absolute input path replaced by a {placeholder} the test fills with a file it writes, and the plain sentence the user was shown.",
+ "contract_turns": {
+  "messy_rw7b": {
+   "run": "rw7b messy_xlsx chat",
+   "question": "what sells most?",
+   "contract": {
+    "result_kind": "aggregate",
+    "source_columns": [
+     "StockCode",
+     "Description",
+     "Quantity",
+     "UnitPrice"
+    ],
+    "result_columns": [
+     {
+      "name": "StockCode",
+      "role": "key",
+      "dtype": "string"
+     },
+     {
+      "name": "Description",
+      "role": "key",
+      "dtype": "string"
+     },
+     {
+      "name": "TotalQuantity",
+      "role": "metric",
+      "dtype": "numeric",
+      "min": 0.0
+     },
+     {
+      "name": "TotalRevenue",
+      "role": "metric",
+      "dtype": "numeric",
+      "min": 0.0
+     }
+    ],
+    "row_relation": {
+     "type": "one_per_group",
+     "group_by": [
+      "StockCode",
+      "Description"
+     ]
+    },
+    "unique_key": [
+     "StockCode",
+     "Description"
+    ],
+    "not_null": [
+     "StockCode",
+     "Description",
+     "TotalQuantity",
+     "TotalRevenue"
+    ]
+   },
+   "code": "import pandas as pd\n\ndef _clean(df: pd.DataFrame) -> pd.DataFrame:\n    \"\"\"Convert numeric columns, drop missing keys, keep positive quantities.\"\"\"\n    df['Quantity'] = pd.to_numeric(df['Quantity'], errors='coerce')\n    df['UnitPrice'] = pd.to_numeric(df['UnitPrice'], errors='coerce')\n    df = df.dropna(subset=['StockCode', 'Description'])\n    df = df[df['Quantity'] > 0]\n    return df\n\ndef main(df: pd.DataFrame) -> pd.DataFrame:\n    path_2010 = '{path_2010}'\n    path_2011 = '{path_2011}'\n    df_2010 = pd.read_csv(path_2010)\n    df_2011 = pd.read_csv(path_2011)\n    required_cols = {'StockCode', 'Description', 'Quantity', 'UnitPrice'}\n    for name, data in (('df_2010', df_2010), ('df_2011', df_2011)):\n        missing = required_cols - set(data.columns)\n        if missing:\n            raise ValueError(f'{name} is missing required columns: {missing}')\n    df_2010 = _clean(df_2010)\n    df_2011 = _clean(df_2011)\n    df_2010['Period'] = '2010_Q4'\n    df_2011['Period'] = '2011_Q1'\n    df_all = pd.concat([df_2010, df_2011], ignore_index=True)\n    df_all['Revenue'] = df_all['Quantity'] * df_all['UnitPrice']\n    product_summary = df_all.groupby(['StockCode', 'Description'], as_index=False).agg(TotalQuantity=('Quantity', 'sum'), TotalRevenue=('Revenue', 'sum'))\n    product_summary['TotalQuantity'] = product_summary['TotalQuantity'].clip(lower=0)\n    product_summary['TotalRevenue'] = product_summary['TotalRevenue'].clip(lower=0)\n    return product_summary\nif __name__ == '__main__':\n    try:\n        df = pd.read_csv('input.csv')\n    except FileNotFoundError:\n        df = pd.DataFrame()\n    result_df = main(df)\n    result_df.to_csv('output.csv', index=False)\n",
+   "shown": "the plan promised one row per ['StockCode', 'Description']; the input holds 73 distinct group(s) but 2776 rows were returned, so the result is not one row per group"
+  },
+  "messy_rw7a": {
+   "run": "rw7a messy_xlsx chat",
+   "question": "what sells most?",
+   "contract": {
+    "result_kind": "aggregate",
+    "source_columns": [
+     "StockCode",
+     "Description",
+     "Quantity",
+     "UnitPrice"
+    ],
+    "result_columns": [
+     {
+      "name": "StockCode",
+      "role": "key",
+      "dtype": "string"
+     },
+     {
+      "name": "Description",
+      "role": "passthrough",
+      "dtype": "string"
+     },
+     {
+      "name": "TotalQuantity",
+      "role": "metric",
+      "dtype": "numeric",
+      "min": 0.0
+     },
+     {
+      "name": "TotalRevenue",
+      "role": "metric",
+      "dtype": "numeric",
+      "min": 0.0
+     }
+    ],
+    "row_relation": {
+     "type": "one_per_group",
+     "group_by": [
+      "StockCode"
+     ]
+    },
+    "unique_key": [
+     "StockCode"
+    ],
+    "not_null": [
+     "StockCode",
+     "TotalQuantity",
+     "TotalRevenue"
+    ]
+   },
+   "code": "import pandas as pd\n\ndef main(df):\n    df['InvoiceDate'] = pd.to_datetime(df['InvoiceDate'], errors='coerce')\n    df['Quantity'] = pd.to_numeric(df['Quantity'], errors='coerce')\n    df['UnitPrice'] = pd.to_numeric(df['UnitPrice'], errors='coerce')\n    q1_path = '{q1_path}'\n    df_q1 = pd.read_csv(q1_path, dtype=str)\n    df_q1['InvoiceDate'] = pd.to_datetime(df_q1['InvoiceDate'], errors='coerce')\n    df_q1['Quantity'] = pd.to_numeric(df_q1['Quantity'], errors='coerce')\n    df_q1['UnitPrice'] = pd.to_numeric(df_q1['UnitPrice'], errors='coerce')\n    combined = pd.concat([df, df_q1], ignore_index=True)\n    combined['Revenue'] = combined['Quantity'] * combined['UnitPrice']\n    product_sales = combined.groupby('StockCode', as_index=False).agg(Description=('Description', lambda s: s.dropna().iloc[0] if s.dropna().any() else pd.NA), TotalQuantity=('Quantity', 'sum'), TotalRevenue=('Revenue', 'sum'))\n    return product_sales\nif __name__ == '__main__':\n    df = read_csv_best_effort('input.csv')\n    df = main(df)\n    df.to_csv('output.csv', index=False)\n",
+   "shown": "out_of_range: 'TotalQuantity' declared min 0.0 but has -366.0 (derived from the data); not_aggregated: the plan promised one row per ['StockCode']; the input holds 73 distinct group(s) but 2479 rows were returned, so the result is not one row per group"
+  },
+  "customers": {
+   "run": "greet R1_best_customers",
+   "question": "who are your best customers",
+   "contract": {
+    "result_kind": "aggregate",
+    "source_columns": [
+     "customer_id",
+     "amount",
+     "returned",
+     "region",
+     "signup_year",
+     "segment"
+    ],
+    "result_columns": [
+     {
+      "name": "customer_id",
+      "role": "key",
+      "dtype": "numeric"
+     },
+     {
+      "name": "total_amount",
+      "role": "metric",
+      "dtype": "numeric",
+      "min": 0.0
+     },
+     {
+      "name": "region",
+      "role": "passthrough",
+      "dtype": "string"
+     },
+     {
+      "name": "signup_year",
+      "role": "passthrough",
+      "dtype": "numeric"
+     },
+     {
+      "name": "segment",
+      "role": "passthrough",
+      "dtype": "string"
+     }
+    ],
+    "row_relation": {
+     "type": "one_per_group",
+     "group_by": [
+      "customer_id"
+     ]
+    },
+    "unique_key": [
+     "customer_id"
+    ],
+    "not_null": [
+     "customer_id",
+     "total_amount"
+    ]
+   },
+   "code": "import pandas as pd\n\ndef main(df):\n    customers_path = '{customers_path}'\n    orders_path = '{orders_path}'\n    customers = pd.read_csv(customers_path)\n    orders = pd.read_csv(orders_path)\n    non_returned = orders[orders['returned'] == False]\n    spend_per_customer = non_returned.groupby('customer_id', as_index=False)['amount'].sum().rename(columns={'amount': 'total_amount'})\n    spend_per_customer = spend_per_customer.sort_values('total_amount', ascending=False)\n    merged = spend_per_customer.merge(customers, on='customer_id', how='left')\n    result = merged[['customer_id', 'total_amount', 'region', 'signup_year', 'segment']]\n    return result\nif __name__ == '__main__':\n    df = read_csv_best_effort('input.csv')\n    df = main(df)\n    df.to_csv('output.csv', index=False)\n",
+   "shown": "the plan promised one row per ['customer_id']; the input holds 100 distinct group(s) but 1999 rows were returned, so the result is not one row per group"
+  }
+ },
+ "scope_turn": {
+  "run": "rw7a nullxlsx reply",
+  "question": "What drives Outcome?",
+  "code": "import pandas as pd\nimport numpy as np\nfrom scipy.stats import pearsonr\n\ndef main(df):\n    df_2022 = read_csv_best_effort('{path_2022}')\n    df_2023 = read_csv_best_effort('{path_2023}')\n    df_all = pd.concat([df_2022, df_2023], ignore_index=True)\n    df_all['Outcome'] = df_all['Outcome'].astype(str).str.strip().str.title().replace({'nan': np.nan})\n    df_all['Glucose_num'] = pd.to_numeric(df_all['Glucose'], errors='coerce')\n    df_all['visit_dt'] = pd.to_datetime(df_all['visit_date'], errors='coerce')\n    df_all['visit_year'] = df_all['visit_dt'].dt.year\n    df_all['Notes_len'] = df_all['Notes'].fillna('').astype(str).str.len()\n    df_valid = df_all[df_all['Outcome'].notna()].copy()\n    outcome_codes, _ = pd.factorize(df_valid['Outcome'], sort=True)\n\n    def safe_pearson(x, y):\n        mask = pd.notna(x) & pd.notna(y)\n        if mask.sum() < 2:\n            return np.nan\n        return pearsonr(x[mask], y[mask])[0]\n    corr_glucose = safe_pearson(df_valid['Glucose_num'], outcome_codes)\n    corr_year = safe_pearson(df_valid['visit_year'], outcome_codes)\n    corr_notes = safe_pearson(df_valid['Notes_len'], outcome_codes)\n    agg = df_valid.groupby('Outcome', as_index=False).agg(record_count=('patient_id', 'size'), mean_glucose=('Glucose_num', 'mean'), median_glucose=('Glucose_num', 'median'), std_glucose=('Glucose_num', 'std'), mean_visit_year=('visit_year', 'mean'), std_visit_year=('visit_year', 'std'), mean_note_len=('Notes_len', 'mean'), std_note_len=('Notes_len', 'std'))\n    agg['corr_glucose_outcome'] = corr_glucose\n    agg['corr_year_outcome'] = corr_year\n    agg['corr_notes_outcome'] = corr_notes\n    agg['record_count'] = agg['record_count'].astype(float)\n    return agg\n",
+  "shown": "Scope: the figures above are computed on a filtered subset of the rows (only where pd has a value and pd has a value), not on every row; how many were left out could not be counted, and the question did not ask for that filter."
+ }
+}

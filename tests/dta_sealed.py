@@ -1,26 +1,24 @@
 """A stand-in for the sealed credential stores, for planner transfer tests. Not a test module.
 
-1.6 port of 2.0's tests/dta_sealed.py (a8e7c1fa). In production a registry
-entry is a handle (``conn_id``) plus display fields: a transfer opens a
-database handle through the onboarding credentials route
-(``_open_db_credentials``) and a bucket's through its cloud_datasets row
-(``_cloud_secrets_for``), and a chat registration hands its secret to one of
-those stores (``_seal_chat_database`` / ``_seal_chat_cloud``).
+In production a ``dta_database_registry`` entry is a handle (``conn_id``) plus
+display fields, and the data transfer agent opens the handle after the
+confirm gate: ``_open_db_credentials`` asks the onboarding credentials route,
+``_cloud_secrets_for`` reads the cloud_datasets row. Nothing secret is in state.
 
 Many transfer tests predate that rule and seed the registry with a password or
-bucket keys, as if the user had typed them, or register without a signed-in
-user. ``install`` keeps those tests about what they test (wizard, routing,
-copy, aliases) by playing the sealed store: the first time the planner reads
-the registry, every entry that carries a secret (or has no handle) has its
-credentials moved into an in-memory store and is left as a handle; the
-resolvers answer from that store. The registry the planner works with is still
-the scrubbed one -- the production rule runs unchanged.
+bucket keys, as if the user had typed them. ``install`` keeps those tests about
+what they test (wizard, routing, copy) by playing the sealed store: the first
+time the planner reads the registry, every entry that carries a secret (or has
+no handle) has its credentials moved into an in-memory store and is left as a
+handle; the two resolvers answer from that store. The registry the planner
+works with is still the scrubbed one -- the production rule runs unchanged.
 
-Adapted from 2.0: 1.6's _cloud_secrets_for takes (entry, alias); 1.6 has no
-_handle_key (the handle is ``conn_id`` or the alias).
+Chat registration is played the same way: what the user typed lands in the
+store (as the onboarding API / cloud_datasets would keep it) and the registry
+gets the handle.
 
-Tests about the leak itself (test_dta_chat_connection_sealing.py) do not use
-this; they go through the real sealed-store calls.
+Tests about the leak itself (test_dta_no_plaintext_credentials.py) do not use
+this; they go through the real resolvers and sealed-store calls.
 """
 from __future__ import annotations
 
@@ -28,7 +26,6 @@ from typing import Any, Dict
 
 import app.agents.planner as P
 from app.graph.etl_state import scrub_registry_entry
-
 
 _CLOUD_SECRET_FIELDS = ("access_key", "secret_key", "gcp_service_account_json",
                         "az_storage_account", "az_access_key", "az_sas_token",
@@ -51,7 +48,7 @@ class SealedStore:
 
     def _needs_sealing(self, entry: Any) -> bool:
         return isinstance(entry, dict) and (
-            not entry.get("conn_id") or scrub_registry_entry(entry) is not entry
+            not entry.get("conn_id") or scrub_registry_entry(entry) != {k: v for k, v in entry.items() if v is not None}
         )
 
     def install(self, monkeypatch) -> "SealedStore":
@@ -70,24 +67,20 @@ class SealedStore:
         def open_db(state, alias, entry):
             if self._needs_sealing(entry):  # injected mid-handler by a mocked resolver
                 entry = self._seal(alias, entry)
-            stored = self.db.get(str((entry or {}).get("conn_id") or alias))
+            stored = self.db.get(P._handle_key(alias, entry))
             if stored is None:
                 return real_open_db(state, alias, entry)
             creds = dict(stored)
             creds.setdefault("sslmode", (entry or {}).get("sslmode"))
             return creds
 
-        def cloud_secrets(entry, alias=None):
+        def cloud_secrets(entry):
             if self._needs_sealing(entry):
-                entry = self._seal(entry.get("name") or entry.get("bucket_name") or alias or "bucket", entry)
+                entry = self._seal(entry.get("name") or entry.get("bucket_name") or "bucket", entry)
             stored = self.cloud.get((entry or {}).get("conn_id"))
             if stored is None:
-                return real_cloud(entry, alias)
+                return real_cloud(entry)
             return {**entry, **stored}
-
-        monkeypatch.setattr(P, "_get_db_registry", get_db_registry)
-        monkeypatch.setattr(P, "_open_db_credentials", open_db)
-        monkeypatch.setattr(P, "_cloud_secrets_for", cloud_secrets)
 
         def seal_chat_database(state, params, secrets):
             # What the onboarding API keeps for a chat-typed database.
@@ -111,6 +104,9 @@ class SealedStore:
 
         monkeypatch.setattr(P, "_seal_chat_database", seal_chat_database)
         monkeypatch.setattr(P, "_seal_chat_cloud", seal_chat_cloud)
+        monkeypatch.setattr(P, "_get_db_registry", get_db_registry)
+        monkeypatch.setattr(P, "_open_db_credentials", open_db)
+        monkeypatch.setattr(P, "_cloud_secrets_for", cloud_secrets)
         return self
 
 

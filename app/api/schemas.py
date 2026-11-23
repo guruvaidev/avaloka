@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from app.core.user_errors import public_agent_errors
 
 from app.agents.mta_v2.schema import TrainingPlan, TrainingResult
 
@@ -11,7 +13,12 @@ from app.agents.mta_v2.schema import TrainingPlan, TrainingResult
 DEFAULT_ASSISTANT_ID = "avaloka"
 
 class ChatResponse(BaseModel):
-    messages: List[Dict[str, str]]
+    # The assistant entry is {"role", "content", "reply_segments"}: content is
+    # the reply with " (commentary — not checked)" after every sentence a
+    # language model wrote; reply_segments says, segment by segment, what code
+    # wrote ("plain") and what a model wrote ("commentary"). The contract is
+    # app/api/reply_segments.py. Additive: an entry without it is plain text.
+    messages: List[Dict[str, Any]]
     planner_definition: Dict[str, Any] = {}
     ready_to_summarize: bool = False
     ready_to_code: bool = False
@@ -93,8 +100,24 @@ class ChatResponse(BaseModel):
     evaluation_report: Optional[Dict[str, Any]] = None
     evaluation_beats_baseline: Optional[bool] = None
     verification_report: Optional[Dict[str, Any]] = None
+    # The agent trace for this turn (GET /threads/{id}/trace?turn=<id>).
+    # Additive: absent when nothing was recorded.
+    trace_turn_id: Optional[str] = None
+    trace_url: Optional[str] = None
     verification_safe_to_present: Optional[bool] = None
     agent_errors: Optional[List[Dict[str, Any]]] = None
+
+    @field_validator("agent_errors")
+    @classmethod
+    def _agent_errors_carry_no_traceback(cls, value):
+        # Which agent failed and its exception class only; the message and the
+        # traceback are in the server log (app.agents.contract.run_agent).
+        return public_agent_errors(value)
+    # Avaloka talking the user through the turn (v2.0, app/api/chat_voice.py):
+    # one short message per step she took, each with one concrete question and
+    # quick replies the UI renders as buttons. Additive: absent when nothing
+    # was said; the shape is ui_contract.assistant_prompt.
+    assistant_prompts: Optional[List[Dict[str, Any]]] = None
 
 
 class UploadResponse(BaseModel):
@@ -114,9 +137,15 @@ class UploadResponse(BaseModel):
     sample_status: Optional[str] = None
     quick_sample_rows: Optional[List[Dict[str, Any]]] = None
     sample_statistics: Optional[Dict[str, Any]] = None
+    # Recursive schema, format/capability manifest and validation outcome.
+    complex_structure: Optional[Dict[str, Any]] = None
     estimated_rows: Optional[int] = None
     # Profiler state (Phase A on upload; Phase B via /preview after polling)
+    # "pending" while the upload's background profile job runs; then
+    # full_profile, failed or skipped. GET /api/datasets/{id}/profile has the
+    # landed profile; profiling_error says in plain words why it failed.
     profiling_status: Optional[str] = None
+    profiling_error: Optional[str] = None
     quick_profiling_result: Optional[Dict[str, Any]] = None
     profiling_result: Optional[Dict[str, Any]] = None
     # Portfolio: keyed by sample name, each value is a list of row-dicts
@@ -135,6 +164,9 @@ class UploadResponse(BaseModel):
     # skipped, sheet chosen). Same strings as UploadedDatasetOut.notes; without
     # this a single-file upload, which has no ``datasets``, said nothing.
     notes: Optional[List[str]] = None
+    # Avaloka's first word after the auto-insights: what she saw in the data
+    # and one question about what to do with it (app/api/chat_voice.py).
+    assistant_prompts: Optional[List[Dict[str, Any]]] = None
 
     model_config = {"populate_by_name": True}
 
@@ -161,7 +193,12 @@ class UploadedDatasetOut(BaseModel):
     sample_status: Optional[str] = None
     quick_sample_rows: Optional[List[Dict[str, Any]]] = None
     sample_statistics: Optional[Dict[str, Any]] = None
+    complex_structure: Optional[Dict[str, Any]] = None
+    # "pending" while the upload's background profile job runs; then
+    # full_profile, failed or skipped. GET /api/datasets/{id}/profile has the
+    # landed profile; profiling_error says in plain words why it failed.
     profiling_status: Optional[str] = None
+    profiling_error: Optional[str] = None
     quick_profiling_result: Optional[Dict[str, Any]] = None
     profiling_result: Optional[Dict[str, Any]] = None
     # Portfolio: keyed by sample name
@@ -245,6 +282,7 @@ class DatasetPreviewResponse(BaseModel):
     total_rows_exact: Optional[int] = None
     # Profiler state
     profiling_status: Optional[str] = None
+    profiling_error: Optional[str] = None
     quick_profiling_result: Optional[Dict[str, Any]] = None
     full_profiling_result: Optional[Dict[str, Any]] = None
     # Portfolio: keyed by sample name
@@ -316,26 +354,36 @@ class RegisterExistingIn(BaseModel):
 
 class DatabaseConnectRequest(BaseModel):
     # Sent in the request body (not query params) so the api_key never lands in
-    # access logs.
-    customer_id: str
-    api_key: str
+    # access logs. ``connection_id`` is the active 1.5.2 UI compatibility path;
+    # the server resolves it to an owned MCP connection without returning secrets.
+    customer_id: Optional[str] = None
+    api_key: Optional[str] = None
+    connection_id: Optional[str] = None
 
 
 class DatabaseChatRequest(BaseModel):
     role: str = Field("user", description="user | assistant | system")
-    content: str
+    content: Optional[str] = None
+    query: Optional[str] = Field(
+        None, description="Legacy 1.5.2 alias for content"
+    )
+    connection_id: Optional[str] = None
     dataset_id: Optional[str] = None
     database_id: Optional[str] = None
     customer_id: Optional[str] = None
     session_id: Optional[str] = Field(
-        None, description="session_id from /api/database/connect; reuses stored credentials"
+        None,
+        description=(
+            "session_id from /api/database/connect; reuses stored credentials"
+        ),
     )
     metadata: Dict[str, Any] = Field(default_factory=dict)
     stream: bool = Field(False, description="If true, respond with SSE")
 
 
 class DatabaseChatResponse(BaseModel):
-    messages: List[Dict[str, str]]
+    # As ChatResponse.messages: the assistant entry may carry reply_segments.
+    messages: List[Dict[str, Any]]
     query_result: Optional[Dict[str, Any]] = None
     database_info: Optional[Dict[str, Any]] = None
     planner_definition: Dict[str, Any] = {}
@@ -347,8 +395,16 @@ class DatabaseChatResponse(BaseModel):
     dataset_id: Optional[str] = None
     session_id: Optional[str] = None
     thread_id: Optional[str] = None
+    connection_id: Optional[str] = None
+    results: Optional[List[Dict[str, Any]]] = None
+    schema_: Optional[List[Dict[str, str]]] = Field(None, alias="schema")
+    row_count: Optional[int] = None
+    execution_time_ms: Optional[int] = None
     visualization_config: Optional[Dict[str, Any]] = None
     visualization_status: Optional[str] = None
+
+    model_config = {"populate_by_name": True}
+
 
 class VisualizationConfig(BaseModel):
     """
@@ -513,3 +569,7 @@ class InsightExplainIn(BaseModel):
 class InsightExplainOut(BaseModel):
     answer: str
     focus_chart_ids: List[str] = Field(default_factory=list)
+    # The answer as reply segments (app/api/reply_segments.py): the model's
+    # words commentary, the explainer's fallback lines plain. `answer` is
+    # these rendered.
+    answer_segments: Optional[List[Dict[str, str]]] = None

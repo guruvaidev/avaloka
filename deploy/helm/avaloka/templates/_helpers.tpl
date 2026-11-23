@@ -32,9 +32,10 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 
 {{/* Secret values that have shipped in this repository (chart defaults, .env.example
 placeholders). A generated secret equal to one of them is replaced, as
-app/core/provisioning.py PUBLISHED_VALUES does. Comma-separated, lower case. */}}
+app/core/provisioning.py PUBLISHED_VALUES does. Comma-separated, lower case.
+password1234 is the admin password MLflow's basic_auth.ini shipped before 3.17. */}}
 {{- define "avaloka.publishedSecretValues" -}}
-avaloka-local-dev-encryption-key,<generate-with-openssl-rand-hex-32>,<generate-and-store-a-strong-random-secret>,changeme,change-me,secret,test,dev,development
+avaloka-local-dev-encryption-key,<generate-with-openssl-rand-hex-32>,<generate-and-store-a-strong-random-secret>,changeme,change-me,secret,test,dev,development,password,password1234
 {{- end -}}
 
 {{/* True ("true") when the value given for a generated secret is a published one. */}}
@@ -88,6 +89,36 @@ openrouter
 {{- else -}}
 {{- printf "%s-secrets" (include "avaloka.fullname" .) -}}
 {{- end -}}
+{{- end -}}
+
+{{/* Namespace of the shared RayCluster/RayService (config.mtaRayNamespace, else
+the release namespace). */}}
+{{- define "avaloka.rayNamespace" -}}
+{{- .Values.config.mtaRayNamespace | default .Release.Namespace -}}
+{{- end -}}
+
+{{/* Secret the Ray pods and the KubeRay operator read the Ray auth token from
+(key auth_token, the key KubeRay's authOptions.secretName expects). The raw
+manifests in deploy/helm/ray name it literally: avaloka-ray-auth. */}}
+{{- define "avaloka.rayAuthSecretName" -}}
+{{- printf "%s-ray-auth" (include "avaloka.fullname" .) -}}
+{{- end -}}
+
+{{/* NetworkPolicy peer for the KubeRay operator pod, which reads job and Serve
+status from Ray dashboards. ray.networkPolicy.operatorNamespace narrows it to
+one namespace; empty admits the operator pod in any namespace (ray_manager
+installs it in the release namespace, k8s_invoker in kuberay-operator). */}}
+{{- define "avaloka.kuberayOperatorPeer" -}}
+- namespaceSelector:
+    {{- with (dig "networkPolicy" "operatorNamespace" "" (.Values.ray | default dict)) }}
+    matchLabels:
+      kubernetes.io/metadata.name: {{ . | quote }}
+    {{- else }}
+    matchLabels: {}
+    {{- end }}
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: kuberay-operator
 {{- end -}}
 
 {{/* Effective Ray address based on connect-vs-provision toggle. */}}
@@ -557,6 +588,16 @@ storage.className commentary in values.yaml, which already states this correctly
 {{- $persistence.accessMode | default (.ctx.Values.storage).accessMode | default "ReadWriteOnce" -}}
 {{- end -}}
 
+
+{{/*
+Namespace the data transfer agent's KubeRay RayJobs and their per-job
+credential Secrets go in: config.dtaJobNamespace, else "<release>-dta-jobs".
+A dedicated namespace, so the app's Secret verbs there reach no other Secret.
+*/}}
+{{- define "avaloka.dtaJobNamespace" -}}
+{{- default (printf "%s-dta-jobs" .Release.Name) .Values.config.dtaJobNamespace -}}
+{{- end -}}
+
 {{/*
 Comma-separated admin addresses from admin.emails (a list, or a comma-separated
 string). Empty when unset: no account is an admin, and nothing falls back to a
@@ -578,4 +619,79 @@ built-in address. Consumers normalise case and whitespace.
 {{- end -}}
 {{- end -}}
 {{- join "," $out -}}
+{{- end -}}
+
+{{/*
+The LangGraph server's image. It is the API image's build plus langgraph-cli
+(requirements-langgraph-server.txt), published as avaloka-langgraph next to
+avaloka-api; the API image no longer carries the CLI, because the
+langgraph-api it brings caps cryptography below its fixes.
+Unset, the repository is image.repository with avaloka-api replaced by
+avaloka-langgraph (so every overlay that points image.repository at a registry
+gets the matching server image there) and the tag is image.tag. A repository
+that does not name avaloka-api cannot be derived: rendering fails instead of
+starting `langgraph dev` from an image that has no langgraph command.
+*/}}
+{{- define "avaloka.langgraphImage" -}}
+{{- /* dig: an install made before langgraph.image existed must still upgrade with --reuse-values */ -}}
+{{- $lgImage := dig "image" dict (.Values.langgraph | default dict) -}}
+{{- $repo := dig "repository" "" $lgImage -}}
+{{- if not $repo -}}
+{{- if not (contains "avaloka-api" .Values.image.repository) -}}
+{{- fail (printf "langgraph.image.repository must be set: image.repository %q does not name avaloka-api, so the LangGraph server image (avaloka-langgraph) cannot be derived from it" .Values.image.repository) -}}
+{{- end -}}
+{{- $repo = replace "avaloka-api" "avaloka-langgraph" .Values.image.repository -}}
+{{- end -}}
+{{- printf "%s:%s" $repo (default .Values.image.tag (dig "tag" "" $lgImage) | toString) -}}
+{{- end -}}
+
+{{/*
+ray.auth, ray.networkPolicy, mlflow.auth and mlflow.networkPolicy with their
+values.yaml defaults. `helm upgrade --reuse-values` of an install made before
+these keys existed hands the templates the old values only; walking into a
+missing map (`.Values.ray.auth.enabled`) is a nil-pointer error that aborts the
+whole upgrade (tests/contract/test_chart_reuse_values.py). Each prints "true"
+or nothing, for `if`.
+*/}}
+{{- define "avaloka.rayAuthEnabled" -}}
+{{- if dig "auth" "enabled" true (.Values.ray | default dict) }}true{{- end -}}
+{{- end }}
+{{- define "avaloka.rayNetworkPolicyEnabled" -}}
+{{- if dig "networkPolicy" "enabled" true (.Values.ray | default dict) }}true{{- end -}}
+{{- end }}
+{{- define "avaloka.mlflowAuthEnabled" -}}
+{{- if dig "auth" "enabled" true (.Values.mlflow | default dict) }}true{{- end -}}
+{{- end }}
+{{- define "avaloka.mlflowNetworkPolicyEnabled" -}}
+{{- if dig "networkPolicy" "enabled" true (.Values.mlflow | default dict) }}true{{- end -}}
+{{- end }}
+
+{{/*
+Third-party usage beacons off (app/core/thirdparty_optout.py says what each
+one silences: daft -> scarf.sh and osstelemetry.io, mlflow, onnxruntime,
+chroma, HF hub, dvc, Ray usage stats, streamlit, langgraph-cli and its PyPI
+version check). The images bake the same values; this covers an image built
+elsewhere. One list for the ConfigMap and for the pods that read none
+(tests/contract/test_thirdparty_telemetry_optout.py holds every container to it).
+*/}}
+{{- define "avaloka.thirdPartyOptout" -}}
+DO_NOT_TRACK: "true"
+SCARF_NO_ANALYTICS: "true"
+ORT_DISABLE_TELEMETRY: "1"
+ANONYMIZED_TELEMETRY: "False"
+MLFLOW_DISABLE_TELEMETRY: "true"
+HF_HUB_DISABLE_TELEMETRY: "1"
+DVC_NO_ANALYTICS: "1"
+RAY_USAGE_STATS_ENABLED: "0"
+STREAMLIT_BROWSER_GATHER_USAGE_STATS: "false"
+LANGGRAPH_CLI_NO_ANALYTICS: "1"
+LANGGRAPH_NO_VERSION_CHECK: "true"
+{{- end -}}
+
+{{/* The same list as container env entries, for a container that reads no ConfigMap. */}}
+{{- define "avaloka.thirdPartyOptoutEnv" -}}
+{{- range $name, $value := (include "avaloka.thirdPartyOptout" . | fromYaml) }}
+- name: {{ $name }}
+  value: {{ $value | quote }}
+{{- end }}
 {{- end -}}

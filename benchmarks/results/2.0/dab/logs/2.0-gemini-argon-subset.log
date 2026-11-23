@@ -1,0 +1,55 @@
+
+Estimated spend (before running):
+
+| Config | Model | Calls | $ low | $ high | price source |
+| --- | --- | --- | --- | --- | --- |
+| dab_avaloka_native | `gemini-4-argon` | 12 | $0.0000 | $0.0000 | unpriced |
+
+**Total: $0.0000 – $0.0000 over 12 calls.**
+
+The high figure assumes every answer uses its full `max_tokens` allowance, so it is a ceiling the provider cannot exceed for these configs — not a forecast.
+
+> ⚠️  UNPRICED, and therefore **excluded from both totals**: `dab_avaloka_native`. No catalog quote exists for these models, so their real spend is unknown — it is not zero.
+
+Running suite 'dab': 12 tasks x 1 configs
+config dab_avaloka_native (sut=avaloka_dab, sampling=entire_dataset, llm=gemini-4-argon) over 12 tasks x 1 trials
+  [dab_avaloka_native] dab:agnews:1 trial 1/1 ok q=1.000 $0.4984 181.85s
+  [dab_avaloka_native] dab:bookreview:1 trial 1/1 ERR q=0.000 $2.0385 254.64s
+  [dab_avaloka_native] dab:crmarenapro:1 trial 1/1 ok q=1.000 $0.8842 348.90s
+  [dab_avaloka_native] dab:DEPS_DEV_V1:1 trial 1/1 ok q=0.000 $1.2724 287.47s
+  [dab_avaloka_native] dab:GITHUB_REPOS:1 trial 1/1 ERR q=0.000 $1.2507 395.06s
+  [dab_avaloka_native] dab:googlelocal:1 trial 1/1 ok q=1.000 $0.1722 99.56s
+  [dab_avaloka_native] dab:music_brainz_20k:1 trial 1/1 ok q=1.000 $0.0554 94.87s
+  [dab_avaloka_native] dab:PANCANCER_ATLAS:1 trial 1/1 ok q=0.000 $1.7505 244.22s
+  [dab_avaloka_native] dab:PATENTS:1 trial 1/1 ERR q=0.000 $2.1293 510.99s
+  ABORT spend ceiling exceeded: $10.0516 spent against a $8.00 ceiling — run halted with partial results. Raise it with --max-spend-usd if this was intended.
+RUN ABORTED: spend ceiling exceeded: $10.0516 spent against a $8.00 ceiling — run halted with partial results. Raise it with --max-spend-usd if this was intended.
+
+Observed spend: $10.0516 over 9 calls
+
+# Scorecard — suite `dab` (harness 0.2.0)
+
+- Observed spend: **$10.0516** over 9 calls · ceiling $8.00
+
+> 🛑 **RUN INCOMPLETE — spend ceiling exceeded: $10.0516 spent against a $8.00 ceiling — run halted with partial results. Raise it with --max-spend-usd if this was intended.**
+> Configs below this point may be missing or all-errored because the run STOPPED, not because they scored badly. This scorecard must not be published as a model comparison.
+
+## Config `dab_avaloka_native`
+
+- sut: `avaloka_dab` · llm: `gemini-4-argon` · sampling: `entire_dataset` · env: `dab-local` · agents: `full_swarm` · trials: 1 · internet: False
+
+| Task | Pass@1 | Best-of-N | Quality (mean) | Cost $ (mean) | Latency s (mean) | Data scanned (mean) | Errors | Price src |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| dab:agnews:1 | 1.00 | 1.00 | 1 | 0.4984 | 181.9 | — | — | `operator_rate` |
+| **dab:bookreview:1** ⚠️ | 0.00 | 0.00 | 0 | 2.039 | 254.6 | — | **1/1 ALL** (budget_exceeded:1) | `operator_rate` |
+| dab:crmarenapro:1 | 1.00 | 1.00 | 1 | 0.8842 | 348.9 | — | — | `operator_rate` |
+| dab:DEPS_DEV_V1:1 | 0.00 | 0.00 | 0 | 1.272 | 287.5 | — | — | `operator_rate` |
+| **dab:GITHUB_REPOS:1** ⚠️ | 0.00 | 0.00 | 0 | 1.251 | 395.1 | — | **1/1 ALL** (timeout:1) | `operator_rate` |
+| dab:googlelocal:1 | 1.00 | 1.00 | 1 | 0.1722 | 99.56 | — | — | `operator_rate` |
+| dab:music_brainz_20k:1 | 1.00 | 1.00 | 1 | 0.05541 | 94.87 | — | — | `operator_rate` |
+| dab:PANCANCER_ATLAS:1 | 0.00 | 0.00 | 0 | 1.75 | 244.2 | — | — | `operator_rate` |
+
+> ⚠️  Rows marked **ALL** scored 0.00 because every trial errored — the model was never successfully measured. Do not read those as quality results.
+
+
+Wrote /private/tmp/claude-505/-Users-leelakrishna-code-ki-avaloka-dev/523f2974-7c63-4383-8c84-7340f46500b7/scratchpad/results/dab/2.0-gemini-argon-subset/dab.json, /private/tmp/claude-505/-Users-leelakrishna-code-ki-avaloka-dev/523f2974-7c63-4383-8c84-7340f46500b7/scratchpad/results/dab/2.0-gemini-argon-subset/dab.md, and /private/tmp/claude-505/-Users-leelakrishna-code-ki-avaloka-dev/523f2974-7c63-4383-8c84-7340f46500b7/scratchpad/results/dab/2.0-gemini-argon-subset/dab.trials.jsonl

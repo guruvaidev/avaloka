@@ -16,6 +16,7 @@ import {
   BarChart03,
   ArrowLeft,
   Diamond01,
+  MessageQuestionCircle,
 } from "@untitledui/icons";
 import { useActivePlan } from "@/lib/use-active-plan";
 import { normalizePlan, planIncludes } from "@/lib/edition-comparison";
@@ -42,6 +43,7 @@ import { Tooltip as RailTooltip, TooltipTrigger, TooltipContent, TooltipProvider
 type RailItem = { id: string; icon: FC<{ className?: string }>; label: string };
 
 const topItems: RailItem[] = [
+  { id: "ask", icon: MessageQuestionCircle, label: "Ask" },
   { id: "chat", icon: MessageChatCircle, label: "Analysis" },
   { id: "projects", icon: Folder, label: "Projects" },
   { id: "reports", icon: ReportIcon, label: "Reports" },
@@ -77,6 +79,7 @@ export function railLockedIds(isFree: boolean, dataTransferUnlocked = true, plan
 // "ray-dashboard" is not here: it opens the Ray dashboard instead of navigating.
 // "inference" is not here either: RailGroup renders it as a <Link to="/inference">.
 const DEFAULT_NAV: Record<string, string> = {
+  ask: "/instant",
   chat: "/proanalysis",
   projects: "/dashboard",
   files: "/dashboard",
@@ -89,6 +92,7 @@ const DEFAULT_NAV: Record<string, string> = {
 };
 
 function activeFromPath(pathname: string): string | undefined {
+  if (pathname.startsWith("/instant")) return "ask";
   if (pathname.startsWith("/inference")) return "inference";
   if (pathname.startsWith("/scheduled-analysis") || pathname.startsWith("/proanalysis/scheduled-analysis")) return "history";
   if (pathname.startsWith("/proanalysis")) return "chat";

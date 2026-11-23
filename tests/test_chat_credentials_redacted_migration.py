@@ -237,6 +237,63 @@ def test_on_a_fresh_install_it_applies_and_redacts_nothing(tmp_path_factory):
         _drop(d)
 
 
+# ---- an organisation collaborator appending to a shared analysis ------------------
+#
+# 2.x shares an analysis with people in the organisation through
+# resource_collaborators (the org-sharing path; 1.6's Professional team sharing has
+# not reached this line). The organisation is the plan-rules harness's Professional
+# one; the owner creates the analysis and invites the member as the browser does,
+# under row-level security and the paid-plan collaborator policy. The member, not
+# the owner, then appends through "collaborators insert shared analysis messages".
+# It runs on whatever migration set the tree has, so on a tree without this
+# migration it shows the member's message stored as typed.
+
+@pytest.fixture(scope="module")
+def collaborator_share(tmp_path_factory):
+    from tests.test_plan_enforced_org_features import _seed
+
+    d = _new_db()
+    try:
+        _ok(d.run_hook(_chart_set(tmp_path_factory.mktemp("chatcred_collab"))))
+        o = _seed(d).orgs["professional"]
+        analysis = str(uuid.uuid4())
+        res = d.as_user(o.auth, "INSERT INTO public.analyses (id, owner_id, name, organization_id) "
+                                f"VALUES ('{analysis}', '{o.profile}', 'Shared', '{o.org}');")
+        assert res.returncode == 0, f"the owner could not create the analysis: {res.stderr[-300:]}"
+        before = d.as_user(o.pro_member_auth, "INSERT INTO public.analysis_messages (analysis_id, role, content) "
+                                              f"VALUES ('{analysis}', 'user', 'hello');")
+        invite = d.as_user(o.auth, "INSERT INTO public.resource_collaborators (resource_type, resource_id, app_user_id, "
+                                   f"access_level, invited_by) VALUES ('analysis', '{analysis}', '{o.pro_member_app}', "
+                                   f"'edit', '{o.auth}');")
+        assert invite.returncode == 0, f"the owner could not invite the member: {invite.stderr[-300:]}"
+        yield d, o, analysis, before
+    finally:
+        _drop(d)
+
+
+@pytest.mark.integration
+def test_the_collaborator_share_is_set_up_by_the_apps_own_rules(collaborator_share):
+    d, o, analysis, before = collaborator_share
+    assert before.returncode != 0 and "row-level security" in before.stderr, \
+        "the member could write to the analysis before being invited, so the share policy is not what is tested"
+    res = d.as_user(o.pro_member_auth, f"SELECT public.is_resource_collaborator('analysis', '{analysis}');")
+    assert res.returncode == 0 and [ln for ln in res.stdout.splitlines() if ln.strip()][-1].strip() == "t", \
+        "the invited member is not a collaborator on the analysis"
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("name,message,probes", TYPED, ids=[t[0] for t in TYPED])
+def test_an_org_collaborator_appending_to_a_shared_analysis_stores_it_redacted(collaborator_share, name, message, probes):
+    d, o, analysis, _ = collaborator_share
+    msg_id = str(uuid.uuid4())
+    res = d.as_user(o.pro_member_auth, "INSERT INTO public.analysis_messages (id, analysis_id, role, content) "
+                                       f"VALUES ('{msg_id}', '{analysis}', 'user', {_q(message)});")
+    assert res.returncode == 0, f"{name}: the collaborator policy refused the member's message: {res.stderr[-300:]}"
+    stored = d.scalar(f"SELECT content FROM public.analysis_messages WHERE id = '{msg_id}';")
+    assert not [p for p in probes if p in stored], f"{name}: the collaborator's message was stored with its password"
+    assert stored == _python_redact(message)
+
+
 # ---- a Professional team member with edit access to a shared analysis -----------
 #
 # The chart's whole migration set, the team-sharing migrations included, with every

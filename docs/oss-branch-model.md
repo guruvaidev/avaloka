@@ -13,7 +13,8 @@ tree in a temporary directory, checks it, and lands it as a single commit on
 top of the public `main`. The public repository's own history is the record of
 what was published; nothing else holds a copy of it.
 
-The two remotes this involves are `origin` (the internal repository) and `github`
+The two remotes this involves are `origin`
+(the private development repository) and `github`
 (`git@github.com:guruvaidev/avaloka.git`, public) — `git remote -v` in a
 checkout of this branch shows both. `SRC_BRANCH` defaults to `develop-1.6`
 (`scripts/generate-oss.sh:41`).
@@ -283,14 +284,19 @@ replacement (`with` or `from`). An anchor that matches no line, or more than
 one, fails the generation. A splice that silently did nothing would publish
 the source text it was meant to replace.
 
-Text whose old form must not be published at all -- internal change numbers,
-branch names, commit ids, the 1.6 line's wording -- is replaced from a table,
-`oss/internal/public-text.tsv`, that the public tree does not carry
-(`replace_table:` in the manifest; the path is excluded and asserted absent).
-Each row is a literal replacement that must match exactly as often as it says.
-`assert_no_match` then checks the result with patterns: no "#" followed by three
-or four digits in Markdown, the CSV reports or the manifest, unless written as
-a GitHub reference, and no commit id in the demo guide.
+On the 1.6 line, text whose old form must not be published at all -- internal
+change numbers, branch names, commit ids, that line's own release wording -- is
+replaced from a table, `oss/internal/public-text.tsv`, that the public tree does
+not carry (`replace_table:` in its manifest; the path is excluded and asserted
+absent). Each row is a literal replacement that must match exactly as often as
+it says, and `assert_no_match` then checks the result with patterns: no "#"
+followed by three or four digits in Markdown, the CSV reports or the manifest,
+unless written as a GitHub reference, and no commit id in the demo guide.
+
+This line's manifest has no replacement table and no `assert_no_match`: the
+table was written against the 1.6 documents, and this line's documents still
+carry internal change numbers. Scrubbing them here is open work, and it starts
+with a table written against these documents, not with the 1.6 one.
 
 To look at the generated tree, or run its tests, keep a copy:
 `OSS_OUT_DIR=<new dir> scripts/generate-oss.sh`. The copy is written only after

@@ -37,9 +37,14 @@ from tests.e2e.conftest import HERMETIC_PLAN, ApiClient, requires_deployed
 
 CSV_BYTES = b"a,b\n1,2\n3,4\n"
 
-# app/api/server.py:299 -- the upload gate's whitelist, frozen here so a format
-# silently added or dropped breaks this suite.
-EXPECTED_UPLOAD_EXTS = {"csv", "tsv", "json", "xml", "parquet", "avro", "orc", "xls", "xlsx"}
+# app/api/server.py -- the upload gate's whitelist, frozen here so a format
+# silently added or dropped breaks this suite. Eleven tabular formats (jsonl
+# and ndjson since 2026-10-17) plus the bounded complex set from #507.
+EXPECTED_UPLOAD_EXTS = {
+    "csv", "tsv", "json", "jsonl", "ndjson", "xml", "parquet", "avro", "orc", "xls", "xlsx",
+    "pdf", "jpg", "jpeg", "png", "tif", "tiff", "bmp", "webp",
+    "mp4", "mov", "mkv", "avi", "webm", "m4v",
+}
 
 # file_handler/handler.py:36-52 -- connectors whose __init__ touches nothing.
 LAZY_CONNECTORS: Dict[str, str] = {
@@ -169,7 +174,7 @@ def _stub_all_connectors(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_e3_01a_supported_upload_exts_frozen() -> None:
-    """SUPPORTED_UPLOAD_EXTS is exactly the nine whitelisted formats; delta/iceberg are absent."""
+    """SUPPORTED_UPLOAD_EXTS is exactly the whitelisted set; delta/iceberg are deferred, not accepted."""
     assert server.SUPPORTED_UPLOAD_EXTS == EXPECTED_UPLOAD_EXTS
     assert "delta" not in server.SUPPORTED_UPLOAD_EXTS
     assert "iceberg" not in server.SUPPORTED_UPLOAD_EXTS
@@ -275,17 +280,47 @@ def test_e3_01b_filehandler_raises_documented_error_without_connector(tmp_path: 
 # ---------------------------------------------------------------------------
 
 
-def _upload_exts_without_connector(monkeypatch: pytest.MonkeyPatch) -> Set[str]:
-    _stub_all_connectors(monkeypatch)
-    return {
-        ext
-        for ext in server.SUPPORTED_UPLOAD_EXTS
-        if FileHandler.get_connector(f"x.{ext}", ext, iceberg_properties={}) is None
-    }
+def _upload_exts_without_connector(tmp_path: Path) -> Set[str]:
+    """The accepted extensions the upload path cannot read.
+
+    The oracle is the reader /api/upload actually dispatches to
+    (``sample_with_profiling``): a complex source (``COMPLEX_SOURCE_TYPES``:
+    pdf, images, video) goes to ``avaloka.io.load_dataset``, which routes a
+    path by ``detect_complex_format`` -- so that predicate is asked, on the
+    same empty file, whether it knows the extension; everything else goes to
+    ``_load_file_with_daft``, whose format dispatch ends in
+    ``ValueError("Unsupported source type ...")``. That branch is reached by
+    calling it on an empty file of each extension: a reader that exists fails
+    on the empty bytes with its own error, which is not what this test is
+    about; only the dispatcher's refusal counts as "no connector".
+    ``FileHandler.get_connector`` used to be the oracle, but it is one of the
+    daft loader's readers (avro) now, not the gate behind the upload path.
+    """
+    from app.agents import sampling_agent_daft as sampler
+    from avaloka.io.complex import detect_complex_format
+
+    missing: Set[str] = set()
+    for ext in server.SUPPORTED_UPLOAD_EXTS:
+        empty = tmp_path / f"x.{ext}"
+        empty.write_bytes(b"")
+        if ext in sampler.COMPLEX_SOURCE_TYPES:
+            if detect_complex_format(empty) is None:
+                missing.add(ext)
+            continue
+        try:
+            sampler._load_file_with_daft(str(empty), ext)
+        except ImportError:
+            raise  # Daft missing: the check cannot run, say so rather than pass
+        except ValueError as exc:
+            if "Unsupported source type" in str(exc):
+                missing.add(ext)
+        except Exception:  # noqa: BLE001  (a real reader choking on an empty file)
+            pass
+    return missing
 
 
-def test_e3_01c_every_accepted_upload_ext_has_a_connector(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Every extension the upload gate accepts must have a connector.
+def test_e3_01c_every_accepted_upload_ext_has_a_connector(tmp_path: Path) -> None:
+    """Every extension the upload gate accepts must have a reader behind it.
 
     This was ``xfail(strict=True)`` while tsv and orc had none. Two things had
     to change together, and the second is the reason this comment is long:
@@ -296,12 +331,19 @@ def test_e3_01c_every_accepted_upload_ext_has_a_connector(monkeypatch: pytest.Mo
     the defect was fixed -- a check whose passing state and whose broken state
     look identical, which is the shape this repo keeps shipping. Adding
     ``OrcConnector`` to the stub list is what makes the assertion real.
+
+    1.7 then widened the accepted set (jsonl/ndjson, pdf, images, video) and
+    moved the upload path's reading off ``FileHandler`` (Daft and
+    ``avaloka.io`` read them), so the oracle followed the code: see
+    ``_upload_exts_without_connector``. This file was not in the gate on
+    develop-1.7 (tests/e2e was auto-marked ``integration`` until fde45c93), so
+    the stale oracle went unnoticed there.
     """
-    missing = _upload_exts_without_connector(monkeypatch)
+    missing = _upload_exts_without_connector(tmp_path)
     assert missing == set(), (
-        f"these declared upload extensions have no connector: {sorted(missing)}. "
-        "The upload gate accepts them, so sampling raises "
-        "\"files aren't supported\" after a 200.")
+        f"these declared upload extensions have no reader: {sorted(missing)}. "
+        "The upload gate accepts them, so sampling fails with "
+        "\"Unsupported source type\" after a 200.")
 
 
 # ---------------------------------------------------------------------------

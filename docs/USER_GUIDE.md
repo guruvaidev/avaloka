@@ -1,6 +1,6 @@
 # Avaloka AI 1.0 — User Guide
 
-**Document version 1.0 · Applies to Avaloka 1.0.0**
+**Document version 1.0 · Applies to Avaloka 1.6**
 
 ---
 

@@ -41,11 +41,14 @@ describe("Billing comparison labels", () => {
     expect(new Set(labels).size).toBe(labels.length);
   });
 
-  it("only swarm_intelligence is held back from the table, and it says why", () => {
+  it("nothing is held back from the table: every capability editions.py ships has a row", () => {
+    // On 1.6 swarm_intelligence was hidden ("ships no swarm code"); 1.7 ships it
+    // (editions.py CAPABILITY_STATUS), so the row is shown, and any hidden
+    // entry must still say why.
     const shown = comparisonSections().flatMap((s) => s.rows.map((r) => r.capability));
     const hidden = EDITION_CAPABILITIES.filter((c) => !shown.includes(c));
-    expect(hidden).toEqual(["swarm_intelligence"]);
-    expect(COMPARISON_LABELS.swarm_intelligence).toHaveProperty("hiddenBecause");
+    expect(hidden).toEqual([]);
+    for (const c of hidden) expect(COMPARISON_LABELS[c]).toHaveProperty("hiddenBecause");
   });
 
   it("every cell is the matrix's own value, with its status", () => {

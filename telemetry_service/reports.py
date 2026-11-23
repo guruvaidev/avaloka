@@ -60,7 +60,8 @@ def _rate(part: int, whole: int) -> float | None:
 #: Counting them here would report one deployment as two installations and a
 #: page view as a run. No report in this module reads them; reports shaped for
 #: sessions and questions do not exist yet.
-PROCESS_EVENT_TYPES = frozenset({"install", "agent.started", "agent.completed", "dataset"})
+PROCESS_EVENT_TYPES = frozenset({"install", "agent.started", "agent.completed", "dataset",
+                                 "swarm.completed", "agent.understanding", "swarm.understanding"})
 
 
 def _process_records(store: Store) -> list[dict]:
@@ -245,6 +246,82 @@ def data_shapes(store: Store) -> Report:
         "formats": dict(sorted(formats.items(), key=lambda kv: -kv[1])),
         "sampled": sampled,
     }])
+
+
+def _histogram_sum(records: list[dict], key: str) -> dict[str, int]:
+    """Add up one histogram field across records, keeping only the keys the
+    schema admitted (a stored record passed validation, so they are the
+    vocabulary; summing them cannot produce a name)."""
+    total: dict[str, int] = {}
+    for record in records:
+        counts = record.get(key)
+        if not isinstance(counts, dict):
+            continue
+        for name, count in counts.items():
+            if isinstance(count, int):
+                total[name] = total.get(name, 0) + count
+    return dict(sorted(total.items()))
+
+
+def understanding(store: Store) -> Report:
+    """What the agents understood about the data people bring, and what they
+    did about it: which roles ran, how often a step sampled, what kinds of
+    operation were chosen, how verification came out, and how the fleets
+    merged. Histograms are summed across steps; nothing here is per column,
+    per file or per clone, because nothing stored is.
+    """
+    steps = [r for r in _process_records(store) if r.get("event_type") == "agent.understanding"]
+    swarms = [r for r in _process_records(store) if r.get("event_type") == "swarm.understanding"]
+    if not steps and not swarms:
+        return Report("Agent understanding", [], "No understanding records yet.")
+
+    roles: dict[str, int] = {}
+    outcomes: dict[str, int] = {}
+    for record in steps:
+        roles[record.get("role", "other")] = roles.get(record.get("role", "other"), 0) + 1
+        outcomes[record["outcome"]] = outcomes.get(record["outcome"], 0) + 1
+    sampled = [r for r in steps if "sampled" in r]
+    checks = [r for r in steps if "checks_run" in r]
+    verdicts: dict[str, int] = {}
+    agreements: dict[str, int] = {}
+    fanout: dict[str, int] = {}
+    for record in swarms:
+        if record.get("verdict"):
+            verdicts[record["verdict"]] = verdicts.get(record["verdict"], 0) + 1
+        if record.get("merge_agreement"):
+            agreements[record["merge_agreement"]] = agreements.get(record["merge_agreement"], 0) + 1
+        fanout[str(record.get("clones"))] = fanout.get(str(record.get("clones")), 0) + 1
+
+    rows = [{
+        "steps": len(steps),
+        "missions": len(swarms),
+        "installations": len({r.get("install_id") for r in steps + swarms if r.get("install_id")}),
+        "roles": dict(sorted(roles.items())),
+        "outcomes": dict(sorted(outcomes.items())),
+        "sampled_steps": sum(1 for r in sampled if r["sampled"]),
+        "sampling_decisions": len(sampled),
+        "sample_fraction_buckets": _histogram_sum(
+            [{"b": {r["sample_fraction_bucket"]: 1}} for r in steps if r.get("sample_fraction_bucket")], "b"),
+        "operations": _histogram_sum(steps, "op_counts"),
+        "checks": {
+            "run": sum(r.get("checks_run", 0) for r in checks),
+            "passed": sum(r.get("checks_passed", 0) for r in checks),
+            "warned": sum(r.get("checks_warned", 0) for r in checks),
+            "failed": sum(r.get("checks_failed", 0) for r in checks),
+        },
+        "column_kinds": _histogram_sum(steps, "column_type_counts"),
+        "null_rate_bands": _histogram_sum(steps, "null_rate_counts"),
+        "cardinality_bands": _histogram_sum(steps, "cardinality_counts"),
+        "size_buckets": _histogram_sum([{"b": {r["size_bucket"]: 1}} for r in steps if r.get("size_bucket")], "b"),
+        "tokens_in": sum(r.get("tokens_in", 0) for r in steps),
+        "tokens_out": sum(r.get("tokens_out", 0) for r in steps),
+        "fleet_sizes": dict(sorted(fanout.items(), key=lambda kv: int(kv[0]) if kv[0].isdigit() else 0)),
+        "merged_verdicts": dict(sorted(verdicts.items())),
+        "merge_agreement": dict(sorted(agreements.items())),
+    }]
+    caveat = ("Histograms are summed over steps, so a dataset profiled by every "
+              "clone of a fleet is counted once per clone. Nothing is per column.")
+    return Report("Agent understanding", rows, caveat)
 
 
 def freshness(store: Store, now: float | None = None) -> Report:
@@ -462,6 +539,7 @@ ALL_REPORTS = {
     "performance": performance,
     "environments": environments,
     "data-shapes": data_shapes,
+    "understanding": understanding,
     "sessions": sessions,
     "freshness": freshness,
 }

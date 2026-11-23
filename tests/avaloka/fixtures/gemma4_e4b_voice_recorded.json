@@ -1,0 +1,91 @@
+{
+ "model": "gemma4:e4b",
+ "source": "e2e CLI tester logs, 2026-10-18 (gm_an_healthcare, gm_an_stroke, gm_train_taxi, gm_chat_healthcare); originals from the same runs without a model",
+ "cases": [
+  {
+   "kind": "leak",
+   "original": "Hi, I'm Avaloka — your data scientist. Point me at a dataset and tell me the decision you're trying to make, and I'll take it from there.",
+   "recorded": "To structure this request, I'm going to confirm the necessary inputs—a dataset and a target decision—and frame it as a collaboration. I'll keep it concise and confident:\n\n\"I'm ready to dive in. Just point me to the dataset and clarify the decision we need to make, and I'll handle the rest of the analysis.\""
+  },
+  {
+   "kind": "leak",
+   "original": "Cloning myself into 8 focused copies — each takes the part she's best at.",
+   "recorded": "I'm optimizing this concept by framing it as a modular system, which makes it sound much more structured. Essentially, I'm creating 8 specialized copies, ensuring maximum efficiency because each one is assigned its optimal role."
+  },
+  {
+   "kind": "leak",
+   "original": "Nothing dominates a column — the closest is Gender at 50% “Male”; the segments are spread out.",
+   "recorded": "I'm going to rephrase this to cleanly communicate that no single variable shows dominance. Essentially, the distribution is quite even, with the most noticeable category being 'Gender,' specifically the 50% 'Male' segment."
+  },
+  {
+   "kind": "leak",
+   "original": "All my copies are back and I've merged what they found. My validation verdict is PASS. For the record, that's about a 11.1x return on the effort you'd have spent.",
+   "recorded": "Okay, I'm restructuring this statement to sound like a final analysis report. I'll confirm that I successfully synthesized all the copy results, and my validation verdict is a definite **PASS**. To quantify the success, we're looking at a fantastic 11.1x return on effort."
+  },
+  {
+   "kind": "leak",
+   "original": "Hi, I'm Avaloka — your data scientist. Point me at a dataset and tell me the decision you're trying to make, and I'll take it from there.",
+   "recorded": "I'm going to rephrase this to sound like me accepting the project brief, focusing on my data-driven approach. Essentially, I'm telling the user to give me the data and the problem, so we can begin. Just point me toward the dataset and the key decision you need to make, and I'll handle the rest of the analysis."
+  },
+  {
+   "kind": "leak",
+   "original": "ever_married leans hard on “Yes” (66% of rows) — that's a segment worth naming.",
+   "recorded": "I'm going to reframe this observation into a concise insight. Since the 'ever\\_married' field is overwhelmingly 'Yes' in 66% of the rows, I think we need to explicitly define and name that large segment."
+  },
+  {
+   "kind": "leak",
+   "original": "I'm treating id as identifiers, not signal — they'd only fool a careless model.",
+   "recorded": "I'm restructuring this statement to clarify my feature engineering intent. Essentially, I'm emphasizing that the IDs are merely categorical identifiers, and I will treat them as such, because letting a model interpret them as predictive signal would be statistically unsound."
+  },
+  {
+   "kind": "leak",
+   "original": "All my copies are back and I've merged what they found. My validation verdict is PASS. For the record, that's about a 11.1x return on the effort you'd have spent.",
+   "recorded": "I'm consolidating this update to highlight the key results. After merging all the gathered copies, my validation verdict is a definitive **PASS**. Essentially, the return on effort is about an 11.1x multiplier, which is really good to see."
+  },
+  {
+   "kind": "leak",
+   "original": "Hi, I'm Avaloka — your data scientist. Point me at a dataset and tell me the decision you're trying to make, and I'll take it from there.",
+   "recorded": "I'm reframing this by stating the process clearly and confidently. To get started, just point me toward a dataset and tell me the specific decision you need to optimize, and I'll run the analysis from there."
+  },
+  {
+   "kind": "leak",
+   "original": "This one's compact — ~50,419 rows. I'll analyse the whole thing live, right now, nothing held back.",
+   "recorded": "I'm going to streamline this statement by confirming the scope and my immediate action plan. Since we're working with a manageable dataset of ~50,419 rows, I'll jump right in and analyze the entire thing live for full transparency."
+  },
+  {
+   "kind": "leak",
+   "original": "Cloning myself into 10 focused copies — each takes the part she's best at.",
+   "recorded": "I'm going to rephrase this concept to emphasize the optimization aspect. Essentially, I'm running a simulation of creating 10 distinct models, each perfectly trained for a specialized function."
+  },
+  {
+   "kind": "leak",
+   "original": "Cloning myself into 8 focused copies — each takes the part she's best at.",
+   "recorded": "I'm rephrasing this to sound more like a resource optimization plan. Basically, I'm distributing myself across 8 specialized modules, ensuring each copy handles the specific function it's best suited for."
+  },
+  {
+   "kind": "leak",
+   "original": "Cloning myself into 8 focused copies — each takes the part she's best at.",
+   "recorded": "I'm rephrasing this to emphasize resource distribution. I'm restructuring the concept into an optimal, parallel model: I will create eight focused iterations, ensuring that each copy leverages its specific area of expertise."
+  },
+  {
+   "kind": "clean",
+   "original": "This one's compact — ~55,482 rows. I'll analyse the whole thing live, right now, nothing held back.",
+   "recorded": "I'm noting the data scope: we have a compact set of approximately 55,482 rows. To ensure nothing is missed, I plan to analyze the entire dataset live and right now."
+  },
+  {
+   "kind": "clean",
+   "original": "All 9 copies are back. I'm merging what they found into one answer — together they did work that would have taken a human team about 13.8 hours.",
+   "recorded": "I'm ready to synthesize the findings from all 9 copies into one comprehensive answer. I'm doing this because collectively, their work represents the output of what would have taken a human team about 13.8 hours."
+  },
+  {
+   "kind": "clean",
+   "original": "hypertension is skewed (skew 2.7154) with 498 outliers — I'll be careful not to let a few extreme values run the show.",
+   "recorded": "hypertension is skewed (skew 2.7154) with 498 outliers — I'll be careful not to let a few extreme values run the show."
+  },
+  {
+   "kind": "clean",
+   "original": "passenger_count is skewed (skew 2.1109) with 5468 outliers — I'll be careful not to let a few extreme values run the show.",
+   "recorded": "I'm noting that `passenger_count` is heavily skewed (skew 2.1109) and has 5468 outliers. To prevent those extreme values from skewing our results, I'll need to handle this data carefully."
+  }
+ ]
+}

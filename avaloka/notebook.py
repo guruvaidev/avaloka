@@ -9,11 +9,13 @@ def md(source: str) -> dict[str, Any]:
     return {"cell_type": "markdown", "metadata": {}, "source": _lines(source)}
 
 
-def code(source: str) -> dict[str, Any]:
+def code(source: str, tags: list[str] | None = None) -> dict[str, Any]:
+    """A code cell. ``tags`` is written to the cell metadata when given: a
+    cell tagged ``parameters`` is what papermill overrides on a re-run."""
     return {
         "cell_type": "code",
         "execution_count": None,
-        "metadata": {},
+        "metadata": {"tags": list(tags)} if tags else {},
         "outputs": [],
         "source": _lines(source),
     }
@@ -25,8 +27,10 @@ def _lines(source: str) -> list[str]:
 
 
 def notebook(cells: list[dict[str, Any]]) -> dict[str, Any]:
+    """nbformat 4.5 gives every cell an ``id``; a stable positional one is
+    enough and keeps two generations of the same notebook identical."""
     return {
-        "cells": cells,
+        "cells": [{**cell, "id": f"cell-{i}"} for i, cell in enumerate(cells)],
         "metadata": {
             "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
             "language_info": {"name": "python"},

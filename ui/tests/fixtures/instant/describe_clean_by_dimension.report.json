@@ -1,0 +1,776 @@
+{
+ "schema_version": "1.1",
+ "report_id": "rpt_54c9a4d607ffd23c",
+ "kind": "analysis",
+ "domain": "generic",
+ "template": "generic",
+ "audience": "analyst",
+ "created_at": "2026-11-10T19:43:42Z",
+ "analysis": {
+  "analysis_id": "recipe-describe",
+  "thread_id": "local",
+  "turn_id": "run",
+  "version": 1,
+  "parent_version": null,
+  "dataset_ids": []
+ },
+ "headline": {
+  "text": "Across {f1} rows the median is {f2} and the mean {f3}; most values sit between {f7} and {f8}.",
+  "bullets": [
+   {
+    "so_what": "The spread (standard deviation) is {f4}; values run from {f5} to {f6}, with skew {f9}.",
+    "now_what": "Compare the median rather than the mean when the shape is skewed."
+   },
+   {
+    "so_what": "The rows split into {f11} groups; the smallest holds {f12} rows.",
+    "now_what": "Read a small group's statistics as rough."
+   }
+  ]
+ },
+ "figures": [
+  {
+   "id": "f1",
+   "value": 600.0,
+   "unit": "count",
+   "decimals": 0,
+   "evidence_ref": "/measure/n"
+  },
+  {
+   "id": "f2",
+   "value": 149.17000000000002,
+   "unit": "currency",
+   "decimals": 2,
+   "evidence_ref": "/measure/median"
+  },
+  {
+   "id": "f3",
+   "value": 169.67176666666666,
+   "unit": "currency",
+   "decimals": 2,
+   "evidence_ref": "/measure/mean"
+  },
+  {
+   "id": "f4",
+   "value": 91.6088948514575,
+   "unit": "currency",
+   "decimals": 2,
+   "evidence_ref": "/measure/std"
+  },
+  {
+   "id": "f5",
+   "value": 37.71,
+   "unit": "currency",
+   "decimals": 2,
+   "evidence_ref": "/measure/min"
+  },
+  {
+   "id": "f6",
+   "value": 807.78,
+   "unit": "currency",
+   "decimals": 2,
+   "evidence_ref": "/measure/max"
+  },
+  {
+   "id": "f7",
+   "value": 80.27,
+   "unit": "currency",
+   "decimals": 2,
+   "evidence_ref": "/measure/p10"
+  },
+  {
+   "id": "f8",
+   "value": 281.94100000000003,
+   "unit": "currency",
+   "decimals": 2,
+   "evidence_ref": "/measure/p90"
+  },
+  {
+   "id": "f9",
+   "value": 2.1757915932240075,
+   "unit": "unitless",
+   "decimals": 2,
+   "evidence_ref": "/measure/skew"
+  },
+  {
+   "id": "f10",
+   "value": 0.0,
+   "unit": "count",
+   "decimals": 0,
+   "evidence_ref": "/rows/duplicates"
+  },
+  {
+   "id": "f11",
+   "value": 4.0,
+   "unit": "count",
+   "decimals": 0,
+   "evidence_ref": "/groups/count"
+  },
+  {
+   "id": "f12",
+   "value": 62.0,
+   "unit": "count",
+   "decimals": 0,
+   "evidence_ref": "/groups/smallest_n"
+  }
+ ],
+ "kpis": [
+  {
+   "id": "median",
+   "label": "Median revenue",
+   "value": "f2",
+   "direction_good": "neutral"
+  },
+  {
+   "id": "mean",
+   "label": "Mean revenue",
+   "value": "f3",
+   "direction_good": "neutral"
+  },
+  {
+   "id": "spread",
+   "label": "Standard deviation",
+   "value": "f4",
+   "direction_good": "neutral"
+  },
+  {
+   "id": "rows",
+   "label": "Rows with a value",
+   "value": "f1",
+   "direction_good": "neutral"
+  }
+ ],
+ "charts": [
+  {
+   "id": "distribution",
+   "title": "Distribution of revenue",
+   "chart_kind": "histogram",
+   "question_type": "distribution",
+   "option": {
+    "aria": {
+     "enabled": true,
+     "decal": {
+      "show": true
+     }
+    },
+    "color": [
+     "#0072B2",
+     "#D55E00",
+     "#009E73",
+     "#CC79A7",
+     "#E69F00",
+     "#56B4E9",
+     "#000000",
+     "#F0E442"
+    ],
+    "tooltip": {
+     "trigger": "item",
+     "confine": true
+    },
+    "animation": true,
+    "xAxis": {
+     "type": "category",
+     "data": [
+      "37.71 to 69.8",
+      "69.8 to 101.9",
+      "101.9 to 134",
+      "134 to 166.1",
+      "166.1 to 198.1",
+      "198.1 to 230.2",
+      "230.2 to 262.3",
+      "262.3 to 294.4",
+      "294.4 to 326.5",
+      "326.5 to 358.6",
+      "358.6 to 390.7",
+      "390.7 to 422.7",
+      "422.7 to 454.8",
+      "454.8 to 486.9",
+      "486.9 to 519",
+      "519 to 551.1",
+      "551.1 to 583.2",
+      "583.2 to 615.3",
+      "615.3 to 647.3",
+      "647.3 to 679.4",
+      "679.4 to 711.5",
+      "711.5 to 743.6",
+      "743.6 to 775.7",
+      "775.7 to 807.8"
+     ],
+     "name": "revenue"
+    },
+    "yAxis": {
+     "type": "value",
+     "name": "rows"
+    },
+    "series": [
+     {
+      "type": "bar",
+      "barCategoryGap": "2%",
+      "data": [
+       33,
+       95,
+       117,
+       105,
+       74,
+       62,
+       40,
+       22,
+       19,
+       14,
+       7,
+       6,
+       0,
+       0,
+       1,
+       0,
+       0,
+       1,
+       1,
+       0,
+       0,
+       2,
+       0,
+       1
+      ]
+     }
+    ]
+   },
+   "alt_text": "Histogram of revenue over the distinct rows; the median and mean are given in the headline.",
+   "data_table": {
+    "columns": [
+     "bin",
+     "rows"
+    ],
+    "rows": [
+     [
+      "37.71 to 69.8",
+      33
+     ],
+     [
+      "69.8 to 101.9",
+      95
+     ],
+     [
+      "101.9 to 134",
+      117
+     ],
+     [
+      "134 to 166.1",
+      105
+     ],
+     [
+      "166.1 to 198.1",
+      74
+     ],
+     [
+      "198.1 to 230.2",
+      62
+     ],
+     [
+      "230.2 to 262.3",
+      40
+     ],
+     [
+      "262.3 to 294.4",
+      22
+     ],
+     [
+      "294.4 to 326.5",
+      19
+     ],
+     [
+      "326.5 to 358.6",
+      14
+     ],
+     [
+      "358.6 to 390.7",
+      7
+     ],
+     [
+      "390.7 to 422.7",
+      6
+     ],
+     [
+      "422.7 to 454.8",
+      0
+     ],
+     [
+      "454.8 to 486.9",
+      0
+     ],
+     [
+      "486.9 to 519",
+      1
+     ],
+     [
+      "519 to 551.1",
+      0
+     ],
+     [
+      "551.1 to 583.2",
+      0
+     ],
+     [
+      "583.2 to 615.3",
+      1
+     ],
+     [
+      "615.3 to 647.3",
+      1
+     ],
+     [
+      "647.3 to 679.4",
+      0
+     ],
+     [
+      "679.4 to 711.5",
+      0
+     ],
+     [
+      "711.5 to 743.6",
+      2
+     ],
+     [
+      "743.6 to 775.7",
+      0
+     ],
+     [
+      "775.7 to 807.8",
+      1
+     ]
+    ]
+   }
+  },
+  {
+   "id": "by_group",
+   "title": "revenue by region",
+   "chart_kind": "boxplot",
+   "question_type": "distribution",
+   "option": {
+    "aria": {
+     "enabled": true,
+     "decal": {
+      "show": true
+     }
+    },
+    "color": [
+     "#0072B2",
+     "#D55E00",
+     "#009E73",
+     "#CC79A7",
+     "#E69F00",
+     "#56B4E9",
+     "#000000",
+     "#F0E442"
+    ],
+    "tooltip": {
+     "trigger": "item",
+     "confine": true
+    },
+    "animation": true,
+    "xAxis": {
+     "type": "category",
+     "data": [
+      "north",
+      "south",
+      "east",
+      "west"
+     ],
+     "name": "region"
+    },
+    "yAxis": {
+     "type": "value",
+     "name": "revenue"
+    },
+    "series": [
+     {
+      "type": "boxplot",
+      "data": [
+       [
+        37.71,
+        111.6325,
+        148.095,
+        203.0375,
+        807.78
+       ],
+       [
+        52.43,
+        104.525,
+        141.93,
+        205.615,
+        722.62
+       ],
+       [
+        49.05,
+        118.32,
+        166.33,
+        223.85,
+        719.09
+       ],
+       [
+        46.78,
+        88.5325,
+        145.29500000000002,
+        223.6325,
+        583.72
+       ]
+      ]
+     }
+    ]
+   },
+   "alt_text": "Box plot of revenue for each region value; each box spans the middle half.",
+   "data_table": {
+    "columns": [
+     "region",
+     "min",
+     "q1",
+     "median",
+     "q3",
+     "max"
+    ],
+    "rows": [
+     [
+      "north",
+      37.71,
+      111.6325,
+      148.095,
+      203.0375,
+      807.78
+     ],
+     [
+      "south",
+      52.43,
+      104.525,
+      141.93,
+      205.615,
+      722.62
+     ],
+     [
+      "east",
+      49.05,
+      118.32,
+      166.33,
+      223.85,
+      719.09
+     ],
+     [
+      "west",
+      46.78,
+      88.5325,
+      145.29500000000002,
+      223.6325,
+      583.72
+     ]
+    ]
+   }
+  }
+ ],
+ "method": {
+  "summary": "Count, mean, median, deciles, quartiles, standard deviation and range of revenue over distinct rows in DuckDB, overall and by region (largest groups; the rest as other); skew and kurtosis from pandas.",
+  "steps": [
+   "Recipe describe, version 1.0."
+  ],
+  "sample": {
+   "rows_analyzed": 600,
+   "total_rows": 600,
+   "is_sampled": false
+  }
+ },
+ "caveats": [],
+ "steps": [
+  {
+   "id": "describe",
+   "order": 1,
+   "title": "Describe a measure",
+   "status": "done"
+  }
+ ],
+ "completion": {
+  "state": "answered"
+ },
+ "data_checks": [
+  {
+   "gate": "missing_measure",
+   "status": "passed"
+  },
+  {
+   "gate": "constant",
+   "status": "passed"
+  },
+  {
+   "gate": "duplicates",
+   "status": "passed"
+  },
+  {
+   "gate": "small_groups",
+   "status": "passed"
+  }
+ ],
+ "evidence": {
+  "rows": {
+   "raw": {
+    "value": 600.0,
+    "unit": "count"
+   },
+   "distinct": {
+    "value": 600.0,
+    "unit": "count"
+   },
+   "duplicates": {
+    "value": 0.0,
+    "unit": "count"
+   }
+  },
+  "measure": {
+   "missing_share": {
+    "value": 0.0,
+    "unit": "fraction"
+   },
+   "n": {
+    "value": 600.0,
+    "unit": "count"
+   },
+   "mean": {
+    "value": 169.67176666666666,
+    "unit": "currency"
+   },
+   "median": {
+    "value": 149.17000000000002,
+    "unit": "currency"
+   },
+   "p10": {
+    "value": 80.27,
+    "unit": "currency"
+   },
+   "p25": {
+    "value": 106.455,
+    "unit": "currency"
+   },
+   "p75": {
+    "value": 212.13750000000002,
+    "unit": "currency"
+   },
+   "p90": {
+    "value": 281.94100000000003,
+    "unit": "currency"
+   },
+   "std": {
+    "value": 91.6088948514575,
+    "unit": "currency"
+   },
+   "min": {
+    "value": 37.71,
+    "unit": "currency"
+   },
+   "max": {
+    "value": 807.78,
+    "unit": "currency"
+   },
+   "skew": {
+    "value": 2.1757915932240075,
+    "unit": "unitless"
+   },
+   "kurtosis": {
+    "value": 9.092683094129255,
+    "unit": "unitless"
+   }
+  },
+  "groups": {
+   "count": {
+    "value": 4.0,
+    "unit": "count"
+   },
+   "smallest_n": {
+    "value": 62.0,
+    "unit": "count"
+   },
+   "by": {
+    "north": {
+     "n": {
+      "value": 254.0,
+      "unit": "count"
+     },
+     "mean": {
+      "value": 167.6897637795275,
+      "unit": "currency"
+     },
+     "median": {
+      "value": 148.095,
+      "unit": "currency"
+     },
+     "p10": {
+      "value": 84.161,
+      "unit": "currency"
+     },
+     "p25": {
+      "value": 111.6325,
+      "unit": "currency"
+     },
+     "p75": {
+      "value": 203.0375,
+      "unit": "currency"
+     },
+     "p90": {
+      "value": 261.161,
+      "unit": "currency"
+     },
+     "std": {
+      "value": 88.88530897134869,
+      "unit": "currency"
+     },
+     "min": {
+      "value": 37.71,
+      "unit": "currency"
+     },
+     "max": {
+      "value": 807.78,
+      "unit": "currency"
+     }
+    },
+    "south": {
+     "n": {
+      "value": 175.0,
+      "unit": "count"
+     },
+     "mean": {
+      "value": 162.95097142857145,
+      "unit": "currency"
+     },
+     "median": {
+      "value": 141.93,
+      "unit": "currency"
+     },
+     "p10": {
+      "value": 79.478,
+      "unit": "currency"
+     },
+     "p25": {
+      "value": 104.525,
+      "unit": "currency"
+     },
+     "p75": {
+      "value": 205.615,
+      "unit": "currency"
+     },
+     "p90": {
+      "value": 266.64399999999995,
+      "unit": "currency"
+     },
+     "std": {
+      "value": 86.27651615506679,
+      "unit": "currency"
+     },
+     "min": {
+      "value": 52.43,
+      "unit": "currency"
+     },
+     "max": {
+      "value": 722.62,
+      "unit": "currency"
+     }
+    },
+    "east": {
+     "n": {
+      "value": 109.0,
+      "unit": "count"
+     },
+     "mean": {
+      "value": 185.3196330275229,
+      "unit": "currency"
+     },
+     "median": {
+      "value": 166.33,
+      "unit": "currency"
+     },
+     "p10": {
+      "value": 87.58,
+      "unit": "currency"
+     },
+     "p25": {
+      "value": 118.32,
+      "unit": "currency"
+     },
+     "p75": {
+      "value": 223.85,
+      "unit": "currency"
+     },
+     "p90": {
+      "value": 305.35400000000004,
+      "unit": "currency"
+     },
+     "std": {
+      "value": 98.17121354237504,
+      "unit": "currency"
+     },
+     "min": {
+      "value": 49.05,
+      "unit": "currency"
+     },
+     "max": {
+      "value": 719.09,
+      "unit": "currency"
+     }
+    },
+    "west": {
+     "n": {
+      "value": 62.0,
+      "unit": "count"
+     },
+     "mean": {
+      "value": 169.2516129032258,
+      "unit": "currency"
+     },
+     "median": {
+      "value": 145.29500000000002,
+      "unit": "currency"
+     },
+     "p10": {
+      "value": 71.642,
+      "unit": "currency"
+     },
+     "p25": {
+      "value": 88.5325,
+      "unit": "currency"
+     },
+     "p75": {
+      "value": 223.6325,
+      "unit": "currency"
+     },
+     "p90": {
+      "value": 293.763,
+      "unit": "currency"
+     },
+     "std": {
+      "value": 103.7347932872067,
+      "unit": "currency"
+     },
+     "min": {
+      "value": 46.78,
+      "unit": "currency"
+     },
+     "max": {
+      "value": 583.72,
+      "unit": "currency"
+     }
+    }
+   }
+  }
+ },
+ "provenance": {
+  "generator": "avaloka",
+  "generator_version": "2.0.0",
+  "llm_used": false,
+  "llm_model": null,
+  "verifier": {
+   "passed": true,
+   "rejections": []
+  },
+  "recipe": {
+   "id": "describe",
+   "version": "1.0"
+  },
+  "engine": {
+   "duckdb": "2.0.0",
+   "pandas": "2.3.3"
+  }
+ }
+}

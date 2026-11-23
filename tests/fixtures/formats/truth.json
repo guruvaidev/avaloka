@@ -1,0 +1,55 @@
+{
+ "columns": [
+  "region",
+  "units_sold",
+  "revenue_usd",
+  "reported_on",
+  "channel",
+  "note"
+ ],
+ "csv_part_rows": [
+  50,
+  70
+ ],
+ "kinds": {
+  "channel": "category",
+  "note": "text",
+  "region": "category",
+  "reported_on": "date_text",
+  "revenue_usd": "numeric",
+  "units_sold": "numeric"
+ },
+ "n_rows": 120,
+ "n_unique": {
+  "channel": 2,
+  "note": 4,
+  "region": 4,
+  "reported_on": 120,
+  "revenue_usd": 117,
+  "units_sold": 113
+ },
+ "nulls": {
+  "channel": 0,
+  "note": 0,
+  "region": 6,
+  "reported_on": 0,
+  "revenue_usd": 3,
+  "units_sold": 0
+ },
+ "numeric": {
+  "revenue_usd": {
+   "max": 7626.28,
+   "mean": 5016.6385,
+   "min": 2786.02
+  },
+  "units_sold": {
+   "max": 896.0,
+   "mean": 459.8,
+   "min": 16.0
+  }
+ },
+ "parquet_part_rows": [
+  40,
+  80
+ ]
+}

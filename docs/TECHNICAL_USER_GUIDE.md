@@ -1,6 +1,6 @@
 # Avaloka AI 1.0 — Technical User Guide
 
-**Document version 1.0 · Applies to Avaloka 1.0.0**
+**Document version 1.0 · Applies to Avaloka 1.6 (open-source release line)**
 
 ---
 
@@ -461,6 +461,21 @@ The agent deduces schema, handles format conversion, and validates the transfer.
 Large transfers run distributed. Cross-account and cross-cloud moves are
 supported where both connections are registered.
 
+**Either end of a transfer can be any database you connected, and only one you
+connected.** The onboarding API's credential route (`/customers/{id}/credentials`)
+answers only that database's own API key and returns no password: it returns a
+handle, the connection string sealed under `DB_ENCRYPTION_KEY`, which the
+planner opens in process. On every chat turn the server gives the planner one
+sealed API key per database the signed-in user connected
+(`db_credential_handles`, built from that user's own connect sessions), plus
+the database being analysed (`active_db_customer_id` /
+`active_db_credential_handle`). So "transfer from my database to my other
+database" resolves both ends, while naming a database another user connected
+answers *not registered* and nothing is fetched. A collaborator on a shared
+analysis gets the handles for their own databases, not the owner's. The handles
+stay ciphertext in graph state and are never logged, traced or sent in
+telemetry.
+
 **Reads and writes are not symmetric, and this catches people out:**
 
 | Direction | Files | Databases |
@@ -539,6 +554,14 @@ allowlist with `allow_fallbacks: false`, and GPT-6 Luna is the fallback tier
 `INFERENCE_PROVIDER=openrouter` with no key disables the LLM and logs why. The
 provider can also be set per agent — `INFERENCE_PROVIDER_PLANNING`,
 `INFERENCE_PROVIDER_CODING`, `AVALOKA_<AGENT>_PROVIDER`.
+
+The default model is `openai/gpt-oss-120b` (owner decision 2026-11-01), and the
+Helm chart ships the same provider. OpenRouter requests are pinned to a
+provider allowlist with `allow_fallbacks: false` and `sort: "throughput"`. The fallback
+chain is GPT-6 Luna on OpenRouter, then gpt-oss-120b on Groq when a Groq key is
+set; a reply answered by a fallback says which model answered and why
+(`AVALOKA_OPENROUTER_*`, `AVALOKA_GROQ_FALLBACK_MODEL`, see
+[privacy-and-egress.md](privacy-and-egress.md)).
 
 `tool_choice` is resolved per provider rather than per client class, because
 `local`, `openrouter` and `openai` all build the same `ChatOpenAI` object and the

@@ -240,6 +240,10 @@ def _calculate(df: pd.DataFrame, action: MetricAction, approach: int) -> pd.Data
             else:
                 working["_avaloka_present"] = values.notna().astype(int)
                 result = working.groupby(groups, dropna=False)["_avaloka_present"].sum()
+        elif action.operation == "sum":
+            # min_count=1: a group with no usable value has no sum. pandas
+            # returns 0 for it otherwise, and 0 reads as a measured total.
+            result = grouped.sum(min_count=1)
         else:
             result = grouped.agg(action.operation)
         return result.reset_index(name=action.output_name)
@@ -253,6 +257,8 @@ def _calculate(df: pd.DataFrame, action: MetricAction, approach: int) -> pd.Data
             value = pd.Index(values.dropna()).nunique()
     elif action.operation == "count":
         value = values.count() if approach == 1 else values.notna().sum() if approach == 2 else len(values.dropna())
+    elif action.operation == "sum":
+        value = values.sum(min_count=1)
     else:
         value = getattr(values, action.operation)()
     return pd.DataFrame([{action.output_name: value}])
@@ -285,7 +291,7 @@ def execute_action_plan(df: pd.DataFrame, plan: ActionPlan) -> ActionResult:
             try:
                 result = _calculate(df, action, approach)
                 if result.empty or (
-                    action.operation not in {"count", "count_distinct", "sum"}
+                    action.operation not in {"count", "count_distinct"}
                     and result[action.output_name].isna().all()
                 ):
                     raise ValueError("No usable values were available for this calculation")

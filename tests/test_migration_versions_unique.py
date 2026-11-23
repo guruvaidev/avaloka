@@ -224,6 +224,8 @@ MERGED_MIGRATIONS = (
     "20261111220000_analysis_move_requires_edit.sql",
     "20261111230000_shared_analysis_display_profiles.sql",
     "20261111233000_team_member_share_revocation.sql",
+    # develop-1.7: the dataset catalog (feat/2.x-dataset-catalog, PR #753).
+    "20261116120000_dataset_catalog.sql",
     "20261116130000_cloud_datasets_sealed_keys.sql",
     "20261116140000_team_members_any_plan.sql",
     "20261117110000_org_name_keys_per_org.sql",
@@ -235,6 +237,48 @@ MERGED_MIGRATIONS = (
 )
 
 _KNOWN_PAIR = {name for names in KNOWN_DUPLICATES.values() for name in names}
+
+# Migrations that reached this line by merging develop-1.6 (6c1ce811, PR #798). They
+# were written for, and have run on, the 1.6 line, so several sort before migrations
+# that are native to this line; renumbering them would make them run again on every
+# 1.6 database (the chart hook keys by file name). The target-branch order check
+# exempts exactly these. A later 1.6 -> 1.7 merge that carries a new 1.6 migration
+# adds its name here; a migration written for this line must still sort last.
+CARRIED_FROM_1_6 = frozenset({
+    "20260903054954_a8b7f26f-6fc8-496a-a1ec-a85f3320a270",
+    "20261025120000_ray_jobs",
+    "20261102100000_owner_only_project_visibility",
+    "20261103090000_restore_support_ticket_policies",
+    "20261103100000_plan_enforce_comments_notifications",
+    "20261103110000_plan_enforce_analysis_share_links",
+    "20261103120000_bg01_no_org_for_self_serve",
+    "20261103130000_fix_bg03_analysis_visibility",
+    "20261103140000_fix_bg01_org_membership",
+    "20261103145000_dedupe_seed_departments_roles",
+    "20261103150000_bg05_bg06_roles_departments",
+    "20261103160000_plan_descriptions_true",
+    "20261106120000_standalone_team_ownership",
+    "20261106130000_remove_team_membership_role",
+    "20261106140000_team_description",
+    "20261106150000_team_invitation_delivery_and_plan_gate",
+    "20261106160000_team_lead_profile",
+    "20261106170000_standalone_analysis_team_sharing",
+    "20261106180000_reconcile_team_invitation_signup",
+    "20261106190000_remove_legacy_team_account_trigger",
+    "20261108090000_get_my_report_access_readonly",
+    "20261108100000_bg01_cleanup_selfserve_orgs",
+    "20261111200000_project_team_sharing",
+    "20261111210000_professional_project_plan_access",
+    "20261111220000_analysis_move_requires_edit",
+    "20261111230000_shared_analysis_display_profiles",
+    "20261111233000_team_member_share_revocation",
+    "20261116140000_team_members_any_plan",
+    "20261117110000_org_name_keys_per_org",
+    "20261117130000_ml_jobs_endpoints",
+    "20261121090000_api_roles_no_truncate",
+    "20261121100000_chat_credentials_redacted",
+    "20261121110000_background_jobs",
+})
 
 
 def _baseline_names() -> set[str]:
@@ -295,7 +339,8 @@ def test_new_migrations_sort_after_the_target_branch():
     for directory in DIRS:
         on_target = _target_versions(ref, directory)
         newest = max(on_target.values())
-        added = sorted({p.name for p in directory.glob("*.sql")} - set(on_target) - _KNOWN_PAIR)
+        added = sorted({p.name for p in directory.glob("*.sql")} - set(on_target) - _KNOWN_PAIR
+                       - {f"{stem}.sql" for stem in CARRIED_FROM_1_6})
         older = [n for n in added if (v := _version(n)) and v <= newest]
         assert not older, (
             f"{directory.relative_to(REPO_ROOT)}: {older} sort at or before {newest}, the newest "

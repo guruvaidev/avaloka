@@ -283,7 +283,7 @@ class RedisClientImpl:
 
             from app.services.embedding_utils import same_embedding_space
             # A vector stored by a different embedding provider (OpenAI, before
-            # embeddings became local by default) scores meaninglessly against
+            # 2.0 made embeddings local by default) scores meaninglessly against
             # this one. Skip it; keyword overlap below still finds the schema, and
             # the next set_schema re-embeds it in the current space.
             foreign = 0

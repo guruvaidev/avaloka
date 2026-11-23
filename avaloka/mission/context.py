@@ -50,6 +50,9 @@ class MissionContext:
     objective: str | None = None
     deployable: bool = False
     deployment_latency_ms: float | None = None
+    #: Whether the candidate panel also votes as an ensemble. None lets the
+    #: planner decide within the budget; True/False is the user's call.
+    ensemble: bool | None = None
 
     execution_mode: ExecutionMode = ExecutionMode.LOCAL
     tier: str = "community"

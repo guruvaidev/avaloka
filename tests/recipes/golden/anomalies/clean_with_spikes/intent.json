@@ -1,0 +1,10 @@
+{
+  "question": "Which days had unusual orders?",
+  "recipe": "anomalies",
+  "params": {
+    "measure": "orders",
+    "time": "date"
+  },
+  "confidence": 1.0,
+  "source": "fixture"
+}

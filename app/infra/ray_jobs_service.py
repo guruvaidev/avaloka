@@ -146,8 +146,16 @@ def cluster_status() -> Dict[str, Any]:
     if not url:
         return {"configured": False, "reachable": False}
     timeout = float(os.getenv("RAY_DASHBOARD_CONNECT_TIMEOUT_S", "5"))
+    from app.infra.ray_auth import RayAuthTokenMissing, auth_headers
+
     try:
-        with urllib.request.urlopen(f"{url}/api/version", timeout=timeout) as resp:
+        headers = auth_headers()
+    except RayAuthTokenMissing as exc:
+        logger.warning("[ray-jobs] %s", exc)
+        return {"configured": True, "reachable": False}
+    try:
+        req = urllib.request.Request(f"{url}/api/version", headers=headers)
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             version = json.loads(resp.read().decode() or "{}")
     except (urllib.error.URLError, OSError, ValueError) as exc:
         logger.info("[ray-jobs] Ray dashboard unreachable: %s", exc)
@@ -159,7 +167,8 @@ def cluster_status() -> Dict[str, Any]:
         "nodes": None,
     }
     try:  # best effort: node count from the dashboard's node summary
-        with urllib.request.urlopen(f"{url}/nodes?view=summary", timeout=timeout) as resp:
+        req = urllib.request.Request(f"{url}/nodes?view=summary", headers=headers)
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             summary = (json.loads(resp.read().decode() or "{}").get("data") or {}).get("summary")
         if isinstance(summary, list):
             out["nodes"] = len(summary)

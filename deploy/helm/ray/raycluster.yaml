@@ -2,6 +2,16 @@
 # KubeRay RayCluster for avaloka distributed compute (sampling / transforms / training).
 # Applied by app/infra/ray_manager.apply_ray_cluster(). Head service DNS:
 #   avaloka-raycluster-head-svc  (Ray client port 10001, dashboard 8265)
+# ClusterIP only. The dashboard listens on 0.0.0.0 because the app and the KubeRay
+# operator reach it through that Service; what keeps everyone else out is Ray's
+# token authentication (RAY_AUTH_MODE=token below) and the chart's NetworkPolicy
+# (deploy/helm/avaloka/templates/ray-networkpolicy.yaml). There used to be a
+# node-port Service (30265) for the dashboard; it is gone (the kind-only opt-in is ray_dashboard_nodeport.yaml). From a workstation:
+#   kubectl port-forward svc/avaloka-raycluster-head-svc 8265:8265
+# and give the dashboard (or `ray job submit` with RAY_AUTH_MODE=token) the token:
+#   kubectl get secret avaloka-ray-auth -o jsonpath='{.data.auth_token}' | base64 -d
+# Needs the avaloka chart installed first (it creates avaloka-ray-auth) and the
+# KubeRay operator 1.6+ (authOptions).
 apiVersion: ray.io/v1
 kind: RayCluster
 metadata:
@@ -9,13 +19,31 @@ metadata:
   labels:
     app.kubernetes.io/part-of: avaloka
 spec:
-  rayVersion: "2.49.2"
+  rayVersion: "2.56.0"
   enableInTreeAutoscaling: true
   # Keep the autoscaler sidecar small so head+sidecar fit on modest nodes.
+  # Ray token authentication, enforced by Ray itself through the env below on
+  # every container. authOptions tells the KubeRay operator (1.6+) to use the
+  # same Secret when it reads job and Serve status from the dashboard; without
+  # it the operator would be refused like anyone else.
+  authOptions:
+    mode: token
+    secretName: avaloka-ray-auth
   autoscalerOptions:
     resources:
       requests: { cpu: "150m", memory: "256Mi" }
       limits: { cpu: "300m", memory: "512Mi" }
+    # The autoscaler sidecar talks to GCS, so it needs the token too.
+    env:
+      # Ray token authentication. Ray >= 2.52 refuses every dashboard, Jobs API,
+      # client and GCS call without this token. One key by secretKeyRef from the
+      # Secret the avaloka chart generates (ray.auth); not optional, so a pod
+      # without it does not start rather than start open.
+      - name: RAY_AUTH_MODE
+        value: token
+      - name: RAY_AUTH_TOKEN
+        valueFrom:
+          secretKeyRef: { name: avaloka-ray-auth, key: auth_token }
   headGroupSpec:
     rayStartParams:
       dashboard-host: "0.0.0.0"
@@ -43,6 +71,30 @@ spec:
             # driver, which Ray runs on the head. A job's own connection keys
             # reach it per job (app/infra/ray_job_runner.py), not through the pod.
             env:
+              # Third-party usage beacons off (app/core/thirdparty_optout.py), so a Ray
+              # image built elsewhere is covered too; RAY_USAGE_STATS_ENABLED is Ray's own.
+              - name: DO_NOT_TRACK
+                value: "true"
+              - name: SCARF_NO_ANALYTICS
+                value: "true"
+              - name: ORT_DISABLE_TELEMETRY
+                value: "1"
+              - name: ANONYMIZED_TELEMETRY
+                value: "False"
+              - name: MLFLOW_DISABLE_TELEMETRY
+                value: "true"
+              - name: HF_HUB_DISABLE_TELEMETRY
+                value: "1"
+              - name: DVC_NO_ANALYTICS
+                value: "1"
+              - name: RAY_USAGE_STATS_ENABLED
+                value: "0"
+              - name: STREAMLIT_BROWSER_GATHER_USAGE_STATS
+                value: "false"
+              - name: LANGGRAPH_CLI_NO_ANALYTICS
+                value: "1"
+              - name: LANGGRAPH_NO_VERSION_CHECK
+                value: "true"
               - name: AWS_ACCESS_KEY_ID
                 valueFrom:
                   secretKeyRef: { name: avaloka-secrets, key: AWS_ACCESS_KEY_ID, optional: true }
@@ -52,6 +104,23 @@ spec:
               - name: AVALOKA_PII_KEY
                 valueFrom:
                   secretKeyRef: { name: avaloka-secrets, key: AVALOKA_PII_KEY, optional: true }
+              # Ray token authentication. Ray >= 2.52 refuses every dashboard, Jobs API,
+              # client and GCS call without this token. One key by secretKeyRef from the
+              # Secret the avaloka chart generates (ray.auth); not optional, so a pod
+              # without it does not start rather than start open.
+              - name: RAY_AUTH_MODE
+                value: token
+              - name: RAY_AUTH_TOKEN
+                valueFrom:
+                  secretKeyRef: { name: avaloka-ray-auth, key: auth_token }
+              # MLflow basic-auth (mlflow.auth): training runs log to, and Serve loads
+              # models from, the tracking server. The mlflow client reads these itself.
+              - name: MLFLOW_TRACKING_USERNAME
+                valueFrom:
+                  secretKeyRef: { name: avaloka-secrets, key: MLFLOW_TRACKING_USERNAME, optional: true }
+              - name: MLFLOW_TRACKING_PASSWORD
+                valueFrom:
+                  secretKeyRef: { name: avaloka-secrets, key: MLFLOW_TRACKING_PASSWORD, optional: true }
             volumeMounts:
               - name: gcp-sa
                 mountPath: /var/secrets/gcp
@@ -104,12 +173,53 @@ spec:
               # Named keys only, as on the head: the object-store keys. The PII
               # key reaches the workers as a task argument from the driver.
               env:
+                # Third-party usage beacons off (app/core/thirdparty_optout.py), so a Ray
+                # image built elsewhere is covered too; RAY_USAGE_STATS_ENABLED is Ray's own.
+                - name: DO_NOT_TRACK
+                  value: "true"
+                - name: SCARF_NO_ANALYTICS
+                  value: "true"
+                - name: ORT_DISABLE_TELEMETRY
+                  value: "1"
+                - name: ANONYMIZED_TELEMETRY
+                  value: "False"
+                - name: MLFLOW_DISABLE_TELEMETRY
+                  value: "true"
+                - name: HF_HUB_DISABLE_TELEMETRY
+                  value: "1"
+                - name: DVC_NO_ANALYTICS
+                  value: "1"
+                - name: RAY_USAGE_STATS_ENABLED
+                  value: "0"
+                - name: STREAMLIT_BROWSER_GATHER_USAGE_STATS
+                  value: "false"
+                - name: LANGGRAPH_CLI_NO_ANALYTICS
+                  value: "1"
+                - name: LANGGRAPH_NO_VERSION_CHECK
+                  value: "true"
                 - name: AWS_ACCESS_KEY_ID
                   valueFrom:
                     secretKeyRef: { name: avaloka-secrets, key: AWS_ACCESS_KEY_ID, optional: true }
                 - name: AWS_SECRET_ACCESS_KEY
                   valueFrom:
                     secretKeyRef: { name: avaloka-secrets, key: AWS_SECRET_ACCESS_KEY, optional: true }
+                # Ray token authentication. Ray >= 2.52 refuses every dashboard, Jobs API,
+                # client and GCS call without this token. One key by secretKeyRef from the
+                # Secret the avaloka chart generates (ray.auth); not optional, so a pod
+                # without it does not start rather than start open.
+                - name: RAY_AUTH_MODE
+                  value: token
+                - name: RAY_AUTH_TOKEN
+                  valueFrom:
+                    secretKeyRef: { name: avaloka-ray-auth, key: auth_token }
+                # MLflow basic-auth (mlflow.auth): training runs log to, and Serve loads
+                # models from, the tracking server. The mlflow client reads these itself.
+                - name: MLFLOW_TRACKING_USERNAME
+                  valueFrom:
+                    secretKeyRef: { name: avaloka-secrets, key: MLFLOW_TRACKING_USERNAME, optional: true }
+                - name: MLFLOW_TRACKING_PASSWORD
+                  valueFrom:
+                    secretKeyRef: { name: avaloka-secrets, key: MLFLOW_TRACKING_PASSWORD, optional: true }
               volumeMounts:
                 - name: gcp-sa
                   mountPath: /var/secrets/gcp

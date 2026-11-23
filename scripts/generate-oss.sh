@@ -450,6 +450,55 @@ if hits:
     sys.exit(f"   {len(hits)} possible secret(s) -- refusing to write")
 SEC
 
+# Internal names: words that must not appear in ANY published text file, case
+# insensitively -- the internal repository's host and workspace. The manifest
+# writes the patterns as regexes with a character class, so the manifest (which
+# is itself published) never contains the words it forbids. `allow` phrases are
+# exact, case-sensitive and removed before matching, each with its reason.
+python3 - "$work" "$manifest" <<'WORDS'
+import sys, pathlib, re
+work, mtext = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]).read_text()
+print("== internal names ==")
+blk = re.search(r"^assert_no_words:\n((?:(?![a-z_]+:).*\n)*)", mtext, re.M)
+if not blk:
+    print("   NOT CHECKED -- this manifest declares no assert_no_words section")
+    sys.exit(0)
+body, sub, pats, allow = blk.group(1), None, [], []
+for line in body.split("\n"):
+    s = re.match(r"^  ([a-z_]+):\s*$", line)
+    if s:
+        sub = s.group(1); continue
+    m = re.match(r'^    - *(?:phrase: *)?"([^"]+)"', line)
+    if m:
+        (pats if sub == "patterns" else allow if sub == "allow" else []).append(m.group(1))
+if not pats:
+    sys.exit("   FAIL assert_no_words declares no patterns -- the check would pass vacuously")
+rx = [re.compile(p, re.I) for p in pats]
+hits, scanned = [], 0
+for f in sorted(work.rglob("*")):
+    if not f.is_file() or ".git" in f.parts:
+        continue
+    try:
+        txt = f.read_text(errors="strict")
+    except (UnicodeDecodeError, OSError):
+        continue
+    scanned += 1
+    masked = txt
+    for a in allow:
+        masked = masked.replace(a, "")
+    for r in rx:
+        for m in r.finditer(masked):
+            line = masked.count("\n", 0, m.start()) + 1
+            hits.append((r.pattern, f"{f.relative_to(work)}:{line}"))
+for r in rx:
+    n = [h for p, h in hits if p == r.pattern]
+    print(f"   {'FAIL' if n else 'ok  '} no file matches /{r.pattern}/i" + (f"  ({len(n)})" if n else ""))
+print(f"   scanned {scanned} text files, {len(allow)} allowed phrase(s)")
+if hits:
+    for _, h in hits[:20]:
+        print(f"     {h}")
+    sys.exit(f"   {len(hits)} internal name(s) in the public tree -- refusing to write")
+WORDS
 # Keep a copy of the generated tree, to read it or run its own tests against
 # exactly what would be published. Only reached once every check has passed.
 if [ -n "${OSS_OUT_DIR:-}" ]; then

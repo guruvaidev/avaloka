@@ -9,6 +9,7 @@ import remarkGfm from "remark-gfm";
 import { ChevronLeft, ChevronRight, X } from "@untitledui/icons";
 import { Maximize2 } from "lucide-react";
 import { TagPicker } from "@/components/analysis/TagPicker";
+import { CommentaryText, commentaryPlainText } from "@/components/chat/CommentaryText";
 import { DynamicChart, type Slide } from "@/components/dashboard/dynamicChart";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { rayJobMarkdown } from "@/lib/rayDashboard";
@@ -43,11 +44,14 @@ export function ChartCarousel({
   onDismiss,
   activeRunId,
   onRunChange,
+  showNeighbors = true,
 }: {
   items: { slide: Slide; index: number; cardKey: string; runId?: string }[];
   onDismiss?: (cardKey: string) => void;
   activeRunId?: string | null;
   onRunChange?: (runId: string) => void;
+  /** Result-table cards show no tilted neighbours (2.x). */
+  showNeighbors?: boolean;
 }) {
   const [active, setActive] = useState(0);
   const [fullscreenOpen, setFullscreenOpen] = useState(false);
@@ -119,7 +123,7 @@ export function ChartCarousel({
         >
           {items.map((it, i) => {
             const off = getOffset(i);
-            if (Math.abs(off) > 1) return null; // only render 3 nearest
+            if (Math.abs(off) > 1 || (!showNeighbors && off !== 0)) return null; // only render 3 nearest
             const isActive = off === 0;
             const translateX = off * 52; // percent
             const translateY = isActive ? 0 : -10;
@@ -170,7 +174,7 @@ export function ChartCarousel({
                     </button>
                   ) : null}
                   <div className="flex flex-wrap items-center gap-2 pr-8">
-                    <h3 className="text-sm font-semibold text-primary">{it.slide.title}</h3>
+                    <h3 className="text-sm font-semibold text-primary"><CommentaryText text={it.slide.title} segments={it.slide.titleSegments} fromSuffix /></h3>
                     {(it.slide as Slide & { sourceLabel?: string }).sourceLabel ? (
                       <span className="rounded-full bg-secondary px-2 py-0.5 text-[11px] font-medium text-secondary">
                         {(it.slide as Slide & { sourceLabel?: string }).sourceLabel}
@@ -180,7 +184,7 @@ export function ChartCarousel({
                     {isActive ? (
                       <button
                         type="button"
-                        aria-label={`Maximize ${it.slide.title} chart`}
+                        aria-label={`Maximize ${commentaryPlainText(it.slide.title, it.slide.titleSegments)} chart`}
                         title="Maximize chart"
                         onClick={(event) => {
                           event.stopPropagation();
@@ -230,7 +234,7 @@ export function ChartCarousel({
       ) : null}
       <Dialog open={fullscreenOpen} onOpenChange={setFullscreenOpen}>
         <DialogContent className="grid h-[90vh] w-[94vw] max-w-none grid-rows-[auto_auto_1fr] gap-3 overflow-hidden rounded-xl border-secondary bg-primary p-5 shadow-2xl dark:border-white/25">
-          <DialogTitle className="pr-10 text-base font-semibold text-primary">{s.title}</DialogTitle>
+          <DialogTitle className="pr-10 text-base font-semibold text-primary"><CommentaryText text={s.title} segments={s.titleSegments} fromSuffix /></DialogTitle>
           {s.subtitle ? (
             <p className="text-sm text-tertiary">
               <InlineMarkdown content={s.subtitle} />

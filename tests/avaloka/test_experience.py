@@ -67,8 +67,11 @@ def test_persona_observations_are_grounded():
         "dataset": {"n_rows": 100, "n_cols": 2},
         "quality": {"score": 80, "high_missing_columns": [], "id_columns": ["uid"]},
         "columns": [{"name": "uid", "role": "id"},
-                    {"name": "cat", "role": "categorical",
-                     "top_values": [{"value": "x", "count": 60}]}],
+                    # Two values: the profiler lists every distinct value up to
+                    # ten, so a single top value would be a constant column,
+                    # which observe() rightly skips (#520).
+                    {"name": "cat", "role": "categorical", "n_unique": 2,
+                     "top_values": [{"value": "x", "count": 60}, {"value": "y", "count": 40}]}],
         "correlations": [],
     }
     lines = ava.observe(profile)

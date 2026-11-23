@@ -1,7 +1,15 @@
 // Generic SMTP mail sender (Office365 / STARTTLS) with raw-protocol error reporting.
-// Called server-side only: requires the service-role key as bearer token,
-// except for `{ diagnose: true }` which only performs a login handshake and
-// returns the exact server reply (no secrets are ever returned).
+// Called server-side only: every request requires the service-role key or
+// INTERNAL_MAIL_TOKEN as bearer token, including `{ diagnose: true }`.
+//
+// diagnose previously ran ahead of that check. It performs a real SMTP login
+// and reports host, port and username, so unauthenticated it disclosed the
+// mail account and gave anyone a way to make the deployment authenticate to
+// its provider. The transcript redaction below was already deliberate -- the
+// auth-user and auth-pass commands pass redact=true -- but the response
+// envelope named the username anyway, so the redaction protected the protocol
+// log and not the reply. The payload is unchanged for an authenticated caller:
+// anyone holding the service-role key can already read the SMTP settings.
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -140,6 +148,21 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
 
+  // Authenticate before anything else: nothing above this line may read the
+  // body, touch configuration or reach the network. The previous arrangement
+  // left two oracles in front of the gate -- a malformed-JSON 400, and a 500
+  // naming whether SMTP is configured at all -- both answerable without a
+  // credential. verify_jwt is false for this function in ui/supabase/config.toml,
+  // so this check is the only control on the hosted side as well as in-cluster.
+  const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+  const internalToken = Deno.env.get("INTERNAL_MAIL_TOKEN") ?? "";
+  const auth = req.headers.get("authorization") ?? "";
+  const presented = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  const allowed = [serviceKey, internalToken].filter(Boolean);
+  if (!presented || !allowed.includes(presented)) {
+    return json({ error: "Unauthorized" }, 401);
+  }
+
   let body: {
     to?: string | string[];
     subject?: string;
@@ -186,15 +209,6 @@ Deno.serve(async (req) => {
         transcript: client.transcript,
       }, 200);
     }
-  }
-
-  const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-  const internalToken = Deno.env.get("INTERNAL_MAIL_TOKEN") ?? "";
-  const auth = req.headers.get("authorization") ?? "";
-  const presented = auth.startsWith("Bearer ") ? auth.slice(7) : "";
-  const allowed = [serviceKey, internalToken].filter(Boolean);
-  if (!presented || !allowed.includes(presented)) {
-    return json({ error: "Unauthorized" }, 401);
   }
 
   const recipients = (Array.isArray(body.to) ? body.to : [body.to])

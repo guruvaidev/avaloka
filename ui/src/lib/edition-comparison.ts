@@ -76,7 +76,13 @@ export const COMPARISON_LABELS: Record<EditionCapability, ComparisonLabel> = {
   local_execution: { section: "analysis", label: "Local execution" },
   file_connectors: { section: "analysis", label: "File connectors", card: true },
   auto_insights: { section: "analysis", label: "Auto Insights", card: true },
+  // 1.7 (docs/design/1.7-DATA-PLATFORM.md part C): the personal catalog is open
+  // on every plan; the shared one is Enterprise (owner ruling 2026-11-01).
+  dataset_catalog: { section: "analysis", label: "Personal dataset catalog with schema versions", card: true },
   ray_distributed: { section: "execution", label: "Ray distributed execution", card: true },
+  // Shipped with 2.0 (editions.py CAPABILITY_STATUS); open on every plan, the
+  // clone count is a limit, not a gate.
+  swarm_intelligence: { section: "execution", label: "Swarm: parallel sub-analyses of one mission" },
   entire_dataset: { section: "execution", label: "Entire-dataset and large-scale runs" },
   scheduler: { section: "execution", label: "Scheduler", card: true },
   batch_jobs: { section: "execution", label: "Batch jobs" },
@@ -90,12 +96,10 @@ export const COMPARISON_LABELS: Record<EditionCapability, ComparisonLabel> = {
   team_collaboration: { section: "collaboration", label: "Teams and collaborator invites", card: true },
   org_structure: { section: "collaboration", label: "Departments, roles, branches and app users", card: true },
   share_analysis: { section: "collaboration", label: "Share analyses", card: true },
+  shared_catalog: { section: "collaboration", label: "Shared dataset catalog with stewards and access requests", card: true },
   comment_on_analysis: { section: "collaboration", label: "Comment on analyses" },
   notifications: { section: "collaboration", label: "Notifications" },
   sso_audit: { section: "collaboration", label: "SSO and audit log", card: true },
-  swarm_intelligence: {
-    hiddenBecause: "editions.py: develop-1.6 ships no swarm code, so a tick would sell what this line does not have",
-  },
 };
 
 export type ComparisonRow = {

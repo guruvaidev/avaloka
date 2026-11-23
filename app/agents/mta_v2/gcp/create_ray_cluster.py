@@ -2,6 +2,8 @@ import time
 import logging
 from kubernetes import client
 
+from app.infra.ray_auth import RAYJOB_AUTH_KEY, require_token
+
 logger = logging.getLogger(__name__)
 
 # Autoscaling defaults
@@ -30,7 +32,7 @@ def create_ray_cluster(
     max_worker_replicas: int = MAX_WORKER_REPLICAS,
     head_resources: dict = DEFAULT_HEAD_RESOURCES,
     worker_resources: dict = DEFAULT_WORKER_RESOURCES,
-    docker_image: str = "rayproject/ray:2.10.0",
+    docker_image: str = "rayproject/ray:2.56.0-py311",
     namespace: str = "default",
     use_sa: bool = False,
     service_account_name: str | None = None,
@@ -39,6 +41,14 @@ def create_ray_cluster(
 
     # Validate worker resource minimums
     _assert_worker_resources(worker_resources)
+
+    # Ray token authentication. This head is published through a LoadBalancer
+    # (the app reaches it from another cluster), so the token is what keeps the
+    # dashboard and Jobs API closed: the app's own RAY_AUTH_TOKEN goes into a
+    # Secret in the run's namespace, every Ray container reads it by
+    # secretKeyRef, and authOptions points the KubeRay operator at it.
+    auth_secret = _ensure_auth_secret(api_client, cluster_name, namespace)
+    auth_env = _auth_env(auth_secret) if auth_secret else []
 
     head_spec = {
         # ClusterIP: the head is reached only from inside the cluster (API/worker pods).
@@ -60,6 +70,7 @@ def create_ray_cluster(
                             {"containerPort": 10001, "name": "client"},
                         ],
                         "resources": head_resources,
+                        "env": list(auth_env),
                     }
                 ]
             }
@@ -82,6 +93,7 @@ def create_ray_cluster(
                         "name": "ray-worker",
                         "image": docker_image,
                         "resources": worker_resources,
+                        "env": list(auth_env),
                     }
                 ],
             }
@@ -96,18 +108,22 @@ def create_ray_cluster(
         "kind": "RayCluster",
         "metadata": {"name": cluster_name},
         "spec": {
-            "rayVersion": "2.10.0",
+            "rayVersion": "2.56.0",
             # Enable the Ray autoscaler sidecar on the head pod
             "enableInTreeAutoscaling": True,
             "autoscalerOptions": {
                 "upscalingMode": "Default",
                 # How long a worker must be idle before scaling down
                 "idleTimeoutSeconds": 600,
+                # The autoscaler talks to GCS, so it needs the token too.
+                "env": list(auth_env),
             },
             "headGroupSpec": head_spec,
             "workerGroupSpecs": [worker_spec],
         },
     }
+    if auth_secret:
+        ray_cluster_yaml["spec"]["authOptions"] = {"mode": "token", "secretName": auth_secret}
 
     logger.info(
         "Creating RayCluster '%s' in namespace '%s' "
@@ -161,6 +177,39 @@ def create_ray_cluster(
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+def _auth_env(secret_name: str) -> list:
+    return [
+        {"name": "RAY_AUTH_MODE", "value": "token"},
+        {"name": "RAY_AUTH_TOKEN", "valueFrom": {"secretKeyRef": {"name": secret_name, "key": RAYJOB_AUTH_KEY}}},
+    ]
+
+
+def _ensure_auth_secret(api_client: client.ApiClient, cluster_name: str, namespace: str) -> str | None:
+    """Put the app's Ray token in ``<cluster>-ray-auth`` (key auth_token); its name, or None.
+
+    None when the app runs without RAY_AUTH_MODE=token. Raises when auth is on
+    and the app has no token: a cluster published through a LoadBalancer must
+    not come up open.
+    """
+    token = require_token()
+    if not token:
+        return None
+    name = f"{cluster_name}-ray-auth"[:253]
+    body = client.V1Secret(
+        metadata=client.V1ObjectMeta(name=name, labels={"app.kubernetes.io/part-of": "avaloka"}),
+        type="Opaque",
+        string_data={RAYJOB_AUTH_KEY: token},
+    )
+    core = client.CoreV1Api(api_client)
+    try:
+        core.create_namespaced_secret(namespace=namespace, body=body)
+    except client.exceptions.ApiException as exc:
+        if exc.status != 409:
+            raise RuntimeError(f"could not create the Ray auth Secret {name}: HTTP {exc.status}") from None
+        core.replace_namespaced_secret(name=name, namespace=namespace, body=body)
+    return name
 
 def _parse_memory_gi(value: str) -> float:
     """Return memory value in GiB from strings like '16Gi', '8192Mi', '17179869184'."""

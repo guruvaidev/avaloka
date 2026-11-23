@@ -25,12 +25,15 @@ RAY_DIR = REPO / "deploy" / "helm" / "ray"
 CHART = REPO / "deploy" / "helm" / "avaloka"
 
 PLATFORM_STORAGE_KEYS = {"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"}
+# MLflow basic-auth: training logs to, and Serve loads models from, the tracking
+# server (tests/test_mlflow_ray_auth.py).
+MLFLOW_KEYS = {"MLFLOW_TRACKING_USERNAME", "MLFLOW_TRACKING_PASSWORD"}
 # MTA training reads the PII key in its driver, which Ray runs on the head.
 ALLOWED = {
-    ("raycluster", "ray-head"): PLATFORM_STORAGE_KEYS | {"AVALOKA_PII_KEY"},
-    ("raycluster", "ray-worker"): PLATFORM_STORAGE_KEYS,
-    ("rayservice", "ray-head"): PLATFORM_STORAGE_KEYS,
-    ("rayservice", "ray-worker"): PLATFORM_STORAGE_KEYS,
+    ("raycluster", "ray-head"): PLATFORM_STORAGE_KEYS | MLFLOW_KEYS | {"AVALOKA_PII_KEY"},
+    ("raycluster", "ray-worker"): PLATFORM_STORAGE_KEYS | MLFLOW_KEYS,
+    ("rayservice", "ray-head"): PLATFORM_STORAGE_KEYS | MLFLOW_KEYS,
+    ("rayservice", "ray-worker"): PLATFORM_STORAGE_KEYS | MLFLOW_KEYS,
 }
 
 
@@ -57,10 +60,16 @@ def test_ray_pods_do_not_load_avaloka_secrets_whole():
             for e in c.get("env") or []
             if "secretKeyRef" in (e.get("valueFrom") or {})
         }
+        # The Ray auth token is the one key that is not from avaloka-secrets and
+        # not optional: it comes from avaloka-ray-auth (the key KubeRay expects),
+        # and a pod without it must not start (tests/test_mlflow_ray_auth.py).
+        token = keyed.pop("RAY_AUTH_TOKEN", None)
+        assert token == {"name": "avaloka-ray-auth", "key": "auth_token"}, (manifest, c["name"], token)
         allowed = ALLOWED[(manifest, c["name"])]
         assert set(keyed) <= allowed, f"{manifest}/{c['name']} gets {sorted(set(keyed) - allowed)}"
         assert set(keyed) == allowed, f"{manifest}/{c['name']} lacks {sorted(allowed - set(keyed))}"
         for name, ref in keyed.items():
+            assert ref.get("name") == "avaloka-secrets", (manifest, c["name"], name)
             assert ref.get("key") == name and ref.get("optional") is True, (manifest, c["name"], name)
     assert seen == set(ALLOWED)
 

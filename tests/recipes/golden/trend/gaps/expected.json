@@ -1,0 +1,65 @@
+{
+  "recipe": "trend",
+  "version_major": 1,
+  "verdict": "qualified",
+  "reason": null,
+  "figures": [
+    {
+      "id": "/periods/count",
+      "value": 22.0,
+      "decimals": 0,
+      "unit": "count"
+    },
+    {
+      "id": "/periods/first",
+      "value": 6242.25,
+      "decimals": 2,
+      "unit": "currency"
+    },
+    {
+      "id": "/periods/last",
+      "value": 5993.62,
+      "decimals": 2,
+      "unit": "currency"
+    },
+    {
+      "id": "/periods/change_share",
+      "value": -4.0,
+      "decimals": 1,
+      "unit": "percent"
+    },
+    {
+      "id": "/periods/change_std",
+      "value": 1147.84,
+      "decimals": 2,
+      "unit": "currency"
+    },
+    {
+      "id": "/periods/gaps",
+      "value": 2.0,
+      "decimals": 0,
+      "unit": "count"
+    },
+    {
+      "id": "/periods/peak",
+      "value": 6408.69,
+      "decimals": 2,
+      "unit": "currency"
+    },
+    {
+      "id": "/rows/duplicates",
+      "value": 0.0,
+      "decimals": 0,
+      "unit": "count"
+    }
+  ],
+  "caveats": [
+    "data_quality"
+  ],
+  "must_not_say": [
+    "causes",
+    "drives",
+    "because",
+    "proves"
+  ]
+}

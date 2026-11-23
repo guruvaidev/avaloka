@@ -16,6 +16,8 @@ from typing import Any, Dict, List, Optional
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
+from app.agents.analysis_outcome import ANSWERED, NOT_RUN, PARTIAL, analysis_outcome
+from app.agents.user_text import last_user_text, own_words
 from app.core.inference import build_chat_model
 from app.core.log_utils import describe_response
 from app.core.model_config import resolve as resolve_model
@@ -109,7 +111,6 @@ _DQ_LINE_RE = re.compile(
     re.IGNORECASE,
 )
 
-_CONTEXT_SPLIT = re.compile(r"\n\s*\[(?:analysis context|context)\]", re.IGNORECASE)
 _EMPTY_CELLS = {"", "nan", "none", "null", "<na>", "nat"}
 
 
@@ -156,16 +157,7 @@ def _strip_unrequested_quality(text: str) -> str:
 
 
 def _user_request(state: Dict[str, Any]) -> str:
-    text = ""
-    for m in reversed(state.get("messages") or []):
-        if isinstance(m, HumanMessage):
-            text = m.content or ""
-            break
-        if isinstance(m, dict) and m.get("role") in ("user", "human"):
-            text = m.get("content") or ""
-            break
-    text = text or state.get("user_prompt") or ""
-    return _CONTEXT_SPLIT.split(str(text), maxsplit=1)[0].strip()
+    return last_user_text(state) or own_words(state.get("user_prompt"))
 
 
 def _result_rows(state: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -339,10 +331,18 @@ def _fallback(rows: List[Dict[str, Any]]) -> str:
             "The full result is in the Data table.")
 
 
+#: A partial run is narrated: its tables are real, and the reply before this one
+#: already says which metrics are missing. No status at all is a turn with no
+#: execution step (a reused artifact) and keeps the narration it always had.
+_NARRATED_OUTCOMES = frozenset({ANSWERED, PARTIAL, NOT_RUN})
+
+
 def result_narrator_node(state: Dict[str, Any]) -> Dict[str, Any]:
     passthrough = {"messages": list(state.get("messages") or [])}
-    execution_result = state.get("execution_result") or {}
-    if execution_result.get("status") in ("error", "failed") or state.get("execution_error"):
+    # Only a run that produced its result is narrated. Checking for
+    # "error"/"failed" alone narrated a timeout, a refusal or a dry run as if
+    # it were the answer (app/agents/analysis_outcome.py decides, once).
+    if analysis_outcome(state) not in _NARRATED_OUTCOMES:
         return passthrough
 
     rows = _result_rows(state)
@@ -359,4 +359,9 @@ def result_narrator_node(state: Dict[str, Any]) -> Dict[str, Any]:
     elif narrator_llm is None:
         logger.warning("Narrator LLM not configured; using fallback text.")
 
-    return {"messages": passthrough["messages"] + [AIMessage(content=text or _fallback(rows))]}
+    # The narration is the model's (commentary); the fallback is ours (plain).
+    from app.api import reply_segments as rs
+
+    message = rs.tag(AIMessage(content=text), rs.COMMENTARY) if text else \
+        rs.tag(AIMessage(content=_fallback(rows)), rs.PLAIN)
+    return {"messages": passthrough["messages"] + [message]}

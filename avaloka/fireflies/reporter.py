@@ -13,8 +13,8 @@ import shlex
 from typing import Any
 
 from avaloka.fireflies.base import Firefly
-from avaloka.llm import LLMClient, narrate
-from avaloka.mission.economics import compute_economics
+from avaloka.llm import LLMClient, narrate, usage_metadata
+from avaloka.mission.economics import MANUAL_EFFORT_CAVEAT, compute_economics
 from avaloka.mission.ledger import WorkUnit
 from avaloka.reports import (evaluation_html, executive_html, model_card_md,
                              technical_html)
@@ -56,6 +56,8 @@ class Reporter(Firefly):
                                  wall_clock_seconds=self.ctx.wall_clock_seconds())
 
         narrative = self._narrative(profile, plan, training_summary, validation, goal_analysis)
+        # A model's rewrite of the deterministic summary is commentary (c-strict).
+        narrative_commentary = narrative != self._narrative_base
 
         common = {
             "goal": self.ctx.goal, "mission_id": self.ctx.mission_id,
@@ -63,7 +65,7 @@ class Reporter(Firefly):
             "quality": profile["quality"], "columns": profile["columns"],
             "correlations": profile.get("correlations", []), "plan": plan,
             "validation": validation, "model": training_summary, "finops": finops,
-            "goal_analysis": goal_analysis,
+            "goal_analysis": goal_analysis, "domain": profile.get("domain"),
             "script_declines_to_reread": self.ctx.blackboard.get("script_declines_to_reread"),
         }
         exec_data = {
@@ -72,7 +74,8 @@ class Reporter(Firefly):
                      ("Rows", f"{profile['dataset']['n_rows']:,}"),
                      ("Verdict", validation.get("verdict", "n/a").upper()),
                      ("Multiplier", f"{econ.economic_multiplier:.1f}x")],
-            "economics": econ.rows(), "narrative": narrative, "findings": findings,
+            "economics": econ.rows(), "narrative": narrative,
+            "narrative_commentary": narrative_commentary, "findings": findings,
             "verdict": validation.get("verdict", "warn"),
             "max_level": validation.get("max_safe_deployment_level", 1),
             "limitations": limitations, "units": [u.as_dict() for u in self.ctx.ledger.units],
@@ -89,19 +92,24 @@ class Reporter(Firefly):
         self._assumptions(profile, plan, validation)
         self._lineage(profile)
         self._environment_lock()
-        self._readme(econ, findings, limitations)
+        self._readme(econ, findings, limitations, profile.get("domain"))
 
         return ("Wrote executive & technical reports, assumptions, lineage, environment lock "
-                "and README.", 120.0, {"model_cost_usd": self._narrate_cost})
+                "and README.", 120.0, {"model_cost_usd": self._narrate_cost, **self._narrate_usage})
 
     # --- content helpers --------------------------------------------------
     _narrate_cost = 0.0
+    _narrate_usage: dict = {}
+    _narrative_base = ""
 
     def _narrative(self, profile, plan, training, validation, goal_analysis=None) -> str:
         q = profile["quality"]["score"]
         base = (f"Avaloka profiled {profile['dataset']['n_cols']} columns across "
                 f"{profile['dataset']['n_rows']:,} rows (quality {q}/100), prepared a reproducible "
                 f"pipeline and planned a '{plan.get('task', 'exploratory')}' approach. ")
+        domain = profile.get("domain") or {}
+        if domain.get("domain") and domain["domain"] != "generic":
+            base += f"The columns read as {domain['label'].lower()} data. "
         if training:
             base += (f"It trained {len(training['candidates'])} candidate model(s) and selected "
                      f"'{training['selected']}'. ")
@@ -114,13 +122,24 @@ class Reporter(Firefly):
         system = ("You are a precise data-science consultant. Rewrite the summary in 2-4 sentences "
                   "for an executive. Do not invent numbers; only rephrase what is given.")
         text, cost = narrate(client, system, base, base)
+        self._narrative_base = base
         self._narrate_cost = cost
+        self._narrate_usage = usage_metadata(client)
         return text
 
     def _findings(self, profile, plan, training, goal_analysis=None) -> list[str]:
+        # The specialists' verdicts lead: an A/B goal is answered by the
+        # lift and its interval, not by the column summaries that follow.
+        specialist = self._specialist_findings()
         if goal_analysis:
-            return list(goal_analysis["findings"])
-        out = []
+            # One basis per figure: when the goal's figures were computed
+            # over every row, its "Computed over all N rows" line closes
+            # them, and a specialist figure from the working sample follows
+            # it under its own sample label, never above that claim.
+            if (goal_analysis.get("basis") or {}).get("full_pass") and self._statistic_sampled():
+                return list(goal_analysis["findings"]) + specialist
+            return specialist + list(goal_analysis["findings"])
+        out = list(specialist)
         for p in profile.get("correlations", [])[:2]:
             if p["corr"] >= 0.5:
                 out.append(f"'{p['a']}' and '{p['b']}' are strongly associated (|corr|={p['corr']}).")
@@ -133,6 +152,105 @@ class Reporter(Firefly):
         for h in plan.get("hypotheses", [])[:1]:
             out.append(h)
         return out or ["No dominant signal detected; treat results as exploratory."]
+
+    def _specialist_findings(self) -> list[str]:
+        """The lift with its CI, the SRM check and the power; the statistic;
+        the conformal coverage. Each only when its specialist ran."""
+        bb = self.ctx.blackboard
+        out: list[str] = []
+        result = bb.get("experiment_result")
+        plan = bb.get("experiment_plan") or {}
+        if result is not None:
+            get = (plan.get if isinstance(plan, dict) else lambda k, d=None: getattr(plan, k, d))
+            arm, outcome = get("treatment_column", "arm"), get("outcome", "outcome")
+            treatment, control = get("treatment"), get("control")
+            if result.effect is None:
+                detail = "; ".join(d.get("detail", "") for d in result.diagnostics) or result.status
+                out.append(f"A/B on '{outcome}' ({arm}: {treatment} vs {control}) could not be "
+                           f"verified: {detail}")
+            else:
+                low, high = result.confidence_interval
+                unit = "share" if get("metric") == "proportion" else "mean"
+                relative = (f", relative {result.relative_effect:+.1%}"
+                            if result.relative_effect is not None else "")
+                out.append(f"A/B on '{outcome}': '{treatment}' vs '{control}' lift {result.effect:+.4f} "
+                           f"in {unit} (95% CI {low:+.4f} to {high:+.4f}{relative}; "
+                           f"n={result.control_n}/{result.treatment_n}).")
+                if low > 0:
+                    out.append(f"The interval excludes zero: '{treatment}' is better than "
+                               f"'{control}' on '{outcome}' at the 95% level.")
+                elif high < 0:
+                    out.append(f"The interval excludes zero: '{treatment}' is worse than "
+                               f"'{control}' on '{outcome}' at the 95% level.")
+                else:
+                    out.append(f"The interval includes zero: the data does not show "
+                               f"'{treatment}' beating '{control}' on '{outcome}'.")
+                srm = next((d for d in result.diagnostics if d.get("kind") == "sample_ratio"), None)
+                if result.sample_ratio_mismatch is None:
+                    out.append("Sample ratio check: not run (no expected arm share).")
+                elif result.sample_ratio_mismatch:
+                    out.append(f"Sample ratio mismatch (chi-square {srm['chi_square']:.2f} > "
+                               f"{srm['threshold']}): the assignment is suspect; treat the lift "
+                               "as unverified.")
+                else:
+                    out.append(f"Sample ratio check passed (chi-square {srm['chi_square']:.2f} "
+                               f"below {srm['threshold']}).")
+                power = result.power or {}
+                if power.get("achieved_power") is not None:
+                    line = (f"Power: {power['achieved_power']:.0%} to detect the observed effect at "
+                            f"alpha {power['alpha']}; these arms resolve an effect of "
+                            f"{power['minimum_detectable_effect']:.4f} at "
+                            f"{power['target_power']:.0%} power")
+                    if power.get("required_n_per_arm_for_observed_effect"):
+                        line += (f"; the observed effect would need about "
+                                 f"{power['required_n_per_arm_for_observed_effect']:,} per arm")
+                    out.append(line + ".")
+        statistic = bb.get("statistical_result")
+        if statistic is not None:
+            estimate = statistic.estimate
+            shown = f"{estimate:.4f}" if isinstance(estimate, float) else str(estimate)
+            stat_plan = bb.get("statistical_plan") or {}
+            what = (stat_plan.get("estimand") if isinstance(stat_plan, dict)
+                    else getattr(stat_plan, "estimand", "")) or statistic.method
+            line = f"{what}: {shown} over {statistic.sample_size:,} valid rows"
+            sampling = bb.get("sampling") or {}
+            notes = []
+            if self._statistic_sampled():
+                # The Statistician read the prepared working frame, which on
+                # a sampled run is the sample, and the figure says so.
+                notes.append(f"sample of {int(sampling.get('n_working_rows') or 0):,} of "
+                             f"{int(sampling.get('n_input_rows') or 0):,} rows")
+            elif (bb.get("statistical_basis") or {}).get("full_pass"):
+                # Every source row was in memory, so the figure is theirs.
+                notes.append("computed over every row")
+            if statistic.confidence_interval:
+                lo, hi = statistic.confidence_interval
+                notes.append(f"95% CI {lo:.4f} to {hi:.4f}")
+            if notes:
+                line += f" ({'; '.join(notes)})"
+            if statistic.p_value is not None:
+                line += f", p={statistic.p_value:.4g}"
+            out.append(line + ".")
+        conformal = bb.get("conformal_result")
+        if conformal is not None:
+            kind = "interval" if conformal.task == "regression" else "label set"
+            width = (f"mean width {conformal.efficiency:.4f}" if conformal.task == "regression"
+                     else f"mean set size {conformal.efficiency:.2f}")
+            covered = (f"; empirical coverage {conformal.empirical_coverage:.1%} on held-out rows"
+                       if conformal.empirical_coverage is not None else "")
+            out.append(f"Conformal {kind} at {conformal.target_coverage:.0%} target coverage: "
+                       f"{width}{covered}.")
+        return out
+
+    def _statistic_sampled(self) -> bool:
+        """Whether the Statistician's figure rests on the working sample."""
+        bb = self.ctx.blackboard
+        if bb.get("statistical_result") is None:
+            return False
+        basis = bb.get("statistical_basis")
+        if basis is not None:
+            return bool(basis.get("sampled"))
+        return bool((bb.get("sampling") or {}).get("sampled"))
 
     def _limitations(self, profile, plan, validation) -> list[str]:
         lims = []
@@ -147,10 +265,13 @@ class Reporter(Firefly):
         if goal_analysis and goal_analysis["status"] != "answered":
             lims.append("The stated goal was not fully answered by a supported calculation; "
                         "see goal_analysis.json for the reason.")
-        if goal_analysis and self.ctx.blackboard.get("sampling", {}).get("sampled"):
+        if goal_analysis and goal_analysis.get("basis", {}).get("sampled", self.ctx.blackboard.get("sampling", {}).get("sampled")):
             lims.append("Goal-specific figures use the working sample, not every source row.")
         if profile["dataset"]["n_rows"] < 200:
             lims.append("Small sample size limits statistical confidence.")
+        specialists = plan.get("specialists", {})
+        for assumption in specialists.get("experiment", {}).get("assumptions", []):
+            lims.append(assumption)
         lims.append("Estimated manual effort and value are heuristics pending customer calibration.")
         return lims
 
@@ -195,7 +316,7 @@ class Reporter(Firefly):
                 continue
         write_text(self.ctx.path("environment.lock"), "\n".join(lines) + "\n")
 
-    def _readme(self, econ, findings, limitations) -> None:
+    def _readme(self, econ, findings, limitations, domain=None) -> None:
         train = self.ctx.blackboard.get("training_summary") is not None
         declined = self.ctx.blackboard.get("script_declines_to_reread")
         deliverables = [
@@ -221,9 +342,11 @@ class Reporter(Firefly):
               f"**Goal:** {self.ctx.goal}", "",
               f"This bundle was produced by Avaloka as a governed *Data Mission* — an outcome, not "
               f"an interaction. Economic multiplier: **{econ.economic_multiplier:.1f}x** "
-              f"(≈{econ.estimated_manual_effort_hours:.1f} manual hours compressed).", "",
+              f"(≈{econ.estimated_manual_effort_hours:.1f} manual hours compressed — "
+              f"{MANUAL_EFFORT_CAVEAT}).", "",
               "## Deliverables", ""]
         md += [f"- {d}" for d in deliverables]
+        md += self._domain_section(domain)
         md += ["", "## Key findings", ""] + [f"- {f}" for f in findings]
         md += ["", "## Limitations", ""] + [f"- {l}" for l in limitations]
         if train and declined:
@@ -242,6 +365,33 @@ class Reporter(Firefly):
                    "# then: avaloka deploy . --target local", "```", ""]
         md += ["---", "_Reproduce or adapt this mission with `avaloka`._"]
         write_text(self.ctx.path("README.md"), "\n".join(md))
+
+
+    @staticmethod
+    def _domain_section(domain) -> list[str]:
+        """The vocabulary's read of the data and the one check it asks for first.
+
+        Names decided the domain (``avaloka.domains.classify``); the section
+        quotes the matched column names, never a value.
+        """
+        if not domain:
+            return []
+        if domain.get("domain") == "generic":
+            lines = ["", "## Domain", "",
+                     f"No domain was recognised from the column names ({domain.get('reason', '')}); "
+                     "the general checks apply.", ""]
+        else:
+            cues = sorted({h["column"] for h in domain.get("matched_cues", [])})
+            lines = ["", "## Domain", "",
+                     f"Read as **{domain['label']}** data (confidence {domain['confidence']:.2f}; "
+                     f"matched on {', '.join(cues[:4])}).", ""]
+        checks = domain.get("hints", {}).get("sanity_checks") or []
+        if checks:
+            lines.append(f"Sanity check for this domain: {checks[0]}")
+        questions = domain.get("questions") or []
+        if questions:
+            lines += ["", f"A question worth answering first: {questions[0]}"]
+        return lines
 
 
 class _SnapshotLedger:

@@ -5,6 +5,11 @@ import traceback
 import os
 import importlib.util
 
+# daft's import-time usage beacon is off unless the deployment opts back in
+# (app/core/thirdparty_optout.py; this script may run without the app package).
+os.environ.setdefault("DO_NOT_TRACK", "true")
+os.environ.setdefault("SCARF_NO_ANALYTICS", "true")
+
 import ray
 import daft
 

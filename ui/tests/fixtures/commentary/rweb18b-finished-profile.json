@@ -1,0 +1,225 @@
+{
+ "_about": "rweb18b ui/full_profile_vc.json (the finished profile the API served while the modal kept the upload-time charts), minimum fields; upload_config is the same chart without the profile.",
+ "finished_config": {
+  "profile_overview": {
+   "domain": "healthcare",
+   "domain_source": "vocabulary",
+   "domain_segments": [
+    {
+     "text": "healthcare",
+     "kind": "plain"
+    }
+   ],
+   "domain_reasoning": "2 distinct cue(s) matched column names (avg_glucose_level, bmi)",
+   "domain_reasoning_source": "vocabulary",
+   "domain_reasoning_segments": [
+    {
+     "text": "2 distinct cue(s) matched column names (avg_glucose_level, bmi)",
+     "kind": "plain"
+    }
+   ],
+   "readiness_score": 85,
+   "readiness_score_segments": [
+    {
+     "text": "85/100",
+     "kind": "commentary"
+    }
+   ]
+  },
+  "column_stats": [
+   {
+    "name": "id",
+    "dtype": "numeric",
+    "role": "identifier",
+    "missing_pct": 0.0,
+    "n_unique": 5110,
+    "meaning": "Unique patient identifier, no clinical information. (commentary — not checked)",
+    "meaning_segments": [
+     {
+      "text": "Unique patient identifier, no clinical information.",
+      "kind": "commentary"
+     }
+    ],
+    "meaning_source": "model",
+    "predictive_value": "low",
+    "predictive_value_source": "model"
+   },
+   {
+    "name": "gender",
+    "dtype": "categorical",
+    "role": "dimension",
+    "missing_pct": 0.0,
+    "n_unique": 3,
+    "meaning": "Patient's gender category (Male, Female, Other). (commentary — not checked)",
+    "meaning_segments": [
+     {
+      "text": "Patient's gender category (Male, Female, Other).",
+      "kind": "commentary"
+     }
+    ],
+    "meaning_source": "model",
+    "predictive_value": "medium",
+    "predictive_value_source": "model"
+   },
+   {
+    "name": "age",
+    "dtype": "numeric",
+    "role": "measure",
+    "missing_pct": 0.0,
+    "n_unique": 104,
+    "meaning": "Patient's age in years. (commentary — not checked)",
+    "meaning_segments": [
+     {
+      "text": "Patient's age in years.",
+      "kind": "commentary"
+     }
+    ],
+    "meaning_source": "model",
+    "predictive_value": "high",
+    "predictive_value_source": "model"
+   }
+  ],
+  "charts": [
+   {
+    "id": "llm_0",
+    "type": "bar",
+    "title": "stroke rate by hypertension",
+    "title_segments": [
+     {
+      "text": "stroke rate by hypertension",
+      "kind": "plain"
+     }
+    ],
+    "insight": "Patients with hypertension experience a noticeably higher stroke rate than those without. (commentary — not checked) stroke rate by hypertension: 4.9% overall across 5,110 rows in the sample; highest for Yes (13.3% of 498 rows), lowest for No (4.0% of 4,612 rows). The highest group's rate is 3.3× the lowest.",
+    "insight_segments": [
+     {
+      "text": "Patients with hypertension experience a noticeably higher stroke rate than those without.",
+      "kind": "commentary"
+     },
+     {
+      "text": " stroke rate by hypertension: 4.9% overall across 5,110 rows in the sample; highest for Yes (13.3% of 498 rows), lowest for No (4.0% of 4,612 rows). The highest group's rate is 3.3× the lowest.",
+      "kind": "plain"
+     }
+    ],
+    "insight_source": "llm",
+    "encodings": {
+     "x": {
+      "field": "hypertension",
+      "type": "nominal"
+     },
+     "y": {
+      "field": "stroke",
+      "type": "quantitative",
+      "aggregate": "mean"
+     }
+    },
+    "config": {
+     "top_k": 15,
+     "rate_by_group": true,
+     "y_format": "percent"
+    },
+    "derived_data": {
+     "points": [
+      {
+       "x": "Yes",
+       "y": 13.3,
+       "n": 498,
+       "rate": 0.1325,
+       "label": "Yes",
+       "name": "Yes",
+       "value": 13.3,
+       "hypertension": "Yes",
+       "stroke": 13.3
+      },
+      {
+       "x": "No",
+       "y": 4.0,
+       "n": 4612,
+       "rate": 0.0397,
+       "label": "No",
+       "name": "No",
+       "value": 4.0,
+       "hypertension": "No",
+       "stroke": 4.0
+      }
+     ],
+     "x_key": "hypertension",
+     "y_key": "stroke"
+    }
+   }
+  ],
+  "visualization_status": "ready"
+ },
+ "upload_config": {
+  "charts": [
+   {
+    "id": "llm_0",
+    "type": "bar",
+    "title": "stroke rate by hypertension",
+    "title_segments": [
+     {
+      "text": "stroke rate by hypertension",
+      "kind": "plain"
+     }
+    ],
+    "insight": "Patients with hypertension experience a noticeably higher stroke rate than those without. (commentary — not checked) stroke rate by hypertension: 4.9% overall across 5,110 rows in the sample; highest for Yes (13.3% of 498 rows), lowest for No (4.0% of 4,612 rows). The highest group's rate is 3.3× the lowest.",
+    "insight_segments": [
+     {
+      "text": "Patients with hypertension experience a noticeably higher stroke rate than those without.",
+      "kind": "commentary"
+     },
+     {
+      "text": " stroke rate by hypertension: 4.9% overall across 5,110 rows in the sample; highest for Yes (13.3% of 498 rows), lowest for No (4.0% of 4,612 rows). The highest group's rate is 3.3× the lowest.",
+      "kind": "plain"
+     }
+    ],
+    "insight_source": "llm",
+    "encodings": {
+     "x": {
+      "field": "hypertension",
+      "type": "nominal"
+     },
+     "y": {
+      "field": "stroke",
+      "type": "quantitative",
+      "aggregate": "mean"
+     }
+    },
+    "config": {
+     "top_k": 15,
+     "rate_by_group": true,
+     "y_format": "percent"
+    },
+    "derived_data": {
+     "points": [
+      {
+       "x": "Yes",
+       "y": 13.3,
+       "n": 498,
+       "rate": 0.1325,
+       "label": "Yes",
+       "name": "Yes",
+       "value": 13.3,
+       "hypertension": "Yes",
+       "stroke": 13.3
+      },
+      {
+       "x": "No",
+       "y": 4.0,
+       "n": 4612,
+       "rate": 0.0397,
+       "label": "No",
+       "name": "No",
+       "value": 4.0,
+       "hypertension": "No",
+       "stroke": 4.0
+      }
+     ],
+     "x_key": "hypertension",
+     "y_key": "stroke"
+    }
+   }
+  ],
+  "visualization_status": "ready"
+ }
+}

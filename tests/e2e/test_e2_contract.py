@@ -18,7 +18,7 @@ from typing import Any, Dict, FrozenSet, List, Optional
 
 import pytest
 
-from tests.e2e.conftest import MODE, REPO_ROOT, ApiClient, requires_deployed
+from tests.e2e.conftest import MODE, REPO_ROOT, SCHEMA_READER, ApiClient, requires_deployed
 
 # --------------------------------------------------------------------------- E2.01
 # The frozen /health body. A new key here is a contract break for every k8s probe
@@ -58,15 +58,20 @@ OPENAPI_PATH_SNAPSHOT: FrozenSet[str] = frozenset(
         "/analytics/config",
         "/analytics/events",
         "/analytics/opt-out",
+        "/api/agent-metrics",
         "/api/assets/{session_id}",
         "/api/assets/{session_id}/code",
         "/api/assets/{session_id}/job",
         "/api/assets/{session_id}/output",
+        "/api/capabilities",
         "/api/cloud-connections",
+        "/api/connections",
+        "/api/connections/{connection_id}",
         "/api/database/connect",
         "/api/database/tables-to-analysis",
         "/api/datasets/{dataset_id}/background-task-status",
         "/api/datasets/{dataset_id}/fidelity",
+        "/api/datasets/{dataset_id}/profile",
         "/api/integrations",
         "/api/integrations/github",
         "/api/integrations/github/connect",
@@ -75,17 +80,17 @@ OPENAPI_PATH_SNAPSHOT: FrozenSet[str] = frozenset(
         "/api/mcp-connections/{connection_id}/decrypt",
         "/api/mcp-connections/{connection_id}/encrypt",
         "/api/missions/plan",
-        "/api/models",
-        "/api/models/{run_id}",
-        "/api/models/{run_id}/configure-inference-service",
-        "/api/models/{run_id}/inference",
-        "/api/models/{run_id}/stop-inference-service",
-        # trainfer (1.6): Postgres-backed endpoint and job reads, the canonical predict proxy.
-        "/api/models/{run_id}/endpoint",
-        "/api/models/{run_id}/predict",
         "/api/ml-jobs",
         "/api/ml-jobs/{job_id}",
         "/api/ml-jobs/{job_id}/cancel",
+        "/api/models",
+        "/api/models/{run_id}",
+        "/api/models/{run_id}/configure-inference-service",
+        "/api/models/{run_id}/cross-validation",
+        "/api/models/{run_id}/endpoint",
+        "/api/models/{run_id}/inference",
+        "/api/models/{run_id}/predict",
+        "/api/models/{run_id}/stop-inference-service",
         "/api/notifications",
         "/api/notifications/read-all",
         "/api/notifications/{notification_id}/read",
@@ -98,9 +103,22 @@ OPENAPI_PATH_SNAPSHOT: FrozenSet[str] = frozenset(
         "/api/ray/status",
         "/api/register-existing-folder",
         "/api/register-existing-storage",
+        "/api/swarm/missions",
+        "/api/swarm/missions/{mission_id}",
+        "/api/swarm/missions/{mission_id}/clones/{clone_id}",
+        "/api/swarm/missions/{mission_id}/episodes",
+        "/api/swarm/missions/{mission_id}/records",
+        "/api/swarm/missions/{mission_id}/telemetry",
+        "/api/swarm/missions/{mission_id}/understanding",
+        "/api/swarm/missions/{mission_id}/understanding/telemetry",
         "/api/upload",
         "/api/v1/database/query",
         "/buckets/list",
+        "/catalog/datasets",
+        "/catalog/datasets/{dataset_id}",
+        "/catalog/datasets/{dataset_id}/share",
+        "/catalog/resolve",
+        "/customers/register",
         "/datasets",
         "/datasets/{dataset_id}",
         "/datasets/{dataset_id}/preview",
@@ -121,6 +139,7 @@ OPENAPI_PATH_SNAPSHOT: FrozenSet[str] = frozenset(
         "/threads/{thread_id}/pending-turn",
         "/threads/{thread_id}/planner-graph",
         "/threads/{thread_id}/selected-datasets",
+        "/threads/{thread_id}/trace",
         "/version",
     }
 )
@@ -138,7 +157,8 @@ def _requires_hermetic(reason: str) -> None:
 
 
 def _openapi_spec(api: ApiClient) -> Dict[str, Any]:
-    res = api.get("/openapi.json")
+    # Signed, like every schema read in the pack (conftest.SCHEMA_READER).
+    res = api.get("/openapi.json", user=SCHEMA_READER)
     assert res.status_code == 200, f"/openapi.json not served: HTTP {res.status_code}"
     return res.json()
 

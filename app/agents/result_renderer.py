@@ -722,20 +722,47 @@ def render_response(
     Never raises — on any internal error it falls back to the (cleaned) stdout
     so the calling node always has something to show.
     """
+    return _rendered(execution_result, output_df, user_question, schema, max_table_rows)[0]
+
+
+def render_response_segments(
+    execution_result: Optional[Dict[str, Any]],
+    output_df: Any = None,
+    user_question: Optional[str] = None,
+    schema: Any = None,
+    max_table_rows: int = 100,
+) -> list:
+    """:func:`render_response` as reply segments (app/api/reply_segments.py):
+    a table, a count, an error or a conclusion is ours (plain); the generated
+    code's own printout, which the model wrote, is commentary."""
+    from app.api import reply_segments as rs
+
+    text, kind = _rendered(execution_result, output_df, user_question, schema, max_table_rows)
+    return rs.normalize([rs.segment(text, kind)])
+
+
+_PLAIN, _PRINTED = "plain", "commentary"
+
+
+def _printed(stdout: Optional[str], default: str) -> tuple:
+    return (stdout, _PRINTED) if stdout else (default, _PLAIN)
+
+
+def _rendered(execution_result, output_df, user_question, schema, max_table_rows) -> tuple:
     try:
         artifact = build_artifact(execution_result, output_df, user_question, schema)
         kind = artifact.get("kind")
 
         if kind == "error":
-            return f"❌ **Execution failed:** {artifact.get('error')}"
+            return f"❌ **Execution failed:** {artifact.get('error')}", _PLAIN
 
         if kind == "empty":
-            return "The query ran successfully but returned no rows."
+            return "The query ran successfully but returned no rows.", _PLAIN
 
         if kind == "table":
             conclusion = conclude(artifact, user_question, schema)
             if conclusion:
-                return conclusion
+                return conclusion, _PLAIN
             try:
                 total = len(output_df)
                 preview = output_df.head(max_table_rows)
@@ -748,19 +775,19 @@ def render_response(
             note = f"Transformed data — {count_txt} rows × {len(cols)} columns."
             if isinstance(total, int) and total > max_table_rows:
                 note += f" Showing the first {max_table_rows}; full result in the download."
-            return f"{note}\n\n{table_md}".strip()
+            return f"{note}\n\n{table_md}".strip(), _PLAIN
 
         if kind == "scalar":
             conclusion = conclude(artifact, user_question, schema)
             if conclusion:
-                return conclusion
+                return conclusion, _PLAIN
             # Fall through to a denoised stdout if we couldn't phrase anything.
-            return clean_stdout(artifact.get("stdout")) or "Code executed successfully."
+            return _printed(clean_stdout(artifact.get("stdout")), "Code executed successfully.")
 
         # kind == "none"
-        return clean_stdout(artifact.get("stdout")) or "Code executed successfully (no output produced)."
+        return _printed(clean_stdout(artifact.get("stdout")), "Code executed successfully (no output produced).")
 
     except Exception:
         # Last-resort safety net — never break the execution node.
         cleaned = clean_stdout((execution_result or {}).get("execution_stdout"))
-        return cleaned or "Code executed."
+        return _printed(cleaned, "Code executed.")

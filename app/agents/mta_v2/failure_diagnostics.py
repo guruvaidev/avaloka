@@ -26,6 +26,7 @@ _RULES = (
     ("POD_EVICTED", (r"\bevicted\b", r"node had condition"), "Training pod was evicted", "Kubernetes evicted the training pod because the node was under resource pressure.", True),
     ("POD_UNSCHEDULABLE", (r"unschedulable", r"failedscheduling", r"insufficient (?:cpu|memory|nvidia.com/gpu)", r"too many pods"), "Training pod could not be scheduled", "No Kubernetes node currently satisfies the training pod's resource requirements.", True),
     ("MLFLOW_ERROR", (r"mlflow", r"artifact", r"model registry", r"tracking uri"), "MLflow operation failed", "Training could not read or write the required MLflow run or model artifacts.", True),
+    ("TIME_COLUMN_INVALID", (r"time column .+ contains \d+ missing or invalid value",), "Time column has missing or unreadable dates", "The time column has rows without a readable date, and time-ordered training needs one on every row.", False),
     ("DATA_ERROR", (r"target column", r"feature column", r"dataset", r"no training rows", r"could not convert", r"unicode(?:decode)?error"), "Training data is invalid", "The dataset or training plan does not satisfy the model's input requirements.", False),
 )
 
@@ -101,6 +102,11 @@ _GUIDANCE = {
         "Check the tracking URI, artifact-store credentials, and write permissions.",
         "Retry after a test run and artifact can be written successfully.",
     ),
+    "TIME_COLUMN_INVALID": (
+        "Fill in or remove the rows without a date, or write every date in one format (for example 2024-01-31).",
+        "Alternatively, take the time column out of the training plan so the rows are not ordered by time.",
+        "Review the training plan, then start training again.",
+    ),
     "DATA_ERROR": (
         "Confirm that the target and feature columns exist and contain usable values.",
         "Remove invalid rows or convert the file to CSV, JSON, or Parquet with a supported encoding.",
@@ -127,6 +133,7 @@ _SAFE_SUMMARIES = {
     "POD_EVICTED": "Kubernetes evicted the training pod because the node was under resource pressure.",
     "POD_UNSCHEDULABLE": "No Kubernetes node currently satisfies the training pod's resource requirements.",
     "MLFLOW_ERROR": "Training could not read or write the required MLflow run or model artifacts.",
+    "TIME_COLUMN_INVALID": "The time column has rows without a readable date, and time-ordered training needs one on every row.",
     "DATA_ERROR": "The dataset or training plan does not satisfy the model's input requirements.",
     "TRAINING_FAILED": "Training stopped because of an unclassified error.",
 }
@@ -224,6 +231,42 @@ def _target_leakage_message_parts(columns: Sequence[str]) -> tuple[str, list[str
     summary = f"{noun} {labels} reveals the target answer, so training was blocked."
     actions = list(_GUIDANCE["TARGET_LEAKAGE"])
     actions[0] = f"Remove {labels} from the selected features."
+    return summary, actions
+
+
+def _time_column_details(error_text: str) -> tuple[list[str], Optional[int]]:
+    """The column and row count from the trainer's time-order check
+    (training_docker_image/src/evaluation.py::add_time_order_column)."""
+    match = re.search(
+        r"time column (.+?) contains (\d+) missing or invalid value", error_text, re.IGNORECASE)
+    if not match:
+        return [], None
+    try:
+        column = ast.literal_eval(match.group(1))
+    except (SyntaxError, ValueError):
+        return [], int(match.group(2))
+    return _safe_column_names([column]), int(match.group(2))
+
+
+def _time_column_message_parts(columns: Sequence[str], invalid: Any) -> tuple[str, list[str]]:
+    """The real cause in plain words: which column, how many rows. Before
+    this, the trainer's message reached only the log and the user read
+    "an unclassified error"."""
+    safe_columns = _safe_column_names(list(columns))
+    try:
+        count = max(0, int(invalid))
+    except (TypeError, ValueError):
+        count = None
+    if not safe_columns or count is None:
+        return _SAFE_SUMMARIES["TIME_COLUMN_INVALID"], list(_GUIDANCE["TIME_COLUMN_INVALID"])
+    label = "`" + safe_columns[0].replace("`", "'") + "`"
+    summary = (f"Time column {label} has {count} row(s) without a readable date -- the cell is "
+               "empty, or the date is written in a form the trainer could not read -- and "
+               "time-ordered training needs a date on every row.")
+    actions = list(_GUIDANCE["TIME_COLUMN_INVALID"])
+    actions[0] = (f"Fill in or remove the {count} row(s) without a date in {label}, or write "
+                  "every date in one format (for example 2024-01-31).")
+    actions[1] = f"Alternatively, take {label} out of the training plan as its time column."
     return summary, actions
 
 
@@ -369,6 +412,9 @@ def build_training_failure(
         affected_columns = _target_leakage_columns(technical_details)
     else:
         affected_columns = []
+    invalid_time_values: Optional[int] = None
+    if code == "TIME_COLUMN_INVALID":
+        affected_columns, invalid_time_values = _time_column_details(technical_details)
     duplicate_count: Optional[int] = None
     duplicate_ratio: Optional[float] = None
     excluded_identifier_columns: list[str] = []
@@ -376,6 +422,8 @@ def build_training_failure(
         summary, actions = _identifier_feature_message_parts(affected_columns)
     elif code == "TARGET_LEAKAGE":
         summary, actions = _target_leakage_message_parts(affected_columns)
+    elif code == "TIME_COLUMN_INVALID":
+        summary, actions = _time_column_message_parts(affected_columns, invalid_time_values)
     elif code == "DUPLICATE_ROWS":
         duplicate_count, duplicate_ratio, excluded_identifier_columns = _duplicate_row_details(technical_details)
         summary, actions = _duplicate_row_message_parts(
@@ -390,6 +438,7 @@ def build_training_failure(
         "duplicate_count": duplicate_count,
         "duplicate_ratio": duplicate_ratio,
         "excluded_identifier_columns": excluded_identifier_columns,
+        "invalid_time_values": invalid_time_values,
         "provider": safe_provider,
         "technical_details": technical_details, "retryable": retryable,
         "job_id": job_id, "namespace": namespace, "pod_name": kube.get("pod_name"),
@@ -421,6 +470,9 @@ def format_training_failure(failure: Dict[str, Any]) -> str:
         summary, actions = _identifier_feature_message_parts(failure.get("affected_columns") or [])
     elif code == "TARGET_LEAKAGE":
         summary, actions = _target_leakage_message_parts(failure.get("affected_columns") or [])
+    elif code == "TIME_COLUMN_INVALID":
+        summary, actions = _time_column_message_parts(
+            failure.get("affected_columns") or [], failure.get("invalid_time_values"))
     elif code == "DUPLICATE_ROWS":
         summary, actions = _duplicate_row_message_parts(
             failure.get("duplicate_count"),

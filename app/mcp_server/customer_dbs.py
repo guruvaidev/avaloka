@@ -7,12 +7,10 @@ multi-tenant access to PostgreSQL, MySQL/MariaDB, SQLite, SQL Server, Oracle
 """
 
 import os
-import sys
 import hashlib
 import hmac
 import json
 import logging
-from dataclasses import dataclass
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 import asyncio
@@ -20,7 +18,7 @@ from urllib.parse import quote_plus
 
 import sqlalchemy as sa
 from sqlalchemy import create_engine, text
-from fastapi import FastAPI, HTTPException, BackgroundTasks, APIRouter, Depends, Request
+from fastapi import FastAPI, HTTPException, BackgroundTasks, APIRouter, Depends, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, validator, Field
 import httpx
@@ -29,8 +27,9 @@ from fastapi.responses import JSONResponse
 from urllib.parse import urlparse, unquote
 
 from app.mcp_server.credentials import (
-    CredentialKeyMissing, NEEDS_REREGISTERING, WRONG_KEY_MESSAGE, credential_handle, load_registry,
-    load_unreadable, read_raw, save_registry,
+    NEEDS_REREGISTERING, WRONG_KEY_MESSAGE, CredentialKeyMissing, api_key_matches, credential_handle,
+    load_registry, load_unreadable, mark_unreadable_inactive, migrate_registry, save_registry,
+    service_headers, verify_user_assertion,
 )
 
 # ---- Optional MongoDB driver (guarded) ----
@@ -45,161 +44,6 @@ logger = logging.getLogger(__name__)
 
 SUPPORTED_DB_TYPES = ['postgresql', 'mysql', 'sqlite', 'mssql', 'oracle', 'mariadb', 'mongodb']
 MONGO_SERVER_SELECTION_TIMEOUT_MS = int(os.getenv("MONGO_SERVER_SELECTION_TIMEOUT_MS", "5000"))
-
-
-# ---- Caller identity ----
-# Every /customers route needs an identity. There are exactly two kinds:
-#   * an end user, holding the customer api_key that /customers/register issued
-#     (Authorization: Bearer <api_key>);
-#   * the Avaloka API service, presenting the shared MCP_SERVICE_TOKEN and naming
-#     the end user it acts for. Only this caller is ever given a password.
-# A caller acts within one owner group: the Avaloka user a customer is bound to,
-# or, for a customer bound to nobody, that customer alone. Anything outside the
-# group is answered 404, never 403, so customer ids do not leak.
-#
-# One exception, for customers registered before owners existed: a customer bound
-# to nobody is also reachable by the API service, for whichever authenticated
-# user it names, on the routes a transfer needs (status, test-connection,
-# credentials). Never by another customer's api_key, never for delete, and never
-# listed. The first /api/database/connect that proves the customer's api_key
-# binds it to that user (POST /customers/{id}/owner), which closes it to everyone
-# else. Until then any signed-in user who names the id can have the service
-# transfer from it: the password still goes only to the service, never to them.
-SERVICE_TOKEN_HEADER = "X-Avaloka-Service-Token"
-SERVICE_USER_HEADER = "X-Avaloka-User"
-
-
-@dataclass(frozen=True)
-class Caller:
-    owner: str
-    user_id: Optional[str] = None
-    is_service: bool = False
-
-
-def _is_service_request(request: Request) -> bool:
-    """True only when MCP_SERVICE_TOKEN is set AND the request presents it.
-
-    Fails closed: with the variable unset or empty no request is a service
-    request, so no password can be released.
-    """
-    expected = os.getenv("MCP_SERVICE_TOKEN", "")
-    presented = request.headers.get(SERVICE_TOKEN_HEADER, "")
-    if not expected or not presented:
-        return False
-    return hmac.compare_digest(presented.encode(), expected.encode())
-
-
-def _service_headers() -> Dict[str, str]:
-    token = os.getenv("MCP_SERVICE_TOKEN", "")
-    return {SERVICE_TOKEN_HEADER: token} if token else {}
-
-
-def _bearer(request: Request) -> str:
-    scheme, _, value = request.headers.get("authorization", "").partition(" ")
-    return value.strip() if scheme.lower() == "bearer" else ""
-
-
-def _owner_of(customer_id: str, record: Dict[str, Any]) -> str:
-    owner_user_id = (record.get("owner_user_id") or "").strip()
-    return f"user:{owner_user_id}" if owner_user_id else f"customer:{customer_id}"
-
-
-def _caller_for_api_key(api_key: str, customers: Dict[str, Any]) -> Optional[Caller]:
-    for cid, record in customers.items():
-        stored = record.get("api_key") or ""
-        if stored and record.get("status") != "inactive" and hmac.compare_digest(
-            stored.encode(), api_key.encode()
-        ):
-            return Caller(owner=_owner_of(cid, record), user_id=record.get("owner_user_id") or None)
-    return None
-
-
-def resolve_caller(request: Request) -> Optional[Caller]:
-    if _is_service_request(request):
-        user_id = request.headers.get(SERVICE_USER_HEADER, "").strip()
-        if not user_id:
-            return None
-        return Caller(owner=f"user:{user_id}", user_id=user_id, is_service=True)
-    api_key = _bearer(request)
-    if api_key:
-        return _caller_for_api_key(api_key, customer_manager._read_customers_file())
-    return None
-
-
-def require_caller(request: Request) -> Caller:
-    caller = resolve_caller(request)
-    if caller is None:
-        raise HTTPException(
-            status_code=401,
-            detail="Authentication required",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    return caller
-
-
-def _is_retired(record: Dict[str, Any]) -> bool:
-    """A deleted customer that was bound to nobody: its id is never reused.
-
-    Saved connections and DTA aliases can still name it, so whoever registered
-    it again with their own DSN would receive the next user's transfer.
-    """
-    return record.get("status") == "inactive" and not (record.get("owner_user_id") or "").strip()
-
-
-def _may_replace(record: Dict[str, Any], owner_user_id: Optional[str]) -> bool:
-    """A deleted customer's id may be registered again only by the user it was bound to."""
-    if record.get("status") != "inactive":
-        return False
-    bound = (record.get("owner_user_id") or "").strip()
-    return bool(bound) and bound == (owner_user_id or "")
-
-
-async def _evict_from_mcp(customer_id: str) -> None:
-    """Drop a deleted customer's key and engine from the MCP server.
-
-    In-process when this router is mounted on the MCP server (the chart's
-    layout); otherwise through its service-only DELETE /admin/customers/{id}.
-    Best-effort: the MCP server also checks customers.json on every call, so
-    a missed eviction cannot keep the key alive.
-    """
-    mts = sys.modules.get("app.mcp_server.multi_tenant_mcp_server")
-    if mts is not None and hasattr(mts, "_evict_customer"):
-        mts._evict_customer(customer_id)
-        return
-    headers = _service_headers()
-    if not headers:
-        return
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            await client.delete(f"{customer_manager.mcp_server_url}/admin/customers/{customer_id}", headers=headers)
-    except Exception as e:
-        logger.warning(f"Could not evict {customer_id} from the MCP server: {e}")
-
-
-def _is_unbound(record: Dict[str, Any]) -> bool:
-    return not (record.get("owner_user_id") or "").strip()
-
-
-def _owned_customer(
-    customers: Dict[str, Any], customer_id: str, caller: Caller, *, service_may_use_unbound: bool = False
-) -> Dict[str, Any]:
-    record = customers.get(customer_id)
-    if record is None:
-        # Not openable under this key is not the same as not there: its owner is
-        # told the truth (409) instead of "not found".
-        unreadable = customer_manager.unreadable_customers().get(customer_id)
-        if unreadable is not None and unreadable.get("status") != "inactive" and (
-            _owner_of(customer_id, unreadable) == caller.owner
-            or (service_may_use_unbound and caller.is_service and _is_unbound(unreadable))
-        ):
-            raise HTTPException(status_code=409, detail=f"Connection {customer_id}: {WRONG_KEY_MESSAGE}.")
-    if record is None or record.get("status") == "inactive":
-        raise HTTPException(status_code=404, detail="Customer not found")
-    if _owner_of(customer_id, record) == caller.owner:
-        return record
-    if service_may_use_unbound and caller.is_service and _is_unbound(record):
-        return record
-    raise HTTPException(status_code=404, detail="Customer not found")
 
 
 class DatabaseConnectionRequest(BaseModel):
@@ -443,18 +287,14 @@ class CustomerManager:
     def _read_customers_file(self) -> dict:
         """Read the customers registry FRESH from disk (see original notes).
 
-        Secrets are sealed on disk and opened here, in process
-        (app/mcp_server/credentials.py). A registry written before secrets
-        were sealed is re-sealed as it is read, when DB_ENCRYPTION_KEY is set.
+        Secrets are sealed on disk and opened here, in process; what this
+        returns is for this process only and never for a response body.
         """
         try:
             return load_registry(self.customers_file)
         except Exception as e:
-            print(f"Error reading customers file: {type(e).__name__}")
+            print(f"Error reading customers file: {e}")
             return getattr(self, "customers", {})
-
-    def load_customers(self):
-        self.customers = self._read_customers_file()
 
     def unreadable_customers(self) -> dict:
         """Records on disk this deployment's key cannot open, shown without any
@@ -465,52 +305,58 @@ class CustomerManager:
             print(f"Error reading customers file: {type(e).__name__}")
             return {}
 
-    def deactivate_unreadable(self, customer_id: str) -> None:
-        """Mark a record this key cannot open inactive, on disk, leaving its sealed fields as they are."""
-        raw = read_raw(self.customers_file)
-        raw[customer_id] = {**raw[customer_id], "status": "inactive",
-                            "deactivated_at": datetime.now().isoformat()}
-        save_registry(self.customers_file, self.customers, keep=raw)
+    def load_customers(self):
+        try:
+            # A registry written before secrets were sealed is re-sealed on
+            # the first load by a process that holds the key.
+            migrate_registry(self.customers_file)
+        except Exception as e:
+            print(f"Error migrating customers file: {e}")
+        self.customers = self._read_customers_file()
 
     def save_customers(self):
-        """Write the registry with every secret sealed. Raises CredentialKeyMissing
-        rather than write a password in plaintext."""
         try:
-            # A record this key cannot open is not in memory; keep it on disk as it was.
-            save_registry(self.customers_file, self.customers, keep=read_raw(self.customers_file))
-        except CredentialKeyMissing:
+            save_registry(self.customers_file, self.customers)
+        except CredentialKeyMissing as e:
+            # Never fall back to a plaintext write: the file stays as it was.
+            print(f"Refusing to save customers in plaintext: {e}")
             raise
         except Exception as e:
-            print(f"Error saving customers: {type(e).__name__}")
+            print(f"Error saving customers: {e}")
 
     def generate_api_key(self, customer_id: str) -> str:
         timestamp = str(int(datetime.now().timestamp()))
         raw_key = f"{customer_id}:{timestamp}:{os.urandom(16).hex()}"
         return f"ak_{hashlib.sha256(raw_key.encode()).hexdigest()[:32]}"
 
-    async def register_customer(
-        self, registration: DatabaseConnectionRequest, owner_user_id: Optional[str] = None
-    ) -> CustomerResponse:
-        """Register a new customer with their database.
+    async def register_customer(self, registration: DatabaseConnectionRequest, owner_user_id: str) -> CustomerResponse:
+        """Register a new customer with their database, owned by ``owner_user_id``."""
 
-        Only ever creates: an id already on disk is refused, so a registration can
-        never overwrite another customer's record or api_key. A deleted id may be
-        registered again (see _may_replace); the old key stays dead.
-        """
-
-        self.load_customers()
-        # A record this key cannot open still belongs to its owner: only they may
-        # register its id again (that replaces it).
+        # Fresh: an id another onboarding process registered must 409 here,
+        # not be overwritten -- that would hand its owner's database to the caller.
+        # The one exception: the same owner registering again over a record
+        # they deactivated (the API rolls a registration back this way when
+        # saving the connection fails), so a retry is not "already registered".
+        self.customers = self._read_customers_file()
+        # A record this key cannot open still belongs to its owner: it is not a
+        # free id (credentials.load_unreadable).
         existing = self.customers.get(registration.customer_id) or \
             self.unreadable_customers().get(registration.customer_id)
-        if existing is not None and _is_retired(existing):
+        if (existing is not None and existing.get("status") == "inactive"
+                and not (existing.get("owner_user_id") or "").strip()):
+            # Deleted while bound to nobody (#564): retired for good. Saved
+            # connections and DTA aliases can still name it, so whoever
+            # registered it again would receive the next user's transfer.
             raise HTTPException(
                 status_code=409,
                 detail=f"Customer {registration.customer_id} was deleted; choose a new id",
             )
-        if existing is not None and not _may_replace(existing, owner_user_id):
-            if (existing.get("status") == NEEDS_REREGISTERING
-                    and (existing.get("owner_user_id") or "") == (owner_user_id or "")):
+        if existing is not None and not (
+            existing.get("status") == "inactive"
+            and existing.get("owner_user_id")
+            and existing.get("owner_user_id") == owner_user_id
+        ):
+            if existing.get("status") == NEEDS_REREGISTERING and existing.get("owner_user_id") == owner_user_id:
                 # Its owner, re-sending it: say why it is refused, and what works.
                 raise HTTPException(
                     status_code=409,
@@ -535,6 +381,7 @@ class CustomerManager:
 
         customer_data = {
             "customer_id": registration.customer_id,
+            "owner_user_id": owner_user_id,
             "customer_name": registration.customer_name,
             "database_type": registration.database_type,
             "connection_string": connection_string,
@@ -548,13 +395,12 @@ class CustomerManager:
             "last_health_check": datetime.now().isoformat(),
             "database_info": connection_test
         }
-        if owner_user_id:
-            customer_data["owner_user_id"] = owner_user_id
 
         try:
             async with httpx.AsyncClient() as client:
-                # The secrets travel sealed under DB_ENCRYPTION_KEY; the MCP
-                # server opens them with its own copy of the key.
+                # The secrets travel sealed under DB_ENCRYPTION_KEY (the body is
+                # also signed, below); the MCP server opens them with its copy of
+                # the key, so the request carries no password (1.6 port, 88120343).
                 mcp_payload = {
                     "customer_id": registration.customer_id,
                     "connection_string_enc": credential_handle(connection_string),
@@ -563,13 +409,18 @@ class CustomerManager:
                     "created_at": datetime.now().isoformat(),
                     "status": "active",
                     "max_rows": registration.max_rows,
-                    "query_timeout": registration.query_timeout
+                    "query_timeout": registration.query_timeout,
+                    "owner_user_id": owner_user_id,
                 }
 
+                # Signed over exactly these bytes: the MCP server's admin
+                # routes take only the onboarding service's credential.
+                body = json.dumps(mcp_payload).encode("utf-8")
                 mcp_response = await client.post(
                     f"{self.mcp_server_url}/admin/customers",
-                    json=mcp_payload,
-                    headers=_service_headers(),
+                    content=body,
+                    headers={"Content-Type": "application/json",
+                             **service_headers("POST", "/admin/customers", body)},
                     timeout=30.0
                 )
 
@@ -611,6 +462,26 @@ class CustomerManager:
                 "support_contact": "support@avaloka.com"
             }
         )
+
+    async def evict_from_mcp(self, customer_id: str) -> bool:
+        """Tell the MCP server to drop a deactivated customer's api_key and engine now.
+
+        Signed like /admin/customers. ``False`` if the call could not be made
+        or was refused; the record is inactive either way, and the MCP server
+        checks the registry on every /call_tool, so the key is still refused.
+        """
+        path = f"/admin/customers/{customer_id}"
+        try:
+            headers = service_headers("DELETE", path, b"")
+            async with httpx.AsyncClient() as client:
+                resp = await client.delete(f"{self.mcp_server_url}{path}", headers=headers, timeout=10.0)
+        except Exception as e:
+            logger.error(f"Evicting {customer_id} from the MCP server failed: {type(e).__name__}: {e}")
+            return False
+        if resp.status_code != 200:
+            logger.error(f"Evicting {customer_id} from the MCP server answered HTTP {resp.status_code}")
+            return False
+        return True
 
     def _get_example_queries(self, database_type: str) -> Dict[str, str]:
         examples = {
@@ -688,9 +559,8 @@ class CustomerManager:
             error_message=connection_test.get("error")
         )
 
-    def list_customers(self, caller: Caller) -> List[Dict[str, Any]]:
-        """The caller's own customers only. Never carries connection_string,
-        password or api_key."""
+    def list_customers(self, caller: "Caller") -> List[Dict[str, Any]]:
+        """The caller's own customers only. Never a secret: no connection_string, no api_key."""
         customers = self._read_customers_file()
         return [
             {
@@ -708,7 +578,7 @@ class CustomerManager:
                 }
             }
             for cid, data in customers.items()
-            if _owner_of(cid, data) == caller.owner
+            if caller.owns(cid, data)
         ] + [
             # Saved, but not openable under this deployment's key: listed, with
             # what is wrong and what to do, rather than silently left out.
@@ -722,8 +592,7 @@ class CustomerManager:
                 "created_at": data.get("created_at"),
             }
             for cid, data in self.unreadable_customers().items()
-            if data.get("status") != "inactive" and cid not in customers
-            and _owner_of(cid, data) == caller.owner
+            if data.get("status") != "inactive" and cid not in customers and caller.owns(cid, data)
         ]
 
 
@@ -771,44 +640,172 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://localhost:8082")
+# The MCP server's own default port (multi_tenant_mcp_server binds MCP_SERVER_PORT,
+# default 8080). It said :8082, which nothing bound.
+MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://localhost:8080")
 customer_manager = CustomerManager(MCP_SERVER_URL)
 
 router = APIRouter()
+
+
+# ---- Who is calling ----
+#
+# Every /customers route needs one of three identities:
+#
+# * a customer's own api_key (#526), as Bearer -- scoped to that one customer;
+# * a user assertion (credentials.user_assertion), as Bearer -- the user the
+#   API server authenticated, scoped to the customers that user registered;
+# * the API service (#564): the shared MCP_SERVICE_TOKEN in
+#   X-Avaloka-Service-Token plus the user it acts for in X-Avaloka-User --
+#   scoped like that user's assertion, with one exception below.
+#
+# No identity, or one that does not verify, is 401. An identity that is fine
+# but does not own the customer named is 404, the same answer as a customer
+# that does not exist, so ids are not confirmed to anyone they do not belong to.
+#
+# The one exception (#618), for customers registered before owners were
+# recorded: a record bound to nobody is reachable by the service-token
+# identity, for whichever user it names, on the routes a transfer needs
+# (status, test-connection, credentials) -- so a legacy database can still be
+# a transfer endpoint. Never by a user assertion, never by another customer's
+# api_key, never for delete, and never listed. POST /customers/{id}/owner
+# binds such a record to the user who proves its api_key, which closes it.
+SERVICE_TOKEN_HEADER = "X-Avaloka-Service-Token"
+SERVICE_USER_HEADER = "X-Avaloka-User"
+
+
+def _is_service_request(request: Request) -> bool:
+    """True only when MCP_SERVICE_TOKEN is set AND the request presents it.
+
+    Fails closed: with the variable unset or empty no request is a service
+    request. The MCP server's /admin routes do not accept this token; they
+    take only the signed service MAC (credentials.verify_service_mac).
+    """
+    expected = os.getenv("MCP_SERVICE_TOKEN", "")
+    presented = request.headers.get(SERVICE_TOKEN_HEADER, "")
+    if not expected or not presented:
+        return False
+    return hmac.compare_digest(presented.encode(), expected.encode())
+
+
+class Caller:
+    def __init__(self, user_id: Optional[str] = None, customer_id: Optional[str] = None,
+                 is_service: bool = False):
+        self.user_id = user_id
+        self.customer_id = customer_id
+        self.is_service = is_service
+
+    def owns(self, customer_id: str, record: Dict[str, Any]) -> bool:
+        if self.customer_id is not None:
+            return customer_id == self.customer_id
+        # A record registered before owners were recorded has none and is
+        # reachable only by its api_key: unowned is nobody's, not everybody's
+        # (the service-token exception is _require_transfer_customer, not this).
+        owner = record.get("owner_user_id")
+        return bool(self.user_id) and bool(owner) and owner == self.user_id
+
+
+def _is_unbound(record: Dict[str, Any]) -> bool:
+    return not (record.get("owner_user_id") or "").strip()
+
+
+def _bearer_token(authorization: Optional[str]) -> str:
+    if authorization and authorization.lower().startswith("bearer "):
+        return authorization[len("bearer "):].strip()
+    return ""
+
+
+def _require_caller(request: Request, authorization: Optional[str] = Header(None)) -> Caller:
+    """Resolve the caller to the service, a user or a customer, reading the registry fresh.
+
+    Fresh, so a key revoked by a re-registration stops working at once.
+    """
+    if _is_service_request(request):
+        user_id = request.headers.get(SERVICE_USER_HEADER, "").strip()
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        return Caller(user_id=user_id, is_service=True)
+    token = _bearer_token(authorization)
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing Bearer credential")
+    user_id = verify_user_assertion(token)
+    if user_id:
+        return Caller(user_id=user_id)
+    for cid, record in customer_manager._read_customers_file().items():
+        # A deactivated customer's key is revoked here too, not only on /call_tool.
+        if record.get("status", "active") == "active" and api_key_matches(record, token):
+            return Caller(customer_id=cid)
+    raise HTTPException(status_code=401, detail="Invalid credential")
+
+
+def _require_user(caller: Caller = Depends(_require_caller)) -> Caller:
+    """Routes that act for a person -- registration -- need the user, not a database's key."""
+    if not caller.user_id:
+        raise HTTPException(status_code=401, detail="A user credential is required")
+    return caller
+
+
+def _refuse_unreadable(customer_id: str, caller: "Caller", service_may_use_unbound: bool = False) -> None:
+    """409, with the truth, for a record the caller may reach that this key cannot open."""
+    record = customer_manager.unreadable_customers().get(customer_id)
+    if record is None or record.get("status") == "inactive":
+        return
+    if caller.owns(customer_id, record) or (service_may_use_unbound and caller.is_service
+                                             and _is_unbound(record)):
+        raise HTTPException(status_code=409, detail=f"Connection {customer_id}: {WRONG_KEY_MESSAGE}.")
+
+
+def _require_customer(customer_id: str, caller: Caller = Depends(_require_caller)) -> Dict[str, Any]:
+    """The named customer's record, if the caller owns it; 404 otherwise (409 if it cannot be opened)."""
+    customer = customer_manager._read_customers_file().get(customer_id)
+    if customer is None:
+        _refuse_unreadable(customer_id, caller)
+    if customer is None or not caller.owns(customer_id, customer):
+        raise HTTPException(status_code=404, detail="Customer not found")
+    return customer
+
+
+def _require_transfer_customer(customer_id: str, caller: Caller = Depends(_require_caller)) -> Dict[str, Any]:
+    """An ACTIVE customer the caller owns, or (#618) an active unbound one for the service token; 404 otherwise.
+
+    For the routes a transfer uses. A deactivated customer is not a transfer
+    endpoint for anyone, its owner included (#564): its handle stays sealed.
+    """
+    customer = customer_manager._read_customers_file().get(customer_id)
+    if customer is None:
+        _refuse_unreadable(customer_id, caller, service_may_use_unbound=True)
+    if customer is None or customer.get("status", "active") != "active":
+        raise HTTPException(status_code=404, detail="Customer not found")
+    if caller.owns(customer_id, customer):
+        return customer
+    if caller.is_service and _is_unbound(customer):
+        return customer
+    raise HTTPException(status_code=404, detail="Customer not found")
 
 
 @router.post("/customers/register", response_model=CustomerResponse)
 async def register_customer(
     registration: DatabaseConnectionRequest,
     background_tasks: BackgroundTasks,
-    request: Request,
+    caller: Caller = Depends(_require_user),
 ):
     """
-    Register a new customer database with Avaloka.
+    Register a new customer database with Avaloka, owned by the calling user.
 
     Supports PostgreSQL, MySQL / MariaDB, SQLite, SQL Server (MSSQL),
     Oracle, and MongoDB.
-
-    Open, but it only creates: an existing id is refused with 409 and nothing of
-    it is read or changed. A deleted id that was bound to a user may be
-    registered again only by that user (the API service naming them); a deleted
-    id that was bound to nobody is retired for good. The new customer is bound to the caller's Avaloka user
-    when there is one (the API service naming its user, or a key already bound to
-    a user); otherwise it is bound to nobody and only its own api_key reaches it.
     """
-    caller = resolve_caller(request)
-    owner_user_id = caller.user_id if caller else None
-    return await customer_manager.register_customer(registration, owner_user_id=owner_user_id)
+    return await customer_manager.register_customer(registration, owner_user_id=caller.user_id)
 
 
 @router.get("/customers/{customer_id}/status", response_model=CustomerStatus)
-async def get_customer_status(customer_id: str, caller: Caller = Depends(require_caller)):
-    _owned_customer(customer_manager.customers, customer_id, caller, service_may_use_unbound=True)
+async def get_customer_status(customer_id: str, customer: Dict[str, Any] = Depends(_require_transfer_customer)):
+    customer_manager.customers = customer_manager._read_customers_file()
     return customer_manager.get_customer_status(customer_id)
 
 
 @router.get("/customers")
-async def list_customers(caller: Caller = Depends(require_caller)):
+async def list_customers(caller: Caller = Depends(_require_caller)):
     customers = customer_manager.list_customers(caller)
     return {
         "customers": customers,
@@ -817,29 +814,37 @@ async def list_customers(caller: Caller = Depends(require_caller)):
     }
 
 
-@router.delete("/customers/{customer_id}")
-async def deactivate_customer(customer_id: str, caller: Caller = Depends(require_caller)):
+def _require_deletable_customer(customer_id: str, caller: Caller = Depends(_require_caller)) -> Dict[str, Any]:
+    """As _require_customer, but its owner may also delete a record this key cannot open."""
     try:
-        _owned_customer(customer_manager.customers, customer_id, caller)
+        return _require_customer(customer_id, caller)
     except HTTPException as e:
         if e.status_code != 409:
             raise
-        # Its owner may still delete a connection this key cannot open.
-        customer_manager.deactivate_unreadable(customer_id)
-        await _evict_from_mcp(customer_id)
-        return {"message": f"Customer {customer_id} deactivated"}
+        return {"customer_id": customer_id, "status": NEEDS_REREGISTERING}
 
+
+@router.delete("/customers/{customer_id}")
+async def deactivate_customer(customer_id: str, customer: Dict[str, Any] = Depends(_require_deletable_customer)):
+    if customer.get("status") == NEEDS_REREGISTERING:
+        # Not openable under this key: mark it deleted on disk as it is.
+        mark_unreadable_inactive(customer_manager.customers_file, customer_id, datetime.now().isoformat())
+        evicted = await customer_manager.evict_from_mcp(customer_id)
+        return {"message": f"Customer {customer_id} deactivated", "mcp_evicted": evicted}
+    # Mutate the fresh registry, not a possibly stale in-memory copy of it.
+    customer_manager.customers = customer_manager._read_customers_file()
     customer_manager.customers[customer_id]["status"] = "inactive"
     customer_manager.customers[customer_id]["deactivated_at"] = datetime.now().isoformat()
     customer_manager.save_customers()
-    await _evict_from_mcp(customer_id)
+    # The record is the authority; evicting is what makes the MCP server
+    # forget the key and dispose of the engine without waiting to notice.
+    evicted = await customer_manager.evict_from_mcp(customer_id)
 
-    return {"message": f"Customer {customer_id} deactivated"}
+    return {"message": f"Customer {customer_id} deactivated", "mcp_evicted": evicted}
 
 
 @router.post("/customers/{customer_id}/test-connection")
-async def test_customer_connection(customer_id: str, caller: Caller = Depends(require_caller)):
-    customer = _owned_customer(customer_manager.customers, customer_id, caller, service_may_use_unbound=True)
+async def test_customer_connection(customer_id: str, customer: Dict[str, Any] = Depends(_require_transfer_customer)):
     db_type = customer["database_type"]
 
     # ---- MongoDB ----
@@ -982,19 +987,32 @@ async def get_supported_databases():
     }
 
 
-@router.get("/customers/{customer_id}/credentials")
-async def get_customer_credentials(customer_id: str, caller: Caller = Depends(require_caller)):
-    """Return full connection credentials parsed from connection_string for DTA transfer use.
+def _require_service_class(caller: Caller = Depends(_require_caller)) -> Caller:
+    """A user assertion or the service token; a customer's api_key is 403 here.
 
-    The password goes only to the Avaloka API service (MCP_SERVICE_TOKEN), and
-    only for a customer bound to the user it names or bound to nobody yet (a
-    legacy customer; see the note on caller identity). An end user's own
-    api_key is not enough.
+    Checked before the record is looked up, so the answer says nothing about
+    which ids exist.
     """
-    _customers = customer_manager._read_customers_file()
-    customer = _owned_customer(_customers, customer_id, caller, service_may_use_unbound=True)
-    if not caller.is_service:
+    if caller.customer_id is not None or not caller.user_id:
         raise HTTPException(status_code=403, detail="Credentials are released only to the Avaloka API service")
+    return caller
+
+
+@router.get("/customers/{customer_id}/credentials")
+async def get_customer_credentials(
+    customer_id: str,
+    _caller: Caller = Depends(_require_service_class),
+    customer: Dict[str, Any] = Depends(_require_transfer_customer),
+):
+    """Return where a connection points plus a credential *handle* for DTA transfer use.
+
+    Only to a service-class caller: a user assertion for a customer that user
+    owns, or the service token (the user's own customers, plus a legacy one
+    bound to nobody, #618). A customer's api_key is 403. The password is not in
+    the response, to anyone: ``credential_handle`` is the connection string
+    sealed under DB_ENCRYPTION_KEY; the API, which holds the same key, opens it
+    in process (app.mcp_server.credentials.open_credential_handle).
+    """
     conn_str = customer.get("connection_string", "")
     db_type = customer.get("database_type", "")
 
@@ -1047,37 +1065,39 @@ async def get_customer_credentials(customer_id: str, caller: Caller = Depends(re
             "host":          parsed.hostname or "localhost",
             "port":          parsed.port,
             "database":      database,
-            "username":      parsed.username,
-            "password":      unquote(parsed.password or ""),
+            "username":      unquote(parsed.username) if parsed.username else None,
             "table":         table,
+            "credential_handle": credential_handle(conn_str),
         }
+    except CredentialKeyMissing as e:
+        raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Could not parse credentials: {e}")
 
 
 @router.post("/customers/{customer_id}/owner")
 async def bind_customer_owner(customer_id: str, request: Request):
-    """Bind a customer to the Avaloka user the API service names.
+    """Bind a customer registered before owners existed to the user the service names.
 
-    Service-only, and the service must also present that customer's own api_key,
-    so it can bind only a customer the user really holds. A customer already
-    bound to someone else is never re-bound.
+    Service-token only, and the service must also present that customer's own
+    api_key (Bearer), so it can bind only a customer the user really holds. A
+    customer already bound to someone else is never re-bound; a deactivated
+    one is never bound.
     """
     if not _is_service_request(request):
         raise HTTPException(status_code=401, detail="Authentication required")
     user_id = request.headers.get(SERVICE_USER_HEADER, "").strip()
-    api_key = _bearer(request)
+    api_key = _bearer_token(request.headers.get("authorization"))
     if not user_id or not api_key:
         raise HTTPException(status_code=401, detail="Authentication required")
 
-    customer_manager.load_customers()
+    customer_manager.customers = customer_manager._read_customers_file()
     record = customer_manager.customers.get(customer_id)
-    stored = (record or {}).get("api_key") or ""
     current = (record or {}).get("owner_user_id")
     if (
-        not stored
+        record is None
         or record.get("status") == "inactive"
-        or not hmac.compare_digest(stored.encode(), api_key.encode())
+        or not api_key_matches(record, api_key)
         or (current and current != user_id)
     ):
         raise HTTPException(status_code=404, detail="Customer not found")
@@ -1087,10 +1107,42 @@ async def bind_customer_owner(customer_id: str, request: Request):
     return {"customer_id": customer_id, "owner_bound": True}
 
 
+PLANNER_METADATA_MAX_BYTES = int(os.getenv("AVALOKA_PLANNER_METADATA_MAX_BYTES", "16384"))
+
+
+@router.get("/customers/{customer_id}/planner-metadata")
+async def get_customer_planner_metadata(
+    customer_id: str,
+    customer: Dict[str, Any] = Depends(_require_customer),
+    max_bytes: int = PLANNER_METADATA_MAX_BYTES,
+):
+    """The size-capped catalogue and statistics a planner may see: no row values, no credential.
+
+    Built through the connector contract (avaloka.connectors) with the
+    credential resolved here, in process. Document databases are not behind
+    the contract yet (L2), so they answer 501 rather than a half-shaped doc.
+    """
+    db_type = customer.get("database_type", "")
+    if db_type == "mongodb":
+        raise HTTPException(status_code=501, detail="planner metadata for MongoDB is not behind the connector contract yet")
+    from avaloka.connectors.postgres import SQLAlchemyConnector
+
+    try:
+        connector = SQLAlchemyConnector(customer.get("connection_string", ""))
+        try:
+            metadata = connector.planner_metadata(max_bytes=max(1024, min(int(max_bytes), 1 << 20)))
+        finally:
+            connector.close()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Could not read planner metadata: {type(e).__name__}")
+    return {"customer_id": customer_id, "database_type": db_type, "source_metadata": metadata}
+
+
 @app.on_event("startup")
 async def _require_encryption_key() -> None:
     # The standalone onboarding service seals every connection string under
-    # DB_ENCRYPTION_KEY; without a private one it does not start.
+    # DB_ENCRYPTION_KEY: provisioned from .env when missing; it refuses to
+    # start only if it still has none (app/core/encryption_key.py).
     from app.core.encryption_key import require_db_encryption_key
     require_db_encryption_key("The onboarding service")
 

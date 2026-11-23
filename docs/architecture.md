@@ -86,6 +86,12 @@ behind them.
    and has no connector; `delta` and `iceberg` have connectors but are not
    upload extensions — they are reached as URIs. Treat `orc` upload as
    unsupported regardless of the gate accepting it.
+
+   **Complex data.** Alongside the tabular connectors, a bounded complex-data
+   path handles PDF, OCR images and sampled video, and the SDK also reads
+   LeRobot and RLDS directories. A flat inspection schema, a recursive
+   contract and a validation result are attached to state. See
+   [complex-data-foundation.md](complex-data-foundation.md).
 2. **Plan.** The Planner converses with you, calling Sampling/Profiling to ground
    itself in the actual data, and proposes a plan. The Planner Graph visualizes
    it.
@@ -310,7 +316,7 @@ so, rather than failing outright.
 | **Managed inference** | GCP (GKE + API Gateway) or Ray Serve | `GCP_PROJECT_ID`, `INFERENCE_*`, `K8S_*` | For served models | Deploys trained models as an inference service. The cloud-neutral default is in-cluster Ray Serve; the GCP-gateway path needs these. |
 | **Sampling cache** | Supabase | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` | Optional | Caches full profiling results so repeated requests skip recomputation. Without it, profiles are recomputed each time. |
 | **Job registry** | GitHub repo | `GITHUB_SYSTEM_TOKEN`, `GITHUB_JOB_REGISTRY_REPO` | Optional | Job definitions are pushed to a Git registry for reproducibility/audit. Skipped when unset. |
-| **Customer data connections** | MCP server | `MCP_SERVER_URL` | For DB chat / DTA | The multi-tenant MCP server brokers customer database credentials for the Data Transfer Agent and database chat. |
+| **Customer data connections** | MCP server | `MCP_SERVER_URL` | For DB chat / DTA | The multi-tenant MCP server brokers customer database credentials for the Data Transfer Agent and database chat. Its credential route answers only a database's own API key and returns a sealed handle, never a password; the planner holds one sealed key per database the calling user connected (`db_credential_handles`) and none for anyone else's. |
 | **Graph runtime** | LangGraph | `LANGGRAPH_API_URL` | For the graph server | Points the API at the LangGraph runtime that executes the agent graph. |
 | **Observability** | LangSmith | `LANGSMITH_API_KEY`, `LANGSMITH_PROJECT` | Optional | Traces agent runs for debugging. Purely additive. |
 | **Data discovery (optional sidecar)** | openclaw | `OPENCLAW_*` | Optional | An optional discovery sidecar; off by default (`OPENCLAW_ENABLED=0` — the default is read at `app/agents/avaloka_agent/openclaw_client.py:31` and set in `.env.example:175`), and the agent uses native Python discovery when disabled. |
@@ -339,15 +345,19 @@ first (`resolve_provider`, `app/core/inference.py:206`):
    a Groq key is, else OpenAI if `OPENAI_API_KEY` is, else OpenRouter —
    `_default_provider_with_a_usable_key`, `app/core/inference.py`.
 
-The default is OpenRouter with `openai/gpt-oss-120b`, matching the Helm chart's
-`inference.provider` (MP-01, owner decision 2026-11-01: the cheapest per correct
-answer in the 2026-11-01 runs). Requests carry OpenRouter `provider` preferences:
-`only` = the allowlist for the model family, `allow_fallbacks: false`,
-`data_collection: "deny"`, `zdr: true` (`openrouter_allowlist`,
-`_openrouter_routing`). When no listed provider can serve a request, OpenRouter
-returns 404 or 503 and the primary falls back to the next tier, GPT-6 Luna (pinned to
-Azure, sent with reasoning effort `none` for tool calling;
-`_with_openrouter_tier`). Groq remains supported. One caution:
+The default is OpenRouter with `openai/gpt-oss-120b` (owner decision
+2026-11-01: the cheapest per correct answer), and the Helm chart's
+`inference.provider` now ships the same. Requests carry OpenRouter `provider`
+preferences: `only` = the allowlist for the model family, `allow_fallbacks:
+false`, `data_collection: "deny"`, `zdr: true` (`openrouter_allowlist`,
+`_openrouter_routing`), with `sort: "throughput"` (the fastest listed provider first;
+owner ruling 2026-11-04; `AVALOKA_OPENROUTER_SORT=price` for the cheapest). When no listed provider can serve a request OpenRouter
+returns 404 or 503, and the primary falls back to the next tier, GPT-6 Luna (pinned
+to Azure, sent with reasoning effort `none` for tool calling), then to gpt-oss-120b
+on Groq directly when a Groq key is set (`_with_openrouter_tier`). 402 (out of
+credit), 429 and outages fail over the same way (`app/core/model_tiers.py`). The
+tier that answers stamps which model answered and why; the turn shows it as a plain
+card and on the agent trace. One caution:
 
 * `.env.example:25` sets `OPENROUTER_BASE_URL`, but the builder reads
   `INFERENCE_OPENROUTER_BASE_URL` (`app/core/inference.py:308`). Overriding the
@@ -391,7 +401,7 @@ The sections above describe the planner/coder/validator core. Since then the
 system gained three layers, each with a one-line rationale and the PR that
 carried it:
 
-### The evidence layer
+### The evidence layer (#271)
 `contract.py` (agents declare stage/reads/writes; undeclared writes are
 dropped, a crashing agent becomes a structured failure), `integrity_agent.py`
 (leakage screened **before** training), `evaluation_agent.py`
@@ -400,7 +410,7 @@ baseline, CI-gated wins), `claim_verifier.py` (the narrative checked against
 the evidence, deterministically). The Validator checks the *code*; this layer
 checks the *claim*.
 
-### Model routing and fallback
+### Model routing and fallback (#272, #286, #287)
 One table decides *which model* (`model_config.py`, env-overridable,
 live-verified); one factory decides *which provider*; `model_fallback.py`
 decides *what happens when the provider fails* — OpenRouter first, then a
@@ -418,7 +428,7 @@ returned type. So fallback is active on the Groq, local, Bedrock, Vertex and
 Azure paths, and is a deliberate no-op on the default one. Pin
 `INFERENCE_PROVIDER=groq` if you want the two-provider path.
 
-### Conversational agent with optional swarm
+### Conversational agent with optional swarm (#273/#282, from #157)
 `avaloka_agent/` routes conversation before planning; swarm is resolved by
 **import probe** (`app/agents/avaloka_agent/capabilities.py`) — an OSS build
 without the module
@@ -426,7 +436,7 @@ degrades to no narration, and no environment variable can claim a capability
 whose code is absent. That property is what the edition split
 (`docs/EDITIONS.md`, `docs/INSTALL.md`) relies on.
 
-### Inference serving lifecycle
+### Inference serving lifecycle (#265)
 The legacy gateway minted an `inference-service-{uuid}` namespace plus a GCP API
 Gateway per model and reclaimed neither: **eighteen accumulated between
 2026-04-22 and 2026-08-14**, each holding a pod, ~1 vCPU and its own
@@ -444,7 +454,7 @@ path. And scale-to-zero applies to the **MTA v2 managed-inference** path, not to
 the Ray Serve `RayService` the chart ships, which is pinned at one replica over
 a one-to-three worker group (§5).
 
-### Training integrity
+### Training integrity (#292)
 Preprocessing is fitted on the **training split only** — imputation values,
 one-hot vocabularies and scaler statistics — and merely *applied* to validation.
 Fitting before the split is textbook target leakage: the model sees test-set
@@ -467,7 +477,7 @@ inside a Docker image and cannot import `app.*`), so their agreement on
 preprocessing, split rule and metric keys is maintained deliberately and should
 be asserted by test rather than assumed.
 
-### Fallback coverage and verification
+### Fallback coverage and verification (#281, #290)
 Fallback is not per-agent opt-in: **twelve modules** resolve their LLM through
 `model_fallback.py`, each non-OpenRouter primary paired with an OpenRouter
 equivalent via `with_fallbacks()`. Eight import `attach_fallback` directly —
@@ -518,7 +528,7 @@ provisioner and single-cloud in the serving path. Routing MTA through the same
 factory is the remaining work; until then, treat AWS/Azure inference as
 manual configuration.
 
-### Measurement (1.7 line)
+### Measurement (1.7 line: #277, #283, #284)
 A benchmark harness with plugin-discovered suites, a
 (Quality, Cost, Latency, Data-Scanned) 4-tuple, resumable journals, and a
 pre-flight smoke suite over five surfaces (harness/prompts/loops/graph/

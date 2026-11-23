@@ -1,0 +1,12 @@
+{
+  "note": "Operator rates for models billed directly by a provider other than OpenRouter. USD per 1M tokens. A groq/ model is checked against this table, never against the OpenRouter catalog: the same model id can carry a different price there. Update an entry only from the provider's own pricing source and change source_url/checked_at with it.",
+  "groq": {
+    "openai/gpt-oss-120b": {
+      "input_usd_per_mtok": 0.15,
+      "output_usd_per_mtok": 0.60,
+      "cached_input_usd_per_mtok": 0.075,
+      "source_url": "https://console.groq.com/docs/model/openai/gpt-oss-120b",
+      "checked_at": "2026-10-31"
+    }
+  }
+}

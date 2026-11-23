@@ -16,8 +16,8 @@ Provider selection (``EMBEDDING_PROVIDER``):
 
 OPENAI_API_KEY is never read here. It is the chat key, and the inference router
 also accepts it for a self-hosted OpenAI-spec server, so its presence says
-nothing about wanting memory text sent to api.openai.com. Until this change the
-"auto" default did exactly that whenever the key was set.
+nothing about wanting memory text sent to api.openai.com. Before 2.0 the "auto"
+default did exactly that whenever the key was set.
 
 All vectors are padded / trimmed to EMBEDDING_TARGET_DIM so every caller
 receives a consistent-length vector regardless of which provider was used.
@@ -137,12 +137,15 @@ def _get_st_model(st_model_name: str):
     if _st_instance is None:
         with _st_lock:
             if _st_instance is None:
-                from sentence_transformers import SentenceTransformer  # noqa: PLC0415
+                # Offline (HF_HUB_OFFLINE, the image default) a model missing
+                # from the cache raises a plain ModelNotCached at once instead
+                # of a retry loop against huggingface.co.
+                from app.core.offline import load_sentence_transformer  # noqa: PLC0415
                 logger.info(
                     f"[embed] Loading sentence-transformer '{st_model_name}' (first call). "
                     "Subsequent calls will reuse the cached instance."
                 )
-                _st_instance = SentenceTransformer(st_model_name)
+                _st_instance = load_sentence_transformer(st_model_name)
     return _st_instance
 
 
@@ -249,6 +252,6 @@ def embed_text(text: str, target_dim: int = None) -> List[float]:
         f"[embed] Local embedding model unavailable — returning zero-vector [{dim}d]. "
         "Semantic retrieval will be non-functional until it is fixed:\n"
         "  pip install sentence-transformers>=2.2.0, and make the model available "
-        "(the API image bakes it in; see docs/INSTALL.md)."
+        "(scripts/prefetch_models.py)."
     )
     return [0.0] * dim

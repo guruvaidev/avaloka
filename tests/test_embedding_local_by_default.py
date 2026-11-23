@@ -19,6 +19,7 @@ HF_HUB_OFFLINE=1.
 from __future__ import annotations
 
 import logging
+import os
 import socket
 import sys
 import types
@@ -334,12 +335,35 @@ def test_milvus_space_check_never_breaks_an_insert():
     assert len(inserted) == 1
 
 
+# --- offline loading -----------------------------------------------------------
+
+
+def test_offline_load_asks_for_cached_files_only(monkeypatch):
+    from app.core import offline
+
+    seen = []
+    fake = types.ModuleType("sentence_transformers")
+    fake.SentenceTransformer = lambda name, **kw: seen.append(kw) or object()
+    monkeypatch.setitem(sys.modules, "sentence_transformers", fake)
+
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    offline.load_sentence_transformer("all-MiniLM-L6-v2")
+    for key in offline.OFFLINE_ENVS:
+        monkeypatch.delenv(key, raising=False)
+    offline.load_sentence_transformer("all-MiniLM-L6-v2")
+
+    assert seen[0].get("local_files_only") is True, (
+        "offline, the model must be resolved from the cache without building Hub requests")
+    assert "local_files_only" not in seen[1]
+
+
 # --- the real bundled model (runs where it is cached, e.g. the API image) -------
 
 
 def test_real_local_model_returns_nonzero_vectors_and_makes_no_request(egress, monkeypatch):
     pytest.importorskip("sentence_transformers")
     import app.services.embedding_utils as mod
+    from app.core.offline import ModelNotCached
 
     for key in ("EMBEDDING_PROVIDER", "EMBEDDING_OPENAI_API_KEY", "APP_ENV",
                 "SENTENCE_TRANSFORMER_MODEL"):
@@ -351,9 +375,15 @@ def test_real_local_model_returns_nonzero_vectors_and_makes_no_request(egress, m
     monkeypatch.setattr(mod, "_warned", set(), raising=False)
     try:
         mod._get_st_model("all-MiniLM-L6-v2")
-    except Exception:   # 1.6 has no offline loader: a cache miss surfaces as OSError & co.
-        pytest.skip("all-MiniLM-L6-v2 is not in the local HF cache")
-    egress.clear()   # this is about embedding, not loading
+    except ModelNotCached:
+        # Under CI a skip here would be a green line that tested nothing: the
+        # gate must supply the model (scripts/prefetch_test_embedding_model.py).
+        if os.environ.get("CI", "").strip().lower() not in ("", "0", "false"):
+            pytest.fail("all-MiniLM-L6-v2 is not in the HF cache and CI is set; run "
+                        "scripts/prefetch_test_embedding_model.py before the gate")
+        pytest.skip("all-MiniLM-L6-v2 is not in the local HF cache "
+                    "(scripts/prefetch_test_embedding_model.py)")
+    egress.clear()   # loading is covered by test_offline_egress; this is about embedding
 
     vec = mod.embed_text(SYNTH, target_dim=1536)
 

@@ -1,11 +1,13 @@
 import requests
 import time
 
+from app.infra.ray_auth import auth_headers
+
 
 def get_ray_job_status(dashboard_url: str, job_id: str):
     base_url = dashboard_url.rstrip("/")
     try:
-        r = requests.get(f"{base_url}/api/jobs/{job_id}", timeout=10)
+        r = requests.get(f"{base_url}/api/jobs/{job_id}", headers=auth_headers(), timeout=10)
         if r.status_code == 404:
             return "NOT_FOUND"
         r.raise_for_status()
