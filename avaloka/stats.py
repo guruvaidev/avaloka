@@ -21,6 +21,12 @@ HIGH_MISSING_PCT = 0.30
 HIGH_CARDINALITY_RATIO = 0.90
 ID_UNIQUE_RATIO = 0.98
 SMALL_SAMPLE_ROWS = 200
+# A categorical feature whose values alone predict the target this accurately,
+# and remove most of the errors the majority-class baseline makes, is treated
+# as leakage. The margin is relative to the baseline's error, not in points: on
+# a 97/3 target a perfect copy is only 3 points above the baseline.
+LEAKAGE_PURITY = 0.95
+LEAKAGE_ERROR_REDUCTION = 0.75
 
 
 def infer_role(series: pd.Series, n_rows: int) -> str:
@@ -242,12 +248,34 @@ def detect_target_leakage(
                                      "value": round(corr, 4), "severity": "high",
                                      "detail": f"|corr| with target = {corr:.3f}; likely leakage."})
             else:
-                # Genuine categorical: does each value map to exactly one label?
-                grp = frame.groupby(s.astype("string"))[target].nunique(dropna=True)
-                if len(grp) > 1 and (grp <= 1).mean() >= 0.99:
+                # Categorical: how well does this one feature predict the target
+                # on its own? "Purity" is the accuracy of predicting the majority
+                # label within each category. Requiring every category to map to
+                # exactly one label (the previous rule) missed any leak with a
+                # little noise -- a status column 98.8% aligned with churn passed
+                # as clean, and the model was certified PASS at level 4.
+                sub = frame[[name, target]].dropna()
+                if sub.empty:
+                    continue
+                groups = sub.groupby(sub[name].astype("string"))[target]
+                if groups.ngroups < 2:
+                    continue
+                purity = float(groups.agg(lambda t: t.value_counts().iloc[0]).sum()) / len(sub)
+                baseline = float(sub[target].value_counts(normalize=True).iloc[0])
+                # Compare against the majority-class baseline too, so an
+                # imbalanced target (e.g. 97/3) does not flag ordinary features
+                # but still flags a copy of the rare label.
+                reduction = (purity - baseline) / (1.0 - baseline) if baseline < 1.0 else 0.0
+                if purity >= 1.0:
                     findings.append({"column": name, "kind": "deterministic_mapping",
                                      "value": 1.0, "severity": "high",
                                      "detail": "Feature value determines the target; likely leakage."})
+                elif purity >= LEAKAGE_PURITY and reduction >= LEAKAGE_ERROR_REDUCTION:
+                    findings.append({"column": name, "kind": "near_deterministic_mapping",
+                                     "value": round(purity, 4), "severity": "high",
+                                     "detail": (f"Feature alone predicts the target with {purity:.1%} "
+                                                f"accuracy (majority baseline {baseline:.1%}); "
+                                                "likely leakage.")})
         except Exception:
             continue
     return findings

@@ -16,7 +16,7 @@ check different things.
 | Asks | will this run against this schema? | is this conclusion supported? |
 | Catches | bad column, unsafe join | overreach, causal language, unsupported numbers |
 
-Seven checks, each targeting a way an automated analysis misleads:
+Eight checks, each targeting a way an automated analysis misleads:
 
 1. **Causal language from correlational evidence** — "drives", "causes",
    "because of" asserted from a correlation. The single most common overreach,
@@ -32,6 +32,9 @@ Seven checks, each targeting a way an automated analysis misleads:
    when another group in the result is lower.
 7. **A threshold the result breaks** — "no category exceeds 30 million" when
    one does, or "all categories are above N" when one is not.
+8. **A method the code never ran** — "the gradient-boosted model achieves…"
+   over a script that fitted a linear regression. The numbers are real, so the
+   other checks pass; what is wrong is the description of how they were made.
 
 Deterministic and dependency-free. The checks are string- and evidence-level,
 so they run without an LLM, cost nothing, and cannot themselves hallucinate.
@@ -97,6 +100,95 @@ _TEST_EVIDENCE_KEYS = ("p_value", "pvalue", "p_val", "confidence_interval",
 _CAUSAL_EVIDENCE_KEYS = ("experiment", "randomized", "randomised", "ab_test",
                          "treatment", "control", "causal", "uplift",
                          "instrument", "did", "difference_in_differences")
+
+#: Evidence key holding the script that produced the result. It is read by
+#: ``check_method_not_in_code`` only: a script is full of literals (a split
+#: ratio, a tree count) that are not results, so it is kept out of the numeric
+#: evidence the invented-number check trusts.
+_CODE_KEY = "executed_code"
+
+#: Model families a narrative can name, as (terms a reader sees, substrings the
+#: script must contain for the name to be true). Markers are matched against
+#: the lower-cased script with its comments and string literals removed, so
+#: "gradientboosting" covers GradientBoostingRegressor and
+#: HistGradientBoostingClassifier alike, "xgb" covers both the xgboost import
+#: and XGBRegressor, and a comment saying "a RandomForest would be better" does
+#: not count as one being fitted.
+_METHOD_FAMILIES = {
+    "gradient boosting": (
+        ("gradient-boosted", "gradient boosted", "gradient boosting",
+         "gradient-boosting", "boosted tree", "boosted trees", "boosted model",
+         "boosting model", "gbm", "gbdt", "gbrt",
+         "xgboost", "lightgbm", "catboost"),
+        ("gradientboosting", "xgb", "lightgbm", "lgbm", "catboost"),
+    ),
+    "random forest": (
+        ("random forest", "random-forest", "random forests"),
+        ("randomforest",),
+    ),
+    "neural network": (
+        ("neural network", "neural networks", "neural net", "neural-network",
+         "deep learning", "multilayer perceptron", "multi-layer perceptron",
+         "perceptron", "mlp"),
+        ("torch", "keras", "tensorflow", "mlpregressor", "mlpclassifier"),
+    ),
+}
+
+#: Words that, just before a model's name, say the sentence is not claiming it
+#: produced the result: a negation ("no", "never", "unlike"), a comparison
+#: ("outperforms", "compared with", "versus"), a suggestion ("could", "consider")
+#: or a restated request ("you asked for"). Judged on the few words before the
+#: mention, not the whole sentence: "the random forest reached 0.91, which
+#: isn't bad" claims the forest ran, and the "isn't" three clauses later does
+#: not change that. The cue may be followed by up to three words ("never
+#: trained a neural network", "you asked for a gradient-boosted model").
+_NOT_ASSERTED_BEFORE = re.compile(
+    r"(?:\b(?:no|not|never|neither|nor|without|unlike|than|versus|vs\.?|against|over|"
+    r"instead of|rather than|compared (?:with|to)|comparable (?:with|to)|relative to|"
+    r"beats?|outperform(?:s|ed|ing)?|exceed(?:s|ed)?|within|close to|near|similar to|like|"
+    r"as (?:good|accurate|well|fast) as|match(?:es|ed|ing)?|"
+    r"could|would|should|might|may|consider(?:ing)?|try(?:ing)?|recommend(?:s|ed)?|suggest(?:s|ed)?|"
+    r"asked for|requested|wanted|expected|instead)\b|n't)"
+    r"(?:\s+\S+){0,3}\s*$",
+    re.IGNORECASE)
+#: Words right after the mention that say it did not run or is only an option.
+_NOT_ASSERTED_AFTER = re.compile(
+    r"^\s*(?:\w+\s+){0,3}?(?:timed out|failed|was not|wasn't|were not|weren't|never|could not|"
+    r"couldn't|did not|didn't|is not|isn't|unavailable|unable|would|could|should|might|may|"
+    r"instead|baseline|alternative|option|next step|later)\b", re.IGNORECASE)
+#: How many words before a mention are read for a cue.
+_CUE_WINDOW = 6
+
+_COMMENT_OR_STRING = re.compile(
+    r'#[^\n]*|"""[\s\S]*?"""|\'\'\'[\s\S]*?\'\'\'|"(?:\\.|[^"\\\n])*"|\'(?:\\.|[^\'\\\n])*\'')
+
+
+def _code_only(script: str) -> str:
+    """The script with its comments and string literals blanked: a model named
+    in a comment, a docstring or a print() message was not fitted."""
+    return _COMMENT_OR_STRING.sub(" ", script).lower()
+
+
+def _asserted_mention(claim: str, terms) -> Optional[str]:
+    """The term of *terms* the claim asserts produced the result, else None.
+
+    Longer terms first, and a mention judged not asserted silences the shorter
+    terms inside it: "no gradient boosting model" is not re-read as a claim
+    about a "boosting model".
+    """
+    lowered = claim.lower()
+    silenced: List[Tuple[int, int]] = []
+    for term in sorted(terms, key=len, reverse=True):
+        for m in re.finditer(rf"\b{re.escape(term)}\b", lowered):
+            if any(s <= m.start() < e or s < m.end() <= e for s, e in silenced):
+                continue
+            before = " ".join(lowered[:m.start()].split()[-_CUE_WINDOW:])
+            after = lowered[m.end():]
+            if _NOT_ASSERTED_BEFORE.search(before) or _NOT_ASSERTED_AFTER.match(after):
+                silenced.append((m.start(), m.end()))
+                continue
+            return term
+    return None
 
 # _NUMBER = re.compile(r"-?\d+(?:\.\d+)?%?")
 #
@@ -212,7 +304,9 @@ def _flatten(evidence: Any, prefix: str = "") -> Dict[str, Any]:
 
 def _evidence_numbers(flat: Dict[str, Any]) -> List[float]:
     numbers: List[float] = []
-    for value in flat.values():
+    for key, value in flat.items():
+        if key == _CODE_KEY:
+            continue
         if isinstance(value, bool):
             continue
         if isinstance(value, (int, float)):
@@ -786,8 +880,36 @@ def check_unsupported_significance(claim: str, flat: Dict[str, Any]) -> Optional
     )
 
 
+def check_method_not_in_code(claim: str, flat: Dict[str, Any]) -> Optional[ClaimFinding]:
+    """A model family named in the narrative that the executed script never used.
+
+    "The gradient-boosted tree model achieves a test RMSE of 10.44" passes every
+    other check when 10.44 really is in the result table. It is still false if
+    the script that produced 10.44 fitted ``np.linalg.lstsq``: the reader is told
+    which method earned the number, and that is the part they will repeat.
+
+    Silent without a script to compare against, and silent when the words
+    around the mention only suggest, compare or rule the method out.
+    """
+    code = flat.get(_CODE_KEY)
+    if not isinstance(code, str) or not code.strip():
+        return None
+    script = _code_only(code)
+    for family, (terms, markers) in _METHOD_FAMILIES.items():
+        term = _asserted_mention(claim, terms)
+        if term and not any(marker in script for marker in markers):
+            return ClaimFinding(
+                claim=claim, verdict=Verdict.CONTRADICTED, check="method_not_in_code",
+                detail=(f"names a {family} model ({term!r}), but the executed code "
+                        f"contains no {family} estimator"),
+                evidence_ref=_CODE_KEY,
+            )
+    return None
+
+
 CHECKS = (
     check_contradicted_by_metrics,
+    check_method_not_in_code,
     check_ordering_contradicted,
     check_superlative_contradicted,
     check_threshold_contradicted,
@@ -895,6 +1017,18 @@ def claim_verifier_node(state: Dict[str, Any]) -> Dict[str, Any]:
             },
             "verification_safe_to_present": True,
         }
+
+    # Attached after the guard above on purpose: ``generated_code`` survives in
+    # state from an earlier turn, so on its own it is not evidence that this
+    # turn ran anything. It is only offered when the result table came from the
+    # script and no training agent contributed -- a model trained by the MTA is
+    # described by training_metrics, not by the coder's script, and comparing
+    # its narrative to that script would flag a true sentence.
+    code = state.get("generated_code")
+    if (isinstance(code, str) and code.strip() and execution_output
+            and state.get("training_metrics") is None
+            and state.get("evaluation_report") is None):
+        evidence[_CODE_KEY] = code
 
     report = verify_claims(narrative, evidence)
     return {
