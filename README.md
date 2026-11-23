@@ -416,15 +416,41 @@ Every document, and who it is for: [docs/DOCS_MAP.md](docs/DOCS_MAP.md).
 
 ## Coming in 2.0
 
-A preview of the next release; follow the [blog](https://avaloka.ai/blog) for
-progress.
+Avaloka 2.0 is the next open-source release. Everything below is in the
+open-source edition; follow the [blog](https://avaloka.ai/blog) for the launch.
 
-- **The swarm:** Avaloka clones itself, works a dataset in parallel and
-  converges on one answer.
-- **A live planner graph** of exactly what ran on your data.
-- **Answers pitched to whoever is asking,** from a CIO's strategy to an
-  analyst's detail.
-- **Nested and semi-structured data, and fully air-gapped operation.**
+- **The swarm, in every edition.** `avaloka coordinate` clones Avaloka across
+  shards of one dataset and converges one answer: profiles merge exactly,
+  verdicts merge conservatively, and the work is narrated in the chat as it
+  happens. Open source runs two clones per mission, a limit written in open
+  code.
+- **Instant Analysis and the Analysis Recipe Library.** Ask one question of an
+  uploaded or sample dataset and get verified findings, an interactive report
+  and a notebook that reproduces it. Ten recipes, from profile and trend to
+  regression, anomalies, cohort retention and A/B tests, each on a stated
+  budget of rows, bytes, memory and time.
+- **Outcome Reports with source-data checks**, carrying the data-quality
+  checks, the recipe and the engine versions behind every finding.
+- **Workload planning from statistics.** Every job is sized from rows, bytes
+  and the source's own statistics, assigned a live, sampled or Ray-batch lane
+  with its reason, and given a scan plan recorded beside the results.
+- **Statistical specialists.** A feature engineer in every mission, and a
+  statistician, an experimenter and a conformal calibrator when the question
+  calls for them.
+- **An agent trace for every turn, and a planner graph of what actually ran**,
+  built from the executed operations with the columns on each one.
+- **Replanning on execution error.** A failed run is diagnosed, the data or
+  the code repaired, and the recovery recorded; a correction from you re-plans
+  and says why.
+- **A personal dataset catalog**, in chat (`use my.sales@2`) and on the command
+  line, with versions and lineage for every dataset an analysis touches.
+- **Generated code in an isolated executor**, with no route to your databases
+  or the internet and none of the server's secrets.
+- **Cross-validation with confusion matrices** and model families for training.
+- **Answers pitched to whoever is asking**, from a novice to an expert, and
+  memory scoped to the conversation it came from.
+- **Secure by default:** MLflow and Ray require authentication, and
+  third-party usage beacons are off on every deploy surface.
 
 ## Contributing
 
