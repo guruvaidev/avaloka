@@ -2194,6 +2194,134 @@ class DatabaseWriteVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
 
+class RowIterationComplexityVisitor(ast.NodeVisitor):
+    """Flags the O(N^2) row-iteration shapes on full-dataset executions.
+
+    Two shapes, both on the frame ``main()`` is given (``df``) and only when the
+    run is on the entire dataset (``analysis_fidelity == "entire_dataset"``):
+
+    * iterating its rows one by one: ``df.iterrows()`` / ``df.itertuples()``;
+    * filtering it again inside a loop over its rows (``df[mask]``,
+      ``df.loc[mask]``, ``df.query(...)`` under ``for ... in df.iterrows()``,
+      ``df.itertuples()``, ``df.index``, ``df[col]``, ``range(len(df))``):
+      every row rescans the whole frame.
+
+    Everything else passes, because the guard must never reject legitimate
+    code: a loop over a short list (categories, column names,
+    ``df[col].unique()``, ``df.groupby(...)``) that filters ``df`` once per
+    group is O(k*N); ``iterrows()`` on an aggregate (``summary.iterrows()``)
+    walks a few rows; a filter outside any loop is one scan.
+    """
+
+    FRAME = "df"
+    #: Methods on the frame whose result is a small set of groups or keys, not its rows.
+    _GROUPING = frozenset({"groupby", "unique", "drop_duplicates", "nunique", "value_counts",
+                           "head", "tail", "nlargest", "nsmallest", "sample", "keys", "columns"})
+    _ROW_ITERATORS = frozenset({"iterrows", "itertuples"})
+    _FILTER_ACCESSORS = frozenset({"loc", "iloc"})
+
+    def __init__(self, enforce_full_data: bool = False):
+        self.enforce_full_data = enforce_full_data
+        self._row_loop_depth = 0
+        self.errors: list[str] = []
+
+    def _add_error(self, msg: str):
+        if msg not in self.errors:
+            self.errors.append(msg)
+
+    def _is_frame(self, node: ast.AST) -> bool:
+        return isinstance(node, ast.Name) and node.id == self.FRAME
+
+    def _rooted_in_frame(self, node: ast.AST) -> bool:
+        """``df``, ``df[...]``, ``df.x``, ``df.f(...)`` and chains of those."""
+        while True:
+            if self._is_frame(node):
+                return True
+            if isinstance(node, ast.Attribute):
+                node = node.value
+            elif isinstance(node, ast.Subscript):
+                node = node.value
+            elif isinstance(node, ast.Call):
+                node = node.func
+            else:
+                return False
+
+    def _chain_methods(self, node: ast.AST) -> set:
+        names: set = set()
+        while isinstance(node, (ast.Attribute, ast.Subscript, ast.Call)):
+            if isinstance(node, ast.Call):
+                node = node.func
+                continue
+            if isinstance(node, ast.Attribute):
+                names.add(node.attr)
+            node = node.value
+        return names
+
+    def _iterates_frame_rows(self, iterator: ast.AST) -> bool:
+        """True when a ``for`` over *iterator* visits the frame row by row."""
+        if isinstance(iterator, ast.Call) and isinstance(iterator.func, ast.Name):
+            if iterator.func.id == "range" and iterator.args:
+                inner = iterator.args[-1]
+                return (isinstance(inner, ast.Call) and isinstance(inner.func, ast.Name)
+                        and inner.func.id == "len" and inner.args and self._rooted_in_frame(inner.args[0]))
+            if iterator.func.id in ("enumerate", "zip", "reversed", "list", "tuple"):
+                return any(self._iterates_frame_rows(a) for a in iterator.args)
+            return False
+        if not self._rooted_in_frame(iterator):
+            return False
+        # df.groupby(...), df[col].unique(), df.head(20): a few groups or rows, not N.
+        return not (self._chain_methods(iterator) & self._GROUPING)
+
+    def _is_filter_of_frame(self, node: ast.Subscript) -> bool:
+        base = node.value
+        if isinstance(base, ast.Attribute) and base.attr in self._FILTER_ACCESSORS:
+            base = base.value
+        if not self._is_frame(base):
+            return False
+        sl = node.slice
+        return (isinstance(sl, (ast.Compare, ast.BoolOp, ast.UnaryOp, ast.BinOp))
+                or (not isinstance(sl, ast.Constant) and self._rooted_in_frame(sl)))
+
+    def visit_For(self, node: ast.For):
+        rows = self.enforce_full_data and self._iterates_frame_rows(node.iter)
+        self._row_loop_depth += int(rows)
+        self.generic_visit(node)
+        self._row_loop_depth -= int(rows)
+
+    def visit_While(self, node: ast.While):
+        rows = self.enforce_full_data and any(self._rooted_in_frame(n) for n in ast.walk(node.test))
+        self._row_loop_depth += int(rows)
+        self.generic_visit(node)
+        self._row_loop_depth -= int(rows)
+
+    def visit_Call(self, node: ast.Call):
+        if self.enforce_full_data and isinstance(node.func, ast.Attribute):
+            if node.func.attr in self._ROW_ITERATORS and self._is_frame(node.func.value):
+                self._add_error(
+                    f"PerformanceError on line {node.lineno}: DataFrame.{node.func.attr}() over the whole "
+                    "dataset is too slow for full-dataset execution and risks hitting the timeout. Use "
+                    "vectorized pandas/NumPy operations, groupby, merge/merge_asof, or pre-extracted NumPy "
+                    "arrays (.to_numpy()) with np.searchsorted."
+                )
+            elif (node.func.attr == "query" and self._is_frame(node.func.value)
+                  and self._row_loop_depth > 0):
+                self._add_error(
+                    f"PerformanceError on line {node.lineno}: df.query(...) inside a loop over df's rows "
+                    "rescans the whole dataset once per row (O(N^2)). Pre-sort/group once outside the loop "
+                    "or use np.searchsorted / pd.merge_asof."
+                )
+        self.generic_visit(node)
+
+    def visit_Subscript(self, node: ast.Subscript):
+        if self.enforce_full_data and self._row_loop_depth > 0 and self._is_filter_of_frame(node):
+            self._add_error(
+                f"PerformanceError on line {node.lineno}: Filtering DataFrame 'df[...]' inside a loop over "
+                "df's rows rescans the whole dataset once per row (O(N^2)) and times out on large datasets. "
+                "Pre-sort/group once outside the loop or use np.searchsorted / pd.merge_asof."
+            )
+        self.generic_visit(node)
+
+
 def _prompt_requests_filtered_ml(user_prompt: str) -> bool:
     prompt = (user_prompt or "").lower()
     ml_terms = (
@@ -2326,6 +2454,12 @@ def static_semantic_validator_node(state: CodingAgentState) -> dict:
         deprecated_api_visitor = DeprecatedApiVisitor()
         deprecated_api_visitor.visit(tree)
 
+        # Full-dataset O(N^2) row-iteration / loop-scan guardrail
+        complexity_visitor = RowIterationComplexityVisitor(
+            enforce_full_data=(state.get("analysis_fidelity") == "entire_dataset")
+        )
+        complexity_visitor.visit(tree)
+
         # 16) HARD: no database connection or write outside the transfer path.
         # Fail closed: only the transfer agent's own pipeline turns it off.
         db_write_visitor = DatabaseWriteVisitor()
@@ -2355,6 +2489,7 @@ def static_semantic_validator_node(state: CodingAgentState) -> dict:
         all_errors.extend(label_encoder_visitor.errors)
         all_errors.extend(synthetic_prediction_visitor.errors)
         all_errors.extend(deprecated_api_visitor.errors)
+        all_errors.extend(complexity_visitor.errors)
         all_errors.extend(db_write_visitor.errors)
         all_errors.extend(
             f"SemanticError: {issue.message}"

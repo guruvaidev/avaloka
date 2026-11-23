@@ -58,7 +58,21 @@ from app.infra.k8s_secrets import cloud_secret_env
 from app.executor.execute_service import URL_ENV as EXECUTE_SERVICE_URL_ENV, auth_headers, configured_host_port
 
 logger = logging.getLogger(__name__)
-AVALOKA_LOCAL_EXEC_TIMEOUT = 120
+AVALOKA_LOCAL_EXEC_TIMEOUT = 180
+AVALOKA_FULL_DATA_EXEC_TIMEOUT = 300
+
+
+def _get_local_exec_timeout(fidelity: Optional[str] = None) -> int:
+    """Resolve local subprocess timeout, honoring AVALOKA_LOCAL_EXEC_TIMEOUT env override."""
+    env_val = os.getenv("AVALOKA_LOCAL_EXEC_TIMEOUT")
+    if env_val:
+        try:
+            return int(env_val)
+        except ValueError:
+            pass
+    if fidelity == "entire_dataset":
+        return AVALOKA_FULL_DATA_EXEC_TIMEOUT
+    return AVALOKA_LOCAL_EXEC_TIMEOUT
 
 
 import os
@@ -75,6 +89,7 @@ try:
 except Exception:
     pass
 import pandas as pd
+import numpy as np
 import json as _avaloka_json
 
 def avaloka_result(value, kind=None, columns=None, **kw):
@@ -1177,6 +1192,7 @@ def _execution_agent_node_local(state: ETLState) -> ETLState:
         read_path_map=read_path_map,
         input_options=_local_input_options(state, resolved_input_location),
         read_sheet_map=_resolve_read_sheets(state),
+        analysis_fidelity=state.get("analysis_fidelity"),
     )
 
     new_state = state.copy()
@@ -3476,6 +3492,7 @@ def execute_code_on_local(
     read_path_map: Optional[dict] = None,
     input_options: Optional[dict] = None,
     read_sheet_map: Optional[dict] = None,
+    analysis_fidelity: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Run generated code locally on the analysis input.
 
@@ -3678,7 +3695,7 @@ def execute_code_on_local(
     # environment is the allowlist in app/executor/env.py, never this one.
     # A local child also gets a private HOME/TMPDIR (deleted afterwards), so
     # nothing it writes lands in this process's home; the executor has its own.
-    _timeout = int(os.getenv("AVALOKA_LOCAL_EXEC_TIMEOUT", "60"))
+    _timeout = _get_local_exec_timeout(analysis_fidelity)
     exec_home = tempfile.mkdtemp(prefix="avaloka_exec_home_")
     try:
         ran = run_script(
@@ -3776,12 +3793,13 @@ def execute_code_on_ssh(code: str, server: str, input_data_location: str, output
             logger.error("Stderr:\n%s", stderr)
             return out
 
+        timeout_s = _get_local_exec_timeout()
         result = subprocess.run(
             ["ssh", server, f"cd {output_location} && bash execute.sh {remote_script_name}"],
             capture_output=True,
             text=True,
             check=False,
-            timeout=int(os.getenv("AVALOKA_LOCAL_EXEC_TIMEOUT", "60")),
+            timeout=timeout_s,
         )
 
         stdout = result.stdout or ""
@@ -3810,7 +3828,7 @@ def execute_code_on_ssh(code: str, server: str, input_data_location: str, output
         out["execution_stdout"] = (e.stdout or "")
         out["execution_stderr"] = (e.stderr or "")
         out["status"] = "error"
-        out["execution_error"] = f"Script execution timed out after {int(os.getenv('AVALOKA_LOCAL_EXEC_TIMEOUT', '60'))} seconds"
+        out["execution_error"] = f"Script execution timed out after {timeout_s} seconds"
         logger.error(out["execution_error"])
 
     except FileNotFoundError:

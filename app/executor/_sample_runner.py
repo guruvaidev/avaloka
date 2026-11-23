@@ -21,6 +21,11 @@ import sys
 from contextlib import redirect_stderr, redirect_stdout
 
 
+def _noop_avaloka_result(value, kind=None, columns=None, **kw):
+    """The sample run's stand-in for the full run's avaloka_result(): records nothing."""
+    return None
+
+
 def _limit_memory(memory_mb):
     """Cap this process's address space before any generated code runs.
 
@@ -107,7 +112,15 @@ def run(work, memory_mb):
         with open(os.path.join(work, "code.py"), encoding="utf-8") as f:
             code = f.read()
 
-        exec_scope = {"pd": pd, "__name__": "avaloka_sample_execution"}
+        # The names the full-run script is given besides its own imports
+        # (app/agents/execution_agent.py's prelude): ``np``, and the
+        # ``avaloka_result()`` helper the coder is told is pre-injected. On the
+        # sample it records nothing; without it every scalar answer the coder
+        # wrote as instructed failed validation with NameError.
+        import numpy as np
+
+        exec_scope = {"pd": pd, "np": np, "avaloka_result": _noop_avaloka_result,
+                      "__name__": "avaloka_sample_execution"}
         exec(compile(code, "<string>", "exec"), exec_scope)
 
         main_func = exec_scope.get("main")

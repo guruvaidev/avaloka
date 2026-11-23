@@ -52,7 +52,7 @@ pydantic>=2.7
 starlette>=0.37
 langchain-core>=0.3.79,<0.4
 redis>=5.0.4
-cachetools>=5.0
+cachetools>=7.2.8
 
 google-cloud-container>=1.0.0
 google-cloud-storage>=3.4
@@ -144,8 +144,8 @@ pymysql>=1.1.0
 google-auth>=2.23.0
 
 
-celery==5.5.3
-celery-redbeat==2.3.3
+celery==5.6.3
+celery-redbeat==2.4.2
 azure-storage-blob
 supabase>=2.0.0
 
@@ -194,7 +194,7 @@ urllib3==2.8.0
 # to the resolver it still lands on 0.24.1 (seven high advisories, e.g.
 # GHSA-9277-mp7x-85jf); 1.2.9 is the smallest release that clears them all.
 dulwich==1.2.9
-charset-normalizer>=3.0.0   # MIT; replaces chardet (LGPL, ASF Category X)
+charset-normalizer>=3.5.2   # MIT; replaces chardet (LGPL, ASF Category X)
 psutil>=5.9.0              # for memory stats in test scripts
 s3fs==2026.6.0
 

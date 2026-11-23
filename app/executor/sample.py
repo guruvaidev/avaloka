@@ -157,7 +157,16 @@ try:
     else:
         # Written by the server: the trusted direction for a pickle.
         _sample = pd.read_pickle(__SAMPLE__)
-    _scope = {"pd": pd, "__name__": "avaloka_sample_execution"}
+    # The names the full-run script is given besides its own imports
+    # (app/agents/execution_agent.py's prelude): ``np``, and the
+    # ``avaloka_result()`` helper the coder is told is pre-injected. On the
+    # sample it records nothing; without it every scalar answer the coder
+    # wrote as instructed failed validation with NameError.
+    import numpy as _np
+    def _avaloka_result_noop(value, kind=None, columns=None, **kw):
+        return None
+    _scope = {"pd": pd, "np": _np, "avaloka_result": _avaloka_result_noop,
+              "__name__": "avaloka_sample_execution"}
     exec(compile(__CODE__, "<string>", "exec"), _scope)
     _main = _scope.get("main")
     if not callable(_main):
