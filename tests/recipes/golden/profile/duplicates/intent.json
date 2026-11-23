@@ -1,0 +1,7 @@
+{
+  "question": "Can this file be trusted?",
+  "recipe": "profile",
+  "params": {},
+  "confidence": 1.0,
+  "source": "fixture"
+}

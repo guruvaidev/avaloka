@@ -1,0 +1,458 @@
+{
+ "schema_version": "1.1",
+ "report_id": "rpt_98f8922391170f22",
+ "kind": "analysis",
+ "domain": "generic",
+ "template": "generic",
+ "audience": "analyst",
+ "created_at": "2026-11-10T19:43:42Z",
+ "analysis": {
+  "analysis_id": "recipe-trend",
+  "thread_id": "local",
+  "turn_id": "run",
+  "version": 1,
+  "parent_version": null,
+  "dataset_ids": []
+ },
+ "headline": {
+  "text": "Over {f1} periods the measure moved from {f2} to {f3}, a change of {f10}.",
+  "bullets": [
+   {
+    "so_what": "Period-to-period moves have a typical size of {f5}; the peak period reached {f7}, the lowest {f8}.",
+    "now_what": "Read the overall change against that typical move before calling it a trend."
+   },
+   {
+    "so_what": "{f6} periods in the sequence have no rows at all.",
+    "now_what": "Check whether the gaps are missing data or genuine pauses."
+   }
+  ]
+ },
+ "figures": [
+  {
+   "id": "f1",
+   "value": 22.0,
+   "unit": "count",
+   "decimals": 0,
+   "evidence_ref": "/periods/count"
+  },
+  {
+   "id": "f2",
+   "value": 6242.25,
+   "unit": "currency",
+   "decimals": 2,
+   "evidence_ref": "/periods/first"
+  },
+  {
+   "id": "f3",
+   "value": 5993.619999999999,
+   "unit": "currency",
+   "decimals": 2,
+   "evidence_ref": "/periods/last"
+  },
+  {
+   "id": "f4",
+   "value": -248.63000000000102,
+   "unit": "currency",
+   "decimals": 2,
+   "evidence_ref": "/periods/change"
+  },
+  {
+   "id": "f5",
+   "value": 1147.8397466087163,
+   "unit": "currency",
+   "decimals": 2,
+   "evidence_ref": "/periods/change_std"
+  },
+  {
+   "id": "f6",
+   "value": 2.0,
+   "unit": "count",
+   "decimals": 0,
+   "evidence_ref": "/periods/gaps"
+  },
+  {
+   "id": "f7",
+   "value": 6408.6900000000005,
+   "unit": "currency",
+   "decimals": 2,
+   "evidence_ref": "/periods/peak"
+  },
+  {
+   "id": "f8",
+   "value": 4062.54,
+   "unit": "currency",
+   "decimals": 2,
+   "evidence_ref": "/periods/low"
+  },
+  {
+   "id": "f9",
+   "value": 0.0,
+   "unit": "count",
+   "decimals": 0,
+   "evidence_ref": "/rows/duplicates"
+  },
+  {
+   "id": "f10",
+   "value": -3.983018943489944,
+   "unit": "percent",
+   "decimals": 1,
+   "evidence_ref": "/periods/change_share"
+  }
+ ],
+ "kpis": [
+  {
+   "id": "last",
+   "label": "Latest period",
+   "value": "f3",
+   "baseline": "f2",
+   "baseline_label": "first period",
+   "direction_good": "neutral",
+   "delta": "f10",
+   "delta_kind": "pct"
+  },
+  {
+   "id": "volatility",
+   "label": "Typical period move",
+   "value": "f5",
+   "direction_good": "down"
+  },
+  {
+   "id": "periods",
+   "label": "Periods",
+   "value": "f1",
+   "direction_good": "neutral"
+  }
+ ],
+ "charts": [
+  {
+   "id": "trend",
+   "title": "revenue by month",
+   "chart_kind": "line",
+   "question_type": "trend",
+   "option": {
+    "aria": {
+     "enabled": true,
+     "decal": {
+      "show": true
+     }
+    },
+    "color": [
+     "#0072B2",
+     "#D55E00",
+     "#009E73",
+     "#CC79A7",
+     "#E69F00",
+     "#56B4E9",
+     "#000000",
+     "#F0E442"
+    ],
+    "tooltip": {
+     "trigger": "axis",
+     "confine": true
+    },
+    "animation": true,
+    "xAxis": {
+     "type": "category",
+     "data": [
+      "2023-01",
+      "2023-02",
+      "2023-03",
+      "2023-04",
+      "2023-05",
+      "2023-07",
+      "2023-08",
+      "2023-09",
+      "2023-10",
+      "2023-11",
+      "2023-12",
+      "2024-01",
+      "2024-02",
+      "2024-04",
+      "2024-05",
+      "2024-06",
+      "2024-07",
+      "2024-08",
+      "2024-09",
+      "2024-10",
+      "2024-11",
+      "2024-12"
+     ],
+     "name": "date"
+    },
+    "yAxis": {
+     "type": "value",
+     "name": "revenue"
+    },
+    "legend": {
+     "show": false
+    },
+    "series": [
+     {
+      "type": "line",
+      "name": "revenue",
+      "data": [
+       6242.25,
+       4062.54,
+       6233.9,
+       5243.86,
+       6408.6900000000005,
+       4873.58,
+       5198.970000000001,
+       6090.49,
+       4665.719999999999,
+       4264.879999999999,
+       5559.150000000001,
+       5561.629999999999,
+       4515.15,
+       6304.0,
+       5531.51,
+       5443.77,
+       5115.1,
+       6070.58,
+       5405.639999999999,
+       5174.469999999999,
+       5002.629999999999,
+       5993.619999999999
+      ]
+     }
+    ]
+   },
+   "alt_text": "Line chart of sum of revenue per month over 22 periods; the first and last values are given in the headline.",
+   "data_table": {
+    "columns": [
+     "date",
+     "revenue"
+    ],
+    "rows": [
+     [
+      "2023-01",
+      6242.25
+     ],
+     [
+      "2023-02",
+      4062.54
+     ],
+     [
+      "2023-03",
+      6233.9
+     ],
+     [
+      "2023-04",
+      5243.86
+     ],
+     [
+      "2023-05",
+      6408.6900000000005
+     ],
+     [
+      "2023-07",
+      4873.58
+     ],
+     [
+      "2023-08",
+      5198.970000000001
+     ],
+     [
+      "2023-09",
+      6090.49
+     ],
+     [
+      "2023-10",
+      4665.719999999999
+     ],
+     [
+      "2023-11",
+      4264.879999999999
+     ],
+     [
+      "2023-12",
+      5559.150000000001
+     ],
+     [
+      "2024-01",
+      5561.629999999999
+     ],
+     [
+      "2024-02",
+      4515.15
+     ],
+     [
+      "2024-04",
+      6304.0
+     ],
+     [
+      "2024-05",
+      5531.51
+     ],
+     [
+      "2024-06",
+      5443.77
+     ],
+     [
+      "2024-07",
+      5115.1
+     ],
+     [
+      "2024-08",
+      6070.58
+     ],
+     [
+      "2024-09",
+      5405.639999999999
+     ],
+     [
+      "2024-10",
+      5174.469999999999
+     ],
+     [
+      "2024-11",
+      5002.629999999999
+     ],
+     [
+      "2024-12",
+      5993.619999999999
+     ]
+    ]
+   }
+  }
+ ],
+ "method": {
+  "summary": "Sum of revenue per month of date over distinct rows in DuckDB; period-over-period changes, their mean and standard deviation, and the gaps in the regular period sequence from pandas.",
+  "steps": [
+   "Recipe trend, version 1.0."
+  ],
+  "sample": {
+   "rows_analyzed": 669,
+   "total_rows": 669,
+   "is_sampled": false
+  }
+ },
+ "caveats": [
+  {
+   "kind": "data_quality",
+   "text": "The period sequence has gaps; changes across a gap span more than one period."
+  }
+ ],
+ "steps": [
+  {
+   "id": "trend",
+   "order": 1,
+   "title": "Trend of a measure over time",
+   "status": "done"
+  }
+ ],
+ "completion": {
+  "state": "partial",
+  "missing": [
+   "The period sequence has gaps; changes across a gap span more than one period."
+  ]
+ },
+ "data_checks": [
+  {
+   "gate": "date_parse",
+   "status": "passed"
+  },
+  {
+   "gate": "period_gaps",
+   "status": "qualified",
+   "caveat_kind": "data_quality",
+   "figure": "f6"
+  },
+  {
+   "gate": "duplicates",
+   "status": "passed"
+  }
+ ],
+ "evidence": {
+  "rows": {
+   "raw": {
+    "value": 669.0,
+    "unit": "count"
+   },
+   "distinct": {
+    "value": 669.0,
+    "unit": "count"
+   },
+   "duplicates": {
+    "value": 0.0,
+    "unit": "count"
+   }
+  },
+  "dates": {
+   "unparsed_share": {
+    "value": 0.0,
+    "unit": "fraction"
+   }
+  },
+  "periods": {
+   "count": {
+    "value": 22.0,
+    "unit": "count"
+   },
+   "gaps": {
+    "value": 2.0,
+    "unit": "count"
+   },
+   "first": {
+    "value": 6242.25,
+    "unit": "currency"
+   },
+   "last": {
+    "value": 5993.619999999999,
+    "unit": "currency"
+   },
+   "change": {
+    "value": -248.63000000000102,
+    "unit": "currency"
+   },
+   "change_mean": {
+    "value": -11.839523809523858,
+    "unit": "currency"
+   },
+   "change_std": {
+    "value": 1147.8397466087163,
+    "unit": "currency"
+   },
+   "peak": {
+    "value": 6408.6900000000005,
+    "unit": "currency"
+   },
+   "low": {
+    "value": 4062.54,
+    "unit": "currency"
+   },
+   "change_share": {
+    "value": -0.03983018943489944,
+    "unit": "fraction"
+   }
+  },
+  "measure": {
+   "total": {
+    "value": 118962.13,
+    "unit": "currency"
+   },
+   "total_raw": {
+    "value": 118962.13000000002,
+    "unit": "currency"
+   }
+  }
+ },
+ "provenance": {
+  "generator": "avaloka",
+  "generator_version": "2.0.0",
+  "llm_used": false,
+  "llm_model": null,
+  "verifier": {
+   "passed": true,
+   "rejections": []
+  },
+  "recipe": {
+   "id": "trend",
+   "version": "1.0"
+  },
+  "engine": {
+   "duckdb": "2.0.0",
+   "pandas": "2.3.3"
+  }
+ }
+}

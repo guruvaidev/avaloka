@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
+import { normalizeLogoUrl } from "@/lib/logo-url";
 
 export type UpdateOrganizationProfileInput = {
   orgId: string;
@@ -21,13 +22,11 @@ export const updateOrganizationProfile = createServerFn({ method: "POST" })
     if (!orgId) throw new Error("No organization associated with this account.");
 
     const source = input.payload ?? {};
-    const logoRaw = source.logo_url;
-    const logoNormalized =
-      logoRaw === undefined
-        ? undefined
-        : logoRaw === null
-        ? null
-        : String(logoRaw).trim().slice(0, 2048) || null;
+    // logo_url is fetched server-side by the send-report-email edge function to
+    // embed in the emailed PDF, so it is a fetch target and gets parsed as a
+    // URL here, not merely truncated to 2048 characters. The edge function
+    // checks it again at the point of fetch; see ui/src/lib/logo-url.ts.
+    const logoNormalized = normalizeLogoUrl(source.logo_url);
 
     const payload: UpdateOrganizationProfileInput["payload"] = {
       tagline: source.tagline ? String(source.tagline) : null,

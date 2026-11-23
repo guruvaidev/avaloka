@@ -1,0 +1,250 @@
+[
+ {
+  "question": "Are revenue and cost correlated?",
+  "columns": {
+   "order_date": "time",
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "units": "measure",
+   "customer_id": "id",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "correlate",
+   "params": {
+    "measures": [
+     "revenue",
+     "cost"
+    ]
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Is there a relationship between salary and age?",
+  "columns": {
+   "employee_id": "id",
+   "salary": "measure",
+   "age": "measure",
+   "department": "dimension",
+   "hire_date": "time",
+   "tenure_years": "measure"
+  },
+  "expected": {
+   "recipe": "correlate",
+   "params": {
+    "measures": [
+     "salary",
+     "age"
+    ]
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Do latency and errors move together?",
+  "columns": {
+   "ts": "time",
+   "latency_ms": "measure",
+   "errors": "measure",
+   "service": "dimension",
+   "host": "high_card_dimension"
+  },
+  "expected": {
+   "recipe": "correlate",
+   "params": {
+    "measures": [
+     "latency_ms",
+     "errors"
+    ]
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Which measures move together?",
+  "columns": {
+   "order_date": "time",
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "units": "measure",
+   "customer_id": "id",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "correlate",
+   "params": {},
+   "flags": []
+  }
+ },
+ {
+  "question": "Is mrr related to sessions?",
+  "columns": {
+   "signup_date": "time",
+   "user_id": "id",
+   "plan": "dimension",
+   "mrr": "measure",
+   "churned": "measure",
+   "sessions": "measure",
+   "country": "dimension"
+  },
+  "expected": {
+   "recipe": "correlate",
+   "params": {
+    "measures": [
+     "mrr",
+     "sessions"
+    ]
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "correlation between units and revenue",
+  "columns": {
+   "order_date": "time",
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "units": "measure",
+   "customer_id": "id",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "correlate",
+   "params": {
+    "measures": [
+     "revenue",
+     "units"
+    ]
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Does tenure go up with salary?",
+  "columns": {
+   "employee_id": "id",
+   "salary": "measure",
+   "age": "measure",
+   "department": "dimension",
+   "hire_date": "time",
+   "tenure_years": "measure"
+  },
+  "expected": {
+   "recipe": "correlate",
+   "params": {
+    "measures": [
+     "salary",
+     "tenure_years"
+    ]
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Are sessions and churn linked?",
+  "columns": {
+   "signup_date": "time",
+   "user_id": "id",
+   "plan": "dimension",
+   "mrr": "measure",
+   "churned": "measure",
+   "sessions": "measure",
+   "country": "dimension"
+  },
+  "expected": {
+   "recipe": "correlate",
+   "params": {
+    "measures": [
+     "churned",
+     "sessions"
+    ]
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "How are age, salary and tenure associated?",
+  "columns": {
+   "employee_id": "id",
+   "salary": "measure",
+   "age": "measure",
+   "department": "dimension",
+   "hire_date": "time",
+   "tenure_years": "measure"
+  },
+  "expected": {
+   "recipe": "correlate",
+   "params": {
+    "measures": [
+     "salary",
+     "age",
+     "tenure_years"
+    ]
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Do cost and revenue track each other?",
+  "columns": {
+   "order_date": "time",
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "units": "measure",
+   "customer_id": "id",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "correlate",
+   "params": {
+    "measures": [
+     "revenue",
+     "cost"
+    ]
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Is there any correlation in this data?",
+  "columns": {
+   "ts": "time",
+   "latency_ms": "measure",
+   "errors": "measure",
+   "service": "dimension",
+   "host": "high_card_dimension"
+  },
+  "expected": {
+   "recipe": "correlate",
+   "params": {},
+   "flags": []
+  }
+ },
+ {
+  "question": "Do revenue and cost rise and fall in step?",
+  "columns": {
+   "order_date": "time",
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "units": "measure",
+   "customer_id": "id",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "correlate",
+   "params": {
+    "measures": [
+     "revenue",
+     "cost"
+    ]
+   },
+   "flags": []
+  }
+ }
+]

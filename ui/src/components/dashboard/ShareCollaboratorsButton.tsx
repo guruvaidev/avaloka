@@ -65,6 +65,7 @@ export function ShareCollaboratorsButton({
           open={open}
           onClose={() => setOpen(false)}
           analysisId={analysisId}
+          projectId={projectId}
           onCollaborationChange={onCollaborationChange}
         />
       ) : (

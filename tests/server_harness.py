@@ -126,6 +126,10 @@ class FakeCache:
     async def srem(self, key: str, member: str) -> None:
         self._sets.get(key, set()).discard(member)
 
+    async def close(self) -> None:
+        # ICache.close; the app's lifespan calls it on shutdown.
+        return None
+
 
 SESSIONS: Dict[str, Dict[str, Any]] = {}
 THREAD_TO_SESSION: Dict[str, str] = {}
@@ -357,6 +361,20 @@ def client(tmp_path, monkeypatch) -> TestClient:
     monkeypatch.setattr(server, "hydrate_thread_history", hydrate_thread_history_fake, raising=False)
     monkeypatch.setattr(server, "persist_thread_history", persist_thread_history_fake, raising=False)
     monkeypatch.setattr(server, "delete_thread_history", delete_thread_history_fake, raising=False)
+
+    # GCS: register-existing-storage streams a head sample through gcsfs before
+    # its download fallback, and with no service-account JSON gcsfs uses ADC --
+    # an anonymous request to storage.googleapis.com from inside the hermetic
+    # gate (it answered 401 and the route fell back). The route imports gcsfs
+    # inside the function, so a stub module here makes that attempt fail
+    # locally and the fallback path is what the tests exercise, as before.
+    import sys
+    import types
+
+    def _no_real_gcs(*args, **kwargs):
+        raise RuntimeError("tests never open a real GCS filesystem")
+
+    monkeypatch.setitem(sys.modules, "gcsfs", types.SimpleNamespace(GCSFileSystem=_no_real_gcs))
 
     # Supabase-backed paths: never hit a real project from tests.
     monkeypatch.setattr(server, "persist_session_snapshot", persist_session_snapshot_fake, raising=False)

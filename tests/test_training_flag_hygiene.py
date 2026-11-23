@@ -35,7 +35,12 @@ def test_guard_exits_clear_stale_training_flag(prompt):
 
 
 def test_infra_keyword_turn_clears_flag_and_routes_to_provisioning():
-    result = _turn("deploy this on GCP")
+    # The deploy is confirmed first (app/agents/infra_confirmation.py); both
+    # turns clear the training flag, and the confirmed one provisions.
+    first = _turn("deploy this on GCP")
+    assert not first.get("enable_training")
+    assert wf.route_planner_output(first) != "provision_infra"
+    result = _turn("yes", pending_clarification=first["pending_clarification"])
     assert not result.get("enable_training")
     assert wf.route_planner_output(result) == "provision_infra"
 

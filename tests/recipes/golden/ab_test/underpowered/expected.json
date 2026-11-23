@@ -1,0 +1,96 @@
+{
+  "recipe": "ab_test",
+  "version_major": 1,
+  "verdict": "qualified",
+  "reason": null,
+  "figures": [
+    {
+      "id": "/arms/smallest_n",
+      "value": 60.0,
+      "decimals": 0,
+      "unit": "count"
+    },
+    {
+      "id": "/lead/treatment_mean",
+      "value": 13.3,
+      "decimals": 1,
+      "unit": "percent"
+    },
+    {
+      "id": "/lead/control_mean",
+      "value": 10.0,
+      "decimals": 1,
+      "unit": "percent"
+    },
+    {
+      "id": "/lead/difference",
+      "value": 3.3,
+      "decimals": 1,
+      "unit": "pp"
+    },
+    {
+      "id": "/lead/ci_low",
+      "value": -8.1,
+      "decimals": 1,
+      "unit": "pp"
+    },
+    {
+      "id": "/lead/ci_high",
+      "value": 14.8,
+      "decimals": 1,
+      "unit": "pp"
+    },
+    {
+      "id": "/lead/p",
+      "value": 0.57,
+      "decimals": 3,
+      "unit": "unitless"
+    },
+    {
+      "id": "/lead/power",
+      "value": 9.0,
+      "decimals": 0,
+      "unit": "percent"
+    },
+    {
+      "id": "/lead/mde",
+      "value": 19.8,
+      "decimals": 1,
+      "unit": "pp"
+    },
+    {
+      "id": "/lead/relative",
+      "value": 33.3,
+      "decimals": 1,
+      "unit": "percent"
+    },
+    {
+      "id": "/arms/srm_p",
+      "value": 1.0,
+      "decimals": 3,
+      "unit": "unitless"
+    },
+    {
+      "id": "/comparisons/count",
+      "value": 1.0,
+      "decimals": 0,
+      "unit": "count"
+    },
+    {
+      "id": "/rows/duplicates",
+      "value": 0.0,
+      "decimals": 0,
+      "unit": "count"
+    }
+  ],
+  "caveats": [
+    "small_n"
+  ],
+  "must_not_say": [
+    "causes",
+    "proves",
+    "guarantees",
+    "will"
+  ],
+  "note": "statsmodels proportions_ztest on 8/60 vs 6/60; the unpooled interval on the difference includes zero and NormalIndPower gives power far below 0.8, so small_n; headline must say not distinguishable."
+}

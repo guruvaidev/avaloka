@@ -1,0 +1,13 @@
+diff --git a/app/agents/visualization_agent.py b/app/agents/visualization_agent.py
+index 7195c6da..93fc136b 100644
+--- a/app/agents/visualization_agent.py
++++ b/app/agents/visualization_agent.py
+@@ -2150,7 +2150,7 @@ def _neutral_title(text: str, ctype: str, enc: Dict[str, Any]) -> str:
+         return f"Distribution of {xf}"
+     if ctype == "scatter" and xf and yf:
+         return f"{yf} vs {xf}"
+-    return f"{yf} by {xf}" if (xf and yf) else (f"Records by {xf}" if xf else "Chart")
++    return f"{yf} vs {xf}" if (xf and yf) else (f"Records by {xf}" if xf else "Chart")
+ 
+ 
+ def _ground_all(

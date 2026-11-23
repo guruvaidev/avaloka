@@ -16,6 +16,20 @@ import pytest
 from app.agents.avaloka_agent import capabilities as caps
 
 
+def _install_swarm(monkeypatch, module):
+    """Make *module* what ``from app.agents.avaloka_agent import swarm`` returns.
+
+    A ``sys.modules`` entry alone is not enough. Once the real swarm module has
+    been imported (develop-1.7 ships one, and any earlier test that imports the
+    agent loads it), the import statement finds the package attribute first and
+    never consults ``sys.modules``, so the stub is silently bypassed.
+    """
+    import app.agents.avaloka_agent as pkg
+    monkeypatch.setitem(sys.modules, "app.agents.avaloka_agent.swarm", module)
+    monkeypatch.setattr(pkg, "swarm", module, raising=False)
+    caps.reset_cache()
+
+
 @pytest.fixture(autouse=True)
 def _clear_cache():
     caps.reset_cache()
@@ -46,8 +60,7 @@ def with_swarm(monkeypatch):
     module = types.ModuleType("app.agents.avaloka_agent.swarm")
     module.plan_swarm = lambda intent: [{"agent": "sampler", "intent": intent}]
     module.announce = lambda intent: f"Coordinating specialists for: {intent}"
-    monkeypatch.setitem(sys.modules, "app.agents.avaloka_agent.swarm", module)
-    caps.reset_cache()
+    _install_swarm(monkeypatch, module)
     yield module
 
 
@@ -95,8 +108,7 @@ def test_installed_announce_is_used(with_swarm):
 def test_a_swarm_module_missing_functions_is_treated_as_absent(monkeypatch):
     partial = types.ModuleType("app.agents.avaloka_agent.swarm")
     partial.plan_swarm = lambda intent: []          # announce missing
-    monkeypatch.setitem(sys.modules, "app.agents.avaloka_agent.swarm", partial)
-    caps.reset_cache()
+    _install_swarm(monkeypatch, partial)
     assert caps.swarm_available() is False
 
 
@@ -107,8 +119,7 @@ def test_a_raising_swarm_degrades_instead_of_breaking_the_reply(monkeypatch):
         raise RuntimeError("swarm backend down")
     broken.plan_swarm = boom
     broken.announce = boom
-    monkeypatch.setitem(sys.modules, "app.agents.avaloka_agent.swarm", broken)
-    caps.reset_cache()
+    _install_swarm(monkeypatch, broken)
 
     assert caps.plan_swarm("x") == []
     assert caps.announce("x") == ""
@@ -118,8 +129,7 @@ def test_a_swarm_returning_none_is_normalised(monkeypatch):
     odd = types.ModuleType("app.agents.avaloka_agent.swarm")
     odd.plan_swarm = lambda intent: None
     odd.announce = lambda intent: None
-    monkeypatch.setitem(sys.modules, "app.agents.avaloka_agent.swarm", odd)
-    caps.reset_cache()
+    _install_swarm(monkeypatch, odd)
 
     assert caps.plan_swarm("x") == []
     assert caps.announce("x") == ""

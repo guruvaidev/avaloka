@@ -1,6 +1,8 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { InlineMarkdown } from "@/components/analysis/ChartCarousel";
+import { CollectedInsight } from "@/components/chat/InsightLine";
 
 export const KEY_FINDINGS_OPEN_KEY = "avaloka.keyFindingsOpen";
 
@@ -34,7 +36,7 @@ export function KeyFindingsCard({ findings, children }: { findings?: string[]; c
   };
   if (!children && !findings?.length) return null;
   return (
-    <section aria-label="Key findings" className="mt-4 rounded-[12px] border border-border bg-card text-foreground">
+    <section aria-label="Key findings" className="mt-4 rounded-[12px] border border-border bg-card text-foreground dark:border-white/10 dark:bg-[#131316]">
       <button
         type="button"
         onClick={toggle}
@@ -49,7 +51,7 @@ export function KeyFindingsCard({ findings, children }: { findings?: string[]; c
           {children ?? (
             <ul className="list-disc space-y-1.5 pl-5">
               {findings!.map((text) => (
-                <li key={text}>{text}</li>
+                <li key={text}><CollectedInsight text={text} renderText={(t) => <InlineMarkdown content={t} />} /></li>
               ))}
             </ul>
           )}

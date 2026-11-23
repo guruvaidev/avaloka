@@ -1,0 +1,2608 @@
+{
+ "_generated_by": "scripts/gen_agent_trace_fixture.py",
+ "trace": {
+  "schema_version": "1.0",
+  "thread_id": "thread-fixture",
+  "turns": [
+   {
+    "turn_id": "e0e234e047d6420d",
+    "question": "What is the average monthly_charges by region?",
+    "started_at": "2026-10-28T03:03:19.925+00:00",
+    "ended_at": "2026-10-28T03:03:19.934+00:00",
+    "latency_ms": 6,
+    "data_scope": {
+     "mode": "entire_dataset",
+     "rows_analyzed": 400,
+     "total_rows": 400,
+     "is_sampled": false
+    },
+    "steps": [
+     {
+      "kind": "agent",
+      "step_id": "bbc0f6159a554739",
+      "parent_id": null,
+      "turn_id": "e0e234e047d6420d",
+      "seq": 1,
+      "node": "memory_injection",
+      "started_at": "2026-10-28T03:03:19.925+00:00",
+      "ended_at": "2026-10-28T03:03:19.925+00:00",
+      "latency_ms": 0,
+      "status": "ok",
+      "error_class": null,
+      "inference": [],
+      "written": [
+       "memory_hints"
+      ],
+      "agent": "Memory",
+      "role": "Recalls what this thread already established",
+      "clone": null,
+      "inputs": {
+       "question": "What is the average monthly_charges by region?",
+       "data_scope": {
+        "dataset": "churn.csv",
+        "fidelity": "entire_dataset",
+        "sample": "random_baseline",
+        "columns": [
+         "customer_id",
+         "tenure_months",
+         "monthly_charges",
+         "region",
+         "churned"
+        ]
+       }
+      },
+      "decision": null,
+      "calculation": {
+       "operation": "recall thread memory",
+       "values": {
+        "hints": 1
+       }
+      },
+      "gates": []
+     },
+     {
+      "kind": "agent",
+      "step_id": "b6b7f34fb2964524",
+      "parent_id": null,
+      "turn_id": "e0e234e047d6420d",
+      "seq": 2,
+      "node": "avaloka_agent",
+      "started_at": "2026-10-28T03:03:19.925+00:00",
+      "ended_at": "2026-10-28T03:03:19.927+00:00",
+      "latency_ms": 2,
+      "status": "ok",
+      "error_class": null,
+      "inference": [
+       {
+        "agent": "conversational",
+        "provider": "openrouter",
+        "model": "openai/gpt-oss-120b",
+        "latency_ms": 0,
+        "at": "2026-10-28T03:03:19.926+00:00",
+        "tokens_in": 1840,
+        "tokens_out": 212,
+        "cost_usd": null,
+        "tool_calls": 0,
+        "outcome": "success",
+        "cost_source": null
+       }
+      ],
+      "written": [
+       "avaloka_intent",
+       "avaloka_intent_confidence",
+       "avaloka_intent_reasoning",
+       "avaloka_swarm",
+       "delegate_to_planner"
+      ],
+      "agent": "Avaloka",
+      "role": "Lead: reads the intent and decides who takes it",
+      "clone": null,
+      "inputs": {
+       "question": "What is the average monthly_charges by region?",
+       "data_scope": {
+        "dataset": "churn.csv",
+        "fidelity": "entire_dataset",
+        "sample": "random_baseline",
+        "columns": [
+         "customer_id",
+         "tenure_months",
+         "monthly_charges",
+         "region",
+         "churned"
+        ]
+       }
+      },
+      "decision": {
+       "type": "intent",
+       "value": "statistical_analysis",
+       "reason": "asks for an average by group",
+       "confidence": 0.9,
+       "delegate": true,
+       "mode": null,
+       "reason_segments": [
+        {
+         "text": "asks for an average by group",
+         "kind": "commentary"
+        }
+       ]
+      },
+      "calculation": null,
+      "gates": []
+     },
+     {
+      "kind": "decision",
+      "step_id": "8eff718fdb1c4adb",
+      "parent_id": null,
+      "turn_id": "e0e234e047d6420d",
+      "seq": 3,
+      "node": "route_avaloka",
+      "after": "avaloka_agent",
+      "at": "2026-10-28T03:03:19.927+00:00",
+      "decision": {
+       "type": "route",
+       "router": "route_avaloka",
+       "chosen": "delegate_to_planner",
+       "reason": "The 'statistical_analysis' intent needs the data, so Avaloka hands it to the planner.",
+       "signals": {
+        "avaloka_intent": "statistical_analysis",
+        "delegate_to_planner": true
+       }
+      }
+     },
+     {
+      "kind": "agent",
+      "step_id": "8b3ebf7e8fb34e4d",
+      "parent_id": null,
+      "turn_id": "e0e234e047d6420d",
+      "seq": 4,
+      "node": "code_etl",
+      "started_at": "2026-10-28T03:03:19.928+00:00",
+      "ended_at": "2026-10-28T03:03:19.932+00:00",
+      "latency_ms": 4,
+      "status": "ok",
+      "error_class": null,
+      "inference": [],
+      "written": [
+       "generated_code"
+      ],
+      "agent": "Coding team",
+      "role": "Writes the code, validates it and dry-runs it",
+      "clone": "coder",
+      "inputs": {
+       "question": "What is the average monthly_charges by region?",
+       "data_scope": {
+        "dataset": "churn.csv",
+        "fidelity": "entire_dataset",
+        "sample": "random_baseline",
+        "columns": [
+         "customer_id",
+         "tenure_months",
+         "monthly_charges",
+         "region",
+         "churned"
+        ]
+       }
+      },
+      "decision": {
+       "type": "verdict",
+       "value": "pass",
+       "reason": null
+      },
+      "calculation": {
+       "operation": "generate code",
+       "code": "import pandas as pd\ndf = pd.read_csv('churn.csv')\ndf = df[df['monthly_charges'] > 0]\ndf['annual'] = df['monthly_charges'] * 12\nresult = df.groupby('region')['monthly_charges'].mean().reset_index()\nresult.to_csv('out.csv', index=False)\n",
+       "operations": [
+        {
+         "op": "load",
+         "line": 2,
+         "formula": "pd.read_csv('churn.csv')",
+         "columns": [],
+         "source": [
+          "churn.csv"
+         ]
+        },
+        {
+         "op": "filter",
+         "line": 3,
+         "formula": "df[df['monthly_charges'] > 0]",
+         "columns": [
+          "monthly_charges"
+         ]
+        },
+        {
+         "op": "derive",
+         "line": 4,
+         "column": "annual",
+         "formula": "df['annual'] = df['monthly_charges'] * 12",
+         "columns": [
+          "annual",
+          "monthly_charges"
+         ]
+        },
+        {
+         "op": "group_aggregate",
+         "line": 5,
+         "formula": "df.groupby('region')['monthly_charges'].mean().reset_index()",
+         "columns": [
+          "region",
+          "monthly_charges"
+         ],
+         "group_by": [
+          "region"
+         ],
+         "aggregations": [
+          "mean"
+         ]
+        },
+        {
+         "op": "write",
+         "line": 6,
+         "formula": "result.to_csv('out.csv', index=False)",
+         "columns": [],
+         "target": "out.csv"
+        }
+       ],
+       "pseudocode": null
+      },
+      "gates": []
+     },
+     {
+      "kind": "agent",
+      "step_id": "a249f969c1b44c19",
+      "parent_id": "8b3ebf7e8fb34e4d",
+      "turn_id": "e0e234e047d6420d",
+      "seq": 5,
+      "node": "coder",
+      "started_at": "2026-10-28T03:03:19.929+00:00",
+      "ended_at": "2026-10-28T03:03:19.929+00:00",
+      "latency_ms": 0,
+      "status": "ok",
+      "error_class": null,
+      "inference": [],
+      "written": [
+       "generated_code"
+      ],
+      "agent": "Coder",
+      "role": "Writes the analysis code",
+      "clone": "coder",
+      "inputs": {
+       "question": "avg",
+       "data_scope": {}
+      },
+      "decision": null,
+      "calculation": {
+       "operation": "generate code",
+       "code": "import pandas as pd\ndf = pd.read_csv('churn.csv')\ndf['annual_guess'] = df['monthly_charges'] * 10\nresult = df.groupby('region')['monthly_charges'].median()\n",
+       "operations": [
+        {
+         "op": "load",
+         "line": 2,
+         "formula": "pd.read_csv('churn.csv')",
+         "columns": [],
+         "source": [
+          "churn.csv"
+         ]
+        },
+        {
+         "op": "derive",
+         "line": 3,
+         "column": "annual_guess",
+         "formula": "df['annual_guess'] = df['monthly_charges'] * 10",
+         "columns": [
+          "annual_guess",
+          "monthly_charges"
+         ]
+        },
+        {
+         "op": "group_aggregate",
+         "line": 4,
+         "formula": "df.groupby('region')['monthly_charges'].median()",
+         "columns": [
+          "region",
+          "monthly_charges"
+         ],
+         "group_by": [
+          "region"
+         ],
+         "aggregations": [
+          "median"
+         ]
+        }
+       ],
+       "pseudocode": null,
+       "attempt": 1
+      },
+      "gates": []
+     },
+     {
+      "kind": "agent",
+      "step_id": "38dc0f73ad144af3",
+      "parent_id": "8b3ebf7e8fb34e4d",
+      "turn_id": "e0e234e047d6420d",
+      "seq": 6,
+      "node": "validator_static",
+      "started_at": "2026-10-28T03:03:19.930+00:00",
+      "ended_at": "2026-10-28T03:03:19.930+00:00",
+      "latency_ms": 0,
+      "status": "ok",
+      "error_class": null,
+      "inference": [],
+      "written": [
+       "code_validation_feedback",
+       "static_semantic_error"
+      ],
+      "agent": "Static check",
+      "role": "AST checks for code that runs but answers wrongly",
+      "clone": "skeptic",
+      "inputs": {
+       "question": "avg",
+       "data_scope": {}
+      },
+      "decision": {
+       "type": "check",
+       "check": "Static semantics",
+       "value": "fail",
+       "reason": "groupby result is not reset"
+      },
+      "calculation": null,
+      "gates": []
+     },
+     {
+      "kind": "decision",
+      "step_id": "dac22279ca114c4c",
+      "parent_id": "8b3ebf7e8fb34e4d",
+      "turn_id": "e0e234e047d6420d",
+      "seq": 7,
+      "node": "check_validation_status",
+      "after": "validator_static",
+      "at": "2026-10-28T03:03:19.930+00:00",
+      "decision": {
+       "type": "route",
+       "router": "check_validation_status",
+       "chosen": "refine",
+       "reason": "Static semantics failed, so the code goes back to the coder.",
+       "signals": {
+        "static_semantic_error": true,
+        "retry_count": 0
+       }
+      }
+     },
+     {
+      "kind": "agent",
+      "step_id": "d7fedbda76db478c",
+      "parent_id": "8b3ebf7e8fb34e4d",
+      "turn_id": "e0e234e047d6420d",
+      "seq": 8,
+      "node": "coder",
+      "started_at": "2026-10-28T03:03:19.930+00:00",
+      "ended_at": "2026-10-28T03:03:19.930+00:00",
+      "latency_ms": 0,
+      "status": "ok",
+      "error_class": null,
+      "inference": [],
+      "written": [
+       "generated_code",
+       "retry_count"
+      ],
+      "agent": "Coder",
+      "role": "Writes the analysis code",
+      "clone": "coder",
+      "inputs": {
+       "question": "avg",
+       "data_scope": {}
+      },
+      "decision": null,
+      "calculation": {
+       "operation": "generate code",
+       "code": "import pandas as pd\ndf = pd.read_csv('churn.csv')\ndf = df[df['monthly_charges'] > 0]\ndf['annual'] = df['monthly_charges'] * 12\nresult = df.groupby('region')['monthly_charges'].mean().reset_index()\nresult.to_csv('out.csv', index=False)\n",
+       "operations": [
+        {
+         "op": "load",
+         "line": 2,
+         "formula": "pd.read_csv('churn.csv')",
+         "columns": [],
+         "source": [
+          "churn.csv"
+         ]
+        },
+        {
+         "op": "filter",
+         "line": 3,
+         "formula": "df[df['monthly_charges'] > 0]",
+         "columns": [
+          "monthly_charges"
+         ]
+        },
+        {
+         "op": "derive",
+         "line": 4,
+         "column": "annual",
+         "formula": "df['annual'] = df['monthly_charges'] * 12",
+         "columns": [
+          "annual",
+          "monthly_charges"
+         ]
+        },
+        {
+         "op": "group_aggregate",
+         "line": 5,
+         "formula": "df.groupby('region')['monthly_charges'].mean().reset_index()",
+         "columns": [
+          "region",
+          "monthly_charges"
+         ],
+         "group_by": [
+          "region"
+         ],
+         "aggregations": [
+          "mean"
+         ]
+        },
+        {
+         "op": "write",
+         "line": 6,
+         "formula": "result.to_csv('out.csv', index=False)",
+         "columns": [],
+         "target": "out.csv"
+        }
+       ],
+       "pseudocode": null,
+       "attempt": 2
+      },
+      "gates": []
+     },
+     {
+      "kind": "agent",
+      "step_id": "d39eab4e465b4665",
+      "parent_id": "8b3ebf7e8fb34e4d",
+      "turn_id": "e0e234e047d6420d",
+      "seq": 9,
+      "node": "validator_static",
+      "started_at": "2026-10-28T03:03:19.931+00:00",
+      "ended_at": "2026-10-28T03:03:19.931+00:00",
+      "latency_ms": 0,
+      "status": "ok",
+      "error_class": null,
+      "inference": [],
+      "written": [
+       "code_validation_feedback",
+       "static_semantic_error"
+      ],
+      "agent": "Static check",
+      "role": "AST checks for code that runs but answers wrongly",
+      "clone": "skeptic",
+      "inputs": {
+       "question": "avg",
+       "data_scope": {}
+      },
+      "decision": {
+       "type": "check",
+       "check": "Static semantics",
+       "value": "pass",
+       "reason": null
+      },
+      "calculation": null,
+      "gates": []
+     },
+     {
+      "kind": "decision",
+      "step_id": "a61cd3843b484d55",
+      "parent_id": "8b3ebf7e8fb34e4d",
+      "turn_id": "e0e234e047d6420d",
+      "seq": 10,
+      "node": "check_validation_status",
+      "after": "validator_static",
+      "at": "2026-10-28T03:03:19.931+00:00",
+      "decision": {
+       "type": "route",
+       "router": "check_validation_status",
+       "chosen": "end",
+       "reason": "All validators passed.",
+       "signals": {
+        "static_semantic_error": false,
+        "retry_count": 1
+       }
+      }
+     },
+     {
+      "kind": "agent",
+      "step_id": "eecd7c8aa06c491d",
+      "parent_id": null,
+      "turn_id": "e0e234e047d6420d",
+      "seq": 11,
+      "node": "execute_locally",
+      "started_at": "2026-10-28T03:03:19.933+00:00",
+      "ended_at": "2026-10-28T03:03:19.933+00:00",
+      "latency_ms": 0,
+      "status": "ok",
+      "error_class": null,
+      "inference": [],
+      "written": [
+       "execution_result",
+       "output_json"
+      ],
+      "agent": "Executor (local)",
+      "role": "Runs the validated code locally",
+      "clone": "runner",
+      "inputs": {
+       "question": "What is the average monthly_charges by region?",
+       "data_scope": {
+        "dataset": "churn.csv",
+        "fidelity": "entire_dataset",
+        "sample": "random_baseline",
+        "columns": [
+         "customer_id",
+         "tenure_months",
+         "monthly_charges",
+         "region",
+         "churned"
+        ]
+       }
+      },
+      "decision": {
+       "type": "verdict",
+       "value": "success",
+       "reason": "done"
+      },
+      "calculation": {
+       "operation": "run locally",
+       "data_scope": {
+        "dataset": "churn.csv",
+        "fidelity": "entire_dataset",
+        "sample": "random_baseline",
+        "columns": [
+         "customer_id",
+         "tenure_months",
+         "monthly_charges",
+         "region",
+         "churned"
+        ]
+       },
+       "values": {
+        "output_rows": 2
+       },
+       "result": {
+        "columns": [
+         "region",
+         "monthly_charges"
+        ],
+        "rows": [
+         [
+          "East",
+          61.5
+         ],
+         [
+          "West",
+          72.25
+         ]
+        ],
+        "total_rows": 2,
+        "truncated": false
+       },
+       "code": "import pandas as pd\ndf = pd.read_csv('churn.csv')\ndf = df[df['monthly_charges'] > 0]\ndf['annual'] = df['monthly_charges'] * 12\nresult = df.groupby('region')['monthly_charges'].mean().reset_index()\nresult.to_csv('out.csv', index=False)\n",
+       "operations": [
+        {
+         "op": "load",
+         "line": 2,
+         "formula": "pd.read_csv('churn.csv')",
+         "columns": [],
+         "source": [
+          "churn.csv"
+         ]
+        },
+        {
+         "op": "filter",
+         "line": 3,
+         "formula": "df[df['monthly_charges'] > 0]",
+         "columns": [
+          "monthly_charges"
+         ]
+        },
+        {
+         "op": "derive",
+         "line": 4,
+         "column": "annual",
+         "formula": "df['annual'] = df['monthly_charges'] * 12",
+         "columns": [
+          "annual",
+          "monthly_charges"
+         ]
+        },
+        {
+         "op": "group_aggregate",
+         "line": 5,
+         "formula": "df.groupby('region')['monthly_charges'].mean().reset_index()",
+         "columns": [
+          "region",
+          "monthly_charges"
+         ],
+         "group_by": [
+          "region"
+         ],
+         "aggregations": [
+          "mean"
+         ]
+        },
+        {
+         "op": "write",
+         "line": 6,
+         "formula": "result.to_csv('out.csv', index=False)",
+         "columns": [],
+         "target": "out.csv"
+        }
+       ]
+      },
+      "gates": []
+     },
+     {
+      "kind": "agent",
+      "step_id": "2f69e5c70c23488c",
+      "parent_id": null,
+      "turn_id": "e0e234e047d6420d",
+      "seq": 12,
+      "node": "verify_claims",
+      "started_at": "2026-10-28T03:03:19.934+00:00",
+      "ended_at": "2026-10-28T03:03:19.934+00:00",
+      "latency_ms": 0,
+      "status": "ok",
+      "error_class": null,
+      "inference": [],
+      "written": [
+       "verification_report"
+      ],
+      "agent": "Claim verifier",
+      "role": "Checks every number in the answer against the evidence",
+      "clone": "skeptic",
+      "inputs": {
+       "question": "What is the average monthly_charges by region?",
+       "data_scope": {
+        "dataset": "churn.csv",
+        "fidelity": "entire_dataset",
+        "sample": "random_baseline",
+        "columns": [
+         "customer_id",
+         "tenure_months",
+         "monthly_charges",
+         "region",
+         "churned"
+        ]
+       }
+      },
+      "decision": {
+       "type": "evidence",
+       "value": "safe",
+       "reason": "Checked 2 claim(s) against the numbers"
+      },
+      "calculation": {
+       "operation": "verify claims against the evidence",
+       "values": {
+        "claims_checked": 2,
+        "problems": 0
+       },
+       "findings": [
+        {
+         "claim": "East averages 61.5",
+         "verdict": "supported",
+         "check": "number",
+         "detail": "",
+         "evidence_ref": null
+        }
+       ]
+      },
+      "gates": []
+     }
+    ],
+    "handoffs": [
+     {
+      "from": "memory_injection",
+      "from_step": "bbc0f6159a554739",
+      "to": "avaloka_agent",
+      "to_step": "b6b7f34fb2964524",
+      "parent_id": null,
+      "passed": [
+       "memory_hints"
+      ],
+      "route": null,
+      "reason": null
+     },
+     {
+      "from": "avaloka_agent",
+      "from_step": "b6b7f34fb2964524",
+      "to": "code_etl",
+      "to_step": "8b3ebf7e8fb34e4d",
+      "parent_id": null,
+      "passed": [
+       "avaloka_intent",
+       "avaloka_intent_confidence",
+       "avaloka_intent_reasoning",
+       "avaloka_swarm",
+       "delegate_to_planner"
+      ],
+      "route": "delegate_to_planner",
+      "reason": "The 'statistical_analysis' intent needs the data, so Avaloka hands it to the planner."
+     },
+     {
+      "from": "code_etl",
+      "from_step": "8b3ebf7e8fb34e4d",
+      "to": "execute_locally",
+      "to_step": "eecd7c8aa06c491d",
+      "parent_id": null,
+      "passed": [
+       "generated_code"
+      ],
+      "route": null,
+      "reason": null
+     },
+     {
+      "from": "execute_locally",
+      "from_step": "eecd7c8aa06c491d",
+      "to": "verify_claims",
+      "to_step": "2f69e5c70c23488c",
+      "parent_id": null,
+      "passed": [
+       "execution_result",
+       "output_json"
+      ],
+      "route": null,
+      "reason": null
+     },
+     {
+      "from": "coder",
+      "from_step": "a249f969c1b44c19",
+      "to": "validator_static",
+      "to_step": "38dc0f73ad144af3",
+      "parent_id": "8b3ebf7e8fb34e4d",
+      "passed": [
+       "generated_code"
+      ],
+      "route": null,
+      "reason": null
+     },
+     {
+      "from": "validator_static",
+      "from_step": "38dc0f73ad144af3",
+      "to": "coder",
+      "to_step": "d7fedbda76db478c",
+      "parent_id": "8b3ebf7e8fb34e4d",
+      "passed": [
+       "code_validation_feedback",
+       "static_semantic_error"
+      ],
+      "route": "refine",
+      "reason": "Static semantics failed, so the code goes back to the coder."
+     },
+     {
+      "from": "coder",
+      "from_step": "d7fedbda76db478c",
+      "to": "validator_static",
+      "to_step": "d39eab4e465b4665",
+      "parent_id": "8b3ebf7e8fb34e4d",
+      "passed": [
+       "generated_code",
+       "retry_count"
+      ],
+      "route": null,
+      "reason": null
+     }
+    ],
+    "swarm": {
+     "clones": [
+      {
+       "kind": "swarm_clone",
+       "clone": "coder",
+       "name": "Ava-Coder",
+       "role": "Analytics engineer",
+       "focus": "writes the code",
+       "status": "done",
+       "agent_steps": [
+        "8b3ebf7e8fb34e4d",
+        "a249f969c1b44c19",
+        "d7fedbda76db478c"
+       ],
+       "latency_ms": 4
+      },
+      {
+       "kind": "swarm_clone",
+       "clone": "scientist",
+       "name": "Ava-Scientist",
+       "role": "ML",
+       "focus": "",
+       "status": "not_run",
+       "agent_steps": [],
+       "latency_ms": null
+      }
+     ],
+     "message": "Cloning myself into 2 focused copies."
+    },
+    "totals": {
+     "agent_steps": 9,
+     "decisions": 3,
+     "errors": 0,
+     "llm_calls": 1,
+     "llm_failures": 0,
+     "tokens_in": 1840,
+     "tokens_out": 212,
+     "llm_latency_ms": 0,
+     "cost_usd": null,
+     "unpriced_calls": 1
+    }
+   }
+  ],
+  "agents": [
+   {
+    "node": "memory_injection",
+    "agent": "Memory",
+    "role": "Recalls what this thread already established",
+    "activations": 1,
+    "succeeded": 1,
+    "failed": 0,
+    "retries": 0,
+    "llm_calls": 0,
+    "llm_failures": 0,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "cost_usd": null,
+    "unpriced_calls": 0,
+    "models": [],
+    "latency_ms": {
+     "total": 0,
+     "p50": 0,
+     "max": 0
+    }
+   },
+   {
+    "node": "avaloka_agent",
+    "agent": "Avaloka",
+    "role": "Lead: reads the intent and decides who takes it",
+    "activations": 1,
+    "succeeded": 1,
+    "failed": 0,
+    "retries": 0,
+    "llm_calls": 1,
+    "llm_failures": 0,
+    "tokens_in": 1840,
+    "tokens_out": 212,
+    "cost_usd": null,
+    "unpriced_calls": 1,
+    "models": [
+     "openrouter/openai/gpt-oss-120b"
+    ],
+    "latency_ms": {
+     "total": 2,
+     "p50": 2,
+     "max": 2
+    }
+   },
+   {
+    "node": "code_etl",
+    "agent": "Coding team",
+    "role": "Writes the code, validates it and dry-runs it",
+    "activations": 1,
+    "succeeded": 1,
+    "failed": 0,
+    "retries": 0,
+    "llm_calls": 0,
+    "llm_failures": 0,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "cost_usd": null,
+    "unpriced_calls": 0,
+    "models": [],
+    "latency_ms": {
+     "total": 4,
+     "p50": 4,
+     "max": 4
+    }
+   },
+   {
+    "node": "coder",
+    "agent": "Coder",
+    "role": "Writes the analysis code",
+    "activations": 2,
+    "succeeded": 2,
+    "failed": 0,
+    "retries": 1,
+    "llm_calls": 0,
+    "llm_failures": 0,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "cost_usd": null,
+    "unpriced_calls": 0,
+    "models": [],
+    "latency_ms": {
+     "total": 0,
+     "p50": 0,
+     "max": 0
+    }
+   },
+   {
+    "node": "validator_static",
+    "agent": "Static check",
+    "role": "AST checks for code that runs but answers wrongly",
+    "activations": 2,
+    "succeeded": 2,
+    "failed": 0,
+    "retries": 0,
+    "llm_calls": 0,
+    "llm_failures": 0,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "cost_usd": null,
+    "unpriced_calls": 0,
+    "models": [],
+    "latency_ms": {
+     "total": 0,
+     "p50": 0,
+     "max": 0
+    }
+   },
+   {
+    "node": "execute_locally",
+    "agent": "Executor (local)",
+    "role": "Runs the validated code locally",
+    "activations": 1,
+    "succeeded": 1,
+    "failed": 0,
+    "retries": 0,
+    "llm_calls": 0,
+    "llm_failures": 0,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "cost_usd": null,
+    "unpriced_calls": 0,
+    "models": [],
+    "latency_ms": {
+     "total": 0,
+     "p50": 0,
+     "max": 0
+    }
+   },
+   {
+    "node": "verify_claims",
+    "agent": "Claim verifier",
+    "role": "Checks every number in the answer against the evidence",
+    "activations": 1,
+    "succeeded": 1,
+    "failed": 0,
+    "retries": 0,
+    "llm_calls": 0,
+    "llm_failures": 0,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "cost_usd": null,
+    "unpriced_calls": 0,
+    "models": [],
+    "latency_ms": {
+     "total": 0,
+     "p50": 0,
+     "max": 0
+    }
+   }
+  ],
+  "totals": {
+   "llm_calls": 1,
+   "llm_failures": 0,
+   "tokens_in": 1840,
+   "tokens_out": 212,
+   "llm_latency_ms": 0,
+   "cost_usd": null,
+   "unpriced_calls": 1
+  },
+  "swarm_limits": {
+   "edition": "oss",
+   "max_clones_per_mission": 2,
+   "max_parallel_clones": 2,
+   "execution": "local",
+   "cluster_fan_out": false,
+   "preview": true,
+   "label": "the free open-source edition",
+   "summary": "Swarm on the free open-source edition: up to 2 clones per mission, run locally."
+  }
+ },
+ "graph": {
+  "schema_version": "1.0",
+  "turn_id": "e0e234e047d6420d",
+  "node_types": [
+   "question",
+   "agent",
+   "decision",
+   "gate",
+   "data",
+   "operation",
+   "check",
+   "result",
+   "evidence",
+   "train",
+   "evaluate"
+  ],
+  "edge_types": [
+   "flow",
+   "route",
+   "handoff",
+   "data",
+   "check",
+   "retry",
+   "evidence",
+   "gate"
+  ],
+  "nodes": [
+   {
+    "id": "q",
+    "type": "question",
+    "label": "What is the average monthly_charges by region?",
+    "lane": "agents",
+    "layer": 0,
+    "order": 0
+   },
+   {
+    "id": "bbc0f6159a554739",
+    "type": "agent",
+    "label": "Memory",
+    "lane": "agents",
+    "step_id": "bbc0f6159a554739",
+    "node": "memory_injection",
+    "status": "ok",
+    "subtitle": "recall thread memory",
+    "metrics": {
+     "latency_ms": 0
+    },
+    "layer": 1,
+    "order": 0
+   },
+   {
+    "id": "b6b7f34fb2964524",
+    "type": "agent",
+    "label": "Avaloka",
+    "lane": "agents",
+    "step_id": "b6b7f34fb2964524",
+    "node": "avaloka_agent",
+    "status": "ok",
+    "subtitle": "intent: statistical_analysis",
+    "metrics": {
+     "latency_ms": 2,
+     "llm_calls": 1,
+     "tokens": 2052,
+     "cost_usd": null,
+     "model": "openai/gpt-oss-120b"
+    },
+    "layer": 2,
+    "order": 0
+   },
+   {
+    "id": "8eff718fdb1c4adb",
+    "type": "decision",
+    "label": "route avaloka",
+    "lane": "agents",
+    "step_id": "8eff718fdb1c4adb",
+    "value": "delegate_to_planner",
+    "reason": "The 'statistical_analysis' intent needs the data, so Avaloka hands it to the planner.",
+    "signals": {
+     "avaloka_intent": "statistical_analysis",
+     "delegate_to_planner": true
+    },
+    "layer": 3,
+    "order": 0
+   },
+   {
+    "id": "8b3ebf7e8fb34e4d",
+    "type": "agent",
+    "label": "Coding team",
+    "lane": "agents",
+    "step_id": "8b3ebf7e8fb34e4d",
+    "node": "code_etl",
+    "status": "ok",
+    "subtitle": "pass",
+    "metrics": {
+     "latency_ms": 4
+    },
+    "clone": "coder",
+    "layer": 4,
+    "order": 0
+   },
+   {
+    "id": "a249f969c1b44c19",
+    "type": "agent",
+    "label": "Coder \u00b7 attempt 1",
+    "lane": "code",
+    "step_id": "a249f969c1b44c19",
+    "node": "coder",
+    "status": "ok",
+    "subtitle": "3 operations",
+    "metrics": {
+     "latency_ms": 0
+    },
+    "clone": "coder",
+    "group": "8b3ebf7e8fb34e4d",
+    "layer": 5,
+    "order": 0
+   },
+   {
+    "id": "38dc0f73ad144af3",
+    "type": "check",
+    "label": "Static semantics",
+    "lane": "code",
+    "step_id": "38dc0f73ad144af3",
+    "node": "validator_static",
+    "status": "ok",
+    "value": "fail",
+    "reason": "groupby result is not reset",
+    "metrics": {
+     "latency_ms": 0
+    },
+    "group": "8b3ebf7e8fb34e4d",
+    "layer": 6,
+    "order": 0
+   },
+   {
+    "id": "d7fedbda76db478c",
+    "type": "agent",
+    "label": "Coder \u00b7 attempt 2",
+    "lane": "code",
+    "step_id": "d7fedbda76db478c",
+    "node": "coder",
+    "status": "ok",
+    "subtitle": "5 operations",
+    "metrics": {
+     "latency_ms": 0
+    },
+    "clone": "coder",
+    "group": "8b3ebf7e8fb34e4d",
+    "layer": 7,
+    "order": 0
+   },
+   {
+    "id": "d39eab4e465b4665",
+    "type": "check",
+    "label": "Static semantics",
+    "lane": "code",
+    "step_id": "d39eab4e465b4665",
+    "node": "validator_static",
+    "status": "ok",
+    "value": "pass",
+    "metrics": {
+     "latency_ms": 0
+    },
+    "group": "8b3ebf7e8fb34e4d",
+    "layer": 8,
+    "order": 0
+   },
+   {
+    "id": "eecd7c8aa06c491d",
+    "type": "agent",
+    "label": "Executor (local)",
+    "lane": "agents",
+    "step_id": "eecd7c8aa06c491d",
+    "node": "execute_locally",
+    "status": "ok",
+    "subtitle": "success",
+    "metrics": {
+     "latency_ms": 0
+    },
+    "clone": "runner",
+    "layer": 9,
+    "order": 0
+   },
+   {
+    "id": "2f69e5c70c23488c",
+    "type": "evidence",
+    "label": "Claim verifier",
+    "lane": "agents",
+    "step_id": "2f69e5c70c23488c",
+    "node": "verify_claims",
+    "status": "ok",
+    "subtitle": "2 claim(s) checked",
+    "metrics": {
+     "latency_ms": 0
+    },
+    "clone": "skeptic",
+    "layer": 11,
+    "order": 0
+   },
+   {
+    "id": "data:load",
+    "type": "data",
+    "label": "Load churn.csv",
+    "lane": "data",
+    "values": {
+     "rows": 400,
+     "columns": 5
+    },
+    "columns": [
+     "customer_id",
+     "tenure_months",
+     "monthly_charges",
+     "region",
+     "churned"
+    ],
+    "formula": "pd.read_csv('churn.csv')",
+    "step_id": "eecd7c8aa06c491d",
+    "layer": 5,
+    "order": 0
+   },
+   {
+    "id": "data:sample",
+    "type": "data",
+    "label": "Sample \u00b7 random_baseline",
+    "lane": "data",
+    "values": {
+     "fidelity": "entire_dataset",
+     "sample": "random_baseline",
+     "rows_analyzed": 400,
+     "total_rows": 400,
+     "is_sampled": false
+    },
+    "layer": 6,
+    "order": 0
+   },
+   {
+    "id": "op:1",
+    "type": "operation",
+    "label": "Filter on monthly_charges",
+    "lane": "data",
+    "formula": "df[df['monthly_charges'] > 0]",
+    "op": "filter",
+    "line": 3,
+    "columns": [
+     "monthly_charges"
+    ],
+    "source": "executed",
+    "step_id": "eecd7c8aa06c491d",
+    "layer": 7,
+    "order": 0
+   },
+   {
+    "id": "op:2",
+    "type": "operation",
+    "label": "Derive annual",
+    "lane": "data",
+    "formula": "df['annual'] = df['monthly_charges'] * 12",
+    "op": "derive",
+    "line": 4,
+    "columns": [
+     "annual",
+     "monthly_charges"
+    ],
+    "source": "executed",
+    "step_id": "eecd7c8aa06c491d",
+    "layer": 8,
+    "order": 0
+   },
+   {
+    "id": "op:3",
+    "type": "operation",
+    "label": "Group by region \u2192 mean",
+    "lane": "data",
+    "formula": "df.groupby('region')['monthly_charges'].mean().reset_index()",
+    "op": "group_aggregate",
+    "line": 5,
+    "columns": [
+     "region",
+     "monthly_charges"
+    ],
+    "source": "executed",
+    "step_id": "eecd7c8aa06c491d",
+    "layer": 9,
+    "order": 0
+   },
+   {
+    "id": "result",
+    "type": "result",
+    "label": "Result",
+    "lane": "data",
+    "step_id": "eecd7c8aa06c491d",
+    "values": {
+     "output_rows": 2,
+     "written_to": "out.csv"
+    },
+    "table": {
+     "columns": [
+      "region",
+      "monthly_charges"
+     ],
+     "rows": [
+      [
+       "East",
+       61.5
+      ],
+      [
+       "West",
+       72.25
+      ]
+     ],
+     "total_rows": 2,
+     "truncated": false
+    },
+    "layer": 10,
+    "order": 0
+   }
+  ],
+  "edges": [
+   {
+    "id": "e0",
+    "source": "q",
+    "target": "bbc0f6159a554739",
+    "type": "flow"
+   },
+   {
+    "id": "e1",
+    "source": "bbc0f6159a554739",
+    "target": "b6b7f34fb2964524",
+    "type": "handoff",
+    "label": "memory_hints"
+   },
+   {
+    "id": "e2",
+    "source": "b6b7f34fb2964524",
+    "target": "8eff718fdb1c4adb",
+    "type": "flow"
+   },
+   {
+    "id": "e3",
+    "source": "8eff718fdb1c4adb",
+    "target": "8b3ebf7e8fb34e4d",
+    "type": "route",
+    "label": "delegate_to_planner"
+   },
+   {
+    "id": "e4",
+    "source": "8b3ebf7e8fb34e4d",
+    "target": "a249f969c1b44c19",
+    "type": "flow"
+   },
+   {
+    "id": "e5",
+    "source": "a249f969c1b44c19",
+    "target": "38dc0f73ad144af3",
+    "type": "check"
+   },
+   {
+    "id": "e6",
+    "source": "38dc0f73ad144af3",
+    "target": "d7fedbda76db478c",
+    "type": "retry",
+    "label": "Static semantics failed, so the code goes back to the coder."
+   },
+   {
+    "id": "e7",
+    "source": "d7fedbda76db478c",
+    "target": "d39eab4e465b4665",
+    "type": "check"
+   },
+   {
+    "id": "e8",
+    "source": "8b3ebf7e8fb34e4d",
+    "target": "eecd7c8aa06c491d",
+    "type": "handoff",
+    "label": "generated_code"
+   },
+   {
+    "id": "e9",
+    "source": "d39eab4e465b4665",
+    "target": "eecd7c8aa06c491d",
+    "type": "handoff",
+    "label": "validated code"
+   },
+   {
+    "id": "e10",
+    "source": "eecd7c8aa06c491d",
+    "target": "2f69e5c70c23488c",
+    "type": "handoff",
+    "label": "execution_result, output_json"
+   },
+   {
+    "id": "e11",
+    "source": "q",
+    "target": "data:load",
+    "type": "data",
+    "label": "acts on"
+   },
+   {
+    "id": "e12",
+    "source": "data:load",
+    "target": "data:sample",
+    "type": "data"
+   },
+   {
+    "id": "e13",
+    "source": "8b3ebf7e8fb34e4d",
+    "target": "data:load",
+    "type": "data",
+    "label": "reads"
+   },
+   {
+    "id": "e14",
+    "source": "data:sample",
+    "target": "op:1",
+    "type": "data"
+   },
+   {
+    "id": "e15",
+    "source": "op:1",
+    "target": "op:2",
+    "type": "data"
+   },
+   {
+    "id": "e16",
+    "source": "op:2",
+    "target": "op:3",
+    "type": "data"
+   },
+   {
+    "id": "e17",
+    "source": "op:3",
+    "target": "result",
+    "type": "data"
+   },
+   {
+    "id": "e18",
+    "source": "eecd7c8aa06c491d",
+    "target": "result",
+    "type": "data",
+    "label": "computes"
+   },
+   {
+    "id": "e19",
+    "source": "result",
+    "target": "2f69e5c70c23488c",
+    "type": "evidence",
+    "label": "checked against"
+   }
+  ],
+  "plan_steps": null,
+  "thread_id": "thread-fixture"
+ },
+ "graph_training": {
+  "schema_version": "1.0",
+  "turn_id": "48ae6079dbb449f6",
+  "node_types": [
+   "question",
+   "agent",
+   "decision",
+   "gate",
+   "data",
+   "operation",
+   "check",
+   "result",
+   "evidence",
+   "train",
+   "evaluate"
+  ],
+  "edge_types": [
+   "flow",
+   "route",
+   "handoff",
+   "data",
+   "check",
+   "retry",
+   "evidence",
+   "gate"
+  ],
+  "nodes": [
+   {
+    "id": "q",
+    "type": "question",
+    "label": "Predict churned from the other columns",
+    "lane": "agents",
+    "layer": 0,
+    "order": 0
+   },
+   {
+    "id": "968f637d73344ce6",
+    "type": "agent",
+    "label": "Memory",
+    "lane": "agents",
+    "step_id": "968f637d73344ce6",
+    "node": "memory_injection",
+    "status": "ok",
+    "subtitle": "recall thread memory",
+    "metrics": {
+     "latency_ms": 0
+    },
+    "layer": 1,
+    "order": 0
+   },
+   {
+    "id": "f6ffd3fa69194c98",
+    "type": "agent",
+    "label": "Avaloka",
+    "lane": "agents",
+    "step_id": "f6ffd3fa69194c98",
+    "node": "avaloka_agent",
+    "status": "ok",
+    "subtitle": "intent: statistical_analysis",
+    "metrics": {
+     "latency_ms": 0
+    },
+    "layer": 2,
+    "order": 0
+   },
+   {
+    "id": "8260e0301bee4764",
+    "type": "decision",
+    "label": "route avaloka",
+    "lane": "agents",
+    "step_id": "8260e0301bee4764",
+    "value": "delegate_to_planner",
+    "reason": "The 'statistical_analysis' intent needs the data, so Avaloka hands it to the planner.",
+    "signals": {
+     "avaloka_intent": "statistical_analysis",
+     "delegate_to_planner": true
+    },
+    "layer": 3,
+    "order": 0
+   },
+   {
+    "id": "bea039d14914478c",
+    "type": "agent",
+    "label": "Model trainer",
+    "lane": "agents",
+    "step_id": "bea039d14914478c",
+    "node": "train_models",
+    "status": "ok",
+    "subtitle": "beats_baseline",
+    "metrics": {
+     "latency_ms": 0
+    },
+    "clone": "scientist",
+    "layer": 4,
+    "order": 0
+   },
+   {
+    "id": "eb4d4003c30f411c",
+    "type": "evidence",
+    "label": "Claim verifier",
+    "lane": "agents",
+    "step_id": "eb4d4003c30f411c",
+    "node": "verify_claims",
+    "status": "ok",
+    "subtitle": "2 claim(s) checked",
+    "metrics": {
+     "latency_ms": 0
+    },
+    "clone": "skeptic",
+    "layer": 9,
+    "order": 0
+   },
+   {
+    "id": "data:load",
+    "type": "data",
+    "label": "Load churn.csv",
+    "lane": "data",
+    "values": {
+     "rows": 400,
+     "columns": 5
+    },
+    "columns": [
+     "customer_id",
+     "tenure_months",
+     "monthly_charges",
+     "region",
+     "churned"
+    ],
+    "layer": 5,
+    "order": 0
+   },
+   {
+    "id": "data:sample",
+    "type": "data",
+    "label": "Sample \u00b7 random_baseline",
+    "lane": "data",
+    "values": {
+     "fidelity": "entire_dataset",
+     "sample": "random_baseline",
+     "rows_analyzed": 400,
+     "total_rows": 400
+    },
+    "layer": 6,
+    "order": 0
+   },
+   {
+    "id": "train:0",
+    "type": "train",
+    "label": "Train churn_predictor",
+    "lane": "data",
+    "subtitle": "classification",
+    "step_id": "bea039d14914478c",
+    "status": "ok",
+    "values": {
+     "target": "churned",
+     "features": 2,
+     "accuracy": 0.91,
+     "f1": 0.88,
+     "final_val_loss": 0.31,
+     "rows_processed": 400
+    },
+    "columns": [
+     "churned",
+     "tenure_months",
+     "monthly_charges"
+    ],
+    "layer": 7,
+    "order": 0
+   },
+   {
+    "id": "evaluate",
+    "type": "evaluate",
+    "label": "Evaluate \u00b7 accuracy",
+    "lane": "data",
+    "step_id": "bea039d14914478c",
+    "value": "beats_baseline",
+    "subtitle": "accuracy 0.91",
+    "values": {
+     "accuracy": 0.91,
+     "f1_macro": 0.88,
+     "baseline accuracy": 0.73
+    },
+    "evaluation": {
+     "task": "classification",
+     "primary_metric": "accuracy",
+     "metrics": {
+      "accuracy": 0.91,
+      "f1_macro": 0.88
+     },
+     "baseline": {
+      "accuracy": 0.73,
+      "f1_macro": 0.42
+     },
+     "beats_baseline": true,
+     "lift_over_baseline": 0.18,
+     "n_folds": 5,
+     "n_rows": 400,
+     "splitter": "StratifiedKFold"
+    },
+    "layer": 8,
+    "order": 0
+   }
+  ],
+  "edges": [
+   {
+    "id": "e0",
+    "source": "q",
+    "target": "968f637d73344ce6",
+    "type": "flow"
+   },
+   {
+    "id": "e1",
+    "source": "968f637d73344ce6",
+    "target": "f6ffd3fa69194c98",
+    "type": "handoff",
+    "label": "memory_hints"
+   },
+   {
+    "id": "e2",
+    "source": "f6ffd3fa69194c98",
+    "target": "8260e0301bee4764",
+    "type": "flow"
+   },
+   {
+    "id": "e3",
+    "source": "8260e0301bee4764",
+    "target": "bea039d14914478c",
+    "type": "route",
+    "label": "delegate_to_planner"
+   },
+   {
+    "id": "e4",
+    "source": "bea039d14914478c",
+    "target": "eb4d4003c30f411c",
+    "type": "handoff",
+    "label": "evaluation_beats_baseline, evaluation_report, training_completed, training_plan"
+   },
+   {
+    "id": "e5",
+    "source": "q",
+    "target": "data:load",
+    "type": "data",
+    "label": "acts on"
+   },
+   {
+    "id": "e6",
+    "source": "data:load",
+    "target": "data:sample",
+    "type": "data"
+   },
+   {
+    "id": "e7",
+    "source": "bea039d14914478c",
+    "target": "data:load",
+    "type": "data",
+    "label": "reads"
+   },
+   {
+    "id": "e8",
+    "source": "data:sample",
+    "target": "train:0",
+    "type": "data"
+   },
+   {
+    "id": "e9",
+    "source": "bea039d14914478c",
+    "target": "train:0",
+    "type": "data",
+    "label": "trains"
+   },
+   {
+    "id": "e10",
+    "source": "train:0",
+    "target": "evaluate",
+    "type": "data"
+   },
+   {
+    "id": "e11",
+    "source": "evaluate",
+    "target": "eb4d4003c30f411c",
+    "type": "evidence",
+    "label": "checked against"
+   }
+  ],
+  "plan_steps": null,
+  "thread_id": "thread-fixture-training"
+ },
+ "graph_live": {
+  "schema_version": "1.0",
+  "turn_id": "7efd3d4b34194b17",
+  "node_types": [
+   "question",
+   "agent",
+   "decision",
+   "gate",
+   "data",
+   "operation",
+   "check",
+   "result",
+   "evidence",
+   "train",
+   "evaluate"
+  ],
+  "edge_types": [
+   "flow",
+   "route",
+   "handoff",
+   "data",
+   "check",
+   "retry",
+   "evidence",
+   "gate"
+  ],
+  "nodes": [
+   {
+    "id": "q",
+    "type": "question",
+    "label": "What is the average salary by department, and which department pays most?",
+    "lane": "agents",
+    "layer": 0,
+    "order": 0
+   },
+   {
+    "id": "3459bfc13b0c4ca3",
+    "type": "agent",
+    "label": "Memory",
+    "lane": "agents",
+    "step_id": "3459bfc13b0c4ca3",
+    "node": "memory_injection",
+    "status": "ok",
+    "subtitle": "recall thread memory",
+    "metrics": {
+     "latency_ms": 575
+    },
+    "layer": 1,
+    "order": 0
+   },
+   {
+    "id": "2213d41494184428",
+    "type": "agent",
+    "label": "Avaloka",
+    "lane": "agents",
+    "step_id": "2213d41494184428",
+    "node": "avaloka_agent",
+    "status": "ok",
+    "subtitle": "intent: clarification",
+    "metrics": {
+     "latency_ms": 57
+    },
+    "layer": 2,
+    "order": 0
+   },
+   {
+    "id": "5a35fd61cafb4066",
+    "type": "decision",
+    "label": "route avaloka",
+    "lane": "agents",
+    "step_id": "5a35fd61cafb4066",
+    "value": "delegate_to_planner",
+    "reason": "The 'clarification' intent needs the data, so Avaloka hands it to the planner.",
+    "signals": {
+     "avaloka_intent": "clarification",
+     "delegate_to_planner": true
+    },
+    "layer": 3,
+    "order": 0
+   },
+   {
+    "id": "a3c772ddec79469f",
+    "type": "agent",
+    "label": "Planner",
+    "lane": "agents",
+    "step_id": "a3c772ddec79469f",
+    "node": "plan_etl",
+    "status": "ok",
+    "subtitle": "plan: summarize",
+    "metrics": {
+     "latency_ms": 68792,
+     "llm_calls": 4,
+     "tokens": 8221,
+     "cost_usd": null,
+     "model": "gemma4:e4b"
+    },
+    "clone": "scout",
+    "layer": 4,
+    "order": 0
+   },
+   {
+    "id": "9edbc43833154e01",
+    "type": "decision",
+    "label": "route planner output",
+    "lane": "agents",
+    "step_id": "9edbc43833154e01",
+    "value": "summarize",
+    "reason": "The plan needs a structured definition before code is written.",
+    "signals": {
+     "ready_to_code": false,
+     "ready_to_summarize": true,
+     "skip_to_training": false,
+     "enable_training": false,
+     "execution_mode": "local",
+     "analysis_fidelity": "portfolio_samples",
+     "analysis_defer_required": null
+    },
+    "layer": 5,
+    "order": 0
+   },
+   {
+    "id": "2d52b541c1f04405",
+    "type": "agent",
+    "label": "Summarizer",
+    "lane": "agents",
+    "step_id": "2d52b541c1f04405",
+    "node": "summarize_etl",
+    "status": "ok",
+    "subtitle": "structure the plan",
+    "metrics": {
+     "latency_ms": 16643,
+     "llm_calls": 1,
+     "tokens": 1712,
+     "cost_usd": null,
+     "model": "gemma4:e4b"
+    },
+    "layer": 6,
+    "order": 0
+   },
+   {
+    "id": "c01842c603054b1b",
+    "type": "decision",
+    "label": "route after summary",
+    "lane": "agents",
+    "step_id": "c01842c603054b1b",
+    "value": "generate_graph",
+    "reason": "The structured plan is drawn as a graph.",
+    "signals": {},
+    "layer": 7,
+    "order": 0
+   },
+   {
+    "id": "e2cc564d8c424ef1",
+    "type": "agent",
+    "label": "Plan drafter",
+    "lane": "agents",
+    "step_id": "e2cc564d8c424ef1",
+    "node": "generate_planner_graph",
+    "status": "ok",
+    "subtitle": "artifact: error: Graphviz system executables not found. Please install Graphviz system package.",
+    "metrics": {
+     "latency_ms": 28
+    },
+    "layer": 8,
+    "order": 0
+   },
+   {
+    "id": "82ff1b4b59094505",
+    "type": "decision",
+    "label": "route after graph",
+    "lane": "agents",
+    "step_id": "82ff1b4b59094505",
+    "value": "code_etl",
+    "reason": "The drawn plan goes to the coding team.",
+    "signals": {},
+    "layer": 9,
+    "order": 0
+   },
+   {
+    "id": "da4712d53a0049cf",
+    "type": "agent",
+    "label": "Coding team",
+    "lane": "agents",
+    "step_id": "da4712d53a0049cf",
+    "node": "code_etl",
+    "status": "ok",
+    "subtitle": "pass",
+    "metrics": {
+     "latency_ms": 194605,
+     "llm_calls": 1,
+     "tokens": 483,
+     "cost_usd": null,
+     "model": "gemma4:e4b"
+    },
+    "clone": "coder",
+    "layer": 10,
+    "order": 0
+   },
+   {
+    "id": "31ad35f06b9e4bfb",
+    "type": "agent",
+    "label": "Coder \u00b7 attempt 1",
+    "lane": "code",
+    "step_id": "31ad35f06b9e4bfb",
+    "node": "coder",
+    "status": "ok",
+    "subtitle": "3 operations",
+    "metrics": {
+     "latency_ms": 52847,
+     "llm_calls": 2,
+     "tokens": 11722,
+     "cost_usd": null,
+     "model": "gemma4:e4b"
+    },
+    "clone": "coder",
+    "group": "da4712d53a0049cf",
+    "layer": 11,
+    "order": 0
+   },
+   {
+    "id": "bd06f098d3ff42db",
+    "type": "check",
+    "label": "Syntax",
+    "lane": "code",
+    "step_id": "bd06f098d3ff42db",
+    "node": "validator_syntax",
+    "status": "ok",
+    "value": "pass",
+    "metrics": {
+     "latency_ms": 1
+    },
+    "group": "da4712d53a0049cf",
+    "layer": 12,
+    "order": 0
+   },
+   {
+    "id": "4a6a5b6675034077",
+    "type": "check",
+    "label": "Static semantics",
+    "lane": "code",
+    "step_id": "4a6a5b6675034077",
+    "node": "validator_static",
+    "status": "ok",
+    "value": "pass",
+    "metrics": {
+     "latency_ms": 5
+    },
+    "group": "da4712d53a0049cf",
+    "layer": 13,
+    "order": 0
+   },
+   {
+    "id": "3910d30243d84ea1",
+    "type": "check",
+    "label": "Dry run",
+    "lane": "code",
+    "step_id": "3910d30243d84ea1",
+    "node": "execute_code",
+    "status": "ok",
+    "value": "pass",
+    "metrics": {
+     "latency_ms": 24
+    },
+    "group": "da4712d53a0049cf",
+    "layer": 14,
+    "order": 0
+   },
+   {
+    "id": "3936b710676642ae",
+    "type": "check",
+    "label": "Result contract",
+    "lane": "code",
+    "step_id": "3936b710676642ae",
+    "node": "validator_contract",
+    "status": "ok",
+    "value": "pass",
+    "metrics": {
+     "latency_ms": 6
+    },
+    "group": "da4712d53a0049cf",
+    "layer": 15,
+    "order": 0
+   },
+   {
+    "id": "1c3dd10b68054d0d",
+    "type": "check",
+    "label": "Logical review",
+    "lane": "code",
+    "step_id": "1c3dd10b68054d0d",
+    "node": "validator_logical",
+    "status": "ok",
+    "value": "fail",
+    "reason": "The returned DataFrame is missing values the user asked for: The name of the department (job_title) that pays the most; The maximum average salary value. Put every requested value into the DataFrame that main(df) returns (as columns, or as rows of a summary table). Values only printed with print() are not shown to the user. Reviewer notes: The code successfully calculates the average salary by job title and returns this table. However, the user explicitly asked for two things: 1) the average salary by department, AND 2) which department pays the most. The current implementation only returns t\u2026",
+    "metrics": {
+     "latency_ms": 46353,
+     "llm_calls": 1,
+     "tokens": 3158,
+     "cost_usd": null,
+     "model": "gemma4:e4b"
+    },
+    "group": "da4712d53a0049cf",
+    "layer": 16,
+    "order": 0
+   },
+   {
+    "id": "907a53cefb4e46c6",
+    "type": "agent",
+    "label": "Coder \u00b7 attempt 2",
+    "lane": "code",
+    "step_id": "907a53cefb4e46c6",
+    "node": "coder",
+    "status": "ok",
+    "subtitle": "4 operations",
+    "metrics": {
+     "latency_ms": 54912,
+     "llm_calls": 1,
+     "tokens": 10593,
+     "cost_usd": null,
+     "model": "gemma4:e4b"
+    },
+    "clone": "coder",
+    "group": "da4712d53a0049cf",
+    "layer": 17,
+    "order": 0
+   },
+   {
+    "id": "a569841f9f92421a",
+    "type": "check",
+    "label": "Syntax",
+    "lane": "code",
+    "step_id": "a569841f9f92421a",
+    "node": "validator_syntax",
+    "status": "ok",
+    "value": "pass",
+    "metrics": {
+     "latency_ms": 3
+    },
+    "group": "da4712d53a0049cf",
+    "layer": 18,
+    "order": 0
+   },
+   {
+    "id": "fe07a6465d324676",
+    "type": "check",
+    "label": "Static semantics",
+    "lane": "code",
+    "step_id": "fe07a6465d324676",
+    "node": "validator_static",
+    "status": "ok",
+    "value": "pass",
+    "metrics": {
+     "latency_ms": 14
+    },
+    "group": "da4712d53a0049cf",
+    "layer": 19,
+    "order": 0
+   },
+   {
+    "id": "0d3d53e725754b6a",
+    "type": "check",
+    "label": "Dry run",
+    "lane": "code",
+    "step_id": "0d3d53e725754b6a",
+    "node": "execute_code",
+    "status": "ok",
+    "value": "pass",
+    "metrics": {
+     "latency_ms": 8
+    },
+    "group": "da4712d53a0049cf",
+    "layer": 20,
+    "order": 0
+   },
+   {
+    "id": "803d725924cd4c37",
+    "type": "check",
+    "label": "Result contract",
+    "lane": "code",
+    "step_id": "803d725924cd4c37",
+    "node": "validator_contract",
+    "status": "ok",
+    "value": "pass",
+    "metrics": {
+     "latency_ms": 3
+    },
+    "group": "da4712d53a0049cf",
+    "layer": 21,
+    "order": 0
+   },
+   {
+    "id": "a2a4f8ff93da42aa",
+    "type": "check",
+    "label": "Logical review",
+    "lane": "code",
+    "step_id": "a2a4f8ff93da42aa",
+    "node": "validator_logical",
+    "status": "ok",
+    "value": "pass",
+    "metrics": {
+     "latency_ms": 30032,
+     "llm_calls": 1,
+     "tokens": 2641,
+     "cost_usd": null,
+     "model": "gemma4:e4b"
+    },
+    "group": "da4712d53a0049cf",
+    "layer": 22,
+    "order": 0
+   },
+   {
+    "id": "bb6e36c1f0794310",
+    "type": "decision",
+    "label": "route after code",
+    "lane": "agents",
+    "step_id": "bb6e36c1f0794310",
+    "value": "execute_locally",
+    "reason": "Validated code goes to execute locally (mode local).",
+    "signals": {
+     "execution_mode": "local",
+     "enable_training": false,
+     "ready_to_train": false
+    },
+    "layer": 23,
+    "order": 0
+   },
+   {
+    "id": "90dc4e543fe44aef",
+    "type": "agent",
+    "label": "Executor (local)",
+    "lane": "agents",
+    "step_id": "90dc4e543fe44aef",
+    "node": "execute_locally",
+    "status": "ok",
+    "subtitle": "success",
+    "metrics": {
+     "latency_ms": 1284
+    },
+    "clone": "runner",
+    "layer": 24,
+    "order": 0
+   },
+   {
+    "id": "b281c641cb1c4a3d",
+    "type": "decision",
+    "label": "route after execution",
+    "lane": "agents",
+    "step_id": "b281c641cb1c4a3d",
+    "value": "visualize",
+    "reason": "Execution produced a result, so it goes to the visualizer.",
+    "signals": {
+     "execution_error": null
+    },
+    "layer": 25,
+    "order": 0
+   },
+   {
+    "id": "ab284102f4474f19",
+    "type": "agent",
+    "label": "Visualizer",
+    "lane": "agents",
+    "step_id": "ab284102f4474f19",
+    "node": "visualize",
+    "status": "ok",
+    "subtitle": "artifact: ready",
+    "metrics": {
+     "latency_ms": 46111,
+     "llm_calls": 1,
+     "tokens": 2786,
+     "cost_usd": null,
+     "model": "gemma4:e4b"
+    },
+    "clone": "voice",
+    "layer": 26,
+    "order": 0
+   },
+   {
+    "id": "b8a56cd0137b4d21",
+    "type": "agent",
+    "label": "Narrator",
+    "lane": "agents",
+    "step_id": "b8a56cd0137b4d21",
+    "node": "narrate_result",
+    "status": "ok",
+    "subtitle": "write the answer",
+    "metrics": {
+     "latency_ms": 18522,
+     "llm_calls": 1,
+     "tokens": 1212,
+     "cost_usd": null,
+     "model": "gemma4:e4b"
+    },
+    "clone": "voice",
+    "layer": 27,
+    "order": 0
+   },
+   {
+    "id": "353a5a742ffb4eaf",
+    "type": "evidence",
+    "label": "Claim verifier",
+    "lane": "agents",
+    "step_id": "353a5a742ffb4eaf",
+    "node": "verify_claims",
+    "status": "ok",
+    "subtitle": "unsafe \u00b7 1 of 3 claims flagged",
+    "metrics": {
+     "latency_ms": 30
+    },
+    "clone": "skeptic",
+    "layer": 28,
+    "order": 0
+   },
+   {
+    "id": "data:load",
+    "type": "data",
+    "label": "Load salaries",
+    "lane": "data",
+    "values": {
+     "rows": 6
+    },
+    "formula": "pd.read_csv('input.csv')",
+    "step_id": "907a53cefb4e46c6",
+    "layer": 11,
+    "order": 0
+   },
+   {
+    "id": "data:sample",
+    "type": "data",
+    "label": "Sample \u00b7 random_baseline",
+    "lane": "data",
+    "values": {
+     "fidelity": "portfolio_samples",
+     "sample": "random_baseline",
+     "rows_analyzed": 6,
+     "total_rows": 6,
+     "is_sampled": false
+    },
+    "layer": 12,
+    "order": 0
+   },
+   {
+    "id": "op:1",
+    "type": "operation",
+    "label": "Group by job_title \u2192 agg(average_salary=('salary', 'mean'))",
+    "lane": "data",
+    "formula": "df.groupby('job_title', as_index=False).agg(average_salary=('salary', 'mean'))",
+    "op": "group_aggregate",
+    "line": 10,
+    "columns": [
+     "job_title",
+     "salary"
+    ],
+    "source": "validated",
+    "step_id": "907a53cefb4e46c6",
+    "layer": 13,
+    "order": 0
+   },
+   {
+    "id": "op:2",
+    "type": "operation",
+    "label": "Append rows",
+    "lane": "data",
+    "formula": "pd.concat([df_avg, summary_row], ignore_index=True)",
+    "op": "concat",
+    "line": 40,
+    "source": "validated",
+    "step_id": "907a53cefb4e46c6",
+    "layer": 14,
+    "order": 0
+   },
+   {
+    "id": "result",
+    "type": "result",
+    "label": "Result",
+    "lane": "data",
+    "step_id": "90dc4e543fe44aef",
+    "values": {
+     "output_rows": 4,
+     "written_to": "output.csv"
+    },
+    "table": {
+     "columns": [
+      "job_title",
+      "average_salary"
+     ],
+     "rows": [
+      [
+       "Director",
+       110000.0
+      ],
+      [
+       "Engineer",
+       110000.0
+      ],
+      [
+       "Manager",
+       50000.0
+      ],
+      [
+       "Producer",
+       8000.0
+      ]
+     ],
+     "total_rows": 4,
+     "truncated": false
+    },
+    "layer": 25,
+    "order": 0
+   }
+  ],
+  "edges": [
+   {
+    "id": "e0",
+    "source": "q",
+    "target": "3459bfc13b0c4ca3",
+    "type": "flow"
+   },
+   {
+    "id": "e1",
+    "source": "3459bfc13b0c4ca3",
+    "target": "2213d41494184428",
+    "type": "handoff",
+    "label": "active_mcp_servers, memory_context_unavailable, memory_hints, milvus_context_id"
+   },
+   {
+    "id": "e2",
+    "source": "2213d41494184428",
+    "target": "5a35fd61cafb4066",
+    "type": "flow"
+   },
+   {
+    "id": "e3",
+    "source": "5a35fd61cafb4066",
+    "target": "a3c772ddec79469f",
+    "type": "route",
+    "label": "delegate_to_planner"
+   },
+   {
+    "id": "e4",
+    "source": "a3c772ddec79469f",
+    "target": "9edbc43833154e01",
+    "type": "flow"
+   },
+   {
+    "id": "e5",
+    "source": "9edbc43833154e01",
+    "target": "2d52b541c1f04405",
+    "type": "route",
+    "label": "summarize"
+   },
+   {
+    "id": "e6",
+    "source": "2d52b541c1f04405",
+    "target": "c01842c603054b1b",
+    "type": "flow"
+   },
+   {
+    "id": "e7",
+    "source": "c01842c603054b1b",
+    "target": "e2cc564d8c424ef1",
+    "type": "route",
+    "label": "generate_graph"
+   },
+   {
+    "id": "e8",
+    "source": "e2cc564d8c424ef1",
+    "target": "82ff1b4b59094505",
+    "type": "flow"
+   },
+   {
+    "id": "e9",
+    "source": "82ff1b4b59094505",
+    "target": "da4712d53a0049cf",
+    "type": "route",
+    "label": "code_etl"
+   },
+   {
+    "id": "e10",
+    "source": "da4712d53a0049cf",
+    "target": "31ad35f06b9e4bfb",
+    "type": "flow"
+   },
+   {
+    "id": "e11",
+    "source": "31ad35f06b9e4bfb",
+    "target": "bd06f098d3ff42db",
+    "type": "check"
+   },
+   {
+    "id": "e12",
+    "source": "bd06f098d3ff42db",
+    "target": "4a6a5b6675034077",
+    "type": "check"
+   },
+   {
+    "id": "e13",
+    "source": "4a6a5b6675034077",
+    "target": "3910d30243d84ea1",
+    "type": "check"
+   },
+   {
+    "id": "e14",
+    "source": "3910d30243d84ea1",
+    "target": "3936b710676642ae",
+    "type": "check"
+   },
+   {
+    "id": "e15",
+    "source": "3936b710676642ae",
+    "target": "1c3dd10b68054d0d",
+    "type": "check"
+   },
+   {
+    "id": "e16",
+    "source": "1c3dd10b68054d0d",
+    "target": "907a53cefb4e46c6",
+    "type": "retry",
+    "label": "Logical review failed, so the code goes back to the coder."
+   },
+   {
+    "id": "e17",
+    "source": "907a53cefb4e46c6",
+    "target": "a569841f9f92421a",
+    "type": "check"
+   },
+   {
+    "id": "e18",
+    "source": "a569841f9f92421a",
+    "target": "fe07a6465d324676",
+    "type": "check"
+   },
+   {
+    "id": "e19",
+    "source": "fe07a6465d324676",
+    "target": "0d3d53e725754b6a",
+    "type": "check"
+   },
+   {
+    "id": "e20",
+    "source": "0d3d53e725754b6a",
+    "target": "803d725924cd4c37",
+    "type": "check"
+   },
+   {
+    "id": "e21",
+    "source": "803d725924cd4c37",
+    "target": "a2a4f8ff93da42aa",
+    "type": "check"
+   },
+   {
+    "id": "e22",
+    "source": "da4712d53a0049cf",
+    "target": "bb6e36c1f0794310",
+    "type": "flow"
+   },
+   {
+    "id": "e23",
+    "source": "a2a4f8ff93da42aa",
+    "target": "bb6e36c1f0794310",
+    "type": "handoff",
+    "label": "validated code"
+   },
+   {
+    "id": "e24",
+    "source": "bb6e36c1f0794310",
+    "target": "90dc4e543fe44aef",
+    "type": "route",
+    "label": "execute_locally"
+   },
+   {
+    "id": "e25",
+    "source": "90dc4e543fe44aef",
+    "target": "b281c641cb1c4a3d",
+    "type": "flow"
+   },
+   {
+    "id": "e26",
+    "source": "b281c641cb1c4a3d",
+    "target": "ab284102f4474f19",
+    "type": "route",
+    "label": "visualize"
+   },
+   {
+    "id": "e27",
+    "source": "ab284102f4474f19",
+    "target": "b8a56cd0137b4d21",
+    "type": "handoff",
+    "label": "visualization_config, visualization_status"
+   },
+   {
+    "id": "e28",
+    "source": "b8a56cd0137b4d21",
+    "target": "353a5a742ffb4eaf",
+    "type": "handoff",
+    "label": "messages"
+   },
+   {
+    "id": "e29",
+    "source": "q",
+    "target": "data:load",
+    "type": "data",
+    "label": "acts on"
+   },
+   {
+    "id": "e30",
+    "source": "data:load",
+    "target": "data:sample",
+    "type": "data"
+   },
+   {
+    "id": "e31",
+    "source": "da4712d53a0049cf",
+    "target": "data:load",
+    "type": "data",
+    "label": "reads"
+   },
+   {
+    "id": "e32",
+    "source": "data:sample",
+    "target": "op:1",
+    "type": "data"
+   },
+   {
+    "id": "e33",
+    "source": "op:1",
+    "target": "op:2",
+    "type": "data"
+   },
+   {
+    "id": "e34",
+    "source": "op:2",
+    "target": "result",
+    "type": "data"
+   },
+   {
+    "id": "e35",
+    "source": "90dc4e543fe44aef",
+    "target": "result",
+    "type": "data",
+    "label": "computes"
+   },
+   {
+    "id": "e36",
+    "source": "result",
+    "target": "353a5a742ffb4eaf",
+    "type": "evidence",
+    "label": "checked against"
+   }
+  ],
+  "plan_steps": null,
+  "thread_id": "thread-live"
+ },
+ "swarm": {
+  "enabled": true,
+  "reason": "installed",
+  "limits": {
+   "edition": "oss",
+   "max_clones_per_mission": 2,
+   "max_parallel_clones": 2,
+   "execution": "local",
+   "cluster_fan_out": false,
+   "preview": true,
+   "label": "the free open-source edition",
+   "summary": "Swarm on the free open-source edition: up to 2 clones per mission, run locally."
+  },
+  "limited": true,
+  "message": "Swarm limited to 2 clones per mission on the free open-source edition, run locally."
+ }
+}

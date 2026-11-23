@@ -1,0 +1,12 @@
+{
+  "question": "How much of sales does ad spend account for?",
+  "recipe": "regress",
+  "params": {
+    "outcome": "sales",
+    "measures": [
+      "ad_spend"
+    ]
+  },
+  "confidence": 1.0,
+  "source": "fixture"
+}

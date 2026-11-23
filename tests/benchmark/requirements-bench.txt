@@ -1,0 +1,18 @@
+# Avaloka benchmark dependencies (in addition to the project's requirements.txt)
+#
+# Core (always needed):
+numpy
+pandas
+pytest==9.1.1
+
+# Real Kaggle download path (optional; enabled with AVALOKA_BENCH_KAGGLE=1):
+kagglehub
+
+# Heavy deep-learning path (optional; enabled with AVALOKA_BENCH_HEAVY=1):
+torch
+
+# Real cloud source connectors (optional; each enabled by its env switch):
+google-cloud-storage      # AVALOKA_BENCH_GCS=1
+boto3                     # AVALOKA_BENCH_S3=1
+azure-storage-blob        # AVALOKA_BENCH_AZURE=1
+sqlalchemy                # AVALOKA_BENCH_PG_DSN=...  (psycopg also needed)

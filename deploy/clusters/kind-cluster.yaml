@@ -21,7 +21,7 @@ nodes:
         hostPort: 9010
         listenAddress: "127.0.0.1"
         protocol: TCP
-      - containerPort: 30265   # Ray dashboard (NodePort)
+      - containerPort: 30265   # was the Ray dashboard NodePort; unused since Ray token auth (port-forward instead)
         hostPort: 8265
         listenAddress: "127.0.0.1"
         protocol: TCP

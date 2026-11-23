@@ -418,14 +418,16 @@ def _run_main_with(monkeypatch, exc: BaseException, *, traceback_env: bool = Fal
 
 
 def test_s7_03_main_turns_a_crash_into_a_sentence(monkeypatch, capsys):
-    """S7.03 — an unexpected exception exits 1 with the cause named, no stack frames."""
+    """S7.03 — an unexpected exception exits 1 with a plain sentence: no stack
+    frames and no raw exception (its text can carry values from the data)."""
     _run_main_with(monkeypatch, RuntimeError("the parquet footer is corrupt"))
     with pytest.raises(SystemExit) as excinfo:
         cli.main()
     assert excinfo.value.code == 1
     out = flat(capsys.readouterr().out)
     assert "I hit a problem I couldn't recover from" in out
-    assert "RuntimeError: the parquet footer is corrupt" in out
+    assert "RuntimeError" not in out
+    assert "the parquet footer is corrupt" not in out
     assert "AVALOKA_TRACEBACK=1" in out, "tell the user how to get the trace"
     assert "Traceback" not in out
 

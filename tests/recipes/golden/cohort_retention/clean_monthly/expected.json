@@ -1,0 +1,66 @@
+{
+  "recipe": "cohort_retention",
+  "version_major": 1,
+  "verdict": "pass",
+  "reason": null,
+  "figures": [
+    {
+      "id": "/cohorts/count",
+      "value": 6.0,
+      "decimals": 0,
+      "unit": "count"
+    },
+    {
+      "id": "/ids/count",
+      "value": 450.0,
+      "decimals": 0,
+      "unit": "count"
+    },
+    {
+      "id": "/cohorts/smallest",
+      "value": 40.0,
+      "decimals": 0,
+      "unit": "count"
+    },
+    {
+      "id": "/cohorts/largest",
+      "value": 120.0,
+      "decimals": 0,
+      "unit": "count"
+    },
+    {
+      "id": "/periods/observed",
+      "value": 6.0,
+      "decimals": 0,
+      "unit": "count"
+    },
+    {
+      "id": "/rows/duplicates",
+      "value": 0.0,
+      "decimals": 0,
+      "unit": "count"
+    },
+    {
+      "id": "/retention/period_1",
+      "value": 70.0,
+      "decimals": 1,
+      "unit": "percent"
+    },
+    {
+      "id": "/retention/period_3",
+      "value": 40.0,
+      "decimals": 1,
+      "unit": "percent"
+    }
+  ],
+  "caveats": [],
+  "must_not_say": [
+    "cause",
+    "causes",
+    "drives",
+    "because",
+    "effect of",
+    "leads to"
+  ],
+  "note": "pandas: month periods of the parsed dates, each user_id's first period is its cohort, active = any row; retention per period number weighted by cohort size. By the generator's rule period 1 is exactly 70 % (315 of 450) and period 3 exactly 40 % (144 of 360 over the four cohorts that reached it)."
+}

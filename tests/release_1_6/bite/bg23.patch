@@ -1,0 +1,13 @@
+diff --git a/ui/src/components/dashboard/UploadModal.tsx b/ui/src/components/dashboard/UploadModal.tsx
+index 20abbbef..e2a0101c 100644
+--- a/ui/src/components/dashboard/UploadModal.tsx
++++ b/ui/src/components/dashboard/UploadModal.tsx
+@@ -916,7 +916,7 @@ export function UploadModal({
+             <ReviewButton variant="link" className="mb-3 h-auto px-0 text-xs text-brand-secondary" onClick={() => setStep(1)}>Back</ReviewButton>
+             <div className="space-y-2">{selectedFiles.map((f, index) => <FileStatusBar key={fileKey(f)} file={f} ready={Boolean(datasetFor(f, index))} onReplace={() => openPicker(f)} />)}</div>
+             <ReviewButton variant="link" className="mt-2 h-auto px-0 text-xs text-brand-secondary" onClick={() => openPicker()}>+ Add file</ReviewButton>
+-            <h2 className="mt-5 border-b border-ai-border pb-2 text-xs font-semibold text-tertiary">AI Insights</h2>
++            <h2 className="mt-5 border-b border-ai-border pb-2 text-xs font-semibold text-tertiary">Ai Insights</h2>
+             {multi ? <>
+               <UploadSummaryCard title={summaryTitle} notes={skippedNotes} />
+               {kind === "workbook" && <p className="mt-3 text-xs font-medium text-secondary">All {datasets.length} sheets will be analysed.</p>}

@@ -15,7 +15,8 @@ def _router_state(**extra):
         "messages": [],
         "execution_mode": "k8s-ray",
         "data_source_location_cloud": "",
-        "infrastructure_request": {"type": "gcp", "app_type": "python-docker", "use_ray": True},
+        # A request the user confirmed: only those reach provision_infra.
+        "infrastructure_request": {"type": "gcp", "app_type": "python-docker", "use_ray": True, "confirmed": True},
         "infrastructure_provisioned": None,
         "ready_to_code": False,
         "ready_to_summarize": False,
@@ -71,7 +72,8 @@ def test_end_route_goes_to_verify_claims(monkeypatch):
     monkeypatch.setattr(workflow, "StateGraph", _RecordingGraph)
     graph = workflow.build_graph()
     path, path_map = graph.conditional["plan_etl"]
-    assert path is workflow.route_planner_output
+    # 1.7 wraps the router in traced_router (the agent trace records which
+    # signals decided the route), so the edge is checked by what it does.
     assert path_map["end"] == "verify_claims"
     assert path_map[path(_router_state(is_dta_request=True))] == "verify_claims"
 

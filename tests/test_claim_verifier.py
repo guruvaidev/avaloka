@@ -13,6 +13,7 @@ from app.agents.claim_verifier import (CHECKS, Verdict, check_absolute_language,
                                        check_causal_overreach,
                                        check_contradicted_by_metrics,
                                        check_invented_numbers,
+                                       check_method_not_in_code,
                                        check_unsupported_significance,
                                        claim_verifier_node, split_claims,
                                        verify_claims)
@@ -201,7 +202,9 @@ def test_a_clean_narrative_is_safe_to_present():
         "Delivery time is associated with repeat purchase rate.",
         {"n_rows": 4200, "correlation": 0.62})
     assert report.safe_to_present
-    assert report.claims_checked == 2
+    # 4200 is found in the evidence; the association has no figure a check
+    # can resolve (D13.2: only what a check resolved is counted).
+    assert report.claims_checked == 1 and report.claims_seen == 2
     assert not report.problems
 
 
@@ -343,3 +346,182 @@ def test_analysis_that_produced_no_numbers_is_still_verified():
     assert "skipped" not in report, (
         "evidence was present, so verification must not be skipped")
     assert report["findings"], "an unsupported figure should be reported"
+
+
+# --------------------------------------------------------------------------- #
+# The narrative names a method the executed script never used
+# --------------------------------------------------------------------------- #
+
+LSTSQ_SCRIPT = """
+import numpy as np
+coeffs, *_ = np.linalg.lstsq(X_train_aug, y_train, rcond=None)
+y_pred_model = X_test_aug @ coeffs
+rmse_model = sqrt(np.mean((y_test - y_pred_model) ** 2))
+"""
+
+BOOSTED_SCRIPT = """
+from sklearn.ensemble import HistGradientBoostingRegressor
+model = HistGradientBoostingRegressor(max_iter=200, random_state=0)
+model.fit(X_train, y_train)
+"""
+
+RESULT_ROWS = [{"test_rmse_model": 10.44, "test_rmse_baseline": 8.92}]
+GB_CLAIM = "The gradient-boosted tree model achieves a test RMSE of 10.44."
+
+
+def test_method_named_but_never_run_is_contradicted():
+    """A request for gradient boosting, a script that fits least squares, and a
+    summary that still says "gradient-boosted". Every figure is in the result
+    table, so nothing else in this module objects."""
+    report = verify_claims(GB_CLAIM, {"execution_output": RESULT_ROWS,
+                                      "executed_code": LSTSQ_SCRIPT})
+    assert not report.safe_to_present
+    finding = report.findings[0]
+    assert finding.verdict is Verdict.CONTRADICTED
+    assert finding.check == "method_not_in_code"
+    assert finding.evidence_ref == "executed_code"
+
+
+def test_method_named_and_actually_run_is_left_alone():
+    report = verify_claims(GB_CLAIM, {"execution_output": RESULT_ROWS,
+                                      "executed_code": BOOSTED_SCRIPT})
+    assert report.safe_to_present
+    assert not report.problems
+
+
+@pytest.mark.parametrize("claim, script", [
+    ("The XGBoost model reached an RMSE of 10.44 on the test years.", LSTSQ_SCRIPT),
+    ("The random forest explains most of the variance in the target.", BOOSTED_SCRIPT),
+    ("The neural network converged after thirty epochs of training.", BOOSTED_SCRIPT),
+])
+def test_other_model_families_are_checked_too(claim, script):
+    finding = check_method_not_in_code(claim, {"executed_code": script})
+    assert finding is not None and finding.check == "method_not_in_code"
+
+
+@pytest.mark.parametrize("claim", [
+    "A gradient-boosted model could capture the non-linear effects.",
+    "I used a linear fit instead of the neural network to stay under the time limit.",
+    "Consider a random forest as a next step for this target.",
+    "The neural network timed out, so a simpler model was fitted.",
+    "This result was not produced by a gradient boosting model.",
+])
+def test_suggesting_or_ruling_out_a_method_is_not_a_claim(claim):
+    assert check_method_not_in_code(claim, {"executed_code": LSTSQ_SCRIPT}) is None
+
+
+def test_method_check_is_silent_without_a_script():
+    """No script, no opinion: the check must not guess."""
+    assert check_method_not_in_code(GB_CLAIM, {}) is None
+    assert check_method_not_in_code(GB_CLAIM, {"executed_code": "   "}) is None
+    assert verify_claims(GB_CLAIM, {"execution_output": RESULT_ROWS}).safe_to_present
+
+
+def test_literals_in_the_script_are_not_numeric_evidence():
+    """max_iter=200 in the script must not license "200" in the narrative."""
+    finding = check_invented_numbers(
+        "The model reached an accuracy of 200 on the held-out years.",
+        {"execution_output": RESULT_ROWS, "executed_code": BOOSTED_SCRIPT})
+    assert finding is not None
+    assert finding.check == "invented_number"
+
+
+def test_node_compares_the_narrative_with_the_generated_code():
+    out = claim_verifier_node({
+        "analysis_narrative": GB_CLAIM,
+        "output_json": RESULT_ROWS,
+        "generated_code": LSTSQ_SCRIPT,
+    })
+    assert out["verification_safe_to_present"] is False
+    checks = [f["check"] for f in out["verification_report"]["findings"]]
+    assert checks == ["method_not_in_code"]
+
+
+def test_code_left_over_from_an_earlier_turn_is_not_evidence():
+    """generated_code persists in state. On a chat turn with no result it must
+    neither defeat the no-evidence skip nor be compared with the reply."""
+    out = claim_verifier_node({
+        "analysis_narrative": "A gradient-boosted model is one option here.",
+        "generated_code": LSTSQ_SCRIPT,
+    })
+    assert out["verification_report"].get("skipped")
+    assert out["verification_safe_to_present"] is True
+
+
+def test_a_trained_model_is_not_compared_with_the_coder_script():
+    """The training agents fit models outside generated_code; their narrative
+    is described by training_metrics, not by a stale coder script."""
+    out = claim_verifier_node({
+        "analysis_narrative": "The neural network reached a validation loss of 0.31.",
+        "output_json": [{"val_loss": 0.31}],
+        "training_metrics": {"val_loss": 0.31},
+        "generated_code": LSTSQ_SCRIPT,
+    })
+    checks = [f["check"] for f in out["verification_report"]["findings"]]
+    assert "method_not_in_code" not in checks
+
+
+# --------------------------------------------------------------------------- #
+# Follow-up: the cue is read around the mention, not across the sentence
+# --------------------------------------------------------------------------- #
+
+LINEAR_SCRIPT = """
+from sklearn.linear_model import LinearRegression
+model = LinearRegression().fit(X_train, y_train)
+"""
+
+
+@pytest.mark.parametrize("claim", [
+    # negations
+    "Unlike a random forest, the linear model keeps the coefficients interpretable.",
+    "No gradient boosting model was fitted here; this is a plain linear fit.",
+    "We never trained a neural network for this task.",
+    # comparisons
+    "The linear model outperforms a random forest baseline on this split.",
+    "Compared with XGBoost, the linear fit is simpler and nearly as accurate.",
+    "The linear fit is within 2% of a random forest on the held-out years.",
+    # the request restated
+    "You asked for a gradient-boosted model, but the request ran as a linear regression.",
+])
+def test_a_method_named_in_a_negation_or_comparison_is_not_a_claim(claim):
+    """Fails on the first cut of the check: these all named the model with no
+    whole-sentence cue word, so each was flagged."""
+    assert check_method_not_in_code(claim, {"executed_code": LINEAR_SCRIPT}) is None
+
+
+@pytest.mark.parametrize("claim", [
+    # a contraction or a modal elsewhere in the sentence used to mute a true claim
+    "The random forest reached 0.91 accuracy, which isn't bad for this data.",
+    "The random forest reached 0.91 accuracy and should generalise to next year.",
+    "The gradient-boosted model reached an RMSE of 10.44; you could tune it further.",
+])
+def test_a_cue_elsewhere_in_the_sentence_does_not_mute_a_real_claim(claim):
+    """Fails on the first cut: "isn't", "should" and "could" anywhere in the
+    sentence silenced the check."""
+    finding = check_method_not_in_code(claim, {"executed_code": LINEAR_SCRIPT})
+    assert finding is not None and finding.check == "method_not_in_code"
+
+
+@pytest.mark.parametrize("claim", [
+    "The GBM reached an RMSE of 10.44.",
+    "The GBDT model reached an RMSE of 10.44.",
+    "The boosting model reached an RMSE of 10.44.",
+    "The MLP reached 0.91 accuracy on the test split.",
+])
+def test_short_names_of_a_family_are_read(claim):
+    """Fails on the first cut: GBM, GBDT, "boosting model" and MLP were not terms."""
+    assert check_method_not_in_code(claim, {"executed_code": LINEAR_SCRIPT}) is not None
+
+
+def test_a_model_named_only_in_a_comment_or_string_was_not_fitted():
+    """Fails on the first cut: the marker matched the comment, and the claim passed."""
+    script = LINEAR_SCRIPT + '# a RandomForestRegressor would be better here\nprint("no xgboost used")\n'
+    finding = check_method_not_in_code("The random forest reached 0.91 accuracy.", {"executed_code": script})
+    assert finding is not None
+    finding = check_method_not_in_code("The XGBoost model reached an RMSE of 10.44.", {"executed_code": script})
+    assert finding is not None
+
+
+def test_a_model_fitted_in_code_still_passes_whatever_the_comments_say():
+    script = BOOSTED_SCRIPT + "# the random forest was slower\n"
+    assert check_method_not_in_code(GB_CLAIM, {"executed_code": script}) is None

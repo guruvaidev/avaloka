@@ -32,7 +32,7 @@ def git_commit() -> Optional[str]:
     Returns None rather than a placeholder: "unknown" in this field would be
     indistinguishable from a real value to anything parsing the file, and the
     whole point of recording it is that a number without a commit is not
-    evidence. Honours CI's own variable first (a Bitbucket/GitHub runner has it
+    evidence. Honours CI's own variable first (a hosted CI runner has it
     without a .git directory), then asks git.
     """
     for var in ("BITBUCKET_COMMIT", "GITHUB_SHA", "CI_COMMIT_SHA"):
@@ -86,6 +86,15 @@ class GroundTruth:
     #: "line_items" for a statement). Keeping them in one place means the
     #: expected labels cannot drift from the expected figure they index.
     planted_answer: dict[str, Any] = field(default_factory=dict)
+    #: The question the task asks, when it has a planted answer to grade.
+    #:
+    #: Without one the task's goal is the generic "find the table and profile
+    #: it", which goal_analysis answers with a dataset overview and no
+    #: figures -- so ``answer_value``/``answer_bound`` could not pass even on a
+    #: perfect read, and a reader asked to choose a sheet by relevance was
+    #: never told what the question was about. Phrased the way goal_analysis
+    #: parses today; the task's goal is this question when declared.
+    question: Optional[str] = None
     #: Free-text note on the shape this file carries, shown in the HTML report.
     shape: str = ""
 

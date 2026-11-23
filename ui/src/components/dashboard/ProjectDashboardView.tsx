@@ -1,7 +1,9 @@
+import { useResourceAccess } from "@/lib/use-resource-access";
 import { useState, type DragEvent } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { X, File02, LayoutLeft } from "@untitledui/icons";
+import { X, File02, LayoutLeft, Expand06 } from "@untitledui/icons";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { cx } from "@/lib/utils/cx";
 import { Button } from "@/components/base/buttons/button";
 import { DASHBOARD_SLOT_LAYOUT, dashboardSlotColClass } from "@/lib/dashboard-layout";
@@ -52,8 +54,9 @@ export function ProjectDashboardView({
   const qc = useQueryClient();
   const navigate = useNavigate();
   const dashboardPerms = useDashboardPerms();
-  const canCreate = dashboardPerms.loading || dashboardPerms.canCreate;
-  const canEdit = dashboardPerms.loading || dashboardPerms.canEdit;
+  const analysisAccess = useResourceAccess("analysis", analysisId);
+  const canCreate = analysisAccess.canEdit && (dashboardPerms.loading || dashboardPerms.canCreate);
+  const canEdit = analysisAccess.canEdit && (dashboardPerms.loading || dashboardPerms.canEdit);
   const { data: dashboard } = useQuery({
     queryKey: projectDashboardQueryKey(analysisId, vizConfig),
     enabled: !!analysisId,
@@ -65,6 +68,7 @@ export function ProjectDashboardView({
   const [dragOverSlot, setDragOverSlot] = useState<number | null>(null);
   const [savingSlot, setSavingSlot] = useState<number | null>(null);
   const [removingSlot, setRemovingSlot] = useState<number | null>(null);
+  const [maximizedWidget, setMaximizedWidget] = useState<(typeof tabWidgets)[number] | null>(null);
   
 
   const handleGenerateReport = async () => {
@@ -210,7 +214,7 @@ export function ProjectDashboardView({
             title={insightsOpen ? "Hide insights" : "Show insights"}
             className={cx(
               "grid size-9 place-items-center rounded-lg border border-secondary bg-primary text-fg-secondary transition hover:bg-primary_hover",
-              insightsOpen && "border-[#1565ef] bg-[#eff8ff] text-[#1565ef]",
+              insightsOpen && "border-brand bg-brand-primary text-brand-secondary",
             )}
           >
             <LayoutLeft className="size-4" />
@@ -230,7 +234,7 @@ export function ProjectDashboardView({
           </Button>
         </div>
       </div>
-      <div className="grid flex-1 auto-rows-fr grid-cols-1 gap-4 overflow-y-auto bg-secondary/40 p-4 sm:grid-cols-2 sm:p-6 lg:grid-cols-6">
+      <div className="grid min-w-0 flex-1 auto-rows-[minmax(280px,auto)] grid-cols-1 content-start gap-4 overflow-y-auto bg-secondary/40 p-4 sm:grid-cols-2 sm:p-6 2xl:grid-cols-6">
 
         {DASHBOARD_SLOT_LAYOUT.map(({ position, colSpan }) => {
           const widget = tabWidgets.find((w) => w.position === position);
@@ -241,8 +245,8 @@ export function ProjectDashboardView({
                 {...slotDropHandlers(position)}
                 className={cx(
                   dashboardSlotColClass(colSpan),
-                  "relative flex min-h-[180px] flex-col rounded-xl border border-secondary bg-primary p-4",
-                  dragOverSlot === position && "border-[#1565ef] ring-1 ring-[#1565ef]/30",
+                  "group relative flex min-h-[280px] min-w-0 flex-col overflow-hidden rounded-xl border border-secondary bg-primary p-4",
+                  dragOverSlot === position && "border-brand ring-1 ring-brand/30",
                   (savingSlot === position || removingSlot === position) && "opacity-60",
                 )}
               >
@@ -258,9 +262,18 @@ export function ProjectDashboardView({
                 </button>
                 ) : null}
                 <p className="pr-8 text-sm font-semibold text-primary">{widget.title}</p>
-                <div className="mt-2 flex min-h-0 flex-1 flex-col">
+                <div className="mt-2 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
                   <DashboardMiniChart widget={widget} samples={samples} />
                 </div>
+                <button
+                  type="button"
+                  aria-label={`Maximize ${widget.title}`}
+                  title="View larger chart"
+                  onClick={() => setMaximizedWidget(widget)}
+                  className="absolute left-1/2 top-1/2 z-20 grid size-11 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-xl border border-secondary bg-primary/90 text-secondary opacity-30 shadow-md backdrop-blur-sm transition hover:scale-105 hover:text-primary focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-brand group-hover:opacity-90"
+                >
+                  <Expand06 className="size-5" />
+                </button>
               </div>
             );
           }
@@ -276,6 +289,23 @@ export function ProjectDashboardView({
           );
         })}
       </div>
+      <Dialog open={!!maximizedWidget} onOpenChange={(open) => !open && setMaximizedWidget(null)}>
+        <DialogContent className="grid h-[90vh] w-[94vw] max-w-none grid-rows-[auto_1fr] gap-3 overflow-hidden rounded-xl border-secondary bg-primary p-5 shadow-2xl dark:border-white/25">
+          <DialogTitle className="truncate pr-10 text-base font-semibold text-primary">
+            {maximizedWidget?.title ?? "Chart"}
+          </DialogTitle>
+          {maximizedWidget ? (
+            <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
+              <DashboardMiniChart
+                widget={maximizedWidget}
+                samples={samples}
+                height={typeof window === "undefined" ? 590 : Math.max(360, window.innerHeight * 0.68)}
+                compact={false}
+              />
+            </div>
+          ) : null}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

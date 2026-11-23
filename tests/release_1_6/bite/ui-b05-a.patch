@@ -1,0 +1,11 @@
+diff --git a/ui/src/routes/api/public/send-analysis-email.ts b/ui/src/routes/api/public/send-analysis-email.ts
+--- a/ui/src/routes/api/public/send-analysis-email.ts
++++ b/ui/src/routes/api/public/send-analysis-email.ts
+@@ -32,7 +32,6 @@ export const Route = createFileRoute("/api/public/send-analysis-email")({
+           method: "POST",
+           headers: {
+             "Content-Type": "application/json",
+-            Authorization: auth,
+           },
+           body,
+         });

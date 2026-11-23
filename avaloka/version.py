@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-_FALLBACK = "1.0.0"
+_FALLBACK = "2.0.0"
 
 
 def _read_version() -> str:

@@ -13,8 +13,33 @@
 /* ----------------------------------------------------------------------------
  * Avaloka brand overrides on top of the Untitled UI default theme.
  * Brand palette is anchored on Figma utility-brand-600 = #1565ef.
- * Body / display font is General Sans (loaded in __root.tsx via Fontshare).
+ * Body / display font is Figtree, served from this origin (public/fonts).
+ *
+ * It used to be General Sans from api.fontshare.com: every page view sent the
+ * viewer's IP to a third party, and an offline install rendered fallback type.
+ * General Sans is not bundled instead because its licence (ITF FFL 2.0, s.02)
+ * forbids redistributing the font files, and this repository is public.
+ * Figtree is SIL OFL 1.1 (public/fonts/figtree/OFL.txt), which permits it.
  * -------------------------------------------------------------------------- */
+@font-face {
+  font-family: "Figtree Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 300 900;
+  src: url("/fonts/figtree/figtree-latin-ext-wght-normal.woff2") format("woff2-variations");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329,
+    U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: "Figtree Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 300 900;
+  src: url("/fonts/figtree/figtree-latin-wght-normal.woff2") format("woff2-variations");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
+    U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
 @theme {
   --color-ai-canvas: #f3f6fb;
   --color-ai-surface: #ffffff;
@@ -53,8 +78,8 @@
   --color-ai-subtle: #667085;
   --color-ai-line: #eaecf0;
   --color-ai-thead: #f9fafb;
-  --font-body: "General Sans", ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --font-display: "General Sans", ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-body: "Figtree Variable", ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-display: "Figtree Variable", ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
 
   --color-brand-50: #eff5ff;
   --color-brand-100: #dbe7ff;
@@ -74,6 +99,12 @@
  * UUI components above do not depend on these tokens.
  * -------------------------------------------------------------------------- */
 @theme inline {
+  --color-inf-canvas: var(--inf-canvas);
+  --color-inf-input: var(--inf-input);
+  --color-inf-tile: var(--inf-tile);
+  --color-inf-active: var(--inf-active);
+  --color-inf-blue: var(--inf-blue);
+  --color-inf-active-border: var(--inf-active-border);
   --color-ray-log-bg: var(--ray-log-bg);
   --color-ray-log-text: var(--ray-log-text);
   --radius-sm: calc(var(--radius) - 4px);
@@ -102,6 +133,17 @@
 }
 
 :root {
+  --inf-canvas: oklch(0.968 0.003 265);
+  --inf-input: oklch(0.984 0.002 265);
+  --inf-tile: oklch(0.962 0.005 265);
+  --inf-active: oklch(0.958 0.021 258);
+  --inf-blue: oklch(0.579 0.218 259);
+  --inf-active-border: oklch(0.86 0.06 258);
+  --inf-success: oklch(0.43 0.105 160);
+  --inf-success-bg: oklch(0.967 0.03 160);
+  --inf-warning: oklch(0.43 0.095 65);
+  --inf-warning-bg: oklch(0.974 0.038 85);
+  --inf-warning-border: oklch(0.83 0.12 85);
   --ray-log-bg: var(--color-gray-950);
   --ray-log-text: var(--color-gray-200);
   --chat-sidebar-bg: #F9FAFB;
@@ -161,17 +203,28 @@
 }
 
 .dark {
+  --inf-canvas: oklch(0.18 0.003 265);
+  --inf-input: oklch(0.22 0.005 265);
+  --inf-tile: oklch(0.25 0.005 265);
+  --inf-active: oklch(0.28 0.055 258);
+  --inf-blue: oklch(0.73 0.14 258);
+  --inf-active-border: oklch(0.5 0.1 258);
+  --inf-success: oklch(0.8 0.12 160);
+  --inf-success-bg: oklch(0.26 0.04 160);
+  --inf-warning: oklch(0.84 0.1 85);
+  --inf-warning-bg: oklch(0.27 0.035 85);
+  --inf-warning-border: oklch(0.53 0.08 85);
   --ray-log-bg: var(--color-gray-950);
   --ray-log-text: var(--color-gray-200);
-  /* Figma: bg-primary #131316, text-primary #fafafa */
-  --background: oklch(0.18 0.003 286);
+  /* Dark surfaces use the requested charcoal palette. */
+  --background: #1A1A1E;
   --foreground: oklch(0.985 0 0);
-  --card: oklch(0.18 0.003 286);
+  --card: #1A1A1E;
   --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.18 0.003 286);
+  --popover: #131316;
   --popover-foreground: oklch(0.985 0 0);
 
-  --primary: oklch(0.58 0.21 258);
+  --primary: #1A1A1E;
   --primary-foreground: oklch(1 0 0);
 
   --secondary: oklch(0.22 0.005 286);
@@ -194,9 +247,9 @@
   --text-placeholder: #70707b;
 
   /* Chat panel surfaces */
-  --chat-sidebar-bg: oklch(0.21 0.004 286);
+  --chat-sidebar-bg: #1A1A1E;
   --chat-sidebar-border: oklch(0.27 0.005 286);
-  --chat-content-bg: oklch(0.18 0.003 286);
+  --chat-content-bg: #131316;
 
   /* Chart axis colours */
   --chart-axis-title: oklch(0.985 0 0);
@@ -583,3 +636,33 @@
 .analysis-result-header .text-foreground { color: var(--result-header-text); }
 .analysis-result-header .text-muted-foreground { color: var(--result-header-meta); }
 .analysis-result-header .text-primary { color: var(--result-header-link); }
+
+/* Inference tokens and presentation are isolated from other workspaces. */
+.inference-page { font-family: "Inter", sans-serif; letter-spacing: 0; --color-primary: var(--inf-blue); }
+.inference-page .bg-primary { background-color: var(--inf-blue); color: var(--primary-foreground); }
+.inference-page .bg-primary:hover { background-color: color-mix(in oklch, var(--inf-blue) 90%, var(--foreground)); }
+.inference-page button, .inference-page a { color: var(--foreground); }
+.inference-page .bg-background { background-color: var(--card); color: var(--foreground); }
+.inference-page .bg-primary { color: var(--primary-foreground); }
+.inference-page .text-primary { color: var(--inf-blue); }
+.inference-page button:disabled { opacity: 0.65; }
+.inf-card { background: var(--card); border-radius: 16px; padding: 20px; min-width: 0; }
+.inf-badge { display: inline-flex; align-items: center; gap: 5px; border-radius: 4px; padding: 3px 6px; font-size: 11px; line-height: 16px; font-weight: 500; }
+.inf-status-running { background: var(--inf-success-bg); color: var(--inf-success); }
+.inf-status-stopped { background: var(--inf-tile); color: var(--muted-foreground); }
+.inf-status-starting { background: var(--inf-active); color: var(--inf-blue); }
+.inf-status-warning { background: var(--inf-warning-bg); color: var(--inf-warning); }
+.inf-success-text { color: var(--inf-success); }
+.inf-warning-text { color: var(--inf-warning); }
+.inf-warning { background: var(--inf-warning-bg); color: var(--inf-warning); border: 1px solid var(--inf-warning-border); border-radius: 8px; padding: 12px; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.inf-model { display: flex; flex-direction: column; align-items: flex-start; justify-content: flex-start; height: auto; width: 100%; min-height: 44px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; gap: 7px; text-align: left; white-space: normal; }
+.inf-model-active { background: var(--inf-active); border-color: var(--inf-blue); }
+.inf-drop { border-style: dashed; border-width: 1px; border-radius: 8px; padding: 32px 16px; text-align: center; }
+.inf-range { height: 10px; background: var(--inf-active-border); border-radius: 8px; position: relative; }
+.inf-range span { position: absolute; left: 16%; width: 68%; height: 100%; border-radius: inherit; background: color-mix(in oklch, var(--inf-blue) 45%, var(--inf-active-border)); }
+.inf-range i { position: absolute; height: 18px; top: -4px; width: 2px; left: 50%; background: var(--inf-blue); }
+.inference-rail-link { display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; border-radius: 10px; }
+.inference-rail-active { background: #EAF2FF; color: #1570EF; border: 1px solid #B9D3FB; }
+.dark .inference-rail-active { background: var(--inf-active); color: var(--inf-blue); border-color: var(--inf-active-border); }
+.inference-page [data-radix-collection-item] { min-height: 44px; }
+@media (max-width: 639px) { .inf-card { padding: 16px; } }

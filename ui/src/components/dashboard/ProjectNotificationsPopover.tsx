@@ -5,6 +5,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { cx } from "@/lib/utils/cx";
 import { useNotifications } from "@/hooks/useNotifications";
 import { supabase } from "@/integrations/supabase/client";
+import { fetchDisplayProfiles } from "@/lib/display-profiles";
 import type { NotificationRow } from "@/lib/notifications";
 import { Logomark } from "@/components/brand/Logomark";
 
@@ -89,11 +90,12 @@ export function ProjectNotificationsPopover({ projectId }: { projectId: string |
     ).filter((id) => !(id in actors));
     if (ids.length === 0) return;
     (async () => {
-      const { data } = await supabase.from("profiles").select("id, full_name, avatar_url").in("id", ids);
-      if (cancelled || !data) return;
+      // Actors may be in other organisations: display fields only.
+      const data = await fetchDisplayProfiles(supabase, ids);
+      if (cancelled) return;
       const next: Record<string, ActorInfo> = {};
       await Promise.all(
-        (data as Array<{ id: string; full_name: string | null; avatar_url: string | null }>).map(async (row) => {
+        data.map(async (row) => {
           next[row.id] = {
             full_name: row.full_name,
             avatar_url: await resolveAvatarUrl(row.avatar_url),

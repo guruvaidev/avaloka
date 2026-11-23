@@ -1,0 +1,244 @@
+{
+  "schema_version": "1.0",
+  "report_id": "rpt_9b1e77a04c2d6f10",
+  "kind": "analysis",
+  "domain": "finance",
+  "template": "fintech_credit",
+  "audience": "analyst",
+  "created_at": "2026-10-18T16:20:40Z",
+  "analysis": {
+    "analysis_id": "a-91",
+    "thread_id": "t-40",
+    "turn_id": "turn-1",
+    "version": 1,
+    "parent_version": null,
+    "dataset_ids": [
+      "ds-loans"
+    ]
+  },
+  "headline": {
+    "text": "Delinquency at {f6} or more past due is {f1}, up {f2} on the prior quarter, led by recent vintages.",
+    "bullets": [
+      {
+        "so_what": "Loans booked in the last two quarters roll to {f6} or more past due at {f3}, against {f4} for older books.",
+        "now_what": "Review the underwriting change made at the start of that window."
+      },
+      {
+        "so_what": "The top {f7} merchants hold {f5} of exposure.",
+        "now_what": "Set a concentration limit before the next funding round."
+      }
+    ]
+  },
+  "figures": [
+    {
+      "id": "f1",
+      "value": 4.7,
+      "unit": "percent",
+      "decimals": 1,
+      "evidence_ref": "/kpi/dq30/rate"
+    },
+    {
+      "id": "f2",
+      "value": 0.9,
+      "unit": "pp",
+      "decimals": 1,
+      "evidence_ref": "/kpi/dq30/delta_pp"
+    },
+    {
+      "id": "f3",
+      "value": 6.2,
+      "unit": "percent",
+      "decimals": 1,
+      "evidence_ref": "/roll/recent"
+    },
+    {
+      "id": "f4",
+      "value": 3.8,
+      "unit": "percent",
+      "decimals": 1,
+      "evidence_ref": "/roll/older"
+    },
+    {
+      "id": "f5",
+      "value": 37,
+      "unit": "percent",
+      "decimals": 0,
+      "evidence_ref": "/concentration/top10"
+    },
+    {
+      "id": "f6",
+      "value": 30,
+      "unit": "days",
+      "decimals": 0,
+      "evidence_ref": "/kpi/dq30/threshold_days"
+    },
+    {
+      "id": "f7",
+      "value": 10,
+      "unit": "count",
+      "decimals": 0,
+      "evidence_ref": "/concentration/top_n"
+    }
+  ],
+  "kpis": [
+    {
+      "id": "dq30",
+      "label": "30+ DPD rate",
+      "value": "f1",
+      "delta": "f2",
+      "delta_kind": "pp",
+      "baseline_label": "prior quarter",
+      "direction_good": "down"
+    }
+  ],
+  "charts": [
+    {
+      "id": "vintage",
+      "title": "Delinquency by months on book, per vintage",
+      "question_type": "cohort",
+      "chart_kind": "vintage_lines",
+      "option": {
+        "xAxis": {
+          "type": "value",
+          "name": "months on book"
+        },
+        "series": []
+      },
+      "alt_text": "One line per quarterly vintage; the two newest vintages rise faster than older ones from month three.",
+      "data_table": {
+        "columns": [
+          "vintage",
+          "mob",
+          "dq30_pct"
+        ],
+        "rows": [
+          [
+            "2026Q1",
+            3,
+            2.1
+          ]
+        ]
+      }
+    },
+    {
+      "id": "roll",
+      "title": "Roll rates between delinquency buckets",
+      "question_type": "flow",
+      "chart_kind": "heatmap",
+      "option": {
+        "series": [
+          {
+            "type": "heatmap"
+          }
+        ]
+      },
+      "alt_text": "Matrix of bucket-to-bucket transition rates; current to 30 days is the largest off-diagonal cell.",
+      "data_table": {
+        "columns": [
+          "from",
+          "to",
+          "rate_pct"
+        ],
+        "rows": [
+          [
+            "current",
+            "30",
+            3.1
+          ]
+        ]
+      }
+    }
+  ],
+  "strategies": [],
+  "method": {
+    "summary": "Vintage curves from origination month and months on book; one-period roll-rate matrix; Herfindahl and top-N exposure.",
+    "sample": {
+      "rows_analyzed": 412000,
+      "total_rows": 412000,
+      "is_sampled": false
+    }
+  },
+  "steps": [
+    {
+      "id": "vintage",
+      "order": 1,
+      "title": "Compare vintages",
+      "status": "done"
+    },
+    {
+      "id": "cause",
+      "order": 2,
+      "title": "Link the rise to the underwriting change",
+      "status": "needs_data",
+      "needs": "the underwriting policy change date"
+    }
+  ],
+  "completion": {
+    "state": "partial",
+    "missing": [
+      "Which policy change, if any, lines up with the recent vintages."
+    ],
+    "open_questions": [
+      "When did the underwriting rules last change?"
+    ]
+  },
+  "follow_ups": [
+    {
+      "id": "fu1",
+      "label": "Roll rate by product",
+      "prompt": "Show the 30-day roll rate by product type."
+    }
+  ],
+  "side_notes": [],
+  "caveats": [
+    {
+      "kind": "small_n",
+      "text": "The newest vintage has fewer than 6 months on book."
+    }
+  ],
+  "evidence": {
+    "kpi": {
+      "dq30": {
+        "rate": {
+          "value": 0.047,
+          "unit": "fraction"
+        },
+        "delta_pp": {
+          "value": 0.9,
+          "unit": "pp"
+        },
+        "threshold_days": {
+          "value": 30,
+          "unit": "days"
+        }
+      }
+    },
+    "roll": {
+      "recent": {
+        "value": 0.062,
+        "unit": "fraction"
+      },
+      "older": {
+        "value": 0.038,
+        "unit": "fraction"
+      }
+    },
+    "concentration": {
+      "top10": {
+        "value": 0.37,
+        "unit": "fraction"
+      },
+      "top_n": 10
+    }
+  },
+  "provenance": {
+    "generator": "avaloka",
+    "generator_version": "2.0.0",
+    "llm_used": false,
+    "llm_model": null,
+    "verifier": {
+      "passed": true,
+      "rejections": []
+    }
+  }
+}

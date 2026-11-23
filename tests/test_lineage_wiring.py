@@ -61,7 +61,7 @@ def test_the_remote_executor_records_its_output(monkeypatch):
         "output_location": "by_region.csv",
         "infrastructure_provisioned": {"status": "provisioned", "details": [{
             "step_name": "Get infra-agent-service IP/Port", "status": "SUCCESS",
-            "details": {"ip": "1.2.3.4", "port": "8080"}}]},
+            "details": {"ip": "203.0.113.4", "port": "8080"}}]},
     }
 
     new_state = exec_mod.execution_agent_node(state)
@@ -144,7 +144,9 @@ def test_model_training_records_the_model(tmp_path):
                                   "final_accuracy": 0.9}
     state = {
         "user_id": USER, "session_id": "s", "messages": [HumanMessage(content="train")],
-        "training_plan": plan, "training_result": None, "training_scheduled": False,
+        "training_plan": plan, "training_result": None,
+        # the worker pass: the chat turn only enqueues since the enqueue-only change
+        "training_scheduled": True,
         "enable_training": True, "skip_to_training": False, "training_task": None,
         "data_source_location_cloud": None, "data_source_location_local": None,
         "data_source_location": None, "dataset_size_bytes": None,

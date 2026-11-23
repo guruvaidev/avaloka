@@ -25,6 +25,7 @@ th{background:#f6f8fa} .kpi{display:inline-block;min-width:150px;margin:6px 18px
 .pass{color:#1a7f37;font-weight:600}.warn{color:#9a6700;font-weight:600}.fail{color:#cf222e;font-weight:600}
 .badge{display:inline-block;padding:2px 8px;border-radius:12px;font-size:12px;background:#ddf4ff;color:#0969da}
 .muted{color:#57606a;font-size:13px} code{background:#eff1f3;padding:1px 5px;border-radius:4px}
+.commentary{font-style:italic;color:#57606a}
 """
 
 _EXEC = """<!doctype html><html><head><meta charset="utf-8"><title>Executive report — {{ goal }}</title>
@@ -37,7 +38,7 @@ _EXEC = """<!doctype html><html><head><meta charset="utf-8"><title>Executive rep
 </div>
 
 <h2>What we did</h2>
-<div class="card"><p>{{ narrative }}</p></div>
+<div class="card"><p>{% if narrative_commentary %}{% for s in narrative_sentences %}<span class="commentary" title="{{ commentary_tooltip }}">{{ s }}{{ commentary_suffix }}</span>{% if not loop.last %} {% endif %}{% endfor %}{% else %}{{ narrative }}{% endif %}</p></div>
 
 <h2>Economics of this mission</h2>
 <div class="card"><table><tr><th>Measure</th><th>Value</th></tr>
@@ -129,11 +130,24 @@ _EVAL = """<!doctype html><html><head><meta charset="utf-8"><title>Evaluation �
 <td class="muted">{% for k,v in c.metrics.items() %}{{ k }}={{ '%.3f'|format(v) }} {% endfor %}</td>
 <td>{{ '%.3f'|format(c.cv_mean) }}±{{ '%.3f'|format(c.cv_std) }}</td>
 <td>{{ '%.2f'|format(c.inference_ms_per_1k) }}</td></tr>{% endfor %}</table></div>
+{% if model.ensemble_vs_single %}<h2>Ensemble versus single</h2>
+<div class="card"><p>{{ model.ensemble_vs_single.reason }}</p>
+<p class="muted">CV {{ model.ensemble_vs_single.metric }}: ensemble {{ '%.4f'|format(model.ensemble_vs_single.ensemble_cv.mean) }}
+[{{ '%.4f'|format(model.ensemble_vs_single.ensemble_cv.interval[0]) }}, {{ '%.4f'|format(model.ensemble_vs_single.ensemble_cv.interval[1]) }}]
+vs {{ model.ensemble_vs_single.best_single }} {{ '%.4f'|format(model.ensemble_vs_single.single_cv.mean) }}
+[{{ '%.4f'|format(model.ensemble_vs_single.single_cv.interval[0]) }}, {{ '%.4f'|format(model.ensemble_vs_single.single_cv.interval[1]) }}];
+selected: <strong>{{ model.ensemble_vs_single.selected }}</strong>.</p></div>{% endif %}
+{% if model.selected_classification %}<h2>Confusion matrix — {{ model.selected }}</h2>
+<div class="card"><table>{% for row in model.selected_classification.confusion_matrix %}{% set outer = loop %}<tr>{% for cell in row %}{% if loop.first or outer.first %}<th>{{ cell }}</th>{% else %}<td>{{ cell }}</td>{% endif %}{% endfor %}</tr>{% endfor %}</table>
+<table><tr><th>Class</th><th>Precision</th><th>Recall</th><th>Support</th></tr>
+{% for name, pc in model.selected_classification.per_class.items() %}<tr><td>{{ name }}</td><td>{{ '%.3f'|format(pc.precision) }}</td><td>{{ '%.3f'|format(pc.recall) }}</td><td>{{ pc.support }}</td></tr>{% endfor %}
+</table><p class="muted">Rows are actual classes, columns predicted; macro precision {{ '%.3f'|format(model.selected_classification.precision_macro) }}, macro recall {{ '%.3f'|format(model.selected_classification.recall_macro) }}.</p></div>{% endif %}
 {% if finops %}<h2>Cost / quality options</h2>
-<div class="card"><table><tr><th>Option</th><th>Candidate</th><th>Score</th><th>Latency</th><th>Est. monthly serving</th></tr>
+<div class="card"><table><tr><th>Option</th><th>Candidate</th><th>Score{% if finops.all_candidates and finops.all_candidates[0].score_basis %} ({{ finops.all_candidates[0].score_basis }}){% endif %}</th><th>Latency</th><th>Est. monthly serving</th></tr>
 {% for name, o in finops.options.items() %}<tr><td>{{ name }}</td><td>{{ o.candidate }}</td>
 <td>{{ o.validation_score }}</td><td>{{ o.api_latency_ms }} ms</td><td>${{ o.est_monthly_serving_usd }}</td></tr>{% endfor %}
-</table><p><strong>Recommendation:</strong> {{ finops.recommendation.choice }} — {{ finops.recommendation.rationale }}</p></div>{% endif %}
+</table><p><strong>Recommendation:</strong> {{ finops.recommendation.choice }} — {{ finops.recommendation.rationale }}</p>
+{% if finops.recommendation.selection_note %}<p class="muted">{{ finops.recommendation.selection_note }}</p>{% endif %}</div>{% endif %}
 <h2>Validation</h2>
 <div class="card"><p>Verdict <span class="{{ validation.verdict }}">{{ validation.verdict|upper }}</span>;
 max safe deployment level {{ validation.max_safe_deployment_level }}/4.</p></div>
@@ -141,7 +155,18 @@ max safe deployment level {{ validation.max_safe_deployment_level }}/4.</p></div
 
 
 def executive_html(ctx_data: dict[str, Any]) -> str:
-    return _env.from_string(_EXEC).render(css=_BASE_CSS, **ctx_data)
+    """The executive report. ``narrative_commentary`` true means a model
+    rewrote the narrative: every sentence of it is marked, as in the chat
+    (avaloka.commentary); the deterministic narrative stays plain."""
+    from avaloka.commentary import COMMENTARY_SUFFIX, split_sentences, strip_suffixes
+
+    data = dict(ctx_data)
+    if data.get("narrative_commentary"):
+        data["narrative_sentences"] = split_sentences(strip_suffixes(str(data.get("narrative") or "")))
+    return _env.from_string(_EXEC).render(
+        css=_BASE_CSS, commentary_suffix=COMMENTARY_SUFFIX,
+        # The UI's COMMENTARY_TOOLTIP (ui/src/lib/reply-segments.ts).
+        commentary_tooltip="Avaloka wrote this; it is not checked against your data.", **data)
 
 
 def technical_html(ctx_data: dict[str, Any]) -> str:
@@ -160,18 +185,26 @@ def model_card_md(d: dict[str, Any]) -> str:
         f"- **Task:** {m['task']}",
         f"- **Target:** {d.get('target')}",
         f"- **Primary metric:** {m['metric']}",
-        f"- **Selected model:** {m['selected']}",
+        f"- **Selected model:** {m['selected']}"
+        + (f" (ranked on {'the CV mean' if m.get('selection_basis') == 'cv' else 'the holdout'})"
+           if m.get("selection_basis") else ""),
         f"- **Validation verdict:** {d['validation']['verdict'].upper()} "
         f"(max safe deployment level {d['validation']['max_safe_deployment_level']}/4)",
         "", "## Intended use", "",
         d.get("intended_use", "Decision support for the stated goal. Not a substitute for human "
               "judgement on high-stakes decisions."),
         "", "## Performance", "",
-        "| Candidate | " + m["metric"] + " | CV mean ± std |",
+        "| Candidate | " + m["metric"] + " (holdout) | CV mean ± std |",
         "|---|---|---|",
     ]
     for c in m["candidates"]:
         lines.append(f"| {c['name']} | {c['primary_score']:.4f} | {c['cv_mean']:.3f} ± {c['cv_std']:.3f} |")
+    verdict = m.get("ensemble_vs_single")
+    if verdict:
+        lines += ["", "### Ensemble versus single", "", verdict["reason"],
+                  f"Selected: {verdict['selected']} (CV winner: {verdict['cv_winner']}; "
+                  f"beyond fold noise: {verdict['exceeds_fold_noise']})."]
+    lines += _classification_section(m)
     lines += ["", "## Training data", "",
               f"- Rows: {m['n_train']} train / {m['n_test']} test",
               f"- Features: {len(m['feature_columns'])}",
@@ -182,3 +215,25 @@ def model_card_md(d: dict[str, Any]) -> str:
     for c in d["validation"]["checks"]:
         lines.append(f"- **{c['name']}** — {c['status'].upper()}: {c['detail']}")
     return "\n".join(lines) + "\n"
+
+
+def _classification_section(m: dict[str, Any]) -> list[str]:
+    """The selected classifier's confusion matrix and per-class precision/recall.
+
+    Rows are the actual class, columns the predicted; the header row and
+    column carry the labels, so the table reads on its own.
+    """
+    detail = m.get("selected_classification")
+    if not detail:
+        return []
+    table = detail["confusion_matrix"]
+    lines = ["", f"### Confusion matrix — {m['selected']} (rows actual, columns predicted)", "",
+             "| " + " | ".join(str(c) for c in table[0]) + " |",
+             "|" + "---|" * len(table[0])]
+    lines += ["| " + " | ".join(str(c) for c in row) + " |" for row in table[1:]]
+    lines += ["", "| Class | Precision | Recall | Support |", "|---|---|---|---|"]
+    lines += [f"| {name} | {pc['precision']:.3f} | {pc['recall']:.3f} | {pc['support']} |"
+              for name, pc in detail["per_class"].items()]
+    lines.append(f"\nMacro precision {detail['precision_macro']:.3f}, "
+                 f"macro recall {detail['recall_macro']:.3f}.")
+    return lines

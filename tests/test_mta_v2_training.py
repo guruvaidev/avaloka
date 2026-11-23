@@ -323,6 +323,7 @@ class TestExecuteTrainingNoплан:
 # Tests: _execute_training — LocalTrainer path (mocked trainer)
 # ---------------------------------------------------------------------------
 
+# These drive the WORKER pass (training_scheduled=True): the chat turn only enqueues.
 class TestExecuteTrainingLocalMocked:
     def setup_method(self):
         from app.agents.mta_v2.agent import ModelTrainingAgent
@@ -345,7 +346,7 @@ class TestExecuteTrainingLocalMocked:
         mock_trainer = MagicMock()
         mock_trainer.train.return_value = expected_result
 
-        state = _make_state(training_plan=plan)
+        state = _make_state(training_plan=plan, training_scheduled=True)
         with patch("app.agents.mta_v2.agent.llm", self._build_mock_llm()), \
              patch("app.agents.mta_v2.agent.LocalTrainer", return_value=mock_trainer):
             result = self.agent._execute_training(state)
@@ -382,7 +383,7 @@ class TestExecuteTrainingLocalMocked:
         }
 
         with patch("app.agents.mta_v2.agent.LocalTrainer", return_value=mock_trainer):
-            result = self.agent._execute_training(_make_state(training_plan=plan))
+            result = self.agent._execute_training(_make_state(training_plan=plan, training_scheduled=True))
 
         assert result["integrity_report"] == integrity
         assert result["integrity_safe_to_train"] is True
@@ -391,7 +392,7 @@ class TestExecuteTrainingLocalMocked:
 
     def test_trainer_receives_correct_user_and_session(self, tmp_csv):
         plan = _make_local_plan(tmp_csv)
-        state = _make_state(training_plan=plan, user_id="alice", session_id="sess-99")
+        state = _make_state(training_plan=plan, user_id="alice", session_id="sess-99", training_scheduled=True)
 
         mock_trainer = MagicMock()
         mock_trainer.train.return_value = {"mlflow_run_id": "r1", "final_accuracy": 0.9}
@@ -405,7 +406,7 @@ class TestExecuteTrainingLocalMocked:
 
     def test_training_scheduled_set_false_after_local_run(self, tmp_csv):
         plan = _make_local_plan(tmp_csv)
-        state = _make_state(training_plan=plan, training_scheduled=False)
+        state = _make_state(training_plan=plan, training_scheduled=True)
 
         mock_trainer = MagicMock()
         mock_trainer.train.return_value = {"mlflow_run_id": "r-x", "final_accuracy": 0.88}
@@ -418,7 +419,7 @@ class TestExecuteTrainingLocalMocked:
 
     def test_deterministic_report_appended_after_local_training(self, tmp_csv):
         plan = _make_local_plan(tmp_csv)
-        state = _make_state(training_plan=plan)
+        state = _make_state(training_plan=plan, training_scheduled=True)
 
         mock_trainer = MagicMock()
         mock_trainer.train.return_value = {"mlflow_run_id": "r-ai", "final_accuracy": 0.9}

@@ -1,0 +1,12 @@
+diff --git a/tests/prompt_suite/suites/v4_suite.json b/tests/prompt_suite/suites/v4_suite.json
+index c162e459..8ad974ee 100644
+--- a/tests/prompt_suite/suites/v4_suite.json
++++ b/tests/prompt_suite/suites/v4_suite.json
+@@ -32,7 +32,6 @@
+      "id": "ING-1",
+      "kind": "ingest",
+      "dataset": "housing.csv (local)",
+-     "expect": "200 \u00b7 schema (10 cols) + preview rows",
+      "raw": "Upload housing.csv via `/api/upload`",
+      "op": "upload",
+      "file": "housing.csv"

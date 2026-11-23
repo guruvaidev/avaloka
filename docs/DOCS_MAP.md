@@ -12,6 +12,8 @@ to start: **[README.md](../README.md)** for what Avaloka is,
 | [INSTALL.md](INSTALL.md) | anyone installing | Requirements, `scripts/install.sh`, editions, offline/air-gapped install, and the first-run failures that do not name their own cause |
 | [USER_GUIDE.md](USER_GUIDE.md) | people using the product | Signing in, uploading data, asking questions, reading the trust panel. No Kubernetes, no code |
 | [README_CLI.md](../README_CLI.md) | terminal users | The `avaloka` command — analyze, train, chat, batch, infer, deploy, coordinate, benchmark |
+| [cli-user-guide.html](cli-user-guide.html) | terminal users | Every `avaloka` command and option with worked examples and a `--debug` transcript; generated from the CLI's help by `scripts/gen_cli_guide.py` and checked by `tests/avaloka/test_cli_guide.py` |
+| [DEMO_GUIDE.md](DEMO_GUIDE.md) | anyone presenting Avaloka | Step-by-step 5, 15 and 30-minute demos for data scientists, analysts and data engineers, in the web app (quickstart) and the CLI, with what not to claim |
 
 ## Running it
 
@@ -47,7 +49,8 @@ to start: **[README.md](../README.md)** for what Avaloka is,
 | Document | For | What it is |
 | --- | --- | --- |
 | [CONTRIBUTING.md](../CONTRIBUTING.md) | contributors | Environment setup, the house style, how to run the suite, the project layout, and how to sign your work |
-| [CHANGELOG.md](../CHANGELOG.md) | upgraders | What changed, including the breaking changes since 1.6.0 |
+| [CHANGELOG.md](../CHANGELOG.md) | upgraders | What changed, release by release; 2.0.0 is the current heading |
+| [releases/2.0.md](releases/2.0.md) | everyone | The 2.0 release notes: what the public 2.0 release contains, where it came from, and the benchmark numbers once measured |
 | [oss-branch-model.md](oss-branch-model.md) | maintainers | How the public `main` is generated from `develop-1.6`, what is withheld, and the invariants that block a bad push |
 | [SECURITY.md](../SECURITY.md) | everyone | How to report a vulnerability. **Defect status lives in the issue tracker, not in `docs/`** |
 
@@ -63,6 +66,8 @@ in that directory describes shipped behaviour.
 
 ## Elsewhere
 
+- **[ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md)** — the people whose work
+  Avaloka's design draws on, with links to their own pages.
 - **[research/](research/)** — the paper and its figures. Maintained separately
   from this set; the PDFs here predate a citation fix noted in its own README.
 - **The PDFs in this directory.** `Avaloka-AI-1.0-User-Guide.pdf` and

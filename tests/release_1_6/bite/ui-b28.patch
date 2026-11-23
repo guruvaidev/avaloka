@@ -1,0 +1,12 @@
+diff --git a/ui/src/components/dashboard/BillingTab.tsx b/ui/src/components/dashboard/BillingTab.tsx
+--- a/ui/src/components/dashboard/BillingTab.tsx
++++ b/ui/src/components/dashboard/BillingTab.tsx
+@@ -2662,7 +2662,7 @@ function ActiveSubscription({ summary, onUpgrade, onPayNow, onCancel }: { summar
+               <Input readOnly value={customerAccount?.vat_number ?? ""} placeholder="—" className="h-10" />
+             </Field>
+             <Field label="Phone number" required>
+-              <Input readOnly value={profile?.phone ?? ""} placeholder="—" className="h-10" />
++              <Input readOnly value={""} placeholder="—" className="h-10" />
+             </Field>
+             <Field label="Billing Email">
+               <Input

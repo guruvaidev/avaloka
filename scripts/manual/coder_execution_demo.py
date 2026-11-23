@@ -34,7 +34,7 @@ The query should perform the following steps:
 """
 
 # PLACEHOLDER: User to substitute file path here
-INPUT_SOURCE_LOCATION = "C:/Users/Julia Maddu GS/Desktop/daft-migration-prototype/data/patient-data-raw.csv"
+INPUT_SOURCE_LOCATION = "path/to/patient-data-raw.csv"
 
 
 # 2. INSTANTIATION: ETL Object & Coder Agent

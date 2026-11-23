@@ -11,6 +11,15 @@ This is a different purpose from the Hindsight decision layer (PR #423), which
 deliberately collects no question text. Neither design justifies the other.
 The question is recorded inside the deployment only; it is never exported.
 
+**Owner decision D16.5 (2026-10-31): prompts stay local; only metadata is
+exported.** An earlier decision allowed the exported payload to carry the
+analyst's typed question (in a name-stripped form, behind a code constant).
+Typed text can contain column names, file names and data values, which breaks
+the standing constraint that telemetry never transmits customer data, column
+names or file names. D16.5 reversed it: the question-text export path was
+removed from the code, not switched off, and every exported record is held to an
+explicit metadata allowlist at the one egress point.
+
 ## Two tiers
 
 An event exists in two representations. They are not the same thing and the
@@ -20,7 +29,8 @@ schema says so (`representations` in `event-schema.v1.json`).
 | --- | --- | --- |
 | Where | The deployment's own database | An Avaloka-operated ingest |
 | When | By default, with a working opt-out | Only when an operator sets a flag **and** an endpoint |
-| Question text | `prompt`: as typed, after pattern redaction. **Column and table names included.** | **None, in any form.** Only `prompt_chars_bucket`, one of six length bands |
+| Question text | `prompt`: as typed, after pattern redaction. **Column and table names included.** | **None, in any form** (D16.5). Only `prompt_chars_bucket`, one of six length bands |
+| What it carries | Everything below, plus the question | **Metadata only:** event type, timings, counts and buckets, outcomes and error class names, closed-vocabulary routes, features and kinds, versions |
 | Identity | `actor_id` (stable keyed pseudonym), `session_id` | A 28-day re-keyed `actor_id`, `session_id`, `install_id` |
 | Is it anonymous? | **No.** | Pseudonymous behavioural data |
 
@@ -30,8 +40,9 @@ describes, inside the customer's deployment, which is why storing it there
 discloses nothing new — but it must not be described as anonymous, and it is
 not.
 
-**The exported tier carries no question text.** The owner decided this on a
-measurement, recorded under "Why no question text is exported" below.
+**The exported tier carries metadata only, and no question text** (owner
+decision D16.5). The earlier measurement that led to the first removal is
+recorded under "Why no question text is exported" below.
 
 ### The stored tier: retention and access
 
@@ -61,6 +72,16 @@ bound for outside the cluster.
   schema, and passes the result through `allowlist.safe()`. A column that does
   not belong to the event type, or a value outside its vocabulary, is dropped
   whatever put it in the table.
+- `export_pending` then holds every record to `allowlist.EXPORT_KEYS` once more
+  (`allowlist.exportable`), immediately before the transport. `EXPORT_KEYS` is
+  an explicit, written-out list of metadata fields, not derived from the schema:
+  a field added to the schema does not leave the cluster until it is added
+  there, in review.
+- `tests/analytics/test_no_prompt_egress.py` captures every outbound request at
+  the transport (`urllib.request.urlopen`) for a turn whose question names a
+  probe column, a probe file and a free-text probe, and asserts none of them is
+  in any outbound byte. A positive control shows the capture does see a prompt
+  when a builder sends one.
 - For every question in the test corpus, a test asserts that no word of the
   question appears anywhere in the exported record.
 
@@ -92,45 +113,21 @@ vocabulary, with the loss concentrated where plain speech and schema vocabulary
 overlap — which, for a data tool, is most of the sentence. The owner judged that
 not worth an egress path guarded by an unverified lookup, and removed it.
 
-### If question-text export is ever enabled
+### Question-text export was removed (D16.5)
 
-**This path is not exercised in production.** `names.py` and its tests are kept
-so the mechanism does not have to be reinvented, and the tests flip
-`export.EXPORT_QUESTION_TEXT` to keep it proven on constructed data. Unexercised
-code rots; assume this has, and re-prove it. Before changing that constant:
+Until 2026-10-31 a disabled question-text path remained in the code: the
+collector could prepare a name-stripped copy of the question (`prompt_export`,
+via `names.py`) and `export.to_wire` could send it as `prompt_stripped` if the
+constant `export.EXPORT_QUESTION_TEXT` were changed. Owner decision D16.5
+removed that path. There is no constant, setting or parameter that exports
+question text, and the collector no longer accepts a name vocabulary or
+prepares an exportable form. The `prompt_export` and `prompt_names_*` columns
+remain in the table only so existing databases need no migration; nothing writes
+them and nothing exports them.
 
-1. **Confirm the session blobs.** Nobody has checked, against a live
-   deployment, that the Redis dataset-session blobs carry column and table names
-   under the keys `names_from_session_blobs` reads (`uploaded_csv_columns`,
-   `schema`, `alias`, `filename`, `tables`). This is the first thing to verify.
-2. **Wire the provider.** `names.session_store_provider` is tested on fakes and
-   is wired nowhere. `app/api/server.py` mounts the collector without it.
-3. **Re-run the over-strip measurement on real questions** and decide again
-   whether the result is worth having.
-4. **Bump the schema.** The exported representation gains `prompt_stripped` and
-   the counters: additive, so a MINOR.
-5. **Update the egress inventory entry and the customer-facing list**, which
-   both currently say no question text leaves.
-
-It is a constant and not a setting so that all of this is a reviewed code
-change, not an environment variable.
-
-How the path behaves when enabled, for whoever picks it up:
-
-- *Fail closed.* No vocabulary — no provider, session store down, one session
-  expired or unreadable, more than 500 sessions, an analyst with no datasets —
-  means no text for that question.
-- *Not retroactive, by design.* The test runs at capture, and only if export is
-  on at that moment. A question asked while export was off never acquires an
-  exportable form, so enabling export ships nothing captured before the choice
-  was made. (The export job also sees only a pseudonym and could not look up
-  whose datasets to check.)
-- *Over-strip, count precisely.* Each removal lands in exactly one of
-  `prompt_names_exact`, `prompt_names_common_word`, `prompt_names_substring`.
-  `common_word` is the over-stripping gauge. It undercounts slightly: an English
-  word outside the built-in list (a table called `orders`) is recorded as `exact`.
-- *What it cannot remove:* a personal or organisation name in prose, an unquoted
-  value, a column of a dataset the deployment has no record of.
+`names.py` is no longer called by the product. A name-stripped question is still
+typed text, so it must not be wired to anything that leaves the cluster.
+Exporting any form of the question again would need a new owner decision.
 
 ## Schema
 
@@ -269,7 +266,7 @@ Delivery is at-least-once; `event_id` is unique in storage.
 | --- | --- | --- |
 | `AVALOKA_ANALYTICS=off` | Operator | Nothing stored, nothing exported |
 | `AVALOKA_TELEMETRY=off` | Operator | Same, unless `AVALOKA_ANALYTICS=on` is set explicitly |
-| `AVALOKA_ANALYTICS_PROMPT_TEXT=off` | Operator | Behavioural events kept; question text not stored (it is never exported either way) |
+| `AVALOKA_ANALYTICS_PROMPT_TEXT=off` | Operator | Behavioural events kept; question text not stored locally (it is never exported either way, D16.5) |
 | `PUT /analytics/opt-out` | Analyst | Their rows deleted; later events refused; never exported |
 | `Sec-GPC: 1` / `DNT: 1` | Browser | Nothing stored for that request |
 

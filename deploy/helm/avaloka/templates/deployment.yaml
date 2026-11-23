@@ -36,6 +36,14 @@ spec:
                 name: {{ include "avaloka.fullname" . }}-config
             - secretRef:
                 name: {{ include "avaloka.secretName" . }}
+          env:
+            # Sent on every call to the LangGraph server, which refuses calls
+            # without it (templates/langgraph.yaml).
+            - name: LANGGRAPH_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "avaloka.secretName" . }}
+                  key: LANGGRAPH_SERVICE_TOKEN
           readinessProbe:
             httpGet:
               path: /health

@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { ChevronDown, ChevronLeft, ChevronRight, Search, X, ArrowUp, ArrowDown } from "lucide-react";
 import { Button } from "@/components/base/buttons/button";
+import { CommentaryLabel, CommentaryText, commentaryPlainText } from "@/components/chat/CommentaryText";
+import { COMMENTARY_TOOLTIP } from "@/lib/reply-segments";
 import { Checkbox } from "@/components/base/checkbox/checkbox";
 import type { Slide } from "../dynamicChart";
 import type { InsightGroup } from "@/lib/insight-groups";
@@ -8,6 +10,8 @@ import type { InsightGroup } from "@/lib/insight-groups";
 export type InsightView = "grid" | "stack" | "columns";
 export type Column = {
   name: string; dtype?: string; role?: string; meaning?: string;
+  /** reply_segments for `meaning` (2.0): absent on older payloads, when the meaning is the model's anyway. */
+  meaning_segments?: unknown;
   predictive_value?: "high" | "medium" | "low";
   missing_pct?: number; n_unique?: number; min?: unknown; max?: unknown;
   mean?: number; median?: number; n_months?: number; first?: unknown; last?: unknown;
@@ -52,7 +56,14 @@ export function scopeCaption(config: any) {
   return count == null ? "Statistics scope not supplied" : `Statistics on ${full ? "all" : "a sample of"} ${number(count)} rows`;
 }
 export function ValuePill({ value, suffix = false }: { value?: Column["predictive_value"]; suffix?: boolean }) {
-  return value ? <span className={`ai-pill ai-value-${value}`}>{value}{suffix ? " value" : ""}</span> : null;
+  if (!value) return null;
+  return <span className="inline-flex items-center" data-predictive-value=""><span className="italic" title={COMMENTARY_TOOLTIP} data-commentary=""><span className={`ai-pill ai-value-${value}`}>{value}{suffix ? " value" : ""}</span></span><CommentaryLabel /></span>;
+}
+
+/** A column meaning is the profiling model's: marked from its segments, or whole when none travelled. */
+export function ColumnMeaning({ column }: { column: Column }) {
+  if (!column.meaning) return null;
+  return <CommentaryText text={column.meaning} segments={column.meaning_segments ?? [{ text: commentaryPlainText(column.meaning), kind: "commentary" }]} />;
 }
 
 export function AutoInsightsHeader({ groups, active, view, onDataset, onView, onClose }: {
@@ -99,7 +110,7 @@ export function ChartStatsRail({ config, slide, onAllColumns }: { config: any; s
   const fields = fieldsOf(config, slide);
   const columns = columnsOf(config).filter((column) => fields.includes(column.name));
   return <aside className="ai-stats-rail ai-surface"><div className="ai-rail-heading"><h3 className="ai-eyebrow">COLUMNS IN THIS CHART</h3><Button color="link-color" className="ai-all-columns" onPress={onAllColumns}>All columns →</Button></div>
-    {columns.map((column) => <section className="ai-column-block" key={column.name}><div className="ai-column-heading"><strong>{column.name}</strong><ValuePill value={column.predictive_value} suffix /></div>{column.meaning && <p className="ai-meaning">{column.meaning}</p>}<p className="ai-column-meta">{columnType(column)} · {percent(column.missing_pct)} missing · {number(column.n_unique)} distinct</p>
+    {columns.map((column) => <section className="ai-column-block" key={column.name}><div className="ai-column-heading"><strong>{column.name}</strong><ValuePill value={column.predictive_value} suffix /></div>{column.meaning && <p className="ai-meaning"><ColumnMeaning column={column} /></p>}<p className="ai-column-meta">{columnType(column)} · {percent(column.missing_pct)} missing · {number(column.n_unique)} distinct</p>
       {columnType(column) === "Number" ? <dl className="ai-stat-tiles">{(['Min', 'Median', 'Mean', 'Max'] as const).map((label) => <div key={label}><dt>{label}</dt><dd>{number(column[label.toLowerCase() as 'min' | 'median' | 'mean' | 'max'], true)}</dd></div>)}</dl> : columnType(column) === "Date" ? <p className="ai-date-range">{date(column.first ?? column.min)} → {date(column.last ?? column.max)}<small>{number(column.n_months)} months</small></p> : <div className="ai-top-values">{column.top_values?.slice(0, 3).map((item, index) => <div key={index}><span title={String(item.value)}>{String(item.value)}</span><meter min={0} max={100} value={item.pct ?? 0} aria-label={`${item.value}: ${percent(item.pct)}`} /><span>{percent(item.pct)}</span></div>)}</div>}
     </section>)}
     {!columns.length && <p className="ai-meaning">No column statistics available for this chart.</p>}<footer className="ai-scope">{scopeCaption(config)}</footer>
@@ -137,7 +148,7 @@ export function ColumnStatisticsTab({ config, slides, onChart }: { config: any; 
   const onSort = (key: 'missing_pct' | 'n_unique' | 'predictive_value') => setSort((prev) => ({ key, asc: prev?.key === key ? !prev.asc : true }));
   const choose = (column: Column) => { setSelected(column.name); const index = slides.findIndex((slide) => fieldsOf(config, slide).includes(column.name)); if (index >= 0) onChart(index); };
   return <section className="ai-columns-tab ai-surface"><div className="ai-toolbar"><div className="ai-filters">{(['All', 'Number', 'Category', 'Date'] as const).map((type, index) => <Button color="secondary" key={type} className={`ai-control ai-filter ${filter === type ? 'ai-active' : ''}`} aria-pressed={filter === type} onPress={() => setFilter(type)}>{['All', 'Numbers', 'Categories', 'Dates'][index]} {counts[index]}</Button>)}</div><div className="ai-search-tools"><Checkbox label="Show ID columns" isSelected={showIds} onChange={setShowIds} /><label className="ai-search"><Search size={16} /><input aria-label="Search columns" placeholder="Search columns" value={search} onChange={(event) => setSearch(event.target.value)} /></label></div></div>
-    <div className="ai-table-scroll"><table className="ai-column-table"><thead><tr><th>Column</th><th>Type</th>{([['Predictive value', 'predictive_value'], ['Missing', 'missing_pct'], ['Distinct', 'n_unique']] as const).map(([label, key]) => <th key={key} aria-sort={sort?.key === key ? sort.asc ? 'ascending' : 'descending' : 'none'}><Button color="tertiary" className="ai-control ai-sort" onPress={() => onSort(key)}>{label}{sort?.key === key && (sort.asc ? <ArrowUp size={12} /> : <ArrowDown size={12} />)}</Button></th>)}<th>Summary</th></tr></thead><tbody>{rows.map((column) => <tr key={column.name} className={selected === column.name ? 'ai-row-selected' : ''} onClick={() => choose(column)}><td><Button color="tertiary" className="ai-control ai-column-name" onPress={() => choose(column)}>{column.name}</Button>{column.meaning && <p title={column.meaning}>{column.meaning}</p>}</td><td><span className={`ai-pill ai-type-${columnType(column).toLowerCase()}`}>{columnType(column)}</span></td><td><ValuePill value={column.predictive_value} /></td><td>{percent(column.missing_pct)}</td><td>{number(column.n_unique)}</td><td><MiniSummary column={column} config={config} /></td></tr>)}</tbody></table>{!rows.length && <p className="ai-empty">{search ? `No columns match "${search}"` : 'No column statistics available for this dataset'}</p>}</div>
+    <div className="ai-table-scroll"><table className="ai-column-table"><thead><tr><th>Column</th><th>Type</th>{([['Predictive value', 'predictive_value'], ['Missing', 'missing_pct'], ['Distinct', 'n_unique']] as const).map(([label, key]) => <th key={key} aria-sort={sort?.key === key ? sort.asc ? 'ascending' : 'descending' : 'none'}><Button color="tertiary" className="ai-control ai-sort" onPress={() => onSort(key)}>{label}{sort?.key === key && (sort.asc ? <ArrowUp size={12} /> : <ArrowDown size={12} />)}</Button></th>)}<th>Summary</th></tr></thead><tbody>{rows.map((column) => <tr key={column.name} className={selected === column.name ? 'ai-row-selected' : ''} onClick={() => choose(column)}><td><Button color="tertiary" className="ai-control ai-column-name" onPress={() => choose(column)}>{column.name}</Button>{column.meaning && <p title={commentaryPlainText(column.meaning, column.meaning_segments)}><ColumnMeaning column={column} /></p>}</td><td><span className={`ai-pill ai-type-${columnType(column).toLowerCase()}`}>{columnType(column)}</span></td><td><ValuePill value={column.predictive_value} /></td><td>{percent(column.missing_pct)}</td><td>{number(column.n_unique)}</td><td><MiniSummary column={column} config={config} /></td></tr>)}</tbody></table>{!rows.length && <p className="ai-empty">{search ? `No columns match "${search}"` : 'No column statistics available for this dataset'}</p>}</div>
     <footer className="ai-table-footer"><span>{scopeCaption(config)}{!showIds && hidden > 0 ? ` · ${hidden} ID columns hidden` : ''}</span><span>Click a column to see the charts that use it</span></footer>
   </section>;
 }

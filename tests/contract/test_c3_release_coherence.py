@@ -14,9 +14,13 @@ day the defect is fixed the xfail turns into an xpass and must be deleted.
 from __future__ import annotations
 
 import configparser
+import importlib.util
+import os
 import pathlib
 import re
+import shlex
 import subprocess
+import tomllib
 from typing import Dict, List, Tuple
 
 import pytest
@@ -211,6 +215,9 @@ def _tracked_test_files() -> List[str]:
 # on position 5 rather than telling anyone a marker had been added.
 _DECLARED_MARKERS: Tuple[str, ...] = (
     "cloud", "integration", "cluster", "kuberay", "kaggle", "slow",
+    # Deselected from the main run and selected by the LangGraph server venv
+    # (scripts/langgraph_server_tests.sh): the main env has no LangGraph CLI.
+    "langgraph_server",
 )
 
 #: Markers that exist for grouping rather than selection -- they are never
@@ -221,7 +228,32 @@ _DECLARED_MARKERS: Tuple[str, ...] = (
 #: directory), so the hermetic filter already deselects it and needs no new
 #: clause. It exists so scripts/integration.sh can select that suite alone.
 _NON_SELECTION_MARKERS = frozenset(
-    {"defect", "single", "multi", "transfer", "operations", "containers"})
+    {"defect", "single", "multi", "transfer", "operations", "containers",
+     # #260's paired optimizer benchmarks. Always worn together with `kaggle`,
+     # and hermetic: the datasets are the tracked CSVs under app/sample_data,
+     # so the gate runs them and the filter has nothing to deselect.
+     "kaggle_efficiency",
+     # `heavy` and `notebook` are here by decision too. Each test that wears one
+     # gates itself, so the hermetic filter has nothing to deselect:
+     #   heavy    -- a 5,000,000-row file or a real torch training run; skipped
+     #               unless AVALOKA_HEAVY_TESTS=1 (tests/recipes) or
+     #               AVALOKA_BENCH_HEAVY=1 (tests/benchmark/conftest.py).
+     #   notebook -- runs a recipe's notebook in a local kernel (no network);
+     #               skipped unless avaloka[recipes-test] is installed
+     #               (notebook_exec.missing_dependency()). Where the extra is
+     #               present the parity proof should run, not be filtered out.
+     # test_self_gated_markers_still_gate_themselves holds that true.
+     "heavy", "notebook"})
+
+#: Each self-gated marker and what a test file wearing it must also carry.
+_SELF_GATES: Dict[str, Tuple[str, ...]] = {
+    "heavy": ("AVALOKA_HEAVY_TESTS",),
+    "notebook": ("missing_dependency()",),
+}
+#: Directories whose conftest.py gates a marker for every test beneath it.
+_CONFTEST_GATES: Dict[str, Tuple[str, str]] = {
+    "heavy": ("tests/benchmark/", "AVALOKA_BENCH_HEAVY"),
+}
 _MARKER_RE = re.compile(r"pytest\.mark\.(?:%s)\b" % "|".join(_DECLARED_MARKERS))
 
 _INFRA_SIGNALS: Dict[str, re.Pattern] = {
@@ -239,7 +271,6 @@ _INFRA_SIGNALS: Dict[str, re.Pattern] = {
 
 _KNOWN_UNMARKED_INFRA_TESTS: Tuple[str, ...] = (
     "tests/infra/test_eks_deployment.py",
-    "tests/test_e2e_gke_groupby_sum.py",
     "tests/test_mcp_server_integration.py",
     "tests/test_youtube_e2e.py",
 )
@@ -419,7 +450,7 @@ def test_e14_07_ci_has_pull_request_pipeline_with_hermetic_marker_filter() -> No
 
 
 def test_e14_07_ci_test_step_runs_without_provider_credentials() -> None:
-    """The hermetic step clears provider variables Bitbucket injects into every step."""
+    """The hermetic step clears provider variables the CI runner injects into every step."""
     must_clear = {
         "GROQ_API_KEY",
         "GROQ_API_KEY_CODING_AGENT",
@@ -444,6 +475,232 @@ def test_e14_07_ci_test_step_runs_without_provider_credentials() -> None:
         )
 
 
+def _run_tests_script() -> List[str]:
+    steps = _pipelines_yaml()["definitions"]["steps"]
+    step = next(s["step"] for s in steps if s["step"].get("name") == "Run Tests")
+    return [line for line in step["script"] if isinstance(line, str)]
+
+
+#: A suite whose status is deferred: `rc=0; <pytest ...> || rc=$?; echo "$rc" > "$<VAR>"`.
+#: No command in that list exits non-zero, so it cannot end the step even when the
+#: runner executes the entries under `set -e`. `pytest ...; echo "$?"` would: under
+#: errexit the red pytest itself ends the step before the echo runs.
+_ECHO_STATUS_RE = re.compile(r';\s*echo\s+"\$\?"')
+
+
+def _defers_to(line: str, var: str) -> bool:
+    return bool(re.match(r"\s*rc=0;\s", line)) and bool(
+        re.search(r'\|\|\s*rc=\$\?;\s*echo\s+"\$rc"\s*>\s*"\$' + var + r'"\s*$', line))
+
+
+#: Run Tests' three suites: status variable, the verdict's shell variable, and the line.
+_DEFERRED_SUITES: Dict[str, Tuple[str, object]] = {
+    "POSTGRES_SUITE_RC": ("pg_rc", lambda l: "pytest" in l and "-m integration" in l),
+    "MAIN_SUITE_RC": ("main_rc", lambda l: "pytest" in l and "not integration" in l
+                      and re.search(r"\stests/\s*(\|\||;|$)", l)),
+    "RECIPES_SUITE_RC": ("recipes_rc", lambda l: "pytest" in l
+                         and re.search(r"\stests/recipes/?\s*(\|\||;|$)", l)),
+}
+
+
+def test_e14_07_every_suite_is_deferred_and_counted() -> None:
+    """The Postgres line, the main suite and tests/recipes all run and report, and each fails the step.
+
+    A CI run ended at a red main suite before tests/recipes ran, so recipes never
+    reported. Each suite records its status in errexit-safe form, and one verdict entry
+    after all three prints every status and fails on any that is non-zero or missing.
+    """
+    script = _run_tests_script()
+    verdicts = [i for i, l in enumerate(script) if all(re.search(r'\bcat\s+"\$' + v + '"', l)
+                                                       for v in _DEFERRED_SUITES)]
+    assert len(verdicts) == 1, "no single verdict entry reads all three suite statuses"
+    verdict = script[verdicts[0]]
+    for var, (shell_var, finds) in _DEFERRED_SUITES.items():
+        lines = [i for i, l in enumerate(script) if finds(l)]
+        assert len(lines) == 1, f"Run Tests has {len(lines)} lines for the suite recorded in ${var}"
+        line = script[lines[0]]
+        assert not _ECHO_STATUS_RE.search(line), (
+            f'the suite for ${var} uses `; echo "$?"`, which ends the step under set -e: ' + line[-120:])
+        assert _defers_to(line, var), (
+            f'the suite for ${var} is not deferred as `rc=0; ... || rc=$?; echo "$rc" > "${var}"`: ' + line[-120:])
+        assert any(re.match(rf"export {var}=\S+$", l.strip()) for l in script[:lines[0]]), (
+            f"${var} is not exported before its line")
+        assert lines[0] < verdicts[0], f"the verdict entry runs before the suite recorded in ${var}"
+        assert re.search(r'^\s*\[\s*"\$' + shell_var + r'"\s*=\s*0\s*\]\s*\|\|\s*failed=1\s*$', verdict, re.M), (
+            f"the verdict entry does not fail the step on ${var}")
+        assert re.search(r'echo\s+"[^"]*\$' + shell_var + '"', verdict), f"the verdict entry does not print ${var}"
+    # One plain test last: under set -e a failing `[ a ] && [ b ]` whose failure is not
+    # the list's last command does not stop the shell, so a chain can let a red through.
+    assert re.match(r"^\s*failed=0\s*$", verdict.strip().splitlines()[0]), "the verdict entry must start from failed=0"
+    assert verdict.strip().splitlines()[-1].strip() == '[ "$failed" = 0 ]', (
+        'the verdict entry must end on the single test [ "$failed" = 0 ]')
+    pytest_lines = [l for l in script if "pytest" in l]
+    echoing = [l[-80:] for l in pytest_lines if _ECHO_STATUS_RE.search(l)]
+    assert not echoing, f'Run Tests records a suite status with `; echo "$?"`: {echoing}'
+
+
+def test_e14_07_postgres_suite_cannot_end_the_step_before_the_main_suite() -> None:
+    """A red Postgres test still lets the hermetic suite run, and still fails the step.
+
+    The CI runner stops a step at the first command that exits non-zero. The Postgres
+    `-m integration` line runs first, so when it was a plain command a red test there
+    left the commit with no main-suite result (pipeline 2627 on develop-1.7).
+    """
+    script = _run_tests_script()
+    pg = [i for i, line in enumerate(script) if "pytest" in line and "-m integration" in line]
+    hermetic = [i for i, line in enumerate(script) if "pytest" in line and "not integration" in line]
+    assert len(pg) == 1 and hermetic, f"Run Tests has {len(pg)} Postgres and {len(hermetic)} hermetic lines"
+    line = script[pg[0]]
+    assert _defers_to(line, "POSTGRES_SUITE_RC"), (
+        "the Postgres line must record its exit status in $POSTGRES_SUITE_RC, not end the step: " + line[-160:])
+    assert re.search(r"\s-r[a-zA-Z]*A", line), "the Postgres line must report every test by node id (-rA)"
+    # `cat "$POSTGRES_SUITE_RC"`, not a bare "cat": the Postgres line names tests/catalog/.
+    verdict = [i for i, l in enumerate(script) if re.search(r'\bcat\s+"\$POSTGRES_SUITE_RC"', l)]
+    assert verdict and verdict[0] > max(hermetic), "nothing after the hermetic line fails the step on the Postgres status"
+    assert re.search(r'\[\s*"\$pg_rc"\s*=\s*0\s*\]\s*\|\|\s*failed=1', script[verdict[0]]), (
+        "the verdict entry must fail the step on the Postgres status")
+
+
+#: Real-Postgres modules that run somewhere other than the Run Tests Postgres line.
+#: tests/containers/ is the scripts/integration.sh suite, with a database of its own;
+#: tests/release_1_6/ is the 1.6 Release Suite (integration) step, which runs the
+#: whole directory (checked below, so the exemption cannot outlive that step).
+_POSTGRES_LINE_EXEMPT_PREFIXES: Tuple[str, ...] = ("tests/containers/", "tests/release_1_6/")
+
+#: Node ids the Postgres line may `--deselect`. Each is an open question, recorded
+#: beside the line in bitbucket-pipelines.yml; anything else deselected is a test
+#: quietly taken out of CI.
+_POSTGRES_LINE_DESELECTED: Tuple[str, ...] = ()
+
+
+def _postgres_line_args() -> Tuple[List[str], List[str]]:
+    """The Postgres line's module arguments and its --deselect node ids."""
+    pg = [line for line in _run_tests_script() if "pytest" in line and "-m integration" in line]
+    assert len(pg) == 1, f"Run Tests has {len(pg)} Postgres lines"
+    command = next(part for part in re.split(r";|\|\|", pg[0]) if re.search(r"\bpytest\s", part))
+    words = shlex.split(command)
+    modules: List[str] = []
+    deselected: List[str] = []
+    i = 0
+    while i < len(words):
+        if words[i] == "--deselect" and i + 1 < len(words):
+            deselected.append(words[i + 1])
+            i += 2
+            continue
+        if words[i].startswith("--deselect="):
+            deselected.append(words[i].split("=", 1)[1])
+        elif re.fullmatch(r"tests/\S+\.py", words[i]):
+            modules.append(words[i])
+        i += 1
+    return modules, deselected
+
+
+def test_e14_07_postgres_line_names_every_real_postgres_module() -> None:
+    """Every `integration` module that reads the CI database's URL is on the Postgres line.
+
+    The hermetic line deselects `integration`, so a real-Postgres module left off the
+    `-m integration` line never runs in CI at all, and natively it only skips. The
+    converse holds too: every module the line names exists, and the only node it
+    deselects is one recorded as an open question.
+    """
+    modules, deselected = _postgres_line_args()
+    named = set(modules)
+    needed = []
+    for rel in _tracked_test_files():
+        if rel.startswith(_POSTGRES_LINE_EXEMPT_PREFIXES):
+            continue
+        text = (REPO_ROOT / rel).read_text(encoding="utf-8", errors="replace")
+        if re.search(r"AVALOKA_TEST_(?:PG_ADMIN|POSTGRES)_URL", text) and re.search(
+                r"pytest\.mark\.integration\b", text):
+            needed.append(rel)
+    assert needed, "found no real-Postgres module at all; the detector is broken"
+    missing = sorted(set(needed) - named)
+    assert not missing, f"real-Postgres modules missing from the Postgres line: {missing}"
+    absent = sorted(f for f in named if not (REPO_ROOT / f).is_file())
+    assert not absent, f"the Postgres line names modules that do not exist: {absent}"
+    unexpected = sorted(set(deselected) - set(_POSTGRES_LINE_DESELECTED))
+    assert not unexpected, f"the Postgres line deselects tests nobody recorded as open: {unexpected}"
+    for node in deselected:
+        module, _, name = node.partition("::")
+        assert module in named, f"{node} is deselected from a module the line does not run"
+        assert re.search(rf"^\s*(?:async\s+)?def\s+{re.escape(name)}\b",
+                         _read(module), re.M), f"the deselected test {node} does not exist"
+    release = [line for line in _all_pipeline_script_lines()
+               if "pytest" in line and "-m integration" in line
+               and re.search(r"\stests/release_1_6/?\s*$", line)]
+    assert release, "no step runs `-m integration tests/release_1_6/`, so its exemption above is false"
+
+
+#: The extras tests/recipes needs: the engine and statistics, and the notebook kernel.
+_RECIPE_EXTRAS: Tuple[str, ...] = ("recipes", "recipes-test")
+
+
+def _extra_modules(extra: str) -> List[str]:
+    """The import names of one pyproject extra (e.g. duckdb, scipy, statsmodels)."""
+    specs = tomllib.loads(_read("pyproject.toml"))["project"]["optional-dependencies"][extra]
+    return [re.match(r"[A-Za-z0-9_.-]+", spec).group(0).replace("-", "_").lower() for spec in specs]
+
+
+def test_e14_07_ci_test_step_installs_the_recipes_extras() -> None:
+    """Run Tests installs `[recipes,recipes-test]` before the hermetic line, so tests/recipes runs.
+
+    requirements.txt has neither DuckDB nor a notebook kernel. Without the extras every
+    recipe test that runs a query fails with "DuckDB is not installed", and the notebook
+    parity tests skip, so neither tests anything.
+    """
+    assert "duckdb" in _extra_modules("recipes"), "pyproject's recipes extra no longer names duckdb"
+    assert "ipykernel" in _extra_modules("recipes-test"), "pyproject's recipes-test extra no longer names ipykernel"
+    script = _run_tests_script()
+    hermetic = [i for i, line in enumerate(script) if "pytest" in line and "not integration" in line]
+    assert hermetic, "Run Tests has no hermetic pytest line"
+    for extra in _RECIPE_EXTRAS:
+        install = [i for i, line in enumerate(script)
+                   if re.search(r"\bpip install\b.*\[[^\]]*(?<![\w-])" + re.escape(extra) + r"(?![\w-])[^\]]*\]", line)]
+        assert install, f"Run Tests does not install the {extra} extra (pip install -e '.[recipes,recipes-test]')"
+        assert install[0] < hermetic[0], f"the {extra} extra is installed after the hermetic suite has run"
+
+
+def test_e14_07_recipes_suite_runs_apart_from_the_main_suite_and_counts() -> None:
+    """tests/recipes is its own pytest process after the main suite, and its status fails the step.
+
+    Its notebook tests each start an ipykernel. Inside the main suite's process they
+    shared the build container's memory with everything else, and the step ended on
+    "exceeded memory limit" with no summary. Apart, they must still count: the line
+    records its status and the verdict entry exits on it, like the Postgres line.
+    """
+    script = _run_tests_script()
+    main = [i for i, line in enumerate(script)
+            if _DEFERRED_SUITES["MAIN_SUITE_RC"][1](line)]
+    assert len(main) == 1, f"Run Tests has {len(main)} main hermetic lines"
+    assert re.search(r"--ignore=tests/recipes/?(\s|$)", script[main[0]]), (
+        "the main hermetic line must leave tests/recipes to its own process")
+    recipes = [i for i, line in enumerate(script)
+               if _DEFERRED_SUITES["RECIPES_SUITE_RC"][1](line)]
+    assert len(recipes) == 1, f"Run Tests has {len(recipes)} tests/recipes lines"
+    line = script[recipes[0]]
+    assert recipes[0] > main[0], "the recipes line must run after the main suite"
+    assert "not cluster and not cloud and not integration" in line, "the recipes line must use the hermetic markers"
+    assert _defers_to(line, "RECIPES_SUITE_RC"), (
+        "the recipes line must record its exit status in $RECIPES_SUITE_RC: " + line[-160:])
+    verdict = [i for i, l in enumerate(script) if re.search(r'\bcat\s+"\$RECIPES_SUITE_RC"', l)]
+    assert verdict and verdict[0] > recipes[0], "nothing after the recipes line fails the step on its status"
+    assert re.search(r'\[\s*"\$recipes_rc"\s*=\s*0\s*\]\s*\|\|\s*failed=1', script[verdict[0]]), (
+        "the verdict entry must exit non-zero when the recipes suite failed")
+
+
+def test_e14_07_recipes_extras_are_importable_under_ci() -> None:
+    """With CI set, every module of both recipe extras imports, so no recipe test can
+    fail or skip for want of one. Natively the extras are optional and this skips."""
+    if os.environ.get("CI", "").strip().lower() in ("", "0", "false"):
+        pytest.skip("CI is not set; the recipe extras are optional on a laptop")
+    missing = {extra: [m for m in _extra_modules(extra) if importlib.util.find_spec(m) is None]
+               for extra in _RECIPE_EXTRAS}
+    missing = {extra: mods for extra, mods in missing.items() if mods}
+    assert not missing, (
+        f"CI is set but a recipe extra is not installed (missing: {missing}); "
+        "tests/recipes would fail or skip rather than test anything")
+
+
 def test_e14_07_ci_marker_expression_matches_ci_sh() -> None:
     """The pipeline's marker expression and scripts/ci.sh's must not drift apart."""
     ci_sh = (REPO_ROOT / "scripts" / "ci.sh").read_text(encoding="utf-8")
@@ -456,6 +713,43 @@ def test_e14_07_ci_marker_expression_matches_ci_sh() -> None:
     ), (
         f"pipeline does not run ci.sh's marker expression {expected!r}. "
         "Both files carry a comment saying they must stay in step; this is what enforces it."
+    )
+
+
+def _steps(node: object):
+    """Every step mapping under a pipeline tier, through `parallel:` groups and `<<:` merges."""
+    if isinstance(node, dict):
+        if isinstance(node.get("step"), dict):
+            yield node["step"]
+        for value in node.values():
+            yield from _steps(value)
+    elif isinstance(node, list):
+        for item in node:
+            yield from _steps(item)
+
+
+def test_e14_07_gating_tier_steps_carry_no_condition() -> None:
+    """No step in the pull-requests tier or a branch tier may carry a `condition:`.
+
+    Build 2706 (PR #783) skipped UI Unit Tests and Build and Verify CLI with
+    "Changesets condition not satisfied" on a push whose only changed file,
+    bitbucket-pipelines.yml, was listed in their includePaths -- while the first
+    build of the same pull request had evaluated the same one-file diff as
+    "Step condition satisfied" and run them. A skip rule that nobody can
+    explain fails "if in doubt, a step runs", so the gating tiers are
+    unconditional: a step either is in a tier or it is not.
+    """
+    pipelines = _pipelines_yaml()["pipelines"]
+    conditioned = sorted(
+        f"{tier_kind}: {name}: {step.get('name')}"
+        for tier_kind in ("pull-requests", "branches")
+        for name, tier in (pipelines.get(tier_kind) or {}).items()
+        for step in _steps(tier)
+        if "condition" in step
+    )
+    assert not conditioned, (
+        f"gating-tier steps carry a condition and can be skipped: {conditioned}. "
+        "Remove the condition or remove the step from the tier; see build 2706."
     )
 
 
@@ -526,6 +820,36 @@ def test_pytest_ini_markers_are_stable() -> None:
     )
 
 
+def _ungated_self_gated_tests() -> Dict[str, List[str]]:
+    """Test files that wear a self-gated marker without its gate, by marker."""
+    out: Dict[str, List[str]] = {}
+    for marker, gates in _SELF_GATES.items():
+        wears = re.compile(r"pytest\.mark\.%s\b" % marker)
+        conftest = _CONFTEST_GATES.get(marker)
+        for rel in _tracked_test_files():
+            src = (REPO_ROOT / rel).read_text(encoding="utf-8", errors="replace")
+            if not wears.search(src) or any(g in src for g in gates):
+                continue
+            if conftest and rel.startswith(conftest[0]) and conftest[1] in _read(conftest[0] + "conftest.py"):
+                continue
+            out.setdefault(marker, []).append(rel)
+    return out
+
+
+def test_self_gated_markers_still_gate_themselves() -> None:
+    """`heavy` and `notebook` stay out of the hermetic filter only while every test wearing one skips itself."""
+    ungated = _ungated_self_gated_tests()
+    assert not ungated, (
+        f"tests wear a self-gated marker without its gate: {ungated}. The hermetic filter does not "
+        "deselect these markers (see _NON_SELECTION_MARKERS); add the gate, or add the marker to "
+        "scripts/ci.sh HERMETIC_MARKERS, bitbucket-pipelines.yml and _DECLARED_MARKERS."
+    )
+    worn = {m for m in _SELF_GATES if any(
+        re.search(r"pytest\.mark\.%s\b" % m, (REPO_ROOT / rel).read_text(encoding="utf-8", errors="replace"))
+        for rel in _tracked_test_files())}
+    assert worn == set(_SELF_GATES), f"no test wears {sorted(set(_SELF_GATES) - worn)}: the check is vacuous"
+
+
 def test_root_level_test_scripts_are_not_collectable_pins_testpaths_scoping() -> None:
     """testpaths stays scoped to tests/, and no stray test script sits at the root.
 
@@ -563,7 +887,7 @@ def test_hermetic_marker_audit_detector_flags_known_offenders(offender: str) -> 
         "DEFECT MARKER-AUDIT (P0): infrastructure-touching tests carry no marker, so "
         "-m 'not cluster and not cloud and not integration' does not deselect them and the plan's "
         "'hermetic suite green' entry criterion is unenforceable. Known offenders: "
-        "tests/test_e2e_gke_groupby_sum.py (docker build + GKE), tests/test_youtube_e2e.py (real LLM/Milvus), "
+        "tests/test_youtube_e2e.py (real LLM/Milvus), "
         "tests/infra/test_eks_deployment.py (boto3 + load_dotenv of the root .env), "
         "tests/test_mcp_server_integration.py (live services on localhost:5432/8080/8081). "
         "Remove this xfail when fixed."
@@ -648,3 +972,30 @@ def test_e6_07_memory_circuit_breaker_is_merged() -> None:
     semantics = _read("tests/test_memory_semantics.py")
     assert "MEMORY_CIRCUIT_BREAKER_TIMEOUT" in semantics
     assert len(_TEST_FUNC_RE.findall(semantics)) >= 1
+
+
+def test_release_tag_publishes_its_version_tags() -> None:
+    """A ``v*`` tag push builds, so ``:<version>`` and ``:<major>.<minor>`` exist.
+
+    The workflow skips a build whose content tag is already published. A release
+    tag normally points at a commit main has already built, so without a tag
+    exception the skip fired, the semver tags -- applied only by the build --
+    were never pushed, and ``:1.0.0`` did not resolve after tagging v1.0.0.
+    """
+    workflow = yaml.safe_load(_read(".github/workflows/images.yml"))
+    # PyYAML reads the bare key `on` as True.
+    triggers = workflow.get("on", workflow.get(True))
+    assert "v*" in triggers["push"]["tags"], "images.yml no longer builds on a v* tag"
+    steps = {step.get("id"): step for step in workflow["jobs"]["build"]["steps"] if step.get("id")}
+    meta = steps["meta"]["with"]["tags"]
+    assert "type=semver,pattern={{version}}" in meta
+    assert "type=semver,pattern={{major}}.{{minor}}" in meta
+    script = steps["published"]["run"]
+    marker = '"${{ github.ref_type }}" == "tag"'
+    assert marker in script, (
+        "images.yml skips a release tag like any push whose content tag exists, so "
+        ":<version> and :<major>.<minor> are never published")
+    tag_branch = script.index(marker)
+    skip_branch = script.index('echo "skip=true"')
+    assert tag_branch < skip_branch, "a release tag can still be skipped before it is built"
+    assert 'echo "skip=false"' in script[tag_branch:skip_branch]

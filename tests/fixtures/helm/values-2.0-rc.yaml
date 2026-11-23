@@ -1,0 +1,518 @@
+# deploy/helm/avaloka/values.yaml as of 72f31eee (base/2.0-rc, 2026-10-19), the oldest 2.x
+# release chart. `helm upgrade --reuse-values` of an install made from it hands the new
+# templates these values and none of the new chart's defaults. Every string under `secrets`
+# and every *key/secret/password/token/url/uri value is blanked (13 values).
+replicaCount: 1
+storage:
+  className: ''
+  accessMode: ReadWriteOnce
+image:
+  repository: ghcr.io/guruvaidev/avaloka-api
+  tag: main
+  pullPolicy: IfNotPresent
+service:
+  type: NodePort
+  port: 9000
+  targetPort: 9000
+  nodePort: 30085
+  annotations: {}
+redis:
+  enabled: true
+  image: redis:7-alpine
+  pullPolicy: IfNotPresent
+  port: 6379
+  externalUrl: ''
+  persistence:
+    enabled: true
+    size: 8Gi
+    storageClass: ''
+  appendOnly: true
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+memory:
+  circuitBreakerTimeout: 20.0
+  offlineEmbeddings: true
+chroma:
+  enabled: true
+  image: chromadb/chroma:latest
+  pullPolicy: IfNotPresent
+  port: 8000
+  externalHost: ''
+  persistence:
+    enabled: true
+    size: 5Gi
+  seed:
+    enabled: false
+    sourceUri: ''
+    image: rclone/rclone:1.71.1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+postgres:
+  enabled: true
+  image: postgres:16-alpine
+  pullPolicy: IfNotPresent
+  port: 5432
+  user: avaloka
+  password: ''
+  database: avaloka
+  externalUrl: ''
+  persistence:
+    enabled: true
+    size: 20Gi
+    storageClass: ''
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: '1'
+      memory: 1Gi
+lineage:
+  enabled: true
+  databaseUrl: ''
+seaweedfs:
+  enabled: true
+  image:
+    repository: chrislusf/seaweedfs
+    tag: '4.48'
+    digest: sha256:4e61d15fd35994cb1e43e1e553dff106794841fd9a99ade2fc8c8bfce4d7872d
+    pullPolicy: IfNotPresent
+  awsCliImage:
+    repository: amazon/aws-cli
+    tag: 2.32.6
+    digest: sha256:79e492dfe333fe420d41990fa958c673671b44e30877d65a2aed3391033f37dd
+    pullPolicy: IfNotPresent
+  port: 8333
+  metricsPort: 9324
+  bucket: avaloka
+  createBucket: true
+  auth:
+    accessKey: ''
+    secretKey: ''
+  service:
+    type: ClusterIP
+    nodePort: ''
+  extraIngressFrom: []
+  persistence:
+    size: 20Gi
+    storageClass: ''
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: '2'
+      memory: 2Gi
+  terminationGracePeriodSeconds: 60
+  volumeSizeLimitMB: 1024
+minio:
+  enabled: false
+  image:
+    repository: quay.io/minio/minio
+    tag: RELEASE.2025-09-07T16-13-09Z
+    pullPolicy: IfNotPresent
+  mcImage:
+    repository: quay.io/minio/mc
+    tag: RELEASE.2025-08-13T08-35-41Z
+    pullPolicy: IfNotPresent
+  port: 9000
+  consolePort: 9001
+  bucket: avaloka
+  createBucket: true
+  auth:
+    accessKey: ''
+    secretKey: ''
+  service:
+    type: ClusterIP
+    nodePort: ''
+    consoleNodePort: ''
+  persistence:
+    size: 20Gi
+    storageClass: ''
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: '2'
+      memory: 2Gi
+milvus:
+  enabled: false
+  host: ''
+  port: 19530
+  image: milvusdb/milvus:v2.5.4
+  etcdImage: quay.io/coreos/etcd:v3.5.16
+  bucket: milvus
+  pullPolicy: IfNotPresent
+  persistence:
+    enabled: true
+    size: 10Gi
+    etcdSize: 2Gi
+  resources:
+    requests:
+      cpu: 500m
+      memory: 2Gi
+    limits:
+      cpu: '2'
+      memory: 4Gi
+  etcdResources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 300m
+      memory: 512Mi
+langgraph:
+  enabled: true
+  port: 2024
+  externalUrl: ''
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: '2'
+      memory: 4Gi
+mcp:
+  enabled: true
+  port: 8010
+  service:
+    type: ClusterIP
+    nodePort: ''
+    annotations: {}
+  persistence:
+    size: 1Gi
+    storageClass: ''
+    mountPath: /app/registry
+  resources:
+    requests:
+      cpu: 50m
+      memory: 256Mi
+    limits:
+      cpu: '1'
+      memory: 1Gi
+supabase:
+  enabled: false
+  requireOwnCredentials: true
+  jwtSecret: ''
+  anonKey: ''
+  serviceKey: ''
+  externalUrl: ''
+  db:
+    image: supabase/postgres:15.8.1.060
+    password: ''
+    port: 5432
+    storageSize: 20Gi
+    storageClassName: ''
+  auth:
+    image: supabase/gotrue:v2.177.0
+    siteUrl: ''
+    disableSignup: false
+    autoconfirm: true
+    smtp:
+      host: ''
+      port: 587
+      user: ''
+      pass: ''
+      sender: ''
+      senderName: Avaloka Ai
+      emailSubject: Sign in to Avaloka Ai
+      adminEmail: ''
+  rest:
+    image: postgrest/postgrest:v12.2.12
+    port: 3000
+  kong:
+    image: kong:2.8.1
+    serviceType: NodePort
+    port: 8000
+    nodePort: 30091
+  functions:
+    enabled: true
+    image: ghcr.io/guruvaidev/avaloka-functions:main
+    pullPolicy: IfNotPresent
+    port: 9000
+    dbEncryptionKey: ''
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: '1'
+        memory: 512Mi
+  storage:
+    image: supabase/storage-api:v1.11.13
+    port: 5000
+    storageSize: 20Gi
+    storageClassName: ''
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: '1'
+      memory: 1Gi
+webui:
+  enabled: true
+  image:
+    repository: ghcr.io/guruvaidev/avaloka-ui
+    tag: main
+    pullPolicy: IfNotPresent
+  containerPort: 3000
+  service:
+    type: NodePort
+    port: 80
+    nodePort: 30090
+    annotations: {}
+  apiUpstream: ''
+  apiBase: ''
+  supabaseUrl: ''
+  supabaseInclusterUrl: ''
+  supabaseAnonKey: ''
+  mcp:
+    apiBase: ''
+    toolBase: ''
+  resources:
+    requests:
+      cpu: 50m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+ui:
+  enabled: false
+  image:
+    repository: ghcr.io/guruvaidev/avaloka-ray
+    tag: main
+    pullPolicy: IfNotPresent
+  service:
+    type: NodePort
+    port: 8501
+    targetPort: 8501
+    nodePort: 30086
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: '1'
+      memory: 1Gi
+gateway:
+  enabled: false
+  provider: ''
+  className: ''
+  name: ''
+  hosts: []
+  annotations: {}
+  tls:
+    enabled: true
+    mode: certmap
+    certMapName: ''
+    secretName: ''
+  httpEnabled: true
+  redirectHttpToHttps: true
+  addresses: []
+  infrastructure:
+    parametersRef: {}
+  routeApiDirect: true
+  apiRoutes:
+  - type: PathPrefix
+    value: /threads
+  - type: PathPrefix
+    value: /docs
+  - type: Exact
+    value: /health
+  - type: Exact
+    value: /version
+  - type: Exact
+    value: /openapi.json
+  extraRoutes: []
+  routeTimeout: ''
+  gcp:
+    healthCheck:
+      enabled: true
+      checkIntervalSec: 15
+      timeoutSec: 10
+      healthyThreshold: 2
+      unhealthyThreshold: 3
+      logging: false
+    api:
+      timeoutSec: 3600
+      sessionAffinity: ''
+    webui:
+      timeoutSec: 120
+      healthPath: /
+      sessionAffinity: ''
+    securityPolicy: ''
+    sslPolicy: ''
+    accessLogging:
+      enabled: true
+      sampleRate: 1000000
+  aws:
+    certificateArns: []
+    scheme: internet-facing
+    loadBalancerName: ''
+    sslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06
+inference:
+  provider: groq
+localLLM:
+  enabled: false
+  engine: ollama
+  model: qwen2.5:3b-instruct
+  servedModelName: qwen2.5:3b-instruct
+  persistence:
+    enabled: false
+    size: 20Gi
+    storageClass: ''
+  ollama:
+    image: ollama/ollama:latest
+    pullPolicy: IfNotPresent
+    resources:
+      requests:
+        cpu: 500m
+        memory: 4Gi
+      limits:
+        cpu: '4'
+        memory: 8Gi
+  vllm:
+    image: vllm/vllm-openai:latest
+    pullPolicy: IfNotPresent
+    maxModelLen: '16384'
+    gpuMemoryUtilization: '0.90'
+    shmSize: 8Gi
+    nodeSelector:
+      nvidia.com/gpu.present: 'true'
+    tolerations:
+    - key: ''
+      operator: Exists
+      effect: NoSchedule
+    resources:
+      requests:
+        cpu: '2'
+        memory: 16Gi
+        nvidia.com/gpu: '1'
+      limits:
+        nvidia.com/gpu: '1'
+config:
+  gcpProjectId: ''
+  storageBackend: local
+  localStorageRoot: /app/data/filestore
+  gcsBucket: ''
+  s3Bucket: ''
+  s3Prefix: ''
+  awsRegion: ''
+  s3EndpointUrl: ''
+  langgraphApiUrl: ''
+  inferenceBackend: rayserve
+  rayServeUrl: ''
+  supabaseUrl: ''
+  mcpServerUrl: ''
+  onboardingApiUrl: ''
+  rayDashboardUrl: ''
+  rayDashboardUrlInCluster: ''
+  mtaRayDashboardUrl: ''
+  mtaRayNamespace: ''
+  mtaRayTrainingEntrypoint: python /home/ray/app/app/agents/mta_v2/training_docker_image/ray_job.py
+  rayApiServerAddress: ''
+  datasetSizeThresholdBytes: ''
+  rayTrainingDockerUri: ''
+  celerySshServers: ''
+  byteRouting: '0'
+  routingShadow: '0'
+  analysisMaxInmemoryBytes: ''
+celery:
+  enabled: true
+  replicas: 1
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: '2'
+      memory: 2Gi
+  redbeat:
+    replicas: 1
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: '1'
+        memory: 512Mi
+mlflow:
+  enabled: true
+  replicas: 1
+  port: 5000
+  workers: 1
+  image:
+    repository: ''
+    tag: ''
+    pullPolicy: ''
+  backendStoreUri: ''
+  trackingUri: ''
+  registryUri: ''
+  artifactsDestination: ''
+  defaultArtifactRoot: ''
+  allowedHosts: ''
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: '1'
+      memory: 3Gi
+ray:
+  connectExisting: false
+  address: ''
+  inClusterAddress: ray://avaloka-raycluster-head-svc:10001
+secrets:
+  groqPlanningKey: ''
+  groqCodingKey: ''
+  piiKey: ''
+  stripeTestApiKey: ''
+  stripeSecretKey: ''
+  stripeWebhookSecret: ''
+  paypalWebhookId: ''
+  openrouterKey: ''
+  jwtSecret: ''
+  supabaseServiceRoleKey: ''
+  groqApiKey: ''
+  awsAccessKeyId: ''
+  awsSecretAccessKey: ''
+  dbEncryptionKey: ''
+gcp:
+  existingSecret: ''
+  secretKey: ''
+  mountPath: /var/secrets/gcp
+existingSecret: ''
+rbac:
+  create: true
+serviceAccount:
+  create: true
+  name: ''
+  annotations: {}
+podLabels: {}
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    cpu: '2'
+    memory: 6Gi
+modelCache:
+  enabled: true
+  sizeLimit: 8Gi
+nodeSelector: {}
+tolerations: []
+affinity: {}
+upload:
+  maxBodySize: 1024m

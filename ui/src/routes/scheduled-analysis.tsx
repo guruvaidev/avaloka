@@ -25,6 +25,7 @@ import { Avatar } from "@/components/base/avatar/avatar";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { useUpgradeGate } from "@/components/dashboard/UpgradeGate";
 import { cx } from "@/lib/utils/cx";
+import { userFacingError } from "@/lib/user-facing-error";
 import { AnalysisOutputTable } from "@/components/dashboard/AnalysisOutputTable";
 import { DynamicChart, normalizeVizConfig } from "@/components/dashboard/dynamicChart";
 import { deriveVizFromRows } from "@/lib/derive-viz";
@@ -36,6 +37,7 @@ import {
   summarizePrompt,
   formatSchedule,
   relativeTime,
+  lastRunLabel,
 } from "@/lib/api/scheduled-prompt-cache";
 
 export const Route = createFileRoute("/scheduled-analysis")({
@@ -430,7 +432,8 @@ function ScheduledAnalysisPage() {
         setOutputNextDueAt(typeof res?.next_due_at === "number" ? res.next_due_at : null);
 
         if (finalStatus === "Failed") {
-          setOutputTraceback(res?.traceback ?? res?.error ?? null);
+          // Plain words only: the server log has the traceback.
+          setOutputTraceback(userFacingError(res?.message ?? res?.error ?? res?.traceback, "The run stopped with an error."));
           setOutputError("This run failed. See the error details below.");
           setOutputRows(null);
           setOutputFileData(null);
@@ -757,7 +760,7 @@ function ScheduledAnalysisPage() {
                           <span className="truncate text-sm font-semibold text-primary">You</span>
                         </div>
                         <span className="shrink-0 text-xs text-tertiary">
-                          Last run: {relativeTime(t.last_run_at)}
+                          Last run: {lastRunLabel(t.last_run_at, t.total_run_count)}
                         </span>
                       </div>
                     </article>
@@ -823,7 +826,7 @@ function ScheduledAnalysisPage() {
                           </div>
                         </td>
                         <td className="px-4 py-3 text-sm text-tertiary">
-                          {relativeTime(t.last_run_at)}
+                          {lastRunLabel(t.last_run_at, t.total_run_count)}
                         </td>
                         <td className="px-4 py-3 text-right">
                           <RowActions
@@ -975,10 +978,8 @@ function ScheduledAnalysisPage() {
                   </div>
                   {outputTraceback && (
                     <div>
-                      <p className="text-xs font-semibold text-tertiary">Traceback</p>
-                      <pre className="mt-1 max-h-80 overflow-auto rounded-lg bg-secondary p-3 text-xs text-primary">
-                        {outputTraceback}
-                      </pre>
+                      <p className="text-xs font-semibold text-tertiary">What went wrong</p>
+                      <p className="mt-1 rounded-lg bg-secondary p-3 text-xs text-primary">{outputTraceback}</p>
                     </div>
                   )}
                 </div>

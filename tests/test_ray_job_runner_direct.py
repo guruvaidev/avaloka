@@ -50,7 +50,7 @@ spec:
         spec:
           containers:
             - name: ray-head
-              image: rayproject/ray:2.49.2
+              image: rayproject/ray:2.56.0-py311
 """
 
 SA_JSON = json.dumps({"type": "service_account", "project_id": "p", "private_key": "k", "client_email": "a@b.c"})
@@ -373,8 +373,8 @@ def test_unreachable_dashboard_returns_error_outcome_without_submitting(monkeypa
 
     monkeypatch.setattr(urllib.request, "urlopen", refuse)
     out = rjr.run_rayjob_from_yaml(RAYJOB_YAML, rayjob_name="dta-test",
-                                   dashboard_url="http://34.132.134.104:8265")
+                                   dashboard_url="http://203.0.113.10:8265")
     assert out.status == "ERROR"
     assert "Ray cluster unreachable" in out.details["error"]
     assert ray.submits == []
-    assert ("client", "http://34.132.134.104:8265") not in ray.events
+    assert ("client", "http://203.0.113.10:8265") not in ray.events

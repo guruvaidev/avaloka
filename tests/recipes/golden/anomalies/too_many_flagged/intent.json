@@ -1,0 +1,9 @@
+{
+  "question": "Which latency values are unusual?",
+  "recipe": "anomalies",
+  "params": {
+    "measure": "latency"
+  },
+  "confidence": 1.0,
+  "source": "fixture"
+}

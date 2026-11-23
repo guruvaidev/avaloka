@@ -1,4 +1,20 @@
 import { supabase } from "@/integrations/supabase/external-client";
+import type { AgentMetric, AgentTrace, ApiCapabilities, PlanGraph } from "@/lib/agent-trace/types";
+import type { UploadFormatStatus } from "@/lib/upload-formats";
+import type { DeferredProfileResponse } from "@/lib/deferred-profile";
+import type {
+  SwarmCloneDoc,
+  SwarmEpisodes,
+  SwarmMissionDoc,
+  SwarmMissionRequest,
+  SwarmMissionSummary,
+  SwarmRecordsPage,
+  SwarmStartResponse,
+  SwarmTelemetry,
+} from "@/lib/agent-trace/swarm";
+import { BACKEND_API_BASE as API_BASE } from "@/lib/api/backend-config";
+// The configured MCP bases (runtime env, else localhost); never a hardcoded tunnel.
+import { MCP_API_BASE, MCP_TOOL_BASE } from "@/lib/api/mcp-config";
 
 export const SERVICE_RESTARTING_MESSAGE =
   "The Avaloka backend is temporarily unavailable and may be restarting or rolling out. " +
@@ -43,6 +59,10 @@ interface UploadResponse {
   portfolio_samples?: Record<string, any[]>;
   available_samples?: string[];
   profiling_result?: Record<string, any>;
+  // "pending" while the data profile runs after the upload returned; poll
+  // getDatasetProfile until it is full_profile, failed or skipped.
+  profiling_status?: string | null;
+  profiling_error?: string | null;
   sample_statistics?: Record<string, any>;
   sample_status?: string;
   background_task_id?: string;
@@ -50,6 +70,8 @@ interface UploadResponse {
 
 // Multi-dataset upload response format
 /** One entry of GET /threads/{id}/datasets. */
+import type { JobNoteBatch, ThreadJobNotesResponse } from "@/lib/job-notes";
+
 export interface ThreadDatasetItem {
   dataset_id: string;
   filename?: string | null;
@@ -72,6 +94,8 @@ export interface DatasetItem {
   portfolio_samples?: Record<string, any[]>;
   available_samples?: string[];
   profiling_result?: Record<string, any>;
+  profiling_status?: string | null;
+  profiling_error?: string | null;
   sample_statistics?: Record<string, any>;
 }
 
@@ -114,10 +138,17 @@ interface MessageResponse {
   multi_action_actions?: Array<{ id: string; operation: string; column?: string | null; group_by: string[] }>;
   multi_action_missing?: Array<{ label: string }>;
   multi_action_notes?: string[];
-  task_info?: { task_id: string; next_due_at?: number };
+  task_info?: { task_id: string; next_due_at?: number; max_runs?: number; [k: string]: unknown };
+  // Background-job notes delivered at this turn's end (one coalesced batch per
+  // flush, written by code on the API). Rendered after the reply; never
+  // persisted again by the UI, the API wrote the transcript row.
+  job_notes?: JobNoteBatch[] | null;
   analysis_fidelity?: "quick_sample" | "portfolio_samples" | "entire_dataset";
   selected_sample_name?: string;
   analysis_task_id?: string;
+  // Slow-turn signals: "running" means poll /pending-turn; kind says what it is.
+  pending_status?: "running" | string | null;
+  pending_kind?: "analysis" | "training" | string | null;
   // Long-running (training) turn signals
   training_status?: string;
   training_completed?: boolean;
@@ -128,6 +159,17 @@ interface MessageResponse {
   error?: string;
   fallback?: boolean;
   execution_context?: { mode: string; mode_label: string; sample?: string | null };
+  // The agent trace recorded for this turn (GET trace_url).
+  trace_turn_id?: string | null;
+  trace_url?: string | null;
+  /** Set when a fallback model tier answered instead of the configured model. */
+  answered_by?: {
+    configured_model: string;
+    answered_model: string;
+    provider: string;
+    reason: string;
+    note?: string;
+  } | null;
   datasets?: Array<{
     dataset_id: string;
     filename?: string;
@@ -160,22 +202,6 @@ interface HealthResponse {
   upstream_timeout_s: number;
 }
 
-interface DatabaseRegistrationResponse {
-  connection_id: string;
-  customer_id: string;
-  status: string;
-  message: string;
-}
-
-interface DatabaseTablesResponse {
-  tables: Array<{
-    name: string;
-    columns: string[];
-    row_count?: number;
-    schema?: string;
-  }>;
-}
-
 interface DatabaseSessionResponse {
   session_id: string;
   thread_id: string;
@@ -201,33 +227,36 @@ interface DatabaseQueryResponse {
   execution_time_ms: number;
 }
 
-import { BACKEND_API_BASE as API_BASE } from "@/lib/api/backend-config";
-
 export interface PendingTurnResponse {
   status: "running" | "done" | "error" | "superseded" | "none" | string;
   message?: string;
   result?: any;
+  /** On "superseded": the id of the turn that replaced this one. */
+  superseded_by?: string | null;
 }
 
 /**
- * A chat turn is "deferred" when the backend accepted it but is still
- * training in the background, or when our proxy gave up waiting on a
- * synchronous response. Both cases resolve later via /pending-turn.
+ * A reply is a scheduled task when task_info.task_id is set and the turn is
+ * not still running. Scheduled tasks deliver results outside the chat turn
+ * (notifications / Scheduled Analysis), so they never show loaders or poll.
+ */
+export function isScheduledTaskReply(res: any): boolean {
+  if (!res || typeof res !== "object") return false;
+  const taskId = res.task_info?.task_id;
+  return Boolean(taskId) && String(res.pending_status ?? "").toLowerCase() !== "running";
+}
+
+/**
+ * A chat turn is "deferred" only when the backend says pending_status ===
+ * "running" (slow turns, model training), or when our proxy gave up waiting
+ * on a synchronous response. Both resolve later via /pending-turn.
  */
 export function isDeferredTurn(res: any): boolean {
   if (!res || typeof res !== "object") return false;
   if (res.fallback === true && res.error === "UPSTREAM_TIMEOUT") return true;
-  if (String(res.pending_status ?? "").toLowerCase() === "running" && res.analysis_task_id) return true;
-  const hasRows = Array.isArray(res.output_json) && res.output_json.length > 0;
-  return (
-    (String(res.training_status ?? "").toLowerCase() === "running" ||
-      String(res.pending_status ?? "").toLowerCase() === "running") &&
-    res.training_completed !== true &&
-    !hasRows
-  );
+  if (isScheduledTaskReply(res)) return false;
+  return String(res.pending_status ?? "").toLowerCase() === "running";
 }
-const MCP_API_BASE = "https://avaloka-mcp.ngrok.app";
-const MCP_TOOL_BASE = "https://avaloka-mcp-tool.ngrok.app";
 
 const _previewInflight: Map<string, Promise<any>> = new Map();
 const _previewControllers: Map<string, AbortController> = new Map();
@@ -336,7 +365,25 @@ function parsePredictionFromReply(reply: string): unknown {
 
 
 
-async function getAccessToken(): Promise<string> {
+/**
+ * A token pasted into the browser for a laptop demo against an API started
+ * with a chosen SUPABASE_JWT_SECRET (docs/design/SWARM_DEMO.md). Read only
+ * when set; the server still verifies it. Nothing else reads this key.
+ */
+export const DEV_TOKEN_KEY = "avaloka-dev-token";
+
+function devToken(): string | null {
+  try {
+    return typeof window !== "undefined" ? window.localStorage.getItem(DEV_TOKEN_KEY) : null;
+  } catch {
+    return null;
+  }
+}
+
+// Exported for the inference panel (src/api/inference.ts), as on 1.6.
+export async function getAccessToken(): Promise<string> {
+  const pasted = devToken();
+  if (pasted) return pasted;
   const {
     data: { session },
   } = await supabase.auth.getSession();
@@ -360,7 +407,7 @@ function proxyUrl(): string {
  * /api/public/backend-proxy to avoid CORS issues with the upstream host.
  * `path` is the backend path (e.g. "/api/upload" or "/threads/x/messages").
  */
-async function proxyFetch(path: string, init: RequestInit & { sessionId?: string } = {}): Promise<Response> {
+export async function proxyFetch(path: string, init: RequestInit & { sessionId?: string } = {}): Promise<Response> {
   const { sessionId, headers: initHeaders, ...rest } = init;
   const headers = new Headers(initHeaders as HeadersInit | undefined);
   headers.set("X-Backend-Path", path);
@@ -371,14 +418,12 @@ async function proxyFetch(path: string, init: RequestInit & { sessionId?: string
 
 // MCP calls reuse the same backend-proxy, but forward to the MCP base.
 // The proxy runs server-side, so the in-cluster MCP URL resolves there.
-async function mcpProxyFetch(base: string, path: string, init: RequestInit = {}): Promise<Response> {
+export async function mcpProxyFetch(base: string, path: string, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers as HeadersInit | undefined);
   headers.set("X-Backend-Path", path);
   headers.set("X-Backend-Base", base);
   return fetch(proxyUrl(), { ...init, headers });
 }
-
-export { mcpProxyFetch, proxyFetch };
 
 export type AppNotificationKind =
   | "analysis_done"
@@ -414,6 +459,10 @@ export interface UploadLimits {
   max_file_mb?: number | null;
   max_total_mb?: number | null;
   batch_jobs?: boolean;
+  /** True when the plan could not be checked (hosted, lookup failed): not an upgrade case. */
+  plan_check_unavailable?: boolean;
+  /** Per gated feature: on the plan, not on the plan, or not checkable right now. */
+  feature_states?: Record<string, "allowed" | "not_on_plan" | "unavailable">;
   [k: string]: unknown;
 }
 
@@ -432,7 +481,146 @@ function processingTimeoutMs(totalBytes: number) {
   return Math.min(180_000, 60_000 + Math.ceil(mb) * 1000);
 }
 
+async function getTraceJson<T>(path: string, what: string): Promise<T> {
+  const accessToken = await getAccessToken();
+  const response = await proxyFetch(path, {
+    method: "GET",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) {
+    const err = new Error(`Failed to fetch ${what}: ${response.statusText}`) as Error & { status?: number; code?: string };
+    err.status = response.status;
+    if (response.status === 403) {
+      // The swarm console gate (app/api/swarm_gate.py) names itself in detail.code.
+      try {
+        const json = await response.json();
+        if (json?.detail?.code) err.code = String(json.detail.code);
+      } catch {
+        /* a bare 403 */
+      }
+    }
+    throw err;
+  }
+  return response.json() as Promise<T>;
+}
+
+async function postTraceJson<T>(path: string, body: unknown, what: string): Promise<T> {
+  const accessToken = await getAccessToken();
+  const response = await proxyFetch(path, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    // A 400 carries the reason (an unknown sample, a missing target column); say it.
+    let detail = response.statusText;
+    try {
+      const json = await response.json();
+      if (typeof json?.detail === "string") detail = json.detail;
+    } catch {
+      /* not JSON */
+    }
+    const err = new Error(`Failed to ${what}: ${detail}`) as Error & { status?: number };
+    err.status = response.status;
+    throw err;
+  }
+  return response.json() as Promise<T>;
+}
+
+function turnQuery(turnId?: string | null, sep = "?"): string {
+  return turnId ? `${sep}turn=${encodeURIComponent(turnId)}` : "";
+}
+
+/** GET /api/llm-models: the language model per agent role and its fallback chain. */
+export type LlmModelsResponse = {
+  roles: Array<{
+    role: string;
+    agent: string;
+    provider: string;
+    model: string;
+    chain: Array<{ provider: string; model: string; armed: boolean; providers_only: string[] | null }>;
+    routing: Record<string, unknown> | null;
+  }>;
+  note?: string;
+};
+
 export const backendApi = {
+  /** Every agent step of one analysis (app/trace). */
+  async getAgentTrace(threadId: string, turnId?: string | null): Promise<AgentTrace> {
+    return getTraceJson<AgentTrace>(
+      `/threads/${encodeURIComponent(threadId)}/trace${turnQuery(turnId)}`,
+      "agent trace",
+    );
+  },
+
+  /** The granular, typed planner graph of one recorded turn. */
+  async getPlanGraph(threadId: string, turnId?: string | null): Promise<PlanGraph> {
+    return getTraceJson<PlanGraph>(
+      `/threads/${encodeURIComponent(threadId)}/planner-graph?format=json${turnQuery(turnId, "&")}`,
+      "planner graph",
+    );
+  },
+
+  /** Per-agent calls, latency, tokens, cost and outcomes across the caller's analyses. */
+  async getAgentMetrics(): Promise<{ threads: number; turns: number; agents: AgentMetric[] }> {
+    return getTraceJson(`/api/agent-metrics`, "agent metrics");
+  },
+
+  /** Feature discovery; ``features.swarm`` carries the edition's swarm limits,
+   *  ``features.swarm_console`` whether the live /swarm page is open to this caller,
+   *  ``features.upload_format_status`` what /api/upload takes and defers. */
+  async getCapabilities(): Promise<ApiCapabilities & {
+    features?: {
+      upload_formats?: string[];
+      upload_format_status?: Record<string, UploadFormatStatus>;
+    };
+  }> {
+    return getTraceJson(`/api/capabilities`, "capabilities");
+  },
+
+  // ---- Swarm missions (app/trace/swarm_service.py; owner-only, Bearer auth) ----
+
+  /** Start a coordinated mission; returns at once, then poll getSwarmRecords. */
+  async startSwarmMission(body: SwarmMissionRequest): Promise<SwarmStartResponse> {
+    return postTraceJson<SwarmStartResponse>(`/api/swarm/missions`, body, "start the swarm mission");
+  },
+
+  async listSwarmMissions(): Promise<{ missions: SwarmMissionSummary[] }> {
+    return getTraceJson(`/api/swarm/missions`, "swarm missions");
+  },
+
+  async getSwarmMission(missionId: string, opts: { records?: boolean } = {}): Promise<SwarmMissionDoc> {
+    return getTraceJson<SwarmMissionDoc>(
+      `/api/swarm/missions/${encodeURIComponent(missionId)}${opts.records ? "?records=1" : ""}`,
+      "swarm mission",
+    );
+  },
+
+  /** Records with seq > after (seq starts at 1); `done` once the mission finished and the tail is drained. */
+  async getSwarmRecords(missionId: string, after = 0, limit = 500): Promise<SwarmRecordsPage> {
+    return getTraceJson<SwarmRecordsPage>(
+      `/api/swarm/missions/${encodeURIComponent(missionId)}/records?after=${after}&limit=${limit}`,
+      "swarm records",
+    );
+  },
+
+  async getSwarmClone(missionId: string, cloneId: string): Promise<SwarmCloneDoc> {
+    return getTraceJson<SwarmCloneDoc>(
+      `/api/swarm/missions/${encodeURIComponent(missionId)}/clones/${encodeURIComponent(cloneId)}`,
+      "swarm clone",
+    );
+  },
+
+  /** The RL view: one episode per clone, reward left null. */
+  async getSwarmEpisodes(missionId: string): Promise<SwarmEpisodes> {
+    return getTraceJson<SwarmEpisodes>(`/api/swarm/missions/${encodeURIComponent(missionId)}/episodes`, "swarm episodes");
+  },
+
+  /** Exactly the records telemetry would send for this mission; nothing is sent. */
+  async getSwarmTelemetry(missionId: string): Promise<SwarmTelemetry> {
+    return getTraceJson<SwarmTelemetry>(`/api/swarm/missions/${encodeURIComponent(missionId)}/telemetry`, "swarm telemetry");
+  },
+
   async getPlannerGraph(threadId: string): Promise<Blob> {
     const accessToken = await getAccessToken();
     const response = await proxyFetch(`/threads/${threadId}/planner-graph`, {
@@ -466,7 +654,12 @@ export const backendApi = {
       throw new Error("Limits unavailable");
     }
     const nested = json?.limits && typeof json.limits === "object" ? json.limits : json;
-    return { ...nested, plan: json?.plan ?? nested?.plan };
+    return {
+      ...nested,
+      plan: json?.plan ?? nested?.plan,
+      plan_check_unavailable: json?.plan_check_unavailable === true,
+      feature_states: json?.feature_states ?? nested?.feature_states,
+    };
   },
 
   async getVersion(): Promise<{ version: string }> {
@@ -475,14 +668,25 @@ export const backendApi = {
     return response.json();
   },
 
+  /**
+   * Health of the database query service: GET /health on MCP_TOOL_BASE, the
+   * MCP server that List tables and queries call, through the same proxy.
+   * (It used to invoke a "check-mcp-health" edge function that no install
+   * ships -- ui/supabase/functions has none -- so it read unhealthy even
+   * while registration and queries worked.) An unreachable upstream comes
+   * back from the proxy as 200 + { fallback: true }, so only the server's own
+   * { status: "healthy" } counts as healthy.
+   */
   async checkMcpHealth(): Promise<{ status: string; healthy: boolean }> {
     try {
-      const response = await supabase.functions.invoke("check-mcp-health", { method: "GET" });
-      if (response.error) return { status: "unhealthy", healthy: false };
-      const data = response.data;
-      return { status: data?.status || "healthy", healthy: data?.healthy !== false };
-    } catch {
+      const response = await mcpProxyFetch(MCP_TOOL_BASE, "/health", { method: "GET" });
+      const data: any = await response.json().catch(() => null);
+      if (data?.fallback === true) return { status: "unreachable", healthy: false };
+      if (!response.ok) return { status: `unhealthy (HTTP ${response.status})`, healthy: false };
+      if (data?.status === "healthy") return { status: "healthy", healthy: true };
       return { status: "unhealthy", healthy: false };
+    } catch {
+      return { status: "unreachable", healthy: false };
     }
   },
 
@@ -719,9 +923,9 @@ export const backendApi = {
     sessionId: string,
     content: string,
     datasetIds?: string[],
-    analysisFidelity?: "quick_sample" | "portfolio_samples" | "entire_dataset",
-    selectedSampleName?: string,
-    metadata?: { dataset_id?: string | null },
+    _analysisFidelity?: "quick_sample" | "portfolio_samples" | "entire_dataset",
+    _selectedSampleName?: string,
+    metadata?: { dataset_id?: string | null; analysis_id?: string | null },
   ): Promise<MessageResponse> {
     try {
       this.abortAllPreviews();
@@ -734,9 +938,13 @@ export const backendApi = {
       content,
       stream: false,
       ...(datasetIds && datasetIds.length > 0 && { dataset_ids: datasetIds }),
-      ...(analysisFidelity && { analysis_fidelity: analysisFidelity }),
-      ...(selectedSampleName && { selected_sample_name: selectedSampleName }),
-      ...(metadata?.dataset_id && { metadata: { dataset_id: metadata.dataset_id } }),
+      // The analysis mode and sample are not sent: the server ignores them in a
+      // chat message, and the "Analysis on" switch writes them to the session
+      // through /api/datasets/{id}/fidelity. The parameters stay for legacy callers.
+      ...(metadata && { metadata: {
+        ...(metadata.dataset_id && { dataset_id: metadata.dataset_id }),
+        ...(metadata.analysis_id && { analysis_id: metadata.analysis_id }),
+      } }),
     };
 
     const accessToken = await getAccessToken();
@@ -801,10 +1009,6 @@ export const backendApi = {
     return response.json();
   },
 
-  /**
-   * Poll the backend for the result of a long-running (deferred) chat turn.
-   * Returns the raw envelope: { status: "running" | "done" | "error" | "superseded" | "none", ... }
-   */
   async listNotifications(opts: { limit?: number; unread?: boolean } = {}): Promise<AppNotificationsResponse> {
     const accessToken = await getAccessToken();
     const params = new URLSearchParams({ limit: String(opts.limit ?? 20) });
@@ -834,6 +1038,27 @@ export const backendApi = {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     if (!response.ok) throw new Error(`Mark all read failed: ${response.status}`);
+    return response.json();
+  },
+
+  /**
+   * Poll the backend for the result of a long-running (deferred) chat turn.
+   * Returns the raw envelope: { status: "running" | "done" | "error" | "superseded" | "none", ... }
+   * Only for turns where isDeferredTurn() is true — never for scheduled tasks.
+   */
+  /**
+   * Deliver and return the thread's finished-job notes. When a turn is in
+   * flight the API keeps them queued (`deferred: true`); they then arrive with
+   * that turn's reply as `job_notes`.
+   */
+  async getThreadJobNotes(threadId: string, sessionId: string): Promise<ThreadJobNotesResponse> {
+    const accessToken = await getAccessToken();
+    const response = await proxyFetch(`/threads/${threadId}/job-notes`, {
+      method: "GET",
+      sessionId,
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!response.ok) throw new Error(`Job notes fetch failed: ${response.statusText}`);
     return response.json();
   },
 
@@ -968,8 +1193,6 @@ export const backendApi = {
     return data?.runs ?? data?.items ?? [];
   },
 
-
-
   async deleteTask(taskId: string, sessionId: string): Promise<void> {
     const accessToken = await getAccessToken();
     const response = await proxyFetch(`/tasks/${taskId}`, {
@@ -1041,6 +1264,17 @@ export const backendApi = {
     return promise;
   },
 
+  /** The upload's background data profile (GET /api/datasets/{id}/profile). */
+  async getDatasetProfile(datasetId: string): Promise<DeferredProfileResponse> {
+    const accessToken = await getAccessToken();
+    const response = await proxyFetch(`/api/datasets/${encodeURIComponent(datasetId)}/profile`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!response.ok) throw new Error(`Profile fetch failed: ${response.statusText}`);
+    return response.json();
+  },
+
   /** Uploaded datasets for the signed-in user (GET /datasets). */
   async listDatasets(): Promise<any> {
     const accessToken = await getAccessToken();
@@ -1081,9 +1315,6 @@ export const backendApi = {
       throw new Error(errorData.detail || `Failed to delete dataset: ${response.statusText}`);
     }
   },
-
-
-
 
   async listBucketObjects(params: {
     backend: "gcs" | "gs" | "s3" | "azure" | "az";
@@ -1157,12 +1388,11 @@ export const backendApi = {
   },
 
   /**
-   * Create a cloud storage connection row in `cloud_datasets`. Matches the
-   * existing production pattern (see src/lib/gcp-connection.ts) which stores
-   * plaintext access_key/secret_key so the backend can initialise the cloud
-   * SDK on /buckets/list and /api/register-existing-storage. When
-   * DB_ENCRYPTION_KEY is set server-side, the backend rotates values into the
-   * *_ciphertext / *_iv columns transparently.
+   * Create a cloud storage connection. The keys go to the backend over HTTPS,
+   * which seals them under DB_ENCRYPTION_KEY and writes only the
+   * *_ciphertext / *_iv columns of `cloud_datasets`: since migration
+   * 20261116130000 the table refuses plaintext access_key/secret_key, so the
+   * UI never writes a key itself (app/api/cloud_connections.py, build_router).
    */
   async createCloudConnection(payload: {
     name: string;
@@ -1174,11 +1404,6 @@ export const backendApi = {
     secret_key: string;
     bucket_name: string;
   }): Promise<{ id: string; name: string; provider: string; bucket_name: string }> {
-    const { supabase } = await import("@/integrations/supabase/client");
-    const { getCachedAuthUser } = await import("@/lib/auth-user");
-    const uid = (await getCachedAuthUser())?.id;
-    if (!uid) throw new Error("Not signed in");
-
     if (payload.provider === "gcp") {
       try {
         const parsed = JSON.parse(payload.secret_key) as Record<string, unknown>;
@@ -1188,72 +1413,35 @@ export const backendApi = {
         throw new Error("Service account key must be valid JSON.");
       }
     }
-
-    // For GCP the `access_key` column stores the Project ID (matches
-    // gcp-connection.ts + backend get_cloud_connection).
-    const access_key =
-      payload.provider === "gcp"
-        ? (payload.project_id ?? "").trim()
-        : (payload.access_key ?? "").trim();
-
-    const { data, error } = await supabase
-      .from("cloud_datasets")
-      .insert({
-        user_id: uid,
+    const accessToken = await getAccessToken();
+    const response = await proxyFetch(`/api/cloud-connections`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
         name: payload.name.trim() || `${payload.provider.toUpperCase()} connection`,
         provider: payload.provider,
         region: payload.region ?? null,
         endpoint_url: payload.endpoint_url ?? null,
+        project_id: payload.project_id ?? null,
         bucket_name: payload.bucket_name.trim(),
-        access_key,
+        access_key: payload.access_key ?? null,
         secret_key: payload.secret_key,
-      })
-      .select("id,name,provider,bucket_name")
-      .single();
-
-    if (error) throw new Error(error.message);
-    return data as { id: string; name: string; provider: string; bucket_name: string };
-  },
-
-
-
-
-  async registerDatabase(connectionData: {
-    connection_name: string;
-    db_type: string;
-    host: string;
-    port: number;
-    database: string;
-    username: string;
-    password: string;
-    use_ssl: boolean;
-  }): Promise<DatabaseRegistrationResponse> {
-    const accessToken = await getAccessToken();
-    const response = await proxyFetch(`/api/database/register`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify(connectionData),
+      }),
     });
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}) as any);
-      throw new Error(errorData.detail || `Database registration failed: ${response.statusText}`);
+      const message =
+        (typeof errorData.detail === "string" ? errorData.detail : errorData.detail?.message) ||
+        `Failed to save the connection: ${response.statusText}`;
+      throw new Error(message);
     }
     return response.json();
   },
 
-  async listDatabaseTables(connectionId: string): Promise<DatabaseTablesResponse> {
-    const accessToken = await getAccessToken();
-    const response = await proxyFetch(`/api/database/tables`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ connection_id: connectionId }),
-    });
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}) as any);
-      throw new Error(errorData.detail || `Failed to fetch tables: ${response.statusText}`);
-    }
-    return response.json();
-  },
+  // No registerDatabase / listDatabaseTables here: they posted to
+  // /api/database/register and /api/database/tables, which no backend route
+  // serves, and nothing called them. Databases are registered by
+  // DatabaseConnectModal through the onboarding API (/customers/register).
 
   async createDatabaseSession(connectionId: string): Promise<DatabaseSessionResponse> {
     const accessToken = await getAccessToken();
@@ -1320,6 +1508,16 @@ export const backendApi = {
       throw new Error(errorData.detail || errorData.error || `Feedback failed: ${response.statusText}`);
     }
     return response.json().catch(() => ({}));
+  },
+
+  async getLlmModels(): Promise<LlmModelsResponse> {
+    const accessToken = await getAccessToken();
+    const response = await proxyFetch(`/api/llm-models`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!response.ok) throw new Error(`Failed to load language models: ${response.statusText}`);
+    return response.json();
   },
 
   async listModels(): Promise<{ models: BackendModel[] }> {
@@ -1422,7 +1620,32 @@ export const backendApi = {
   },
 
 
+  /** One Instant Analysis run (GET /api/instant/{run_id}): verdict, report, export links. */
+  async getInstantRun(runId: string): Promise<unknown> {
+    const accessToken = await getAccessToken();
+    const response = await proxyFetch(`/api/instant/${encodeURIComponent(runId)}`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!response.ok) throw new Error(`Run fetch failed: ${response.statusText}`);
+    return response.json();
+  },
 
+  /**
+   * A run's self-contained HTML export, as text. A backend path
+   * ("/api/instant/{run_id}/export.html") goes through the proxy with the
+   * bearer; an absolute URL (a signed object-store link) is fetched as is.
+   */
+  async getInstantExport(url: string): Promise<string> {
+    const response = /^https?:\/\//i.test(url)
+      ? await fetch(url, { method: "GET" })
+      : await proxyFetch(url, {
+          method: "GET",
+          headers: { Authorization: `Bearer ${await getAccessToken()}` },
+        });
+    if (!response.ok) throw new Error(`Export fetch failed: ${response.statusText}`);
+    return response.text();
+  },
 
   _mcpApi: MCP_API_BASE,
 

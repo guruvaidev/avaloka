@@ -6,7 +6,7 @@ Supports TWO submission modes (auto-detected):
   KUBERAY mode — RAY_DASHBOARD_URL not set → uses kubectl apply RayJob YAML
 
 Requirements (cluster tests):
-  - kubectl configured + pointing at ray-gke-cluster
+  - kubectl configured + pointing at your Ray cluster
   - ray-training namespace exists
   - KubeRay CRD installed (KUBERAY mode only)
 
@@ -20,7 +20,7 @@ Run cloud tests (needs TEST_CLOUD_URI + TEST_CONNECTION_ID):
     pytest tests/test_ray_integration.py -v -s -m cloud
 
 Env vars:
-    RAY_DASHBOARD_URL     — set this to enable Direct mode (e.g. http://34.132.134.104:8265)
+    RAY_DASHBOARD_URL     — set this to enable Direct mode (e.g. http://203.0.113.10:8265)
     TEST_RAY_NAMESPACE    — default: ray-training
     TEST_RAY_WORKERS      — default: 3
     TEST_RAY_TIMEOUT_S    — default: 300

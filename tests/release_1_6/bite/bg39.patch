@@ -1,0 +1,20 @@
+diff --git a/ui/src/components/dashboard/data-view/DataGrid.tsx b/ui/src/components/dashboard/data-view/DataGrid.tsx
+index eef6c0d4..817716de 100644
+--- a/ui/src/components/dashboard/data-view/DataGrid.tsx
++++ b/ui/src/components/dashboard/data-view/DataGrid.tsx
+@@ -22,13 +22,13 @@ import {
+ 
+ type Row = Record<string, unknown>;
+ export const PAGE_SIZE_KEY = "dataView:pageSize";
+-const PAGE_SIZES = [10, 25, 50, 100];
++const PAGE_SIZES = [8, 10, 25, 50, 100];
+ const NUMBER_COL_WIDTH = 48;
+ 
+ function readPageSize(): number {
+   try {
+     const saved = Number(localStorage.getItem(PAGE_SIZE_KEY));
+-    return PAGE_SIZES.includes(saved) ? saved : 25;
++    return PAGE_SIZES.includes(saved) ? saved : 8;
+   } catch {
+     return 25;
+   }

@@ -176,7 +176,7 @@ def test_s2_03_workload_plan_serialises_for_the_bundle():
     assert d["lane"] == "online" and d["estimated"] is True
     assert {"n_rows", "n_bytes", "rationale", "spoken", "recommend_batch"} <= set(d)
     json.dumps(d)
-    assert "~5" in plan.spoken, "an estimated count is spoken as approximate"
+    assert "about 5 rows (estimated)" in plan.spoken, "an estimated count is spoken as an estimate"
 
 
 def test_s2_04_route_agrees_with_peek_plus_classify(churn_csv):

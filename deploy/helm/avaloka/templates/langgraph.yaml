@@ -1,7 +1,18 @@
 {{- if .Values.langgraph.enabled }}
 # LangGraph runs-API server (`langgraph dev`) hosting the avaloka agent graph
 # (langgraph.json -> app/api/langgraph_app.py:graph). The API's /threads endpoints
-# proxy here. Runs from the same avaloka-api image with a different command.
+# proxy here. Runs the avaloka-langgraph image (avaloka.langgraphImage): the API
+# image's build plus langgraph-cli, which the API image no longer carries.
+#
+# Internal only. The API is its only caller (app/api/server.py lg_request: the
+# thread registry), so:
+#   network   ClusterIP, no Ingress in any chart, and the NetworkPolicy below
+#             admits only the api pods, on this port
+#   auth      every call but GET /ok needs LANGGRAPH_SERVICE_TOKEN, compared in
+#             constant time, or gets 401 (app/api/langgraph_service_auth.py,
+#             wired in through langgraph.json http.app). The token is generated
+#             into the release Secret and kept across upgrades; the API and this
+#             pod read it by secretKeyRef.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -27,8 +38,8 @@ spec:
       serviceAccountName: {{ include "avaloka.serviceAccountName" . }}
       containers:
         - name: langgraph
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          image: {{ include "avaloka.langgraphImage" . | quote }}
+          imagePullPolicy: {{ default .Values.image.pullPolicy (dig "image" "pullPolicy" "" (.Values.langgraph | default dict)) }}
           command: ["langgraph", "dev", "--host", "0.0.0.0", "--port", "{{ .Values.langgraph.port }}", "--no-browser"]
           ports:
             - name: http
@@ -38,6 +49,20 @@ spec:
                 name: {{ include "avaloka.fullname" . }}-config
             - secretRef:
                 name: {{ include "avaloka.secretName" . }}
+          env:
+            # The token this server requires (named, so a Secret without it is
+            # a start error rather than a server that refuses every call).
+            - name: LANGGRAPH_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "avaloka.secretName" . }}
+                  key: LANGGRAPH_SERVICE_TOKEN
+            # `langgraph dev` otherwise reports each start to LangChain's
+            # analytics and asks PyPI for a newer version.
+            - name: LANGGRAPH_CLI_NO_ANALYTICS
+              value: "1"
+            - name: LANGGRAPH_NO_VERSION_CHECK
+              value: "true"
           readinessProbe:
             tcpSocket:
               port: http
@@ -93,4 +118,33 @@ spec:
       port: {{ .Values.langgraph.port }}
       targetPort: http
       protocol: TCP
+---
+# Ingress to the LangGraph server: the api pods, on its port; nothing else.
+# Celery, celery-executor, the UI and the MCP server never call it (only
+# lg_request in app/api/server.py does). Egress is left as it was.
+# NetworkPolicy is enforced by the CNI (Calico, Cilium, GKE Dataplane V2 do;
+# some do not). Without enforcement the service token still guards every call.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "avaloka.fullname" . }}-langgraph
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: langgraph
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "avaloka.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: langgraph
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "avaloka.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: api
+      ports:
+        - port: {{ .Values.langgraph.port }}
+          protocol: TCP
 {{- end }}

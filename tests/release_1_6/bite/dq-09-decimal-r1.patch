@@ -1,0 +1,13 @@
+diff --git a/app/agents/claim_verifier.py b/app/agents/claim_verifier.py
+index fd4b22ce..7eff1212 100644
+--- a/app/agents/claim_verifier.py
++++ b/app/agents/claim_verifier.py
+@@ -282,7 +282,7 @@ def check_invented_numbers(claim: str, flat: Dict[str, Any],
+         # Preserve the useful exemption for ordinary prose counts ("3
+         # segments") and calendar years. Percentages are explicitly excluded:
+         # "8.0%" is a statistic even though its float value is an integer.
+-        if not is_percentage and abs(value) < 10 and value.is_integer():
++        if not is_percentage and abs(value) < 10 and value.is_integer() and "." not in raw:
+             continue
+         if not is_percentage and 1900 <= value <= 2100 and value.is_integer():
+             continue

@@ -107,7 +107,7 @@ def run_cloud_to_cloud_test():
         print(f"   Expected file: patient_data_transformed.json")
     else:
         print(f"❌ GKE execution failed.")
-        print(f"   Check Ray dashboard at: http://34.30.130.231:8265")
+        print(f"   Check Ray dashboard at: {os.environ.get('RAY_DASHBOARD_URL', '$RAY_DASHBOARD_URL')}")
         print(f"   Look for job: dta-{job_id}")
     print(f"{'='*80}\n")
 

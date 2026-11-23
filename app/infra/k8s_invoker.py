@@ -32,9 +32,9 @@ def _probe(command: list, **kwargs) -> subprocess.CompletedProcess:
         )
 
 
-def _run_command(command: list, step_name: str) -> dict:
+def _run_command(command: list, step_name: str, env: dict | None = None) -> dict:
     try:
-        result = subprocess.run(command, capture_output=True, text=True, check=True, shell=False)
+        result = subprocess.run(command, capture_output=True, text=True, check=True, shell=False, env=env)
         print ("----------")
         print (command)
         print (result)
@@ -119,7 +119,9 @@ def provision_cluster(platform: str) -> dict:
                 "details": ""
             }
         
-        # Assume IAM role and set temporary credentials (as done in test_eks_deployment.py)
+        # Assume the IAM role. The temporary credentials go only into the env of
+        # the aws CLI children below, never os.environ: that made them
+        # process-wide for every later request (NEW-RS-02).
         try:
             sts_client = boto3.client('sts', region_name=aws_region)
             assumed_role_object = sts_client.assume_role(
@@ -127,10 +129,13 @@ def provision_cluster(platform: str) -> dict:
                 RoleSessionName="EKSClusterProvisionSession"
             )
             credentials = assumed_role_object['Credentials']
-            os.environ['AWS_ACCESS_KEY_ID'] = credentials['AccessKeyId']
-            os.environ['AWS_SECRET_ACCESS_KEY'] = credentials['SecretAccessKey']
-            os.environ['AWS_SESSION_TOKEN'] = credentials['SessionToken']
-            os.environ["AWS_DEFAULT_REGION"] = aws_region # Configure AWS CLI default region
+            aws_env = {
+                **os.environ,
+                'AWS_ACCESS_KEY_ID': credentials['AccessKeyId'],
+                'AWS_SECRET_ACCESS_KEY': credentials['SecretAccessKey'],
+                'AWS_SESSION_TOKEN': credentials['SessionToken'],
+                'AWS_DEFAULT_REGION': aws_region,
+            }
         except ClientError as e:
             return {
                 "step_name": f"Assume IAM Role for {platform}",
@@ -141,7 +146,7 @@ def provision_cluster(platform: str) -> dict:
 
         # Check if the EKS cluster already exists
         check_cmd = ["aws", "eks", "describe-cluster", "--name", cluster_name, "--region", aws_region]
-        check_result = _probe(check_cmd)
+        check_result = _probe(check_cmd, env=aws_env)
 
         if check_result.returncode == 0:
             print(f"EKS cluster {cluster_name} already exists. Skipping creation.")
@@ -161,13 +166,13 @@ def provision_cluster(platform: str) -> dict:
                 "--role-arn", eks_cluster_role_arn,
                 "--resources-vpc-config", f"subnetIds={aws_subnet_ids},securityGroupIds={aws_security_group_ids}"
             ]
-            create_outcome = _run_command(create_cmd, f"Create {platform} Cluster")
+            create_outcome = _run_command(create_cmd, f"Create {platform} Cluster", env=aws_env)
             if create_outcome["status"] == "FAILED":
                 return create_outcome
             
             # Wait for cluster to become active
             wait_cmd = ["aws", "eks", "wait", "cluster-active", "--name", cluster_name, "--region", aws_region]
-            return _run_command(wait_cmd, f"Wait for {platform} Cluster Active")
+            return _run_command(wait_cmd, f"Wait for {platform} Cluster Active", env=aws_env)
     else:
         return {
             "step_name": f"Provision Cluster",
@@ -196,6 +201,11 @@ def configure_kubectl(platform: str) -> dict:
             "--name", cluster_name,
             "--region", aws_region
         ]
+        role_arn = os.environ.get("AWS_EKS_CLUSTER_ROLE_ARN")
+        if role_arn:
+            # The cluster's creator is the assumed role, whose credentials no
+            # longer sit in os.environ; the kubeconfig's get-token assumes it.
+            cmd += ["--role-arn", role_arn]
     else:
         return {
             "step_name": "Configure Kubectl",
@@ -296,6 +306,28 @@ def _operator_running(ns: str, deployment: str) -> bool:
                 pass
     return False
 
+def _version_tuple(v: str) -> tuple:
+    import re as _re
+    return tuple(int(x) for x in _re.findall(r"\d+", (v or "").split("-")[0])[:3])
+
+
+def _installed_kuberay_version(ns: str, release: str):
+    """The kuberay-operator chart version Helm installed as ``release``, or None."""
+    import json as _json
+    r = _probe([_helm(), "list", "-n", ns, "-o", "json", "--filter", f"^{release}$"])
+    if r.returncode != 0:
+        return None
+    try:
+        rows = _json.loads(r.stdout or "[]")
+    except ValueError:
+        return None
+    for row in rows:
+        chart = str(row.get("chart") or "")
+        if chart.startswith("kuberay-operator-"):
+            return chart[len("kuberay-operator-"):]
+    return None
+
+
 def ensure_kuberay_installed() -> dict:
     """
     Ensure KubeRay operator/CRDs exist.
@@ -308,14 +340,20 @@ def ensure_kuberay_installed() -> dict:
     release = os.environ.get("KUBERAY_HELM_RELEASE", "kuberay-operator")
     chart = os.environ.get("KUBERAY_HELM_CHART", "kuberay/kuberay-operator")
 
-    # If CRDs exist AND operator seems running, skip
+    from app.infra.ray_manager import KUBERAY_OPERATOR_VERSION, upgrade_kuberay_crds
+
+    # If CRDs exist AND operator seems running, skip -- unless Helm installed an
+    # operator older than the one Ray token auth needs (ray_manager), which
+    # would be refused by every token-authenticated dashboard it polls.
     if kuberay_crds_installed() and _operator_running(ns, release):
-        return {
-            "step_name": "Ensure KubeRay Installed",
-            "status": "SKIPPED",
-            "message": "KubeRay already installed (CRD present + operator running).",
-            "details": ""
-        }
+        installed = _installed_kuberay_version(ns, release)
+        if installed is None or _version_tuple(installed) >= _version_tuple(KUBERAY_OPERATOR_VERSION):
+            return {
+                "step_name": "Ensure KubeRay Installed",
+                "status": "SKIPPED",
+                "message": "KubeRay already installed (CRD present + operator running).",
+                "details": ""
+            }
 
     # Preferred: apply local manifest if provided
     manifest_path = os.environ.get("KUBERAY_MANIFEST_PATH")
@@ -357,8 +395,12 @@ def ensure_kuberay_installed() -> dict:
 
     _run_command([_helm(), "repo", "update"], "Helm repo update")
 
+    crds = upgrade_kuberay_crds()
+    if crds["status"] == "FAILED":
+        return crds
     install = _run_command(
-        [_helm(), "upgrade", "--install", release, chart, "-n", ns, "--create-namespace", "--wait", "--timeout", "180s"],
+        [_helm(), "upgrade", "--install", release, chart, "--version", KUBERAY_OPERATOR_VERSION,
+         "-n", ns, "--create-namespace", "--wait", "--timeout", "180s"],
         "Install KubeRay (helm)"
     )
     if install["status"] == "FAILED":
@@ -383,59 +425,12 @@ def deploy_application(app_type: str, platform: str) -> dict:
     """Deploys the specified application type to the K8s cluster."""
     print(f"Deploying {app_type} application...")
     if app_type == "python-docker":
-        project_id = cloud_config.project_id()
-        image_repo = os.environ.get(
-            "INFRA_AGENT_IMAGE_REPO",
-            f"gcr.io/{project_id}/infra-agent-python-app"
-        )
-        image_tag  = os.environ.get("INFRA_AGENT_IMAGE_TAG", "latest")
-        full_image = f"{image_repo}:{image_tag}"
-
-        # 1) Build
-        dockerfile_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'python_app')
-        build_outcome = _run_command(
-            ["docker", "build", "-t", f"infra-agent-python-app:{image_tag}", dockerfile_path],
-            "Build Python Docker Image"
-        )
-        if build_outcome["status"] == "FAILED":
-            return build_outcome
-
-        # 2) Auth (configurable registry host)
-        registry_host = full_image.split("/")[0]
-        _run_command(
-            ["gcloud", "auth", "configure-docker", registry_host, "--quiet"],
-            "Authenticate GCR"
-        )
-
-        # 3) Tag + Push
-        _run_command(
-            ["docker", "tag", f"infra-agent-python-app:{image_tag}", full_image],
-            "Tag Docker Image"
-        )
-        push_outcome = _run_command(["docker", "push", full_image], "Push Docker Image")
-        if push_outcome["status"] == "FAILED":
-            return push_outcome
-
-        # 4) Deploy (skip if exists)
-        config_path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), 'config', 'infra-agent-deployment.yaml'
-        )
-        check_result = _probe(
-            ["kubectl", "get", "deployment", "infra-agent", "-o", "jsonpath='{.metadata.name}'"],
-        )
-        if check_result.returncode == 0 and "infra-agent" in check_result.stdout:
-            return {
-                "step_name": "Deploy Python Docker Application",
-                "status": "SKIPPED",
-                "message": "Deployment 'infra-agent' already exists.",
-                "details": ""
-            }
-
-        return _run_command(
-            ["kubectl", "apply", "-f", config_path],
-            "Deploy Python Docker Application"
-        )
-    
+        # This used to docker-build app/infra/python_app, push it to
+        # gcr.io/<project>/infra-agent-python-app and kubectl-apply a manifest
+        # that exposed its unauthenticated /execute through a LoadBalancer with
+        # the default ServiceAccount token mounted. The hardened service ships
+        # with the Helm chart instead; nothing is built or applied at runtime.
+        return locate_execute_service()
     elif app_type == "spark":
         # Placeholder for Spark deployment logic
         # This would typically involve installing a Spark operator or deploying Spark via Helm.
@@ -469,21 +464,10 @@ def verify_application_status(app_type: str) -> dict:
     """Verifies the status of the deployed application."""
     print(f"Verifying {app_type} application status...")
     if app_type == "python-docker":
-        # Wait for the deployment to be ready
-        wait_cmd = ["kubectl", "wait", "--for=condition=available", "deployment/infra-agent", "--timeout=300s"]
-        outcome = _run_command(wait_cmd, "Wait for Python App Deployment Ready")
-        if outcome["status"] == "FAILED":
-            return outcome
-
-        # Check that the deployment is available
-        get_cmd = ["kubectl", "get", "deployment", "infra-agent"]
-        get_outcome = _run_command(get_cmd, "Get Python App Deployment Status")
-        if get_outcome["status"] == "SUCCESS" and "1/1" in get_outcome["details"]:
-            get_outcome["message"] = "Python application deployment verified: 1/1 replicas available."
-        elif get_outcome["status"] == "SUCCESS":
-            get_outcome["status"] = "WARNING"
-            get_outcome["message"] = "Python application deployment not fully ready."
-        return get_outcome
+        located = locate_execute_service()
+        if located["status"] != "SUCCESS":
+            return located
+        return check_execute_service_health(located["details"])
     elif app_type == "spark":
         # Placeholder for Spark application status verification
         return {
@@ -507,6 +491,54 @@ def verify_application_status(app_type: str) -> dict:
             "message": f"Unsupported application type: {app_type}",
             "details": ""
         }
+
+EXECUTE_SERVICE_STEP = "Locate execute service"
+
+
+def locate_execute_service() -> dict:
+    """The python-docker step: find the chart-deployed ``/execute`` service.
+
+    SUCCESS when the deployment configured ``AVALOKA_EXECUTE_SERVICE_URL`` and
+    ``EXECUTE_SERVICE_TOKEN`` (Helm: ``executeService.enabled``), FAILED with
+    the fix otherwise. Never builds an image or applies a manifest.
+    """
+    from app.executor.execute_service import TOKEN_ENV, URL_ENV, configured_host_port, configured_url
+
+    where = configured_host_port()
+    if where and (os.getenv(TOKEN_ENV) or "").strip():
+        return {
+            "step_name": EXECUTE_SERVICE_STEP,
+            "status": "SUCCESS",
+            "message": f"Execute service configured at {configured_url()}",
+            "details": {"ip": where[0], "port": where[1]},
+        }
+    missing = [n for n, v in ((URL_ENV, where), (TOKEN_ENV, (os.getenv(TOKEN_ENV) or "").strip())) if not v]
+    return {
+        "step_name": EXECUTE_SERVICE_STEP,
+        "status": "FAILED",
+        "message": (
+            "The execute service is not configured (missing " + ", ".join(missing) + "). "
+            "It is deployed by the Helm chart: install or upgrade with executeService.enabled=true."
+        ),
+        "details": "",
+    }
+
+
+def check_execute_service_health(where: dict) -> dict:
+    """GET /health on the execute service (no token needed; it runs nothing)."""
+    import urllib.request
+
+    url = f"http://{where['ip']}:{where['port']}/health"
+    try:
+        with urllib.request.urlopen(url, timeout=10) as res:
+            ok = res.status == 200
+    except Exception as exc:  # noqa: BLE001 - reported as the step's outcome
+        return {"step_name": "Verify execute service", "status": "FAILED",
+                "message": f"Execute service health check failed: {exc}", "details": ""}
+    return {"step_name": "Verify execute service", "status": "SUCCESS" if ok else "FAILED",
+            "message": "Execute service is healthy." if ok else "Execute service health check failed.",
+            "details": where}
+
 
 def get_service_ip_and_port(service_name: str) -> dict:
     """Retrieves the external IP and port of a Kubernetes service."""

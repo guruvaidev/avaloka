@@ -7,23 +7,39 @@ spec:
   shutdownAfterJobFinishes: true
   ttlSecondsAfterFinished: 600
 
+  # No credential is ever rendered into this CR or its ConfigMap: database URLs
+  # and bucket keys reach the pods from the per-job Secret __RAYJOB_NAME__-env
+  # (secretKeyRef below), which app/infra/ray_job_runner.py creates owned by
+  # this RayJob right after it is applied, and deletes when the job ends.
   runtimeEnvYAML: |
+    # Pinned to the versions requirements.txt resolves to, so a DTA job runs the
+    # libraries the app generated and validated its script against; unpinned,
+    # every job installed whatever PyPI had that day. Ray is never listed: the
+    # image provides it. tests/test_ray_version_alignment.py holds these pins.
     pip:
-      - pandas
-      - daft
-      - sqlalchemy
-      - psycopg2-binary
-      - PyMySQL
-      - google-cloud-storage
-      - sqlglot
-      - connectorx
+      - pandas==2.3.3
+      - daft==0.7.26
+      - sqlalchemy==2.1.6
+      - psycopg2-binary==2.9.13
+      - PyMySQL==1.2.3
+      - google-cloud-storage==3.17.1
+      - sqlglot==30.27.0
+      - connectorx==0.4.6
     env_vars:
       JOB_ID: "__JOB_ID__"
       PYTHONPATH: "/home/ray"
-      __CLOUD_ENV_VARS__
 
   rayClusterSpec:
-    rayVersion: "2.10.0"
+    rayVersion: "2.56.0"
+    # ray-auth:begin  Ray enforces the token through RAY_AUTH_MODE/RAY_AUTH_TOKEN on
+    # every container; authOptions lets the KubeRay operator (1.6+) read this
+    # job's status with the same token, from the job's own Secret. Needs Ray
+    # >= 2.52 in the image. The runner removes every ray-auth block when the
+    # app runs without RAY_AUTH_MODE=token (chart ray.auth.enabled=false).
+    authOptions:
+      mode: token
+      secretName: __RAYJOB_NAME__-env
+    # ray-auth:end
     enableInTreeAutoscaling: false
 
     headGroupSpec:
@@ -56,6 +72,18 @@ spec:
               env:
                 - name: GOOGLE_APPLICATION_CREDENTIALS
                   value: /var/secrets/google/key.json
+                # ray-auth:begin  Ray token authentication (RAY_AUTH_MODE=token). The token
+                # is this job's copy in its own Secret (key auth_token), put there by
+                # app/infra/ray_job_runner.py from the app's RAY_AUTH_TOKEN.
+                - name: RAY_AUTH_MODE
+                  value: token
+                - name: RAY_AUTH_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: __RAYJOB_NAME__-env
+                      key: auth_token
+                # ray-auth:end
+                __SECRET_ENV_REFS__
               volumeMounts:
                 - name: script-volume
                   mountPath: /home/ray/scripts
@@ -72,6 +100,9 @@ spec:
             - name: gcs-sa-key-volume
               secret:
                 secretName: __GCS_SECRET_NAME__
+                # Optional: the job namespace (rbac.rayJobSecretsNamespace) need
+                # not hold a platform GCS key.
+                optional: true
 
     workerGroupSpecs:
       - groupName: small-group
@@ -99,6 +130,18 @@ spec:
                 env:
                   - name: GOOGLE_APPLICATION_CREDENTIALS
                     value: /var/secrets/google/key.json
+                  # ray-auth:begin  Ray token authentication (RAY_AUTH_MODE=token). The token
+                  # is this job's copy in its own Secret (key auth_token), put there by
+                  # app/infra/ray_job_runner.py from the app's RAY_AUTH_TOKEN.
+                  - name: RAY_AUTH_MODE
+                    value: token
+                  - name: RAY_AUTH_TOKEN
+                    valueFrom:
+                      secretKeyRef:
+                        name: __RAYJOB_NAME__-env
+                        key: auth_token
+                  # ray-auth:end
+                  __SECRET_ENV_REFS__
                 volumeMounts:
                   - name: script-volume
                     mountPath: /home/ray/scripts
@@ -112,6 +155,7 @@ spec:
               - name: gcs-sa-key-volume
                 secret:
                   secretName: __GCS_SECRET_NAME__
+                  optional: true
 
 ---
 apiVersion: v1

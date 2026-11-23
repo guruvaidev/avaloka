@@ -19,14 +19,31 @@ pinned numbers, so there is one place to update when a version changes.
 
 | Component | Version | Where it's pinned |
 | --------- | ------- | ----------------- |
-| Ray / Ray Serve (app client) | 2.49.2 | `requirements.txt` (`ray[air,serve]==2.49.2`) |
-| Ray (cluster image) | 2.49.2 | `deploy/docker/Dockerfile.ray` (`rayproject/ray:2.49.2-py311`) |
-| RayCluster CR `rayVersion` | 2.49.2 | `deploy/helm/ray/raycluster.yaml` |
-| RayService CR `rayVersion` | 2.49.2 | `deploy/helm/ray/rayservice.yaml` |
-| KubeRay operator | set by `KUBERAY_OPERATOR_VERSION` | `app/infra/ray_manager.py` |
-| Daft (getdaft) | `>=0.5.0,<0.6` | `requirements.txt` |
+| Ray / Ray Serve (app client) | 2.56.0 | `requirements.txt` (`ray[air,serve]==2.56.0`) |
+| Ray (cluster image) | 2.56.0 | `deploy/docker/Dockerfile.ray` (`rayproject/ray:2.56.0-py311`) |
+| RayCluster CR `rayVersion` | 2.56.0 | `deploy/helm/ray/raycluster.yaml` |
+| RayService CR `rayVersion` | 2.56.0 | `deploy/helm/ray/rayservice.yaml` |
+| KubeRay operator | 1.6.2 (`KUBERAY_OPERATOR_VERSION`; 1.6+ required for Ray token auth) | `app/infra/ray_manager.py` |
+| RayJob templates `rayVersion` / image | 2.56.0 | `app/infra/rayjob.yaml`, `app/infra/rayjob_data_transfer.yaml` |
+| Daft | `>=0.7.1,<0.8` | `requirements.txt` (`getdaft`, the pre-rename name, is a shim and is not listed) |
 
-> **Why 2.49.2.** The matrix previously named 2.53.0, a Ray release that does
+> **Why 2.56.0.** 2.56.0 clears the two high Ray advisories left on 2.52.1,
+> GHSA-hhrp-gw25-jr43 (read_webdataset pickle, fixed 2.56.0) and
+> GHSA-mw35-8rx3-xf9r (Parquet Arrow extension-type deserialisation, fixed
+> 2.55.0). It requires pyarrow>=17, so pyarrow moves to 23.0.1 with it.
+
+> **Why 2.52.1 (previous step).** It is the smallest release that clears the three critical
+> Ray advisories GitHub reported against 2.49.2: GHSA-q279-jhrf-cc6v (fixed
+> 2.52.0), GHSA-6wgj-66m2-xxp2 (last affected 2.49.2) and GHSA-gx77-xgc2-4888
+> (last affected 2.52.0). Two consequences of the move: Ray Train V2 is on by
+> default in 2.52.1 (off in 2.49.2), so the cluster and training images set
+> `RAY_TRAIN_V2_ENABLED=0` to keep the V1 TorchTrainer semantics `ray_job.py`
+> was written against; and the Jobs API and dashboard stay unauthenticated
+> unless `RAY_AUTH_MODE=token` is set, which the advisories' real fix requires.
+> It is set now: see "Ray and MLflow authentication" in
+> [deployment.md](deployment.md#ray-and-mlflow-authentication).
+
+> **Why not 2.53.0 (history).** The matrix previously named 2.53.0, a Ray release that does
 > not exist — the newest published is 2.49.2. Every consumer agreed with every
 > other, so the guard test passed, and `pip install -r requirements.txt` failed
 > on every platform with "No matching distribution found for ray==2.53.0". A
@@ -60,7 +77,7 @@ pinned numbers, so there is one place to update when a version changes.
 | --------- | ------- | ----------------- |
 | LangChain | 0.3.x | `requirements.txt` |
 | LangGraph | 0.6.x | `requirements.txt` |
-| LangGraph CLI | 0.4.x | `requirements.txt` |
+| LangGraph CLI | 0.4.x | `requirements-langgraph-server.txt` — the LangGraph server's image only, not the API's: its langgraph-api 0.5.x caps cryptography `<45` |
 | MCP SDK | `>=1.18,<2` | `requirements.txt` |
 | langchain-openai | `>=0.3,<1.0` | `requirements.txt` (OpenRouter and local models use this client) |
 | LLM provider (local / CLI default) | OpenRouter, resolved key-aware | `app/core/inference.py` — unset `INFERENCE_PROVIDER` resolves to OpenRouter, falling back to Groq when only a Groq key is present |
@@ -96,17 +113,24 @@ pinned numbers, so there is one place to update when a version changes.
 | Image | Published tags that exist on GHCR | Chart default |
 | --- | --- | --- |
 | `ghcr.io/guruvaidev/avaloka-api` | `main`, `latest`, `sha-<short>`, `src-*`, `deps-*`, `buildcache` | `main` |
+| `ghcr.io/guruvaidev/avaloka-langgraph` | same set, **from the first `images.yml` run after this change** (the package must then be made public) | `main`, derived from `image.repository`/`image.tag` (`langgraph.image.*` overrides) |
 | `ghcr.io/guruvaidev/avaloka-ui` | same set | `main` |
 | `ghcr.io/guruvaidev/avaloka-ray` | same set | `main` (used by `ui.image`; the Ray CRs name `avaloka-ray:latest` bare) |
 | `ghcr.io/guruvaidev/avaloka-functions` | same set | `main` |
 
-All four pull anonymously. **No semver tag exists** — `images.yml` would
-publish one on a `v*` git tag, but none has been pushed, so `:1.0.0` / `:1.6.0`
-do not resolve. Neither does `:develop-1.6`. Verify before pinning:
-`docker manifest inspect ghcr.io/guruvaidev/avaloka-api:<tag>`.
+All four pull anonymously. **Version tags come from the `VERSION` file of the
+branch being built**, not from the branch name: `images.yml` reads it and adds
+`:<MAJOR.MINOR.PATCH>` and `:<MAJOR.MINOR>` to every build, so the 2.0 line
+publishes `:2.0.0` and `:2.0` and a branch still carrying `VERSION=1.6.0`
+publishes `:1.6.0` and `:1.6`. Both are moving tags until a `v*` git tag is
+pushed, which is the only path that pins one. No `:2.0.0` exists until the
+first build from the 2.0 line runs; `:1.0.0` and `:1.6.0` were never published
+(the branches that carried those versions predate this rule). Verify before
+pinning: `docker manifest inspect ghcr.io/guruvaidev/avaloka-api:<tag>`.
 
-Chart version is `1.6.0` / appVersion `1.6.0` (`deploy/helm/avaloka/Chart.yaml`),
-which is independent of the image tags above.
+Chart version is `2.0.0` / appVersion `2.0.0` (`deploy/helm/avaloka/Chart.yaml`),
+and the chart's default image tag stays `main`: it is the one tag every
+deployment can pull today, and the version tags above are additions to it.
 
 ### Third-party images that do not pull
 

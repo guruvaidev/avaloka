@@ -1,0 +1,10 @@
+{
+  "question": "Did variant B convert better than A?",
+  "recipe": "ab_test",
+  "params": {
+    "arm": "variant",
+    "outcome": "converted"
+  },
+  "confidence": 1.0,
+  "source": "fixture"
+}

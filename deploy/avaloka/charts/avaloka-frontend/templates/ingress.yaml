@@ -6,10 +6,12 @@ metadata:
   name: {{ include "avaloka-frontend.fullname" . }}
   labels:
     {{- include "avaloka-frontend.labels" . | nindent 4 }}
-  {{- with .Values.ingress.annotations }}
   annotations:
+    # upload.maxBodySize is the one place the edge body cap is set (D5).
+    nginx.ingress.kubernetes.io/proxy-body-size: {{ required "upload.maxBodySize must be set (a finite nginx size, e.g. 1024m)" .Values.upload.maxBodySize | quote }}
+    {{- with (omit (.Values.ingress.annotations | default dict) "nginx.ingress.kubernetes.io/proxy-body-size") }}
     {{- toYaml . | nindent 4 }}
-  {{- end }}
+    {{- end }}
 spec:
   {{- with .Values.ingress.className }}
   ingressClassName: {{ . }}

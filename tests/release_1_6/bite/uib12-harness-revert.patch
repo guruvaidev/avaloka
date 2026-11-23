@@ -1,0 +1,13 @@
+diff --git a/app/agents/coder.py b/app/agents/coder.py
+index f03f7ce6..15d8a2d4 100644
+--- a/app/agents/coder.py
++++ b/app/agents/coder.py
+@@ -226,7 +226,7 @@ def _json_for_prompt(value: Any) -> str:
+ 
+ 
+ def _generate_pseudocode(state: CodingAgentState) -> str:
+-    if coder_llm is None:
++    if True:
+         return ""
+ 
+     plan_text = state.get("plan") or ""

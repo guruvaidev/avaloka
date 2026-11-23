@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+import warnings
 from collections import Counter
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -19,6 +20,14 @@ def add_time_order_column(frame: pd.DataFrame, time_column: str) -> pd.DataFrame
     Numeric sequence/timestamp columns retain their numeric order. Other values
     must all parse as datetimes. Missing or malformed timestamps are rejected so
     validation cannot silently mix unknown dates into a chronological split.
+
+    Each cell is parsed on its own (``format="mixed"``), the rule the CLI
+    loader uses for date columns (avaloka/stats.py ``_looks_like_dates``). A
+    single inferred format turned every date written another way into
+    "invalid": a column in five export forms ("2022-01-01", "02/02/2023",
+    "Apr 4, 2023", "20220505", ...) with 2 real gaps in 60 rows was refused
+    as having 48 missing or invalid values. Only a cell that is missing or
+    does not parse as a date at all is counted now.
     """
     if not time_column or time_column not in frame.columns:
         raise ValueError(
@@ -30,7 +39,9 @@ def add_time_order_column(frame: pd.DataFrame, time_column: str) -> pd.DataFrame
     if numeric.notna().all():
         order_values = numeric
     else:
-        parsed = pd.to_datetime(values, errors="coerce", utc=True)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")      # per-cell parsing warns; it is the point
+            parsed = pd.to_datetime(values, errors="coerce", utc=True, format="mixed")
         invalid = int(parsed.isna().sum())
         if invalid:
             raise ValueError(
@@ -125,6 +136,12 @@ def build_holdout_evaluation_report(
         "primary_metric": "rmse" if task == "regression" else "accuracy",
         "beats_baseline": None,
         "warnings": [],
+        # What the numbers are. Both trainers validate on one holdout; the
+        # local trainer k-folds the scikit-learn families on top and says so.
+        # The Ray path and the MLP carry "holdout", and no fold report.
+        "evaluation_strategy": model_metrics.get("evaluation_strategy") or "holdout",
+        "cross_validation": model_metrics.get("cross_validation"),
+        "classification": model_metrics.get("classification"),
     }
 
     if not train or not validation:

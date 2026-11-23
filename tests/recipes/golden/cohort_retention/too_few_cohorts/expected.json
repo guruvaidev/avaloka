@@ -1,0 +1,17 @@
+{
+  "recipe": "cohort_retention",
+  "version_major": 1,
+  "verdict": "refuse",
+  "reason": "insufficient_periods",
+  "figures": [],
+  "caveats": [],
+  "must_not_say": [
+    "cause",
+    "causes",
+    "drives",
+    "because",
+    "effect of",
+    "leads to"
+  ],
+  "note": "pandas: two cohorts only, so the recipe refuses insufficient_periods; nothing is reported."
+}

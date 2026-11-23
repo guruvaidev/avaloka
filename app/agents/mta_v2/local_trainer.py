@@ -44,7 +44,9 @@ from sklearn.metrics import f1_score as sk_f1_score
 from sqlalchemy import create_engine, text
 from torch.utils.data import DataLoader, TensorDataset
 
+from app.agents.evaluation_agent import evaluate_model
 from app.agents.mta_v2.model import DynamicMLP, ModelConfig
+from app.agents.mta_v2 import estimators, model_card
 from app.agents.mta_v2.loader.sql import load_dataset_from_sql
 from app.agents.mta_v2.loader.url import load_dataset_from_url
 from app.agents.mta_v2.training_docker_image.src.data_integrity import (
@@ -443,6 +445,39 @@ def inverse_standard_scaling(values: List[float], scaler: Dict[str, Any] | None)
     return [float(value) * scale + mean for value in values]
 
 
+def _sklearn_regression_metrics(
+    model: Any,
+    train_df: pd.DataFrame,
+    val_df: pd.DataFrame,
+    config: Dict[str, Any],
+    record: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Regression metrics for a non-MLP family, in the target's own units.
+
+    _apply_preprocessing standardises regression labels before train_local, and
+    the MLP path inverts that before computing MAE/RMSE/R-squared. The sklearn
+    families fit on the same scaled labels, so their predictions are scaled too.
+    Without this, training_main finds no train_/val_ mae/rmse/r2 keys and logs
+    final_mae = final_rmse = 0.0 -- a perfect-looking score for any model.
+    Accuracy and F1 mean nothing for regression and are dropped, as the MLP
+    path omits them.
+    """
+    target_scaling = config.get("target_scaling") or {}
+    feature_cols: List[str] = config["feature_cols"]
+    out = {k: v for k, v in record.items()
+           if k not in ("accuracy", "val_accuracy", "f1_score", "val_f1_score")}
+    for split, frame in (("train", train_df), ("val", val_df)):
+        preds = model.predict(frame[feature_cols].to_numpy(dtype=float))
+        metrics = _compute_regression_metrics(
+            inverse_standard_scaling(frame["__label__"].astype(float).tolist(), target_scaling),
+            inverse_standard_scaling([float(p) for p in preds], target_scaling),
+        )
+        out[f"{split}_mae"] = metrics["mae"]
+        out[f"{split}_rmse"] = metrics["rmse"]
+        out[f"{split}_r2_score"] = metrics["r2_score"]
+    return out
+
+
 # =========================================================
 # Imputation  (same mean/mode logic as ray_job.py)
 # =========================================================
@@ -611,6 +646,27 @@ def train_local(
 
     Returns (best_model, history, final_metrics).
     """
+    # Which family. Everything below this point is the MLP path; the other
+    # families are fitted by estimators.fit_sklearn and return the same
+    # (model, history, final_metrics) triple, so callers need no branch.
+    algorithm = estimators.normalise_algorithm(config.get("algorithm"))
+    if algorithm != "mlp":
+        model, history, final_metrics = estimators.fit_sklearn(
+            train_df, val_df, {**config, "algorithm": algorithm})
+        if "classification" not in config["model_type"]:
+            final_metrics = _sklearn_regression_metrics(model, train_df, val_df, config,
+                                                        final_metrics)
+            history = [final_metrics]
+        # k-fold on the training split, on top of the holdout. The history
+        # row stays flat -- it is logged metric by metric -- so the fold
+        # report and the confusion matrix ride on a copy of final_metrics.
+        return model, history, {
+            **final_metrics,
+            "evaluation_strategy": "holdout+kfold",
+            "cross_validation": _cross_validate_family(model, train_df, config),
+            "classification": estimators.validation_detail(model, val_df, config),
+        }
+
     torch.manual_seed(config["random_seed"])
     device = torch.device("cuda" if config["use_gpu"] and torch.cuda.is_available() else "cpu")
     logger.info("[Train] Device: %s", device)
@@ -810,7 +866,46 @@ def train_local(
     # The restored weights are from the lowest validation-loss checkpoint, so
     # report the metrics from that same epoch instead of a later degraded epoch.
     final_metrics = min(history, key=lambda row: row["val_loss"]) if history else {}
-    return model, history, final_metrics
+    # The MLP keeps its single holdout -- refitting a network per fold is not
+    # a cost this path pays -- and says so, rather than leaving the reader to
+    # assume the number was cross-validated like the other families' are.
+    return model, history, {
+        **final_metrics,
+        "evaluation_strategy": "holdout",
+        "cross_validation": None,
+        "classification": estimators.validation_detail(model, val_df, config),
+    }
+
+
+def _cross_validate_family(model: Any, train_df: pd.DataFrame, config: Dict[str, Any]) -> Dict[str, Any]:
+    """k-fold the fitted family's recipe on the training split.
+
+    ``evaluate_model`` clones the estimator per fold, picks the splitter from
+    the data's declared shape (time-ordered rows get ``TimeSeriesSplit``,
+    classification is stratified) and records why, and compares the folds
+    against the trivial baseline on the confidence interval. Regression
+    labels arrive standardised; they are put back in the target's units so
+    the fold RMSE agrees with the holdout ``val_rmse``.
+    """
+    is_classification = "classification" in str(config["model_type"])
+    X = train_df[config["feature_cols"]].to_numpy(dtype=float)
+    y = train_df["__label__"].to_numpy()
+    if is_classification:
+        y = y.astype(int)
+    else:
+        y = np.asarray(inverse_standard_scaling(y.astype(float).tolist(),
+                                                config.get("target_scaling") or {}))
+    report = evaluate_model(
+        model, X, y,
+        task="classification" if is_classification else "regression",
+        time_ordered=bool(config.get("time_ordered")),
+    )
+    out = report.as_dict()
+    primary = out["metrics"].get(out["primary_metric"]) or {}
+    out["cv_mean"] = primary.get("mean")
+    out["cv_std"] = primary.get("std")
+    logger.info("[Train] %s", report.summary())
+    return out
 
 
 # =========================================================
@@ -843,8 +938,17 @@ def training_main(
     activation: str = "relu",
     dropout: float = 0.2,
     batch_norm: bool = True,
+    algorithm: str = "mlp",
+    extra_hyperparameters: dict[str, Any] | None = None,
+    build_model_card: bool = True,
+    cv_folds: int = 5,
 ) -> dict[str, Any]:
     start_time = time.time()
+
+    # Normalised once, here, so every log line and artifact agrees on what was
+    # trained even when the planner emitted an alias or something unknown.
+    algorithm = estimators.normalise_algorithm(algorithm)
+    extra_hyperparameters = dict(extra_hyperparameters or {})
 
     hidden_sizes = hidden_sizes or [128, 64]
     class_names  = class_names  or []
@@ -1023,6 +1127,9 @@ def training_main(
         "use_gpu":                 use_gpu,
         "target_scaling":          preprocessing.get("target_scaling", {}),
         "class_weights":           preprocessing.get("class_weights"),
+        "algorithm":               algorithm,
+        "time_ordered":            bool(time_column),
+        **extra_hyperparameters,
     }
 
     # ======================================================
@@ -1034,6 +1141,7 @@ def training_main(
         logger.info("[MLflow] run_id=%s", mlflow_run_id)
 
         # ---- Log hyperparameters (identical to ray_job.py) ----
+        mlflow.log_param("algorithm", algorithm)
         mlflow.log_params({
             "task_id":                 task_id,
             "user_id":                 user_id,
@@ -1081,6 +1189,24 @@ def training_main(
             n_folds=validation_split["n_folds"],
             time_column=validation_split["time_column"],
         )
+
+        # What the model learned, in a form the conversational agent can quote.
+        # Best-effort by construction: a failed model card must never cost a
+        # successful training run, so build_model_card swallows and logs.
+        card = {"summary_text": "", "importances": [], "baseline": {}}
+        if build_model_card:
+            card = model_card.build_model_card(
+                model,
+                algorithm=algorithm,
+                model_type=model_type,
+                train_df=train_df,
+                val_df=val_df,
+                feature_cols=feature_cols,
+                metrics=final_metrics_raw or {},
+                random_state=random_seed,
+            )
+            if card.get("summary_text"):
+                mlflow.log_text(card["summary_text"], "metadata/model_card.txt")
 
         # ---- Log per-epoch metrics (identical to ray_job.py) ----
         for epoch_row in history:
@@ -1148,19 +1274,51 @@ def training_main(
         local_pth_named  = f"{temp_dir}/model.pth"
         local_onnx_named = f"{temp_dir}/model.onnx"
 
-        save_model_pth(model, local_pth_named)
-        save_model_onnx(model, local_onnx_named)
-
-        # ---- Log model artifacts to MLflow (identical to ray_job.py) ----
+        # ---- Log model artifacts to MLflow ----
+        # With a signature and a 5-row input example so the registry version
+        # (app/core/ml_registry) describes its contract. Registration itself
+        # happens in the worker after training, not here.
         logger.info("[MLflow] Logging model artifacts ...")
-        mlflow.pytorch.log_model(
-            pytorch_model=model,
-            artifact_path="model",
-            registered_model_name=None,
-            serialization_format="pickle"
-        )
-        mlflow.log_artifact(local_pth_named,  artifact_path="model_files")
-        mlflow.log_artifact(local_onnx_named, artifact_path="model_files")
+        from app.agents.mta_v2.model_signature import build_signature, build_sklearn_signature
+
+        if estimators.is_torch_model(model):
+            save_model_pth(model, local_pth_named)
+            save_model_onnx(model, local_onnx_named)
+            signature, input_example = build_signature(model, val_df, model_feature_cols)
+            output_metrics_signature_logged = signature is not None
+            mlflow.pytorch.log_model(
+                pytorch_model=model,
+                artifact_path="model",
+                registered_model_name=None,
+                serialization_format="pickle",
+                signature=signature,
+                input_example=input_example,
+            )
+            mlflow.log_artifact(local_pth_named,  artifact_path="model_files")
+            mlflow.log_artifact(local_onnx_named, artifact_path="model_files")
+        else:
+            # A scikit-learn estimator has no state_dict and no ONNX graph, so
+            # .pth/.onnx are simply not produced. Logging it through
+            # mlflow.pytorch would write a pickle that nothing can load back as
+            # a torch module -- broken at load time rather than here, which is
+            # worse. mlflow.sklearn plus a joblib file is the equivalent pair.
+            import joblib
+            # `import mlflow.sklearn` here would bind `mlflow` as a LOCAL name for
+            # the whole of training_main, so every earlier mlflow.* call raised
+            # UnboundLocalError. Bind the submodule under its own name instead.
+            import mlflow.sklearn as mlflow_sklearn
+            signature, input_example = build_sklearn_signature(model, val_df, model_feature_cols)
+            output_metrics_signature_logged = signature is not None
+            mlflow_sklearn.log_model(
+                sk_model=model,
+                artifact_path="model",
+                skops_trusted_types=list(estimators.SKOPS_TRUSTED_TYPES),
+                signature=signature,
+                input_example=input_example,
+            )
+            local_joblib = f"{temp_dir}/model.joblib"
+            joblib.dump(model, local_joblib)
+            mlflow.log_artifact(local_joblib, artifact_path="model_files")
 
         local_model_config = f"{temp_dir}/model_config.json"
         with open(local_model_config, "w") as f:
@@ -1246,6 +1404,9 @@ def training_main(
             "created_at":         datetime.now(timezone.utc).isoformat(),
             "integrity_report":   integrity_report,
             "evaluation_report":  evaluation_report,
+            "algorithm":          algorithm,
+            "model_summary_text": card.get("summary_text") or None,
+            "feature_importances": card.get("importances") or [],
             **final_task_metrics,
         }
 
@@ -1272,6 +1433,8 @@ def training_main(
             "created_at":        datetime.now(timezone.utc).isoformat(),
         })
 
+    output_metrics["signature_logged"] = bool(output_metrics_signature_logged)
+    output_metrics["cv_folds"] = int(cv_folds)
     logger.info(
         "[Done] task_id=%s  mlflow_run_id=%s  model=%s  version=%s  runtime=%.3fs",
         task_id, mlflow_run_id, model_name, model_version, runtime_s,
@@ -1361,6 +1524,9 @@ class LocalTrainer:
             task_id, self.user_id, data_uri,
         )
 
+        def _family_default(key: str) -> Any:
+            return estimators.default_for(_get(training_plan, "algorithm", "mlp"), key)
+
         # ---- MLflow setup (idempotent) ----
         setup_mlflow()
 
@@ -1376,20 +1542,34 @@ class LocalTrainer:
                 class_names        = _get(dc, "class_names") or [],
                 feature_cols       = _get(dc, "feature_columns") or _get(dc, "feature_cols") or [],
                 model_name         = _get(training_plan, "model_name", "dynamic-mlp"),
+                cv_folds           = int((_get(training_plan, "cross_validation") or {}).get("k", 5)),
                 model_description  = _get(training_plan, "model_description", ""),
                 model_version      = _get(training_plan, "model_version", "1"),
-                learning_rate      = _get(hp, "learning_rate", 0.001),
+                # A key the plan leaves out takes the chosen family's default:
+                # the MLP's 0.001 once reached gradient boosting this way.
+                learning_rate      = _get(hp, "learning_rate", _family_default("learning_rate")),
                 epochs             = _get(hp, "epochs", 30),
                 batch_size         = _get(hp, "batch_size", 32),
                 optimizer_name     = _get(hp, "optimizer_name", "adam"),
                 random_seed        = _get(hp, "random_seed", 42),
-                early_stopping_pat = _get(hp, "early_stopping_patience", 5),
+                early_stopping_pat = _get(hp, "early_stopping_patience", _family_default("early_stopping_patience")),
                 early_stopping_min_delta = _get(hp, "early_stopping_min_delta", 1e-4),
                 use_gpu            = _get(rc, "use_gpu", False),
                 hidden_sizes       = _get(hp, "hidden_layer_sizes") or _get(hp, "hidden_sizes") or [128, 64],
                 activation         = _get(hp, "activation", "relu"),
                 dropout            = _get(hp, "dropout_rate") or _get(hp, "dropout") or 0.2,
                 batch_norm         = _get(hp, "batch_norm", True),
+                algorithm          = _get(training_plan, "algorithm", "mlp"),
+                # Family-specific hyperparameters ride through untouched; each
+                # estimator reads the keys that apply to it (see
+                # estimators.FAMILY_HYPERPARAMETERS) and ignores the rest.
+                extra_hyperparameters = {
+                    key: _get(hp, key)
+                    for key in ("max_iter", "max_depth", "max_leaf_nodes",
+                                "l2_regularization", "n_estimators",
+                                "min_samples_leaf", "max_features", "alphas")
+                    if _get(hp, key) is not None
+                },
             )
             logger.info("[LocalTrainer] Training finished — mlflow_run_id=%s", result.get("mlflow_run_id"))
             return result
@@ -1399,6 +1579,7 @@ class LocalTrainer:
             return {
                 "status": "error",
                 "error": str(exc),
+                "algorithm": estimators.normalise_algorithm(_get(training_plan, "algorithm", "mlp")),
                 "model_name": _get(training_plan, "model_name", "dynamic-mlp"),
                 "model_type": _get(training_plan, "model_type", "classification"),
                 "model_version": _get(training_plan, "model_version", "1"),

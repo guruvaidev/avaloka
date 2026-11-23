@@ -1,4 +1,5 @@
 # coder.py
+import ast
 import os
 import logging
 import json
@@ -11,7 +12,9 @@ from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
 from app.core.inference import build_chat_model
 from app.agents.state import CodingAgentState
+from app.agents.db_write_guard import DB_WRITE_REFUSAL, describes_database_write
 from app.agents.preparation_agent import parse_numeric_token
+from app.services.memory_actions import analysis_memory_context
 # Re-exported: app/agents/data_transfer_agent/daft_coder.py imports this
 # through app.agents.coder, so the name must stay importable here even
 # though coder.py no longer calls it itself.
@@ -27,6 +30,16 @@ project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(_
 load_dotenv(os.path.join(project_root, ".env"))
 
 logger = logging.getLogger(__name__)
+
+# Retry ceiling for the coder/validator loop. Previously the literal 2, inline
+# in the hard-fail branch, so tuning the loop budget for a deployment meant a
+# code change and a release. A pilot with a slower model or a stricter latency
+# envelope wants a different budget, and that should be configuration.
+#
+# Kept in sync with app/core/loop_telemetry.DEFAULT_MAX_RETRIES, which reads the
+# same variable so reported loop outcomes are classified against the ceiling
+# actually in force rather than an assumed one.
+CODER_MAX_RETRIES = int(os.getenv("AVALOKA_CODER_MAX_RETRIES", "2"))
 
 # --- LLM Setup ---
 from app.core.model_config import resolve as resolve_model
@@ -57,6 +70,20 @@ _TRUNCATION_RETRY_NOTE = (
     "at runtime), loop over columns instead of repeating blocks, and keep "
     "comments to a minimum. The script must end with the __main__ block."
 )
+
+
+
+def _without_job_notes(messages):
+    """Drop code-written background-job notes (app/core/job_notes.py) before
+    scanning the history for the user's instruction or the plan: a note is
+    system context, never an instruction."""
+    out = []
+    for m in messages:
+        ak = getattr(m, "additional_kwargs", None) or {}
+        if isinstance(ak, dict) and ak.get("avaloka_job_note"):
+            continue
+        out.append(m)
+    return out
 
 
 def _finish_reason(response: Any) -> str:
@@ -234,7 +261,7 @@ def _generate_pseudocode(state: CodingAgentState) -> str:
     instruction = plan_text or user_prompt
 
     if not instruction:
-        messages = state.get("messages") or []
+        messages = _without_job_notes(state.get("messages") or [])
         for message in reversed(messages):
             candidate = getattr(message, "content", None)
             if candidate:
@@ -345,13 +372,15 @@ Rules for the contract itself:
     if sample_row:
         human_prompt += f"\nSample row:\n{_json_for_prompt(sample_row)}\n"
 
-    # Inject Context Memory directly into the Pseudocode planner's awareness
-    if state.get("memory_hints"):
-        hints_str = "\n- ".join(state["memory_hints"])
+    # Inject Context Memory directly into the Pseudocode planner's awareness.
+    # A write or transfer in memory never steers a blueprint (memory_actions).
+    memory_hints, logic_signature = analysis_memory_context(state)
+    if memory_hints:
+        hints_str = "\n- ".join(memory_hints)
         human_prompt += f"\n[CONTEXT MEMORY - USER PREFERENCES & PAST INSIGHTS]:\n- {hints_str}\n"
     
-    if state.get("session_logic_signature"):
-        human_prompt += f"\n[SESSION LOGIC SIGNATURE]:\n{state['session_logic_signature']}\n"
+    if logic_signature:
+        human_prompt += f"\n[SESSION LOGIC SIGNATURE]:\n{logic_signature}\n"
 
     human_prompt += (
         "\nRespond with the numbered pseudocode steps, then the fenced json "
@@ -492,7 +521,7 @@ def _detect_math_on_string_column_coder(state: CodingAgentState) -> Optional[str
     # whose wording ("assumption", "column named ...") must not trip the guard.
     plan_raw = state.get("user_prompt") or state.get("plan") or ""
     if not plan_raw:
-        messages = state.get("messages") or []
+        messages = _without_job_notes(state.get("messages") or [])
         for message in reversed(messages):
             content = getattr(message, "content", None)
             if content:
@@ -542,6 +571,11 @@ def _generate_stub_code(state: CodingAgentState) -> str:
     """Return deterministic pandas code when Groq LLM is unavailable."""
     data_source = _prompt_safe_path(state.get("data_source_location") or "")
     output_location = _prompt_safe_path(state.get("output_location") or "output.csv")
+    input_data_type = (state.get("input_data_type") or "").lower()
+    complex_source = input_data_type in {
+        "pdf", "jpg", "jpeg", "png", "tif", "tiff", "bmp", "webp",
+        "mp4", "mov", "mkv", "avi", "webm", "m4v", "lerobot", "rlds",
+    }
     plan_raw = state.get("plan") or ""
     instruction_raw = plan_raw
 
@@ -551,7 +585,7 @@ def _generate_stub_code(state: CodingAgentState) -> str:
             instruction_raw = user_prompt
 
     if not instruction_raw:
-        messages = state.get("messages") or []
+        messages = _without_job_notes(state.get("messages") or [])
         for message in reversed(messages):
             content = getattr(message, "content", None)
             if content:
@@ -614,6 +648,10 @@ def _generate_stub_code(state: CodingAgentState) -> str:
 
     code_lines: List[str] = [
         "import pandas as pd",
+        *(
+            ["from avaloka.io import load_dataset"]
+            if complex_source else []
+        ),
         "",
         "def main(df):",
     ]
@@ -804,13 +842,39 @@ def _generate_stub_code(state: CodingAgentState) -> str:
         [
             "",
             "if __name__ == \"__main__\":",
-            f"    df = pd.read_csv({repr(data_source)})",
+            (
+                f"    df = load_dataset({repr(data_source)}).frame"
+                if complex_source else f"    df = pd.read_csv({repr(data_source)})"
+            ),
             "    df = main(df)",
             f"    df.to_csv({repr(output_location)}, index=False)",
         ]
     )
 
     return "\n".join(code_lines)
+
+
+def _columns_the_stub_leaves_out(stub_code: str, contract) -> List[str]:
+    """Blueprint source columns the deterministic stub never touches.
+
+    The stub is keyword heuristics over the plan text. rc9: for "average age of
+    patients with stroke" it filtered ``bmi == 'None'`` and summed ``id`` (the
+    plan said "assumption", which contains "sum"); the filter on ``stroke`` was
+    gone. When the blueprint names the columns the answer is built from and the
+    stub reads none of some of them, the stub is answering a different question.
+    With no contract there is nothing to compare against, and the stub runs as before.
+    """
+    if contract is None or not getattr(contract, "source_columns", None):
+        return []
+    try:
+        tree = ast.parse(stub_code)
+    except SyntaxError:
+        return list(contract.source_columns)
+    used = {
+        n.value for n in ast.walk(tree)
+        if isinstance(n, ast.Constant) and isinstance(n.value, str)
+    }
+    return [c for c in contract.source_columns if c not in used]
 
 
 def _append_unique_message(messages: List, content: Optional[str]) -> List:
@@ -918,11 +982,56 @@ def coder_node(state: CodingAgentState) -> dict:
     # respect explicitly provided library, otherwise infer
     library_to_use = state.get("library_to_use") or "pandas"
     additional_instructions, ex_code = None, None
+    complex_source_types = {
+        "pdf", "jpg", "jpeg", "png", "tif", "tiff", "bmp", "webp",
+        "mp4", "mov", "mkv", "avi", "webm", "m4v", "lerobot", "rlds",
+    }
+    complex_source = (input_data_type or "").lower() in complex_source_types
+    # Tabular sources keep develop-1.6's rule: the prompt shows the literal
+    # "input.csv" and execute_code_on_local substitutes the real location, so a
+    # host path never enters the prompt. That rewrite only matches
+    # read_csv_best_effort(...) / pd.read_csv(...), so a complex source still
+    # names its (prompt-safe) path in load_dataset(...).
+    source_load_expression = (
+        f"load_dataset({data_source_location!r}).frame"
+        if complex_source
+        else 'read_csv_best_effort("input.csv")'
+    )
 
     hard_fail = bool(state.get("syntax_error") or state.get("static_semantic_error"))
-    if hard_fail and retry_count >= 2:
+    if hard_fail and retry_count >= CODER_MAX_RETRIES:
         logger.info("Falling back to deterministic code generation after repeated HARD validation failures.")
         stub_code = _generate_stub_code(state)
+        left_out = _columns_the_stub_leaves_out(stub_code, _contract_from_state(state))
+        if left_out:
+            # Say so rather than answer a different question: the stub cannot
+            # express the filter or measure on these columns.
+            names = ", ".join(f"`{c}`" for c in left_out)
+            reason = (
+                "I couldn't write code for this that passed my checks, and my simple fallback "
+                f"can't use {names}, which this question depends on, so I haven't answered "
+                "rather than give a figure for a different question."
+            )
+            last_check = (state.get("code_validation_feedback") or "").strip()
+            if last_check:
+                reason += f"\n\nThe check that kept failing: {last_check[:400]}"
+            logger.info("Stub fallback refused: it leaves out %s", left_out)
+            return {
+                "generated_code": (
+                    "import pandas as pd\n\n"
+                    "def main(df: pd.DataFrame):\n"
+                    "    return df"
+                ),
+                "coder_blocked_reason": reason,
+                "code_validation_feedback": reason,
+                "retry_count": retry_count + 1,
+                "llm_raw_response": reason,
+                "messages": _append_unique_message(state_messages, reason),
+                "primary_llm_response": primary_response or reason,
+                "coder_pseudocode": state.get("coder_pseudocode"),
+                "coder_contract": state.get("coder_contract"),
+                "contract_error": None,
+            }
         fallback_msg = "Generated deterministic stub code after repeated HARD validation failures."
         primary_msg = primary_response or fallback_msg
         return {
@@ -942,7 +1051,14 @@ def coder_node(state: CodingAgentState) -> dict:
         }
 
     if state.get("library_to_use") is None:
-        if input_data_type in ["csv", "xml", "json", "parquet", None]:
+        if complex_source:
+            library_to_use = "Avaloka complex data loader and pandas"
+            additional_instructions = (
+                "Import load_dataset from avaloka.io and load the source with "
+                "df = load_dataset(DATA_SOURCE).frame. Analyze that bounded inspection "
+                "frame; never decode the source with pandas.read_csv."
+            )
+        elif input_data_type in ["csv", "xml", "json", "parquet", None]:
             library_to_use = "pandas"
         elif input_data_type == "avro":
             library_to_use = "fastavro and pandas"
@@ -981,6 +1097,32 @@ def coder_node(state: CodingAgentState) -> dict:
     else:
         pseudocode_plan = _generate_pseudocode(state)
         pseudocode_plan, contract = _split_blueprint(pseudocode_plan, state)
+
+    # Guard: a database write is the transfer path's, never the coder's. rc10's
+    # planner plan was "stroke rate by gender"; the write first appeared here,
+    # in a blueprint the coder built from the thread history (to_sql into the
+    # warehouse after a cancelled transfer). Stop before any code is written.
+    db_write = describes_database_write(pseudocode_plan) or describes_database_write(plan)
+    if db_write:
+        logger.warning("Coder: blueprint writes to a database (%r) — refusing; not generating code. "
+                       "Blueprint:\n%s\nPlan:\n%s",
+                       db_write[:120], str(pseudocode_plan or "")[:6000], str(plan or "")[:3000])
+        return {
+            "generated_code": (
+                "import pandas as pd\n\n"
+                "def main(df: pd.DataFrame):\n"
+                "    return df"
+            ),
+            "coder_blocked_reason": DB_WRITE_REFUSAL,
+            "code_validation_feedback": DB_WRITE_REFUSAL,
+            "retry_count": retry_count + 1,
+            "llm_raw_response": DB_WRITE_REFUSAL,
+            "messages": _append_unique_message(state_messages, DB_WRITE_REFUSAL),
+            "primary_llm_response": primary_response or DB_WRITE_REFUSAL,
+            "coder_pseudocode": pseudocode_plan,
+            "coder_contract": contract.to_dict() if contract else None,
+            "contract_error": None,
+        }
 
     # Guard: refuse math on string columns (LLM path)
     math_err = _detect_math_on_string_column_coder(state)
@@ -1075,7 +1217,7 @@ def main(df):
     return pd.DataFrame({{'TransactionAmt_mean': [m]}})   # 1-row summary
 
 if __name__ == "__main__":
-    df = read_csv_best_effort("input.csv")
+    df = {source_load_expression}
     df = main(df)
     df.to_csv("output.csv", index=False)
 ```
@@ -1110,7 +1252,7 @@ def main(df):
     return df   # full transformed dataset, NO avaloka_result call
 
 if __name__ == "__main__":
-    df = read_csv_best_effort("input.csv")
+    df = {source_load_expression}
     df = main(df)
     df.to_csv("output.csv", index=False)
 ```
@@ -1314,6 +1456,12 @@ SPARSE MATRIX VS DENSE MATRIX LOGIC (ANTI-MEMORY-OVERLOAD TRAP):
 - Before reading `.row`, `.col`, or `.data` from a sparse similarity result, call `.tocoo()` first. For symmetric pairwise similarity outputs, filter the COO coordinates to unique non-self pairs before building the DataFrame, usually with `mask = coo.row < coo.col`; this removes diagonal self-similarity and duplicate mirrored pairs. Return a sparse edge-list DataFrame from the filtered COO representation, with columns like `product_id_a`, `product_id_b`, and `similarity`; map COO row/column integer codes back to the original product IDs before returning.
 - If the user asks for a "full pairwise matrix", interpret "full" as all non-zero pairwise similarities represented sparsely. Do not materialize zero similarity cells.
 
+PREDICTOR / DRIVER RANKING LOGIC (what predicts / drives / matters most, strongest predictors, feature importance):
+- Rank every column by a scale-free association with the outcome, one row per ORIGINAL column (not per dummy): Pearson r (point-biserial for a 0/1 outcome) for a numeric column, the correlation ratio eta for a categorical column against a numeric or 0/1 outcome, Cramer's V between two categorical columns. Return columns `feature`, `measure`, `association` sorted by `association` descending.
+- Call the result association, never importance: "age has the strongest association with stroke (r = 0.245)". It is one column at a time and does not control for the other columns.
+- NEVER rank by a model's raw `coef_` on unscaled features or `pd.get_dummies` output: a coefficient is per unit of its column, so a 0/1 dummy's 1.27 against age's 0.07 per year says nothing about which matters more. If a model is asked for, put numeric features through `StandardScaler` in a Pipeline first, or use `sklearn.inspection.permutation_importance`, and still return the association above alongside it.
+- Drop identifier columns before ranking or fitting anything: a column named id, *_id, *Id, uuid, key, row or index, or a near-unique key (every value distinct, or a row counter). An identifier is never a predictor. Never use `remainder='passthrough'` in a ColumnTransformer for this: it sends the id column into the model. NEVER report a tree model's `feature_importances_` as what predicts the outcome: it is measured on the training rows and inflates columns with many distinct values (a row id scored 0.189, above heart disease's 0.022).
+
 GRID SEARCH COST GUARDRAIL:
 - NEVER generate a large exhaustive `GridSearchCV` for local execution.
 - Keep exhaustive grid search to at most 100 total fits, calculated as parameter combinations times CV folds.
@@ -1413,6 +1561,12 @@ SECURITY AND STABILITY (OOM TRAP PREVENTION):
 - If no suitable alternative fits what was asked, say so to the analyst (raise ValueError with a clear message naming the estimator and why it cannot run at this size) rather than silently reducing the input.
 - This does not relax NEVER RE-SAMPLE THE DATAFRAME above: constrain or replace the model, never shrink the dataframe to make it fit.
 
+ALGORITHMIC COMPLEXITY & VECTORIZATION (ANTI-TIMEOUT TRAP):
+- NEVER use `.iterrows()`, `.itertuples()`, or repeated DataFrame boolean filtering (`df[df['col'] == x]`) inside a `for` or `while` loop. Scanning a DataFrame inside a Python loop has O(N^2) time complexity and will exceed the execution timeout on medium and large datasets.
+- Always prefer vectorized pandas/NumPy operations (`groupby`, `merge`, `merge_asof`, `map`, `isin`, boolean masks, `.to_numpy()`, `np.where`, `np.searchsorted`) over row-by-row Python iteration.
+- When matching ordered intervals, time windows, or sequential dependencies across rows, sort once and use `pd.merge_asof` or binary search (`np.searchsorted`) on pre-extracted NumPy arrays rather than nested loops.
+- When comparing or sorting datetime columns, coerce both sides with `pd.to_datetime(..., errors='coerce')` first. NEVER compare `pd.Timestamp` or `datetime64` values against raw integers (`0` or `-1`), which raises `TypeError: '<' not supported between instances of 'int' and 'Timestamp'`.
+
 Example expected output format:
 ```python
 import pandas as pd
@@ -1421,24 +1575,34 @@ def main(df):
     return df
 
 if __name__ == "__main__":
-    df = pd.read_csv("input.csv")
+    df = {source_load_expression}
     df = main(df)
     df.to_csv("output.csv", index=False)
 """
     schema_for_prompt = state.get("schema") or {}
+    complex_structure = state.get("complex_structure") or {}
+    complex_contract = json.dumps(
+        complex_structure, sort_keys=True, default=str
+    )[:8_000]
     human_prompt = (
         f"Data Schema:\n{schema_for_prompt}\n\n"
         "Important: Keep all existing column names unchanged unless the plan or pseudocode explicitly requests a rename. "
         "If you aggregate a column (such as summing Price), keep the resulting column labeled with the original name.\n\n"
     )
+    if complex_contract:
+        human_prompt += (
+            f"Complex Data Contract and Validation Manifest:\n{complex_contract}\n\n"
+        )
 
-    # Inject Context Memory directly into the Coder's awareness
-    if state.get("memory_hints"):
-        hints_str = "\n- ".join(state["memory_hints"])
+    # Inject Context Memory directly into the Coder's awareness. A write or
+    # transfer in memory never steers the code (memory_actions).
+    memory_hints, logic_signature = analysis_memory_context(state)
+    if memory_hints:
+        hints_str = "\n- ".join(memory_hints)
         human_prompt += f"[CONTEXT MEMORY - USER PREFERENCES & PAST INSIGHTS]:\n- {hints_str}\n\n"
     
-    if state.get("session_logic_signature"):
-        human_prompt += f"[SESSION LOGIC SIGNATURE]:\n{state['session_logic_signature']}\n\n"
+    if logic_signature:
+        human_prompt += f"[SESSION LOGIC SIGNATURE]:\n{logic_signature}\n\n"
 
     if pseudocode_plan:
         human_prompt += f"Pseudocode blueprint (follow exactly):\n{pseudocode_plan}\n\n"

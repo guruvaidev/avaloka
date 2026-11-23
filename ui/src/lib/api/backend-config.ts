@@ -10,4 +10,4 @@ import { runtimeEnv } from "@/lib/runtime-env";
 
 export const BACKEND_API_BASE =
   runtimeEnv.API_BASE?.replace(/\/$/, "") ||
-  "http://127.0.0.1:8010";
+  "http://127.0.0.1:9000";

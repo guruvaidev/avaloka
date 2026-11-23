@@ -12,11 +12,59 @@ release line and published on `main`. Older versions are not maintained.
 
 ## Advisories
 
+### 2026-11: The /execute service ran code without authentication
+
+**Affected:** every release up to and including 1.6.0, and `develop-1.6` before #687.
+**Fixed in:** `develop-1.6` from 2026-11-03 (#687).
+
+`app/infra/python_app` ran `exec()` on the body of every request it received,
+with no authentication. It was exposed through a Service of
+`type: LoadBalancer`, and its pod had the namespace's default service-account
+token mounted. Anyone who could reach the load balancer could run code in that
+pod and use the token with the default service account's permissions.
+
+**When it was deployed:** the infrastructure path built and deployed it when a
+chat message matched `deploy`, `aws`, `gcp` or `kubernetes`, and `docker`,
+`gcloud` and `kubectl` were available to the server.
+
+**What changed:** `app/infra/python_app` is removed. `/execute` is now served
+by `executeService` in the Helm chart, which is off by default. It is
+`ClusterIP` only, with a NetworkPolicy that admits only the API, LangGraph and
+Celery pods. Every request needs `EXECUTE_SERVICE_TOKEN`. The pod runs
+hardened, without a service-account token, and each request runs in a child
+process with a scrubbed environment and time and memory limits. A chat message
+that names a cloud no longer provisions anything: provisioning needs an
+explicit request and a confirmation.
+
+**How to check:** in each namespace Avaloka ran in,
+
+```bash
+kubectl get deploy infra-agent
+kubectl get svc infra-agent-service
+kubectl get configmap infra-agent-config
+```
+
+and look in your registry for the image `gcr.io/<project>/infra-agent-python-app`.
+
+**What you need to do:**
+
+1. Upgrade to a build that carries the fix (see **Fixed in** above).
+2. Delete those resources and the image:
+   `kubectl delete deploy infra-agent`, `kubectl delete svc infra-agent-service`,
+   `kubectl delete configmap infra-agent-config`.
+3. Treat everything the namespace's default service account could reach as
+   exposed, and rotate it: its token, and every secret or credential it could
+   read.
+4. Review the load balancer's logs for requests to `/execute` since the service
+   was created.
+
+Questions about this advisory: **support@avaloka.ai**.
+
 ### 2026-10: MCP server onboarding and admin routes were unauthenticated
 
 **Affected:** every release up to and including 1.6.0, and `main` before the
-sync of 2026-10-31.
-**Fixed in:** `main` from 2026-10-31.
+sync of 2026-10-29.
+**Fixed in:** `main` from 2026-10-29.
 
 The MCP server (port 8010 in the Helm chart) served its customer-onboarding
 routes (`/customers/*`) and its admin routes (`/admin/customers`, `/connect`,

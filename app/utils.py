@@ -53,7 +53,11 @@ def convert_message_dicts_to_objects(messages):
         if role == "human":
             message_objects.append(HumanMessage(content=msg["content"]))
         elif role == "ai":
-            message_objects.append(AIMessage(content=msg["content"]))
+            # The provenance of each sentence (app/api/reply_segments.py)
+            # survives a scheduled run's round trip through the result store.
+            segs = msg.get("reply_segments")
+            message_objects.append(AIMessage(content=msg["content"],
+                                             additional_kwargs={"reply_segments": segs} if segs else {}))
         elif role == "system":
             message_objects.append(SystemMessage(content=msg["content"]))
     return message_objects
@@ -64,7 +68,11 @@ def convert_message_objects_to_dicts(messages):
         if isinstance(msg, HumanMessage):
             message_dicts.append({"role": "human", "content": msg.content})
         elif isinstance(msg, AIMessage):
-            message_dicts.append({"role": "ai", "content": msg.content})
+            item = {"role": "ai", "content": msg.content}
+            segs = (msg.additional_kwargs or {}).get("reply_segments")
+            if segs:
+                item["reply_segments"] = segs
+            message_dicts.append(item)
         elif isinstance(msg, SystemMessage):
             message_dicts.append({"role": "system", "content": msg.content})
     return message_dicts

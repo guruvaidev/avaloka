@@ -31,6 +31,9 @@ from app.services.memory_plane import MemoryOrchestrator
 
 QUERY = "average fare by borough"
 DOMAIN = "trips(fare, borough, pickup_at)"
+# The schema cache is read for the dataset being analysed, and only for it
+# (app/services/memory_scope.py): the domain-hint tests name one.
+DATASET = "trips"
 
 
 def _orchestrator(llm=None, ready: bool = True) -> MemoryOrchestrator:
@@ -91,7 +94,7 @@ def test_a_failing_store_keeps_the_hints_from_the_others():
     orch.postgres.check_artifact_exists.side_effect = RuntimeError("postgres down")
     orch.redis.search_schema_semantically.return_value = DOMAIN
 
-    out = orch._retrieve_memory_internal(QUERY, session_id="s-fail")
+    out = orch._retrieve_memory_internal(QUERY, session_id="s-fail", dataset_id=DATASET)
 
     assert out["memory_hints"] == [f"Domain insight: {DOMAIN}"]
     assert out["prior_artifact_found"] is False
@@ -115,7 +118,7 @@ def test_a_slow_stage_is_skipped_and_the_rest_is_kept(monkeypatch):
     orch.milvus.search_similar_insights.side_effect = lambda *a, **k: time.sleep(1.0) or []
 
     start = time.monotonic()
-    out = orch._retrieve_memory_internal(QUERY, session_id="s-slow")
+    out = orch._retrieve_memory_internal(QUERY, session_id="s-slow", dataset_id=DATASET)
     elapsed = time.monotonic() - start
 
     assert f"Domain insight: {DOMAIN}" in out["memory_hints"]
@@ -152,10 +155,10 @@ def test_a_hung_store_holds_one_thread_not_one_per_request(monkeypatch):
     orch.milvus.search_similar_insights.side_effect = lambda *a, **k: release.wait(20) and []
 
     try:
-        orch._retrieve_memory_internal(QUERY, session_id="s-leak")
+        orch._retrieve_memory_internal(QUERY, session_id="s-leak", dataset_id=DATASET)
         start = time.monotonic()
         for _ in range(3):
-            out = orch._retrieve_memory_internal(QUERY, session_id="s-leak")
+            out = orch._retrieve_memory_internal(QUERY, session_id="s-leak", dataset_id=DATASET)
             assert out["memory_hints"] == [f"Domain insight: {DOMAIN}"]
         later = time.monotonic() - start
         calls = orch.milvus.search_similar_insights.call_count
@@ -169,7 +172,7 @@ def test_a_hung_store_holds_one_thread_not_one_per_request(monkeypatch):
             t.join(5)
     orch.milvus.search_similar_insights.side_effect = None
     orch.milvus.search_similar_insights.return_value = [{"content": "back"}]
-    out = orch._retrieve_memory_internal(QUERY, session_id="s-leak")
+    out = orch._retrieve_memory_internal(QUERY, session_id="s-leak", dataset_id=DATASET)
     assert "back" in out["memory_hints"], "the stage must run again once the hung call has returned"
 
 
@@ -196,7 +199,7 @@ def test_connect_does_not_queue_behind_a_connection_already_in_progress():
     orch.milvus.connect.assert_not_called()
 
 
-def test_the_query_is_embedded_once_even_on_the_legacy_session_read():
+def test_the_query_is_embedded_once_for_every_scope_it_reads():
     orch = _orchestrator()
 
     orch._retrieve_memory_internal(
@@ -204,7 +207,7 @@ def test_the_query_is_embedded_once_even_on_the_legacy_session_read():
     )
 
     assert orch.milvus.search_similar_insights.call_count == 2, (
-        "expected the user-scoped read and the legacy session-scoped read"
+        "expected the thread's read and the user's preference read (no dataset known)"
     )
     assert orch._embed.call_count == 1
 
@@ -255,7 +258,9 @@ def test_a_hint_learned_in_the_background_reaches_the_next_turn():
     _wait_for_learning()
     # Checked before the second turn, which starts a learning thread of its own.
     orch.milvus.insert_insight.assert_called_once()
-    orch.chroma.update_user_signature.assert_called_once_with("s-next", "prefers polars")
+    # A style preference, so filed under the user's preference key (with no
+    # user, the session stands in for one).
+    orch.chroma.update_user_signature.assert_called_once_with("s-next#pref", "prefers polars")
 
     out = orch._retrieve_memory_internal(QUERY, session_id="s-next")
 

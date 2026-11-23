@@ -77,6 +77,8 @@ def _fresh(monkeypatch):
     monkeypatch.delenv("AVALOKA_EDITION", raising=False)
     monkeypatch.delenv("AVALOKA_PLAN_LIMITS", raising=False)
     monkeypatch.delenv("AVALOKA_DEFAULT_PLAN", raising=False)
+    monkeypatch.delenv("AVALOKA_DEPLOYMENT", raising=False)
+    monkeypatch.delenv("AVALOKA_SELF_HOSTED_MAX_UPLOAD_BYTES", raising=False)
     yield
     pl.clear_plan_cache()
 
@@ -273,11 +275,15 @@ def _no_supabase(monkeypatch):
     ("AVALOKA_PLAN_LIMITS", "0"),
     ("AVALOKA_PLAN_LIMITS", "false"),
     ("AVALOKA_PLAN_LIMITS", "disabled"),
+    ("AVALOKA_DEPLOYMENT", "self_hosted"),
+    ("AVALOKA_DEPLOYMENT", "self-hosted"),
 ])
 def test_an_install_without_billing_is_not_limited_and_never_asks_supabase(monkeypatch, var, value):
+    """The plan name follows the edition (oss when none is set), never a hosted tier."""
     monkeypatch.setenv(var, value)
     _no_supabase(monkeypatch)
-    assert pl.resolve_plan("auth-1") == "enterprise"
+    assert pl.resolve_plan("auth-1") == "oss"
+    assert pl.limits_for(pl.resolve_plan("auth-1")).self_hosted is True
 
 
 def test_an_install_without_billing_is_not_offered_an_upgrade(monkeypatch):
@@ -290,21 +296,136 @@ def test_an_install_without_billing_is_not_offered_an_upgrade(monkeypatch):
 def test_an_install_without_billing_applies_even_with_no_user(monkeypatch):
     monkeypatch.setenv("AVALOKA_EDITION", "oss")
     _no_supabase(monkeypatch)
-    assert pl.resolve_plan(None) == "enterprise"
+    assert pl.resolve_plan(None) == "oss"
 
 
-def test_the_plan_of_an_unbilled_install_is_configurable(monkeypatch):
-    monkeypatch.setenv("AVALOKA_EDITION", "oss")
-    monkeypatch.setenv("AVALOKA_DEFAULT_PLAN", "professional")
+@pytest.mark.parametrize("claimed", ["enterprise", "professional", "free", "gold"])
+def test_an_open_source_build_reports_oss_whatever_the_env_claims(monkeypatch, claimed):
+    """Defect D5: the oss server reported its plan as "enterprise". Without the
+    commercial package an install is oss, whatever AVALOKA_EDITION or the old
+    AVALOKA_DEFAULT_PLAN label says."""
+    monkeypatch.setenv("AVALOKA_PLAN_LIMITS", "off")
+    monkeypatch.setenv("AVALOKA_EDITION", claimed)
+    monkeypatch.setenv("AVALOKA_DEFAULT_PLAN", claimed)
+    monkeypatch.setattr(pl, "commercial_build", lambda: False)
     _no_supabase(monkeypatch)
-    assert pl.resolve_plan("auth-1") == "professional"
+    assert pl.resolve_plan("auth-1") == "oss"
 
 
-def test_an_unknown_default_plan_falls_back_to_enterprise(monkeypatch):
+def test_oss_reports_oss_even_with_the_old_default_plan_set(monkeypatch):
     monkeypatch.setenv("AVALOKA_EDITION", "oss")
-    monkeypatch.setenv("AVALOKA_DEFAULT_PLAN", "gold")
+    monkeypatch.setenv("AVALOKA_DEFAULT_PLAN", "enterprise")
+    _no_supabase(monkeypatch)
+    assert pl.resolve_plan("auth-1") == "oss"
+
+
+def test_a_self_hosted_commercial_build_keeps_its_name(monkeypatch):
+    monkeypatch.setenv("AVALOKA_DEPLOYMENT", "self_hosted")
+    monkeypatch.setenv("AVALOKA_EDITION", "enterprise")
+    monkeypatch.setattr(pl, "commercial_build", lambda: True)
     _no_supabase(monkeypatch)
     assert pl.resolve_plan("auth-1") == "enterprise"
+    # A label only: the limits are the server's, not Enterprise's 100 MB.
+    assert pl.limits_for("enterprise").self_hosted is True
+
+
+@pytest.mark.parametrize("value", ["", "avaloka_hosted", "hosted"])
+def test_an_unset_or_hosted_deployment_keeps_billing(monkeypatch, value):
+    """editions.normalize_deployment maps unknown to self_hosted; plan limits must
+    not, or every hosted deployment (none sets AVALOKA_DEPLOYMENT) loses its caps."""
+    monkeypatch.setenv("AVALOKA_DEPLOYMENT", value)
+    _use(monkeypatch, FakeSupabase(profiles=[PROFILE], subscriptions=[]))
+    assert pl.resolve_plan("auth-1") == "free"
+    assert pl.limits_for("free").self_hosted is False
+
+
+# ---- self-hosted limits come from the machine, not a plan -----------------
+
+
+def _disk(monkeypatch, free_bytes, root="/srv/avaloka"):
+    monkeypatch.setattr(pl, "_upload_roots", lambda: [pl.Path(root)])
+    monkeypatch.setattr(pl, "_free_disk_bytes", lambda p: free_bytes)
+
+
+def _memory(monkeypatch, total_bytes):
+    monkeypatch.setattr(pl, "container_memory_limit_bytes", lambda: total_bytes)
+
+
+def test_self_hosted_is_bounded_by_free_disk(monkeypatch):
+    monkeypatch.setenv("AVALOKA_EDITION", "oss")
+    monkeypatch.setenv("AVALOKA_UPLOAD_DISK_RESERVE_BYTES", str(512 * MB))
+    _disk(monkeypatch, 1112 * MB)            # (1112 - 512) / 2 copies = 300 MB
+    _memory(monkeypatch, 16 * 1024 * MB)
+    lim = pl.limits_for("oss")
+    assert lim.self_hosted and lim.bound_by == "disk"
+    assert lim.max_file_bytes == lim.max_total_bytes == 300 * MB
+    assert lim.batch_jobs is True
+    assert pl.check_sizes(lim, [300 * MB]) is None
+    err = pl.check_sizes(lim, [475 * MB])
+    assert err["code"] == "resource_limit_exceeded" and err["plan"] == "oss"
+    assert err["reason"] == "file_size" and err["limit"] == 300 * MB
+    assert err["upgrade_available"] is False and err["upgrade_url"] is None
+    assert "This upload is 475 MB. This server can take 300 MB per file" in err["message"]
+    assert "1112 MB of disk is free under /srv/avaloka" in err["message"]
+    assert "plan" not in err["message"].lower()
+
+
+def test_self_hosted_is_bounded_by_memory_for_the_profile_step(monkeypatch):
+    monkeypatch.setenv("AVALOKA_EDITION", "oss")
+    _disk(monkeypatch, 500 * 1024 * MB)
+    _memory(monkeypatch, 2 * 1024 * MB)      # half of 2 GB = 1 GB
+    lim = pl.limits_for("oss")
+    assert lim.bound_by == "memory" and lim.max_file_bytes == 1024 * MB
+    err = pl.check_sizes(lim, [1500 * MB])
+    assert err["code"] == "resource_limit_exceeded"
+    assert "the server has 2048 MB of memory" in err["message"]
+
+
+def test_self_hosted_takes_the_least_free_root(monkeypatch):
+    monkeypatch.setenv("AVALOKA_EDITION", "oss")
+    monkeypatch.setenv("AVALOKA_UPLOAD_DISK_RESERVE_BYTES", "0")
+    roots = {"/var/tmp/avaloka": 10 * 1024 * MB, "/data/filestore": 400 * MB}
+    monkeypatch.setattr(pl, "_upload_roots", lambda: [pl.Path(r) for r in roots])
+    monkeypatch.setattr(pl, "_free_disk_bytes", lambda p: roots[str(p)])
+    _memory(monkeypatch, 16 * 1024 * MB)
+    lim = pl.limits_for("oss")
+    assert lim.max_file_bytes == 200 * MB and "/data/filestore" in lim.bound_note
+
+
+def test_self_hosted_operator_number_wins(monkeypatch):
+    monkeypatch.setenv("AVALOKA_EDITION", "oss")
+    monkeypatch.setenv("AVALOKA_SELF_HOSTED_MAX_UPLOAD_BYTES", str(5 * 1024 * MB))
+    _disk(monkeypatch, 1 * MB)
+    lim = pl.limits_for("oss")
+    assert lim.bound_by == "env" and lim.max_file_bytes == 5 * 1024 * MB
+
+
+def test_self_hosted_never_refuses_on_plan_grounds(monkeypatch):
+    """A 127 MB file: refused by Enterprise's 100 MB on a hosted install, taken self-hosted."""
+    _disk(monkeypatch, 50 * 1024 * MB)
+    _memory(monkeypatch, 16 * 1024 * MB)
+    assert pl.check_sizes(pl.limits_for("enterprise"), [127 * MB])["code"] == "plan_limit_exceeded"
+    monkeypatch.setenv("AVALOKA_EDITION", "oss")
+    assert pl.check_sizes(pl.limits_for(pl.resolve_plan("auth-1")), [127 * MB, 475 * MB]) is None
+
+
+def test_hosted_plans_keep_their_limits():
+    free = pl.limits_for("free")
+    assert free.self_hosted is False and free.max_total_bytes == 100 * MB
+    err = pl.check_sizes(free, [300 * MB])
+    assert err["code"] == "plan_limit_exceeded" and err["plan"] == "free"
+    assert err["upgrade_available"] is True
+    assert pl.limits_for("enterprise").max_file_bytes == 100 * MB
+    assert pl.limits_for("enterprise").max_total_bytes == 200 * MB
+    assert pl.limits_for("professional").self_hosted is False
+    assert pl.limits_for("oss").plan == "free", "an unknown name on a hosted install is Free"
+
+
+def test_upload_roots_fall_back_to_the_nearest_existing_ancestor(monkeypatch, tmp_path):
+    monkeypatch.setenv("TMP_ROOT", str(tmp_path / "not" / "yet" / "made"))
+    monkeypatch.setenv("LOCAL_STORAGE_ROOT", str(tmp_path))
+    assert pl._upload_roots() == [tmp_path]
+    assert pl._free_disk_bytes(tmp_path) > 0
 
 
 @pytest.mark.parametrize("value", ["", "on", "1", "hosted"])

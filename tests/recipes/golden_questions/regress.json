@@ -1,0 +1,304 @@
+[
+ {
+  "question": "Does higher salary cause longer tenure?",
+  "columns": {
+   "employee_id": "id",
+   "salary": "measure",
+   "age": "measure",
+   "department": "dimension",
+   "hire_date": "time",
+   "tenure_years": "measure"
+  },
+  "expected": {
+   "recipe": "regress",
+   "params": {
+    "outcome": "tenure_years",
+    "measures": [
+     "salary"
+    ]
+   },
+   "flags": [
+    "causal_question"
+   ]
+  }
+ },
+ {
+  "question": "What drives churn?",
+  "columns": {
+   "signup_date": "time",
+   "user_id": "id",
+   "plan": "dimension",
+   "mrr": "measure",
+   "churned": "measure",
+   "sessions": "measure",
+   "country": "dimension"
+  },
+  "expected": {
+   "recipe": "regress",
+   "params": {
+    "outcome": "churned"
+   },
+   "flags": [
+    "causal_question"
+   ]
+  }
+ },
+ {
+  "question": "Which factors explain revenue?",
+  "columns": {
+   "order_date": "time",
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "units": "measure",
+   "customer_id": "id",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "regress",
+   "params": {
+    "outcome": "revenue"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Predict salary from age and tenure",
+  "columns": {
+   "employee_id": "id",
+   "salary": "measure",
+   "age": "measure",
+   "department": "dimension",
+   "hire_date": "time",
+   "tenure_years": "measure"
+  },
+  "expected": {
+   "recipe": "regress",
+   "params": {
+    "outcome": "salary",
+    "measures": [
+     "age",
+     "tenure_years"
+    ]
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "How much of latency depends on errors?",
+  "columns": {
+   "ts": "time",
+   "latency_ms": "measure",
+   "errors": "measure",
+   "service": "dimension",
+   "host": "high_card_dimension"
+  },
+  "expected": {
+   "recipe": "regress",
+   "params": {
+    "outcome": "latency_ms",
+    "measures": [
+     "errors"
+    ]
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Run a regression of mrr on sessions",
+  "columns": {
+   "signup_date": "time",
+   "user_id": "id",
+   "plan": "dimension",
+   "mrr": "measure",
+   "churned": "measure",
+   "sessions": "measure",
+   "country": "dimension"
+  },
+  "expected": {
+   "recipe": "regress",
+   "params": {
+    "outcome": "mrr",
+    "measures": [
+     "sessions"
+    ]
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Does cost affect revenue?",
+  "columns": {
+   "order_date": "time",
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "units": "measure",
+   "customer_id": "id",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "regress",
+   "params": {
+    "outcome": "revenue",
+    "measures": [
+     "cost"
+    ]
+   },
+   "flags": [
+    "causal_question"
+   ]
+  }
+ },
+ {
+  "question": "What is the impact of sessions on churn?",
+  "columns": {
+   "signup_date": "time",
+   "user_id": "id",
+   "plan": "dimension",
+   "mrr": "measure",
+   "churned": "measure",
+   "sessions": "measure",
+   "country": "dimension"
+  },
+  "expected": {
+   "recipe": "regress",
+   "params": {
+    "outcome": "churned",
+    "measures": [
+     "sessions"
+    ]
+   },
+   "flags": [
+    "causal_question"
+   ]
+  }
+ },
+ {
+  "question": "main drivers of cost",
+  "columns": {
+   "order_date": "time",
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "units": "measure",
+   "customer_id": "id",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "regress",
+   "params": {
+    "outcome": "cost"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Is revenue due to units sold or something else?",
+  "columns": {
+   "order_date": "time",
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "units": "measure",
+   "customer_id": "id",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "regress",
+   "params": {
+    "outcome": "revenue",
+    "measures": [
+     "units"
+    ]
+   },
+   "flags": [
+    "causal_question"
+   ]
+  }
+ },
+ {
+  "question": "Which variables influence salary the most?",
+  "columns": {
+   "employee_id": "id",
+   "salary": "measure",
+   "age": "measure",
+   "department": "dimension",
+   "hire_date": "time",
+   "tenure_years": "measure"
+  },
+  "expected": {
+   "recipe": "regress",
+   "params": {
+    "outcome": "salary"
+   },
+   "flags": [
+    "causal_question"
+   ]
+  }
+ },
+ {
+  "question": "explain errors in terms of latency",
+  "columns": {
+   "ts": "time",
+   "latency_ms": "measure",
+   "errors": "measure",
+   "service": "dimension",
+   "host": "high_card_dimension"
+  },
+  "expected": {
+   "recipe": "regress",
+   "params": {
+    "outcome": "errors",
+    "measures": [
+     "latency_ms"
+    ]
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Does age determine salary?",
+  "columns": {
+   "employee_id": "id",
+   "salary": "measure",
+   "age": "measure",
+   "department": "dimension",
+   "hire_date": "time",
+   "tenure_years": "measure"
+  },
+  "expected": {
+   "recipe": "regress",
+   "params": {
+    "outcome": "salary",
+    "measures": [
+     "age"
+    ]
+   },
+   "flags": [
+    "causal_question"
+   ]
+  }
+ },
+ {
+  "question": "What makes customers churn?",
+  "columns": {
+   "signup_date": "time",
+   "user_id": "id",
+   "plan": "dimension",
+   "mrr": "measure",
+   "churned": "measure",
+   "sessions": "measure",
+   "country": "dimension"
+  },
+  "expected": {
+   "recipe": "regress",
+   "params": {
+    "outcome": "churned"
+   },
+   "flags": [
+    "causal_question"
+   ]
+  }
+ }
+]

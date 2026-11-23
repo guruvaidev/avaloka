@@ -7,7 +7,7 @@ This page is self-contained. Read it and you should know what the work claims
 without opening the PDF — and know exactly which of those claims the code in
 this repository backs, because every one of them cites `file:line` here.
 
-Avaloka 1.6.0, Python 3.11–3.12 (`VERSION`, `pyproject.toml:7`,
+Avaloka 2.0.0, Python 3.11–3.12 (`VERSION`, `pyproject.toml:7`,
 `pyproject.toml:16`).
 
 ---
@@ -125,6 +125,104 @@ a Docker image and cannot import `app.*`, the two are separate implementations
 whose agreement is maintained by test rather than by shared code
 (`docs/architecture.md:298-318`). Unit tests on both paths are the only defence
 available, which is why they are required rather than optional.
+
+### 2.4 Statistics as the first input (2.0)
+
+The 2.0 line adds a layer the 1.6 paper only gestured at: before any model is
+consulted, the runtime reads what the data physically *is* and lets those
+numbers decide how much is touched, by how many workers, and in what order.
+Everything below is deterministic.
+
+**Size without a scan.** `avaloka/workload.py` counts a CSV exactly at or below
+4 MB and otherwise extrapolates the mean line length of the first 4 MB over the
+file's byte size, flagging the result as an estimate (`_count_csv_rows`,
+`peek`); Parquet row counts come from the footer. The server does the same for
+uploads and object-store prefixes — a listing for total bytes, a 64 KB head read
+for bytes per row, their ratio for rows
+(`app/agents/sampling_agent_daft.py::_estimate_dataset_size`). Catalogue
+statistics are collected when a source is resolved
+(`avaloka/source_statistics.py`, from `avaloka/io/sources.py::materialize`):
+file size, format and Parquet row-group count; for a database table the indexes
+and primary key, SQLite `page_count × page_size`, PostgreSQL
+`pg_total_relation_size`, and native partition columns and child counts from
+`pg_partitioned_table` / `pg_inherits`. A read-only query yields statistics
+marked `statistics_partial`, because there is no relation to inspect.
+
+**Lanes, and a sampler that obeys them.** Rows and bytes select a lane
+(`workload.py::classify`): `online` at or below 100,000 rows and 50 MB —
+analyse everything live; `sampled_online` at or below 5,000,000 rows and 1 GB —
+sampled answer now, full pass offered as `avaloka batch`; `batch` beyond. The
+lane is on the blackboard before the first firefly runs (`avaloka/cli.py:384`,
+`avaloka/chat.py:146`) and `avaloka/fireflies/sampling_specialist.py:40-45`
+obeys it rather than re-deciding: only `online` analyses the full frame; any
+other lane draws 50,000 rows, stratified by the target when it has ≤ 50
+classes, seed 42, reason recorded as an assumption. The server-side sampler is
+the finer version of the same rule (`app/agents/sampling_async.py:30-95`): five
+row tiers, a 50,000-row quick preview from `LARGE` up with the full profile
+deferred to a background job, and under byte routing a 1,000-row probe of
+in-memory bytes per row against a cap of 0.40 × the container memory limit —
+labelled in `app/core/analysis_limits.py:25-31` an **unvalidated hypothesis**.
+
+**The Workload Optimizer.** `avaloka/fireflies/workload_optimizer.py` (60
+lines, no LLM) sits between the Sampling Specialist and the Data Engineer in
+both rosters (`avaloka/missions.py:92,97`; `tests/avaloka/test_workload_optimizer.py`
+asserts the order). From the Data Scout's profile (`n_rows`, `n_unique`,
+`top_values`, `missing_pct`, `constant_columns` — `avaloka/stats.py:99-198`) and
+the catalogue statistics it estimates a filter factor per predicate — equality:
+top-value count / `n_rows`, else 1 / `n_unique`; `in`: list length / `n_unique`;
+null tests: `missing_pct`; range: 1/3 — orders predicates by factor with
+indexed columns first, drops constant columns from the projection, marks a
+predicate for pushdown when the source is Parquet or the column is indexed or a
+partition key, picks `partition_pruned_scan` → `index_filtered_scan` →
+`projected_scan`, and multiplies the factors into an estimated result
+cardinality. The plan is `workload_optimization.json`, folded into the planner's
+plan and `mission.json`.
+
+**What the plan is not wired to — read this before quoting "optimizer".** No
+production code sets the `analysis_filters` the optimizer reads (only its unit
+test does), and `avaloka/fireflies/data_engineer.py` reads `working_frame` and
+`profile`, never the plan. In 2.0 the plan is an auditable recommendation
+beside the executed scan, not the executed scan. The speedups in §5 are paired
+benchmarks of the *strategy* the plan recommends, run by
+`avaloka/benchmark/sqlite_efficiency.py` and `workload_efficiency.py`, not by
+Avaloka's generated code; they bound what applying the plan would buy.
+
+**The swarm.** `avaloka/coordinator.py::MainAvaloka` loads the dataset once,
+splits it **by row position** (`np.array_split`, `:159`) into as many shards as
+the edition grants (`avaloka/swarm_limits.py`: oss/free 2, professional 16,
+enterprise unlimited, resolved from the installed build; a capped request is
+announced, `coordinator.py:296-304`), and runs a full sub-mission per shard in
+a `ThreadPoolExecutor` (`:371`) — each clone reloads only its own shard file.
+Each clone is handed a lane from its shard's row count (`online` ≤ 100,000,
+`:214-220`), so the same Sampling Specialist rule decides whether a shard is
+sampled; this is the code behind "swarm, workload routing and adaptive sampling
+go hand in hand". Convergence is exact where it can be: shard profiles merge as
+sufficient statistics (counts, missing, min, max, mean/variance via sums —
+`coordinator.py:10-25`, `:395-408`), verdicts worst-case, the training model by
+best honest score. Every edition runs clones **locally**; there is no cluster
+fan-out in this build. `avaloka/swarm_trace.py` records every clone step with a
+gap-free `seq`; `reward` is null by design and no learned layer consumes it.
+
+**Statistics in the conversation.** The first thing said about a dataset is
+read off its profile (`avaloka/chat.py:122-141`): row/column counts, the lane in
+the first person with a `~` when the count was estimated
+(`workload.py:89-90`), observations each pinned to a statistic
+(`avaloka/persona.py:70-100`), and next steps that name this dataset's columns
+by profiled role (`chat.py:43`). Goal answers are deterministic and carry their
+scope — "Sample of N working rows" vs "All N working rows"
+(`avaloka/goal_analysis.py:119`) — and a goal naming a measure no column
+supplies is marked unresolved with the candidates listed rather than answered
+with a row count (`:32-59`). On the data-agent path a question is classified
+without a model (`avaloka/data_agent/specialists.py::build_question_plan`) by
+output shape, statistical intent (descriptive / inferential / experimental),
+prediction intent, transforms, join and ambiguity, which routes cartographer →
+transformer → statistician → experimenter → calibrator → skeptic
+(`route_specialists`), and `review_answer` is a deterministic shape-and-evidence
+gate. The executable specialists (`avaloka/fireflies/analytical_specialists.py`)
+compute a typed, SHA-256-fingerprinted `StatisticalPlan`
+(`avaloka/statistics/core.py:16-26,98`), an A/B analysis, or a split-conformal
+interval; `missions.py:104-125` inserts them before the Validator only when a
+caller has placed the typed plan on the blackboard — the CLI does not.
 
 ## 3. Where the gates actually sit
 
@@ -321,6 +419,33 @@ verb "run" (`:109-118`).
 
 ---
 
+### Paired scan efficiency (2.0)
+
+What the strategy the Workload Optimizer recommends buys, measured by
+`avaloka/benchmark/sqlite_efficiency.py`: baseline is `SELECT *` with the
+filter and projection in Python; optimized is the indexed, projected SQL the
+plan describes. In-memory SQLite, rows tiled to 100,000, medians, result sets
+asserted identical. **VM steps** (SQLite virtual-machine steps) are the portable
+metric; wall speedups are from the committing machine, which the result files do
+not identify.
+
+| dataset | returned | VM steps | cut | wall |
+| --- | ---: | ---: | ---: | ---: |
+| Kaggle Telco Customer Churn (7 repeats) | 159 | 2,300,006 → 1,123 | 99.95% | 2291× |
+| Kaggle Titanic (7) | 112 | 1,400,006 → 794 | 99.94% | 1899× |
+| Kaggle Iris (7) | 667 | 800,006 → 4,679 | 99.42% | 182× |
+| `2021-2022 Football Team Stats.csv`, bundled (5) | 1,020 | 2,200,006 → 7,150 | 99.68% | 310× |
+| `salaries.csv`, bundled (5) | 16,666 | 700,006 → 116,672 | 83.33% | 7.1× |
+
+Sources: `docs/workload-optimizer-kaggle-results.json`,
+`docs/workload-optimizer-benchmark-results.json` (committed 2026-08-15 with the
+optimizer). Read narrowly: the baseline is the worst reasonable scan, so these
+are ceilings; `salaries`, where the predicate keeps a sixth of the rows, is
+closer to what a weakly selective filter buys. Neither benchmark runs the
+optimizer's code path or Avaloka's generated script. The Parquet companion
+(`workload_efficiency.py`, opt-in over downloaded Kaggle data) has no committed
+result, so no number is reported for it.
+
 ## 6. What has *not* been measured
 
 Stated as plainly as section 5, because a reader who takes section 5 for more
@@ -359,12 +484,116 @@ than it is has been misled by this page.
 
 ---
 
+* **The optimizer's plan is not applied.** `workload_optimization.json` is
+  recorded; nothing executes it (§2.4). Any end-to-end speedup attributed to
+  the optimizer is unmeasured, and the scan table in §5 is a ceiling.
+* **The swarm has never been measured.** Convergence is exact by construction
+  and unit-tested (`tests/avaloka/test_coordinator.py`, 11 cases), but no
+  wall-clock, cost or quality comparison of a sharded run against a single
+  mission exists, and no run has used more than a thread pool on one machine.
+* **The benchmark tracks run reference policies, not Avaloka.**
+  `benchmarks/tracks/{adaptive_sampling,swarm_ablation,reliability}` run a
+  stdlib reference swarm and reference sampling strategies over a seeded
+  20,000-row synthetic dataset; the adapter that puts the real graph behind
+  them (`benchmarks/adapters/avaloka_graph.py`) requires cloud credentials and
+  no result is committed. `benchmarks/results/` is gitignored and empty.
+* **No DataAgentBench run yet.** `benchmarks/external/dab/` can run the
+  official 54-query suite (five trials each) and refuses to export incomplete
+  output; the run is pending — see the model-card section below.
+* **The per-clone trace trains nothing.** `reward` is null by design.
+* **The 1.6 measurements have not been re-run on 2.0.** The 17/17 suite,
+  the misroute rates and the routing-accuracy table are carried forward as
+  1.6 numbers.
+
+### The model-card comparison, pending
+
+Frontier model cards compare systems row by row on the same benchmark, same
+data, same budget, with provenance under every number. The paper adopts that
+layout for the comparison it most needs and has not run: Avaloka 2.0 with every
+gate on, Avaloka 1.0, and base models answering the same questions alone. The
+skeleton is shaped to the run actually being made. Until it lands every open
+cell reads exactly `TBD (bench-compare run <id>)`; no cell is filled from
+memory, a vendor page or an unlogged trial, and a cell that cannot exist says
+why.
+
+| | Avaloka 2.0 (harness) | Avaloka 1.0 (harness) | Gemini one-shot | Claude one-shot | gpt-oss-120b one-shot | gemma4:e4b one-shot, local |
+| --- | --- | --- | --- | --- | --- | --- |
+| **Correctness** | | | | | | |
+| DAB pass@1, 54 queries, 1 trial, 95% CI | TBD (bench-compare run <id>) | not run — capability absent ᵃ | 12-query subset only ᵇ | TBD (bench-compare run <id>) | TBD (bench-compare run <id>) | TBD (bench-compare run <id>) |
+| DAB pass@1, 12-query one-per-dataset subset ᵇ | TBD (bench-compare run <id>) | not run — capability absent ᵃ | TBD (bench-compare run <id>) | TBD (bench-compare run <id>) | TBD (bench-compare run <id>) | TBD (bench-compare run <id>) |
+| DAB trial-to-trial std, 10 queries × 3 | TBD (bench-compare run <id>) ᶜ | not run | not run | not run | not run | not run |
+| DS suite overall score, 11 runs, 2.0 grader | TBD (bench-compare run <id>) | TBD (bench-compare run <id>) | TBD (bench-compare run <id>) | TBD (bench-compare run <id>) | TBD (bench-compare run <id>) | TBD (bench-compare run <id>) |
+| Conversational integrity pass@1, 9 probes | TBD (bench-compare run <id>) | TBD (bench-compare run <id>) | TBD (bench-compare run <id>) | TBD (bench-compare run <id>) | TBD (bench-compare run <id>) | TBD (bench-compare run <id>) |
+| Track 1 adaptive sampling (reference adapters) | TBD (bench-compare run <id>) ᵈ | n/a ᵈ | n/a ᵈ | n/a ᵈ | n/a ᵈ | n/a ᵈ |
+| **Efficiency (DAB)** | | | | | | |
+| Cost per query (USD) | TBD (bench-compare run <id>) | not run — capability absent ᵃ | TBD (bench-compare run <id>) | TBD (bench-compare run <id>) | TBD (bench-compare run <id>) | $0 (local) |
+| Latency per query (s) | TBD (bench-compare run <id>) | not run — capability absent ᵃ | TBD (bench-compare run <id>) | TBD (bench-compare run <id>) | TBD (bench-compare run <id>) | TBD (bench-compare run <id>) |
+| Tool calls / retries | TBD (bench-compare run <id>) | not run — capability absent ᵃ | 0 by construction ᵉ | 0 by construction ᵉ | 0 by construction ᵉ | 0 by construction ᵉ |
+| Data scanned (fraction) | not instrumented | not run — capability absent ᵃ | not instrumented | not instrumented | not instrumented | not instrumented |
+| **Governance** | | | | | | |
+| Planted leak columns flagged (of 2), DS suite | TBD (bench-compare run <id>) | TBD (bench-compare run <id>) | TBD (bench-compare run <id>) ᶠ | TBD (bench-compare run <id>) ᶠ | TBD (bench-compare run <id>) ᶠ | TBD (bench-compare run <id>) ᶠ |
+| Unsupported claims | not instrumented | not instrumented | not instrumented | not instrumented | not instrumented | not instrumented |
+| Contract catches past the LLM reviewer | not instrumented | no contract | n/a | n/a | n/a | n/a |
+| **Reliability** | | | | | | |
+| Track 5 recovery under injected faults (reference adapter) | TBD (bench-compare run <id>) ᵈ | n/a ᵈ | n/a ᵈ | n/a ᵈ | n/a ᵈ | n/a ᵈ |
+
+Planned identifiers, to be confirmed by the run's provenance: Avaloka 2.0 =
+the `integration/2.0` tree; Avaloka 1.0 = the first public commit (`VERSION`
+1.0.0; the repo has no tags); Gemini = `gemini-4-argon` via Google's
+OpenAI-compatible endpoint; Claude = `claude-haiku-5.5` via OpenRouter (larger
+Claude models are outside the budget); `openai/gpt-oss-120b` via Groq;
+`gemma4:e4b` locally via Ollama.
+ᵃ Avaloka 1.0 has no natural-language multi-database agent — its graph is
+upload-centric — so the row is *not run, capability absent*, not zero.
+ᵇ The Gemini harness cell is a 12-query, one-per-dataset subset for cost; the
+same subset is scored for every column so the row is comparable.
+ᶜ Avaloka 2.0 over gpt-oss-120b only.
+ᵈ Tracks 1 and 5 run local reference adapters with no model axis; the 2.0 row
+is a reference measurement and the other columns cannot differ by construction.
+ᵉ One-shot has no tools by construction.
+ᶠ Model-alone leakage is a harness-computed holdout metric over 3 trials, so ±
+is real there; single-trial DAB cells carry an exact-binomial 95% interval
+instead of a standard deviation.
+
+**Methodology, fixed before the numbers.** *Tasks:* the official
+DataAgentBench — 54 queries over 12 datasets on PostgreSQL, MongoDB, SQLite and
+DuckDB, hints off, **one trial per query** (seed = trial index) through
+`benchmarks/external/dab`; five trials would cost ~5× and are not run, so
+pass@1 carries an exact-binomial 95% interval and best-of-N is not reported.
+The deterministic DS suite (11 runs per column, every column graded by the 2.0
+grader), nine deterministic conversational-integrity probes (faithful = 1.00 /
+sycophant = 0.00 brackets), and for the 2.0 column only the Track 1 sampling
+and Track 5 fault-injection reference adapters. *What "alone" means, exactly:*
+the base model sees the question and the database description once, writes one
+Python program, and it runs once against the same databases — no tools, no
+feedback, no retry — scored by the same official validators
+(`scripts/bench/oneshot_dab_agent.py`). The 2.0 column is the data-agent
+mission: question plan → specialist routing → bounded plan/act/inspect over
+`query_db`/`list_db`/`execute_python` → answer review. The gap between the two
+therefore measures the **whole harness** — tool loop, planning and gates
+together — not the validators alone; a tool loop without review, which would
+isolate the gates, has not been built. *Metrics:* pass@1; cost from
+provider-reported usage at stated public rates (Groq public rate, OpenRouter
+catalog, OpenRouter proxy quote for Gemini, $0 local); latency, tool calls and
+retries from the records; data scanned is not populated by the data-agent path
+→ *not instrumented*. *Provenance per column, printed when the run lands:*
+record file under `benchmarks/results/2.0/`, date, git SHA of the SUT tree and
+whether it was dirty, exact model id + provider string, trials, seed,
+machine/container (M1 Max; `avaloka-ci-deps` for CLI/DS cells, native arm64
+venv for DAB), total spend from the ledger. *Rules:* a row that cannot be run
+for a column prints the reason, never zero; governance counts for a base model
+are what the evaluator counted; the contract-catch row — results the
+deterministic contract rejected after the LLM reviewer passed them — is the
+cleanest test of the paper's central claim and is *not instrumented* in any of
+these runs, recorded here as the first instrumentation to add.
+
 ## 7. How to read the PDF against this code
 
 [`../Avaloka-Research-Paper.pdf`](../Avaloka-Research-Paper.pdf) is the ICLR
-2026 *Agents in the Wild* workshop paper, **rebuilt against the 1.6 code**. The
-version originally submitted described a system that had drifted from the
-implementation, and this build corrects it rather than reprinting it.
+2026 *Agents in the Wild* workshop paper, **rebuilt against the 2.0 code** (14
+pages; the sections marked (2.0) above are in it). The version originally
+submitted described a system that had drifted from the implementation, and this
+build corrects it rather than reprinting it.
 
 The table below is the audit that produced those corrections. It is kept
 because the corrections are the interesting part: each row is a claim that was
@@ -426,7 +655,7 @@ plane — contradicting the GCP-bound serving path above. The current figure
 
 | Path | What it is |
 | --- | --- |
-| [`../Avaloka-Research-Paper.pdf`](../Avaloka-Research-Paper.pdf) | The ICLR 2026 *Agents in the Wild* workshop paper, rebuilt against the 1.6 code |
+| [`../Avaloka-Research-Paper.pdf`](../Avaloka-Research-Paper.pdf) | The ICLR 2026 *Agents in the Wild* workshop paper, rebuilt against the 2.0 code |
 | `avaloka-paper.pdf` | The same paper, alongside this page |
 | `fig/avaloka-architecture.png` | The architecture figure embedded in the paper |
 

@@ -102,6 +102,23 @@ def build_json(dest: Path) -> Path:
     return dest
 
 
+def build_jsonl(dest: Path) -> Path:
+    """One JSON object per line, the shape a log exporter or Mongo dump has.
+
+    Declared by the API since 2026-10-17 (``jsonl`` and ``ndjson``); the CLI
+    loader read it before that. Written line by line, not via pandas, so the
+    file is newline-delimited and nothing else.
+    """
+    import json
+    records = _canonical_frame().to_dict("records")
+    with open(dest, "w", encoding="utf-8") as handle:
+        for record in records:
+            handle.write(json.dumps({k: (int(v) if isinstance(v, np.integer) else
+                                         float(v) if isinstance(v, np.floating) else v)
+                                     for k, v in record.items()}) + "\n")
+    return dest
+
+
 def build_xml(dest: Path) -> Path:
     """An XML document with one element per row.
 
@@ -170,6 +187,8 @@ def build_avro(dest: Path) -> Path:
 FORMAT_DATASETS: dict[str, tuple[object, str, GroundTruth]] = {
     "fmt_tsv":     (build_tsv,     "tsv",     _ground_truth(dates_are_text=True)),
     "fmt_json":    (build_json,    "json",    _ground_truth(dates_are_text=True)),
+    "fmt_jsonl":   (build_jsonl,   "jsonl",   _ground_truth(dates_are_text=True)),
+    "fmt_ndjson":  (build_jsonl,   "ndjson",  _ground_truth(dates_are_text=True)),
     "fmt_xml":     (build_xml,     "xml",     _ground_truth(dates_are_text=True)),
     "fmt_parquet": (build_parquet, "parquet", _ground_truth(dates_are_text=True)),
     "fmt_orc":     (build_orc,     "orc",     _ground_truth(dates_are_text=True)),
@@ -196,6 +215,17 @@ DEFERRED_FORMATS: dict[str, str] = {
         "xlrd refuses, so a task built on it would re-test xlsx under another "
         "extension and report a pass for a format it never read"
     ),
+    # Added to SUPPORTED_UPLOAD_EXTS by the bounded complex-data path (#246,
+    # avaloka/io/complex.py). They are read by that path and unit-tested in
+    # tests/avaloka/test_complex_io.py, but no benchmark task reads them: a
+    # task needs graded ground truth (OCR text, extracted frames) that the
+    # suite does not have yet, and a task without it would report a pass for
+    # "the loader returned a frame".
+    **{ext: (
+        "complex-data format (PDF/image/video): read by avaloka.io.complex and "
+        "unit-tested, but no benchmark task with graded ground truth exists yet"
+    ) for ext in ("pdf", "jpg", "jpeg", "png", "tif", "tiff", "bmp", "webp",
+                  "mp4", "mov", "mkv", "avi", "webm", "m4v")},
 }
 
 # --------------------------------------------------------------------------

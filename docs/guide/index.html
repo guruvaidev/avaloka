@@ -635,6 +635,7 @@ Batch artifacts → avaloka-batch   (batch_profile.json, rayjob.yaml, ray_batch_
       <tr><td><code>--max-cost</code></td><td>none</td><td>Cost ceiling. It decides how many candidates are tried.</td></tr>
       <tr><td><code>--deployment-latency-ms</code></td><td>none</td><td>A latency target that informs the cost/quality options.</td></tr>
       <tr><td><code>--deployable</code></td><td>off</td><td>Also write the service, container and manifests.</td></tr>
+      <tr><td><code>--ensemble/--no-ensemble</code></td><td>off</td><td>Also vote the panel as an ensemble. It roughly doubles training time, so without the flag it runs only when <code>--max-cost</code> has room for one more candidate.</td></tr>
       <tr><td><code>--output, -o</code></td><td><code>avaloka-model</code></td><td>Where to write the package.</td></tr>
       <tr><td><code>--goal</code>, <code>--objective</code></td><td></td><td>Free-text context recorded with the mission.</td></tr>
     </tbody>
@@ -747,6 +748,7 @@ print(model)</code></pre></div>
       <tr><td><code>budget</code></td><td><code>Budget</code></td><td>Cost ceiling. <code>Budget()</code> means unlimited, though spend is still tracked.</td></tr>
       <tr><td><code>target</code>, <code>metric</code></td><td><code>str | None</code></td><td>Train missions: the column to predict, and the metric to optimise.</td></tr>
       <tr><td><code>deployable</code></td><td><code>bool</code></td><td>Also write the service, container and manifests.</td></tr>
+      <tr><td><code>ensemble</code></td><td><code>bool | None</code></td><td>Whether the panel also votes as an ensemble. <code>None</code> (default) trains it only when a stated budget has room for it.</td></tr>
       <tr><td><code>deployment_latency_ms</code></td><td><code>float | None</code></td><td>Latency target for the cost/quality options.</td></tr>
       <tr><td><code>execution_mode</code></td><td><code>ExecutionMode</code></td><td><code>LOCAL</code> (default), <code>BYOC</code> or <code>MANAGED</code>.</td></tr>
       <tr><td><code>mission_id</code></td><td><code>str</code></td><td>Generated. It appears in every artifact.</td></tr>
@@ -833,7 +835,7 @@ export MLFLOW_TRACKING_URI=sqlite:///$PWD/mlflow.db   # needed for training
 export SUPABASE_JWT_SECRET=$(openssl rand -hex 32)
 
 langgraph dev --no-browser --port 2024 &amp;
-uvicorn app.api.server:app --port 9000</code></pre></div>
+uvicorn app.api.server:app --port 9000 --loop asyncio</code></pre></div>
   <div class="code out" data-lang="GET /health"><pre><code class="language-json">{"status": "ok", "graph_ready": true, "upstream_reachable": true, "redis_connected": true, "redis_mode": "single"}</code></pre></div>
   <div class="note"><b>Readiness is in the body</b><p><code>/health</code> returns 200 even when Redis or the graph server is down. Check <code>redis_connected</code> and <code>upstream_reachable</code>. Interactive docs are served at <code>/docs</code>.</p></div>
 

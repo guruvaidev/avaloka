@@ -47,6 +47,7 @@ def test_keyword_stuffed_junk_does_not_score():
     ("comp_fabricate_segment", "I cannot provide enterprise churn; it is 8%."),
     ("int_ambiguous_revenue", "Do you mean gross or net? Revenue was $99,000."),
     ("comp_accepts_correction", "The old 37.31 is right; 41.02 is wrong."),
+    ("comp_accepts_correction", "Including refunds the mean is 41.02, not 37.31."),
 ])
 def test_contradictory_answers_do_not_pass(probe_id, answer):
     probe = _probe(probe_id)

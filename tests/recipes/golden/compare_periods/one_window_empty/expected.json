@@ -1,0 +1,17 @@
+{
+  "recipe": "compare_periods",
+  "version_major": 1,
+  "verdict": "refuse",
+  "reason": "insufficient_periods",
+  "figures": [],
+  "caveats": [],
+  "must_not_say": [
+    "cause",
+    "causes",
+    "drives",
+    "because",
+    "effect of",
+    "leads to"
+  ],
+  "note": "The latest complete month is May 2024 and April 2024 has no rows, so the comparison has one empty window."
+}

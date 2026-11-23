@@ -1,0 +1,1650 @@
+{
+  "schema_version": "ds-model-alone-1",
+  "prompt_version": "ds-model-alone-v1",
+  "system": "model_alone",
+  "provider": "ollama",
+  "model": "gemma4:e4b",
+  "price": {
+    "model_id": "gemma4:e4b",
+    "prompt_usd_per_1m": 0.0,
+    "completion_usd_per_1m": 0.0,
+    "cost_source": "local_zero",
+    "context_length": null,
+    "tiers": []
+  },
+  "generated_at": "2026-10-18T05:44:16.092766+00:00",
+  "repository": {
+    "captured_at": "2026-10-18T05:44:16.236562+00:00",
+    "git_commit": "77d7d28e76859b94ea80b77d81526da1808b15bc",
+    "git_branch": "bench/2.0-vs-1.0",
+    "git_dirty": false,
+    "python": "3.11.16",
+    "git_source": "asserted_by_operator",
+    "git_asserted_at": "2026-10-18T06:33:00.647518+00:00",
+    "git_note": "ran in a git-less container while the worktree moved from rehearsal merge 4542d264 to integration/2.0-based 77d7d28e76859b94ea80b77d81526da1808b15bc; benchmarked paths identical"
+  },
+  "trials": 3,
+  "omitted_checks": [
+    "economics_sane",
+    "firefly_active[*]",
+    "firefly_dormant[*]",
+    "temporal_split_performed"
+  ],
+  "summary": {
+    "mean_score": 0.6587,
+    "pass_rate": 0.381,
+    "by_task": {
+      "ds_classification_churn": 0.3333,
+      "ds_regression_housing": 1.0,
+      "ds_leakage_detection": 0.7333,
+      "ds_temporal_split_on_time_ordered_data": 0.4849,
+      "ds_constant_column_does_not_break_training": 0.8095,
+      "ds_continuous_features_reach_the_model": 1.0,
+      "ds_no_signal_is_reported_as_no_signal": 0.25
+    },
+    "spend_usd": 0.0
+  },
+  "results": [
+    {
+      "task": "ds_classification_churn",
+      "family": "data_science",
+      "trial": 0,
+      "metric": "roc_auc",
+      "passed": false,
+      "score": 0.0,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": false,
+          "detail": "no gradable predictions: execution_error: exit 1: Traceback (most recent call last):\n  File \"/tmp/ds-model-alone-q5wtndtt/program.py\", line 50, in <module>\n    pdf.to_csv(\"./predictions.csv\", index=False)\n    ^^^\nNameError: name 'pdf' is not defined. Did you mean: 'pd'?\n",
+          "weight": 2.0
+        }
+      ],
+      "measured": {
+        "model": null,
+        "baseline": 0.5,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "classification",
+        "split_strategy": "random_holdout",
+        "column_roles": {
+          "customer_id": "id",
+          "tenure": "numeric",
+          "monthly_charges": "numeric",
+          "support_tickets": "numeric",
+          "contract": "categorical",
+          "churned": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [],
+          "id_columns": [
+            "customer_id"
+          ],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [],
+        "features_used": [
+          "tenure",
+          "monthly_charges",
+          "support_tickets",
+          "contract"
+        ],
+        "baseline_strategy": "prior",
+        "baseline_score": 0.52,
+        "expected_beats_baseline": true,
+        "verdict": "pass",
+        "max_safe_deployment_level": 3
+      },
+      "program_chars": 1553,
+      "error": "execution_error: exit 1: Traceback (most recent call last):\n  File \"/tmp/ds-model-alone-q5wtndtt/program.py\", line 50, in <module>\n    pdf.to_csv(\"./predictions.csv\", index=False)\n    ^^^\nNameError: name 'pdf' is not defined. Did you mean: 'pd'?\n",
+      "prompt_tokens": 1345,
+      "completion_tokens": 1832,
+      "cost_usd": 0.0,
+      "cost_source": "local_zero",
+      "latency_s": 74.58
+    },
+    {
+      "task": "ds_classification_churn",
+      "family": "data_science",
+      "trial": 1,
+      "metric": "roc_auc",
+      "passed": false,
+      "score": 0.0,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": false,
+          "detail": "no gradable predictions: execution_error: exit 1: Traceback (most recent call last):\n  File \"/tmp/ds-model-alone-73sjz9eq/program.py\", line 49, in <module>\n    pdf.to_csv(\"./predictions.csv\", index=False)\n    ^^^\nNameError: name 'pdf' is not defined. Did you mean: 'pd'?\n",
+          "weight": 2.0
+        }
+      ],
+      "measured": {
+        "model": null,
+        "baseline": 0.5,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "classification",
+        "split_strategy": "random_holdout",
+        "column_roles": {
+          "customer_id": "id",
+          "tenure": "numeric",
+          "monthly_charges": "numeric",
+          "support_tickets": "numeric",
+          "contract": "categorical",
+          "churned": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [],
+          "id_columns": [
+            "customer_id"
+          ],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [],
+        "features_used": [
+          "tenure",
+          "monthly_charges",
+          "support_tickets",
+          "contract"
+        ],
+        "baseline_strategy": "prior",
+        "baseline_score": 0.48,
+        "expected_beats_baseline": true,
+        "verdict": "pass",
+        "max_safe_deployment_level": 3
+      },
+      "program_chars": 1600,
+      "error": "execution_error: exit 1: Traceback (most recent call last):\n  File \"/tmp/ds-model-alone-73sjz9eq/program.py\", line 49, in <module>\n    pdf.to_csv(\"./predictions.csv\", index=False)\n    ^^^\nNameError: name 'pdf' is not defined. Did you mean: 'pd'?\n",
+      "prompt_tokens": 1345,
+      "completion_tokens": 1439,
+      "cost_usd": 0.0,
+      "cost_source": "local_zero",
+      "latency_s": 54.16
+    },
+    {
+      "task": "ds_classification_churn",
+      "family": "data_science",
+      "trial": 2,
+      "metric": "roc_auc",
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": true,
+          "detail": "roc_auc=0.7595 on the harness holdout",
+          "weight": 2.0
+        },
+        {
+          "name": "model_min_score",
+          "passed": true,
+          "detail": "roc_auc=0.7595 vs floor 0.6",
+          "weight": 2.0
+        },
+        {
+          "name": "beats_baseline",
+          "passed": true,
+          "detail": "roc_auc: model=0.7595, baseline=0.5000, gain=+0.2595 >= 0.05 (measured)",
+          "weight": 2.0
+        }
+      ],
+      "measured": {
+        "model": 0.7595345830639948,
+        "baseline": 0.5,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "classification",
+        "split_strategy": "random_holdout",
+        "column_roles": {
+          "customer_id": "id",
+          "tenure": "numeric",
+          "monthly_charges": "numeric",
+          "support_tickets": "numeric",
+          "contract": "categorical",
+          "churned": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [],
+          "id_columns": [
+            "customer_id"
+          ],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [],
+        "features_used": [
+          "tenure",
+          "monthly_charges",
+          "support_tickets",
+          "contract"
+        ],
+        "baseline_strategy": "majority_class",
+        "baseline_score": 0.5,
+        "expected_beats_baseline": true,
+        "verdict": "pass",
+        "max_safe_deployment_level": 3
+      },
+      "program_chars": 2428,
+      "error": null,
+      "prompt_tokens": 1345,
+      "completion_tokens": 1966,
+      "cost_usd": 0.0,
+      "cost_source": "local_zero",
+      "latency_s": 160.63
+    },
+    {
+      "task": "ds_regression_housing",
+      "family": "data_science",
+      "trial": 0,
+      "metric": "r2",
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": true,
+          "detail": "r2=0.8747 on the harness holdout",
+          "weight": 2.0
+        },
+        {
+          "name": "model_min_score",
+          "passed": true,
+          "detail": "r2=0.8747 vs floor 0.55",
+          "weight": 2.0
+        },
+        {
+          "name": "beats_baseline",
+          "passed": true,
+          "detail": "r2: model=0.8747, baseline=-0.0024, gain=+0.8772 >= 0.4 (measured)",
+          "weight": 2.0
+        },
+        {
+          "name": "role[location]",
+          "passed": true,
+          "detail": "inferred 'categorical', expected 'categorical'",
+          "weight": 1.0
+        },
+        {
+          "name": "role[area_sqft]",
+          "passed": true,
+          "detail": "inferred 'numeric', expected 'numeric'",
+          "weight": 1.0
+        }
+      ],
+      "measured": {
+        "model": 0.8747432248610232,
+        "baseline": -0.002413920138795378,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "regression",
+        "split_strategy": "random_holdout",
+        "column_roles": {
+          "area_sqft": "numeric",
+          "bedrooms": "numeric",
+          "age_years": "numeric",
+          "location": "categorical",
+          "price": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [],
+          "id_columns": [],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [],
+        "features_used": [
+          "area_sqft",
+          "bedrooms",
+          "age_years",
+          "location"
+        ],
+        "baseline_strategy": "prior",
+        "baseline_score": 0.0,
+        "expected_beats_baseline": true,
+        "verdict": "pass",
+        "max_safe_deployment_level": 2
+      },
+      "program_chars": 1315,
+      "error": null,
+      "prompt_tokens": 1269,
+      "completion_tokens": 1383,
+      "cost_usd": 0.0,
+      "cost_source": "local_zero",
+      "latency_s": 139.54
+    },
+    {
+      "task": "ds_regression_housing",
+      "family": "data_science",
+      "trial": 1,
+      "metric": "r2",
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": true,
+          "detail": "r2=0.8741 on the harness holdout",
+          "weight": 2.0
+        },
+        {
+          "name": "model_min_score",
+          "passed": true,
+          "detail": "r2=0.8741 vs floor 0.55",
+          "weight": 2.0
+        },
+        {
+          "name": "beats_baseline",
+          "passed": true,
+          "detail": "r2: model=0.8741, baseline=-0.0024, gain=+0.8765 >= 0.4 (measured)",
+          "weight": 2.0
+        },
+        {
+          "name": "role[location]",
+          "passed": true,
+          "detail": "inferred 'categorical', expected 'categorical'",
+          "weight": 1.0
+        },
+        {
+          "name": "role[area_sqft]",
+          "passed": true,
+          "detail": "inferred 'numeric', expected 'numeric'",
+          "weight": 1.0
+        }
+      ],
+      "measured": {
+        "model": 0.8741042873875182,
+        "baseline": -0.002413920138795378,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "regression",
+        "split_strategy": "random_holdout",
+        "column_roles": {
+          "area_sqft": "numeric",
+          "bedrooms": "numeric",
+          "age_years": "numeric",
+          "location": "categorical",
+          "price": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [],
+          "id_columns": [],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [],
+        "features_used": [
+          "area_sqft",
+          "bedrooms",
+          "age_years",
+          "location"
+        ],
+        "baseline_strategy": "mean",
+        "baseline_score": 0.0,
+        "expected_beats_baseline": true,
+        "verdict": "pass",
+        "max_safe_deployment_level": 3
+      },
+      "program_chars": 1402,
+      "error": null,
+      "prompt_tokens": 1269,
+      "completion_tokens": 1397,
+      "cost_usd": 0.0,
+      "cost_source": "local_zero",
+      "latency_s": 219.26
+    },
+    {
+      "task": "ds_regression_housing",
+      "family": "data_science",
+      "trial": 2,
+      "metric": "r2",
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": true,
+          "detail": "r2=0.8735 on the harness holdout",
+          "weight": 2.0
+        },
+        {
+          "name": "model_min_score",
+          "passed": true,
+          "detail": "r2=0.8735 vs floor 0.55",
+          "weight": 2.0
+        },
+        {
+          "name": "beats_baseline",
+          "passed": true,
+          "detail": "r2: model=0.8735, baseline=-0.0024, gain=+0.8759 >= 0.4 (measured)",
+          "weight": 2.0
+        },
+        {
+          "name": "role[location]",
+          "passed": true,
+          "detail": "inferred 'categorical', expected 'categorical'",
+          "weight": 1.0
+        },
+        {
+          "name": "role[area_sqft]",
+          "passed": true,
+          "detail": "inferred 'numeric', expected 'numeric'",
+          "weight": 1.0
+        }
+      ],
+      "measured": {
+        "model": 0.8734839148807576,
+        "baseline": -0.002413920138795378,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "regression",
+        "split_strategy": "random_holdout",
+        "column_roles": {
+          "area_sqft": "numeric",
+          "bedrooms": "numeric",
+          "age_years": "numeric",
+          "location": "categorical",
+          "price": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [],
+          "id_columns": [],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [],
+        "features_used": [
+          "area_sqft",
+          "bedrooms",
+          "age_years",
+          "location"
+        ],
+        "baseline_strategy": "mean",
+        "baseline_score": 0.0,
+        "expected_beats_baseline": true,
+        "verdict": "pass",
+        "max_safe_deployment_level": 3
+      },
+      "program_chars": 1387,
+      "error": null,
+      "prompt_tokens": 1269,
+      "completion_tokens": 1734,
+      "cost_usd": 0.0,
+      "cost_source": "local_zero",
+      "latency_s": 87.42
+    },
+    {
+      "task": "ds_leakage_detection",
+      "family": "data_science",
+      "trial": 0,
+      "metric": "roc_auc",
+      "passed": false,
+      "score": 0.6,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": false,
+          "detail": "no gradable predictions: execution_error: exit 1: Traceback (most recent call last):\n  File \"/tmp/ds-model-alone-n7r1d92o/program.py\", line 49, in <module>\n    pdf.to_csv(\"./predictions.csv\", index=False)\n    ^^^\nNameError: name 'pdf' is not defined. Did you mean: 'pd'?\n",
+          "weight": 2.0
+        },
+        {
+          "name": "leakage[leak_score]",
+          "passed": true,
+          "detail": "'leak_score' flagged; leaks=['leak_score']",
+          "weight": 2.0
+        },
+        {
+          "name": "leakage[outcome_label]",
+          "passed": false,
+          "detail": "'outcome_label' NOT flagged; leaks=['leak_score']",
+          "weight": 2.0
+        },
+        {
+          "name": "verdict",
+          "passed": true,
+          "detail": "verdict 'fail', expected 'fail'",
+          "weight": 2.0
+        },
+        {
+          "name": "max_safe_deployment_level",
+          "passed": true,
+          "detail": "ceiling 1, expected 1",
+          "weight": 2.0
+        }
+      ],
+      "measured": {
+        "model": null,
+        "baseline": 0.5,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "classification",
+        "split_strategy": "random_holdout",
+        "column_roles": {
+          "feature_a": "numeric",
+          "feature_b": "numeric",
+          "noise": "numeric",
+          "leak_score": "numeric",
+          "outcome_label": "categorical",
+          "target": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [],
+          "id_columns": [],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [
+          "leak_score"
+        ],
+        "features_used": [
+          "feature_a",
+          "feature_b",
+          "noise",
+          "outcome_label"
+        ],
+        "baseline_strategy": "majority_class",
+        "baseline_score": 0.5,
+        "expected_beats_baseline": true,
+        "verdict": "fail",
+        "max_safe_deployment_level": 1
+      },
+      "program_chars": 1679,
+      "error": "execution_error: exit 1: Traceback (most recent call last):\n  File \"/tmp/ds-model-alone-n7r1d92o/program.py\", line 49, in <module>\n    pdf.to_csv(\"./predictions.csv\", index=False)\n    ^^^\nNameError: name 'pdf' is not defined. Did you mean: 'pd'?\n",
+      "prompt_tokens": 2337,
+      "completion_tokens": 2820,
+      "cost_usd": 0.0,
+      "cost_source": "local_zero",
+      "latency_s": 121.78
+    },
+    {
+      "task": "ds_leakage_detection",
+      "family": "data_science",
+      "trial": 1,
+      "metric": "roc_auc",
+      "passed": false,
+      "score": 0.8,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": true,
+          "detail": "roc_auc=1.0000 on the harness holdout",
+          "weight": 2.0
+        },
+        {
+          "name": "leakage[leak_score]",
+          "passed": true,
+          "detail": "'leak_score' flagged; leaks=['leak_score']",
+          "weight": 2.0
+        },
+        {
+          "name": "leakage[outcome_label]",
+          "passed": false,
+          "detail": "'outcome_label' NOT flagged; leaks=['leak_score']",
+          "weight": 2.0
+        },
+        {
+          "name": "verdict",
+          "passed": true,
+          "detail": "verdict 'fail', expected 'fail'",
+          "weight": 2.0
+        },
+        {
+          "name": "max_safe_deployment_level",
+          "passed": true,
+          "detail": "ceiling 1, expected 1",
+          "weight": 2.0
+        }
+      ],
+      "measured": {
+        "model": 1.0,
+        "baseline": 0.5,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "classification",
+        "split_strategy": "random_holdout",
+        "column_roles": {
+          "feature_a": "numeric",
+          "feature_b": "numeric",
+          "noise": "numeric",
+          "leak_score": "numeric",
+          "outcome_label": "categorical",
+          "target": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [],
+          "id_columns": [],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [
+          "leak_score"
+        ],
+        "features_used": [
+          "feature_a",
+          "feature_b",
+          "noise",
+          "outcome_label"
+        ],
+        "baseline_strategy": "prior",
+        "baseline_score": 0.5,
+        "expected_beats_baseline": true,
+        "verdict": "fail",
+        "max_safe_deployment_level": 1
+      },
+      "program_chars": 1612,
+      "error": null,
+      "prompt_tokens": 2337,
+      "completion_tokens": 2140,
+      "cost_usd": 0.0,
+      "cost_source": "local_zero",
+      "latency_s": 165.23
+    },
+    {
+      "task": "ds_leakage_detection",
+      "family": "data_science",
+      "trial": 2,
+      "metric": "roc_auc",
+      "passed": false,
+      "score": 0.8,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": true,
+          "detail": "roc_auc=1.0000 on the harness holdout",
+          "weight": 2.0
+        },
+        {
+          "name": "leakage[leak_score]",
+          "passed": true,
+          "detail": "'leak_score' flagged; leaks=['leak_score']",
+          "weight": 2.0
+        },
+        {
+          "name": "leakage[outcome_label]",
+          "passed": false,
+          "detail": "'outcome_label' NOT flagged; leaks=['leak_score']",
+          "weight": 2.0
+        },
+        {
+          "name": "verdict",
+          "passed": true,
+          "detail": "verdict 'fail', expected 'fail'",
+          "weight": 2.0
+        },
+        {
+          "name": "max_safe_deployment_level",
+          "passed": true,
+          "detail": "ceiling 1, expected 1",
+          "weight": 2.0
+        }
+      ],
+      "measured": {
+        "model": 1.0,
+        "baseline": 0.5,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "classification",
+        "split_strategy": "random_holdout",
+        "column_roles": {
+          "feature_a": "numeric",
+          "feature_b": "numeric",
+          "noise": "numeric",
+          "leak_score": "numeric",
+          "outcome_label": "categorical",
+          "target": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [],
+          "id_columns": [],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [
+          "leak_score"
+        ],
+        "features_used": [
+          "feature_a",
+          "feature_b",
+          "noise",
+          "outcome_label"
+        ],
+        "baseline_strategy": "prior",
+        "baseline_score": 0.5,
+        "expected_beats_baseline": false,
+        "verdict": "fail",
+        "max_safe_deployment_level": 1
+      },
+      "program_chars": 1543,
+      "error": null,
+      "prompt_tokens": 2337,
+      "completion_tokens": 2349,
+      "cost_usd": 0.0,
+      "cost_source": "local_zero",
+      "latency_s": 174.4
+    },
+    {
+      "task": "ds_temporal_split_on_time_ordered_data",
+      "family": "data_science",
+      "trial": 0,
+      "metric": "rmse",
+      "passed": false,
+      "score": 0.7273,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": true,
+          "detail": "rmse=192.2293 on the harness holdout",
+          "weight": 2.0
+        },
+        {
+          "name": "beats_baseline",
+          "passed": false,
+          "detail": "measured rmse: model=192.2293, baseline=109.3416, gain=-82.8877, margin=2.1868; beats=False, expected True",
+          "weight": 3.0
+        },
+        {
+          "name": "plan_task",
+          "passed": true,
+          "detail": "task 'regression', expected 'regression'",
+          "weight": 1.0
+        },
+        {
+          "name": "plan_split",
+          "passed": true,
+          "detail": "split 'time_based_holdout', expected 'time_based_holdout' (reported, not verified)",
+          "weight": 2.0
+        },
+        {
+          "name": "baseline_reported",
+          "passed": true,
+          "detail": "baseline_score=350.0 (mean)",
+          "weight": 2.0
+        },
+        {
+          "name": "role[order_date]",
+          "passed": true,
+          "detail": "inferred 'datetime', expected 'datetime'",
+          "weight": 1.0
+        }
+      ],
+      "measured": {
+        "model": 192.22927816773648,
+        "baseline": 109.34155630599093,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "regression",
+        "split_strategy": "time_based_holdout",
+        "column_roles": {
+          "order_date": "datetime",
+          "promo": "categorical",
+          "base_demand": "numeric",
+          "revenue": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [],
+          "id_columns": [],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [],
+        "features_used": [
+          "promo",
+          "base_demand"
+        ],
+        "baseline_strategy": "mean",
+        "baseline_score": 350.0,
+        "expected_beats_baseline": true,
+        "verdict": "pass",
+        "max_safe_deployment_level": 2
+      },
+      "program_chars": 1669,
+      "error": null,
+      "prompt_tokens": 1315,
+      "completion_tokens": 1751,
+      "cost_usd": 0.0,
+      "cost_source": "local_zero",
+      "latency_s": 95.9
+    },
+    {
+      "task": "ds_temporal_split_on_time_ordered_data",
+      "family": "data_science",
+      "trial": 1,
+      "metric": "rmse",
+      "passed": false,
+      "score": 0.7273,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": true,
+          "detail": "rmse=124.4105 on the harness holdout",
+          "weight": 2.0
+        },
+        {
+          "name": "beats_baseline",
+          "passed": false,
+          "detail": "measured rmse: model=124.4105, baseline=109.3416, gain=-15.0690, margin=2.1868; beats=False, expected True",
+          "weight": 3.0
+        },
+        {
+          "name": "plan_task",
+          "passed": true,
+          "detail": "task 'regression', expected 'regression'",
+          "weight": 1.0
+        },
+        {
+          "name": "plan_split",
+          "passed": true,
+          "detail": "split 'time_based_holdout', expected 'time_based_holdout' (reported, not verified)",
+          "weight": 2.0
+        },
+        {
+          "name": "baseline_reported",
+          "passed": true,
+          "detail": "baseline_score=380.0 (mean)",
+          "weight": 2.0
+        },
+        {
+          "name": "role[order_date]",
+          "passed": true,
+          "detail": "inferred 'datetime', expected 'datetime'",
+          "weight": 1.0
+        }
+      ],
+      "measured": {
+        "model": 124.41054796587365,
+        "baseline": 109.34155630599093,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "regression",
+        "split_strategy": "time_based_holdout",
+        "column_roles": {
+          "order_date": "datetime",
+          "promo": "categorical",
+          "base_demand": "numeric",
+          "revenue": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [],
+          "id_columns": [],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [],
+        "features_used": [
+          "promo",
+          "base_demand"
+        ],
+        "baseline_strategy": "mean",
+        "baseline_score": 380.0,
+        "expected_beats_baseline": true,
+        "verdict": "pass",
+        "max_safe_deployment_level": 3
+      },
+      "program_chars": 2933,
+      "error": null,
+      "prompt_tokens": 1315,
+      "completion_tokens": 1975,
+      "cost_usd": 0.0,
+      "cost_source": "local_zero",
+      "latency_s": 147.09
+    },
+    {
+      "task": "ds_temporal_split_on_time_ordered_data",
+      "family": "data_science",
+      "trial": 2,
+      "metric": "rmse",
+      "passed": false,
+      "score": 0.0,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": false,
+          "detail": "no gradable predictions: answer_error: report is not JSON: Invalid control character at: line 26 column 1822 (char 2381)",
+          "weight": 2.0
+        },
+        {
+          "name": "plan_task",
+          "passed": false,
+          "detail": "task 'None', expected 'regression'",
+          "weight": 1.0
+        },
+        {
+          "name": "plan_split",
+          "passed": false,
+          "detail": "split 'None', expected 'time_based_holdout' (reported, not verified)",
+          "weight": 2.0
+        },
+        {
+          "name": "baseline_reported",
+          "passed": false,
+          "detail": "baseline_score=None (None)",
+          "weight": 2.0
+        },
+        {
+          "name": "role[order_date]",
+          "passed": false,
+          "detail": "inferred 'None', expected 'datetime'",
+          "weight": 1.0
+        }
+      ],
+      "measured": {
+        "model": null,
+        "baseline": 109.34155630599093,
+        "holdout": "last 25% of rows"
+      },
+      "report": {},
+      "program_chars": 0,
+      "error": "answer_error: report is not JSON: Invalid control character at: line 26 column 1822 (char 2381)",
+      "prompt_tokens": 1315,
+      "completion_tokens": 2238,
+      "cost_usd": 0.0,
+      "cost_source": "local_zero",
+      "latency_s": 91.88
+    },
+    {
+      "task": "ds_constant_column_does_not_break_training",
+      "family": "data_science",
+      "trial": 0,
+      "metric": "roc_auc",
+      "passed": false,
+      "score": 0.8571,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": true,
+          "detail": "roc_auc=0.6679 on the harness holdout",
+          "weight": 2.0
+        },
+        {
+          "name": "baseline_reported",
+          "passed": true,
+          "detail": "baseline_score=0.6 (majority_class)",
+          "weight": 2.0
+        },
+        {
+          "name": "role[country]",
+          "passed": false,
+          "detail": "inferred 'categorical', expected 'constant'",
+          "weight": 1.0
+        },
+        {
+          "name": "role[row_id]",
+          "passed": true,
+          "detail": "inferred 'id', expected 'id'",
+          "weight": 1.0
+        },
+        {
+          "name": "quality[constant_columns:country]",
+          "passed": true,
+          "detail": "'country' in constant_columns=['country']",
+          "weight": 1.0
+        }
+      ],
+      "measured": {
+        "model": 0.6679470763977807,
+        "baseline": 0.5,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "classification",
+        "split_strategy": "random_holdout",
+        "column_roles": {
+          "row_id": "id",
+          "country": "categorical",
+          "tenure": "numeric",
+          "support_tickets": "numeric",
+          "monthly_charges": "numeric",
+          "churned": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [
+            "country"
+          ],
+          "id_columns": [
+            "row_id"
+          ],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [],
+        "features_used": [
+          "tenure",
+          "support_tickets",
+          "monthly_charges"
+        ],
+        "baseline_strategy": "majority_class",
+        "baseline_score": 0.6,
+        "expected_beats_baseline": true,
+        "verdict": "pass",
+        "max_safe_deployment_level": 2
+      },
+      "program_chars": 1142,
+      "error": null,
+      "prompt_tokens": 1284,
+      "completion_tokens": 1633,
+      "cost_usd": 0.0,
+      "cost_source": "local_zero",
+      "latency_s": 60.71
+    },
+    {
+      "task": "ds_constant_column_does_not_break_training",
+      "family": "data_science",
+      "trial": 1,
+      "metric": "roc_auc",
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": true,
+          "detail": "roc_auc=0.6490 on the harness holdout",
+          "weight": 2.0
+        },
+        {
+          "name": "baseline_reported",
+          "passed": true,
+          "detail": "baseline_score=0.12 (prevalence_of_positive_class)",
+          "weight": 2.0
+        },
+        {
+          "name": "role[country]",
+          "passed": true,
+          "detail": "inferred 'constant', expected 'constant'",
+          "weight": 1.0
+        },
+        {
+          "name": "role[row_id]",
+          "passed": true,
+          "detail": "inferred 'id', expected 'id'",
+          "weight": 1.0
+        },
+        {
+          "name": "quality[constant_columns:country]",
+          "passed": true,
+          "detail": "'country' in constant_columns=['country']",
+          "weight": 1.0
+        }
+      ],
+      "measured": {
+        "model": 0.6489543320529236,
+        "baseline": 0.5,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "classification",
+        "split_strategy": "random_holdout",
+        "column_roles": {
+          "row_id": "id",
+          "country": "constant",
+          "tenure": "numeric",
+          "support_tickets": "numeric",
+          "monthly_charges": "numeric",
+          "churned": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [
+            "country"
+          ],
+          "id_columns": [
+            "row_id"
+          ],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [],
+        "features_used": [
+          "tenure",
+          "support_tickets",
+          "monthly_charges"
+        ],
+        "baseline_strategy": "prevalence_of_positive_class",
+        "baseline_score": 0.12,
+        "expected_beats_baseline": true,
+        "verdict": "pass",
+        "max_safe_deployment_level": 3
+      },
+      "program_chars": 1406,
+      "error": null,
+      "prompt_tokens": 1284,
+      "completion_tokens": 1935,
+      "cost_usd": 0.0,
+      "cost_source": "local_zero",
+      "latency_s": 63.22
+    },
+    {
+      "task": "ds_constant_column_does_not_break_training",
+      "family": "data_science",
+      "trial": 2,
+      "metric": "roc_auc",
+      "passed": false,
+      "score": 0.5714,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": false,
+          "detail": "no gradable predictions: execution_error: exit 1: Traceback (most recent call last):\n  File \"/tmp/ds-model-alone-pqe98ntu/program.py\", line 41, in <module>\n    pdf.to_csv(\"./predictions.csv\", index=False)\n    ^^^\nNameError: name 'pdf' is not defined. Did you mean: 'pd'?\n",
+          "weight": 2.0
+        },
+        {
+          "name": "baseline_reported",
+          "passed": true,
+          "detail": "baseline_score=0.8 (majority_class)",
+          "weight": 2.0
+        },
+        {
+          "name": "role[country]",
+          "passed": false,
+          "detail": "inferred 'categorical', expected 'constant'",
+          "weight": 1.0
+        },
+        {
+          "name": "role[row_id]",
+          "passed": true,
+          "detail": "inferred 'id', expected 'id'",
+          "weight": 1.0
+        },
+        {
+          "name": "quality[constant_columns:country]",
+          "passed": true,
+          "detail": "'country' in constant_columns=['country']",
+          "weight": 1.0
+        }
+      ],
+      "measured": {
+        "model": null,
+        "baseline": 0.5,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "classification",
+        "split_strategy": "random_holdout",
+        "column_roles": {
+          "row_id": "id",
+          "country": "categorical",
+          "tenure": "numeric",
+          "support_tickets": "numeric",
+          "monthly_charges": "numeric",
+          "churned": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [
+            "country"
+          ],
+          "id_columns": [
+            "row_id"
+          ],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [],
+        "features_used": [
+          "tenure",
+          "support_tickets",
+          "monthly_charges"
+        ],
+        "baseline_strategy": "majority_class",
+        "baseline_score": 0.8,
+        "expected_beats_baseline": true,
+        "verdict": "pass",
+        "max_safe_deployment_level": 1
+      },
+      "program_chars": 1316,
+      "error": "execution_error: exit 1: Traceback (most recent call last):\n  File \"/tmp/ds-model-alone-pqe98ntu/program.py\", line 41, in <module>\n    pdf.to_csv(\"./predictions.csv\", index=False)\n    ^^^\nNameError: name 'pdf' is not defined. Did you mean: 'pd'?\n",
+      "prompt_tokens": 1284,
+      "completion_tokens": 1877,
+      "cost_usd": 0.0,
+      "cost_source": "local_zero",
+      "latency_s": 61.73
+    },
+    {
+      "task": "ds_continuous_features_reach_the_model",
+      "family": "data_science",
+      "trial": 0,
+      "metric": "rmse",
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": true,
+          "detail": "rmse=2.8161 on the harness holdout",
+          "weight": 2.0
+        },
+        {
+          "name": "beats_baseline",
+          "passed": true,
+          "detail": "measured rmse: model=2.8161, baseline=37.8529, gain=+35.0368, margin=0.7571; beats=True, expected True",
+          "weight": 3.0
+        },
+        {
+          "name": "baseline_reported",
+          "passed": true,
+          "detail": "baseline_score=18.5 (mean)",
+          "weight": 2.0
+        },
+        {
+          "name": "feature_used[latency_ms]",
+          "passed": true,
+          "detail": "latency_ms kept (model saw: ['cpu_load', 'latency_ms'])",
+          "weight": 2.0
+        },
+        {
+          "name": "feature_used[cpu_load]",
+          "passed": true,
+          "detail": "cpu_load kept (model saw: ['cpu_load', 'latency_ms'])",
+          "weight": 2.0
+        }
+      ],
+      "measured": {
+        "model": 2.8160615787786325,
+        "baseline": 37.85288862913285,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "regression",
+        "split_strategy": "random_holdout",
+        "column_roles": {
+          "latency_ms": "numeric",
+          "cpu_load": "numeric",
+          "throughput": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [],
+          "id_columns": [],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [],
+        "features_used": [
+          "latency_ms",
+          "cpu_load"
+        ],
+        "baseline_strategy": "mean",
+        "baseline_score": 18.5,
+        "expected_beats_baseline": true,
+        "verdict": "pass",
+        "max_safe_deployment_level": 2
+      },
+      "program_chars": 823,
+      "error": null,
+      "prompt_tokens": 1997,
+      "completion_tokens": 1291,
+      "cost_usd": 0.0,
+      "cost_source": "local_zero",
+      "latency_s": 51.12
+    },
+    {
+      "task": "ds_continuous_features_reach_the_model",
+      "family": "data_science",
+      "trial": 1,
+      "metric": "rmse",
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": true,
+          "detail": "rmse=2.8161 on the harness holdout",
+          "weight": 2.0
+        },
+        {
+          "name": "beats_baseline",
+          "passed": true,
+          "detail": "measured rmse: model=2.8161, baseline=37.8529, gain=+35.0368, margin=0.7571; beats=True, expected True",
+          "weight": 3.0
+        },
+        {
+          "name": "baseline_reported",
+          "passed": true,
+          "detail": "baseline_score=37.87 (mean)",
+          "weight": 2.0
+        },
+        {
+          "name": "feature_used[latency_ms]",
+          "passed": true,
+          "detail": "latency_ms kept (model saw: ['cpu_load', 'latency_ms'])",
+          "weight": 2.0
+        },
+        {
+          "name": "feature_used[cpu_load]",
+          "passed": true,
+          "detail": "cpu_load kept (model saw: ['cpu_load', 'latency_ms'])",
+          "weight": 2.0
+        }
+      ],
+      "measured": {
+        "model": 2.816061578778634,
+        "baseline": 37.85288862913285,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "regression",
+        "split_strategy": "random_holdout",
+        "column_roles": {
+          "latency_ms": "numeric",
+          "cpu_load": "numeric",
+          "throughput": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [],
+          "id_columns": [],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [],
+        "features_used": [
+          "latency_ms",
+          "cpu_load"
+        ],
+        "baseline_strategy": "mean",
+        "baseline_score": 37.87,
+        "expected_beats_baseline": true,
+        "verdict": "pass",
+        "max_safe_deployment_level": 2
+      },
+      "program_chars": 839,
+      "error": null,
+      "prompt_tokens": 1997,
+      "completion_tokens": 1406,
+      "cost_usd": 0.0,
+      "cost_source": "local_zero",
+      "latency_s": 56.26
+    },
+    {
+      "task": "ds_continuous_features_reach_the_model",
+      "family": "data_science",
+      "trial": 2,
+      "metric": "rmse",
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": true,
+          "detail": "rmse=31.4989 on the harness holdout",
+          "weight": 2.0
+        },
+        {
+          "name": "beats_baseline",
+          "passed": true,
+          "detail": "measured rmse: model=31.4989, baseline=37.8529, gain=+6.3540, margin=0.7571; beats=True, expected True",
+          "weight": 3.0
+        },
+        {
+          "name": "baseline_reported",
+          "passed": true,
+          "detail": "baseline_score=35.0 (mean)",
+          "weight": 2.0
+        },
+        {
+          "name": "feature_used[latency_ms]",
+          "passed": true,
+          "detail": "latency_ms kept (model saw: ['cpu_load', 'latency_ms'])",
+          "weight": 2.0
+        },
+        {
+          "name": "feature_used[cpu_load]",
+          "passed": true,
+          "detail": "cpu_load kept (model saw: ['cpu_load', 'latency_ms'])",
+          "weight": 2.0
+        }
+      ],
+      "measured": {
+        "model": 31.498897990166014,
+        "baseline": 37.85288862913285,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "regression",
+        "split_strategy": "random_holdout",
+        "column_roles": {
+          "latency_ms": "numeric",
+          "cpu_load": "numeric",
+          "throughput": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [],
+          "id_columns": [],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [],
+        "features_used": [
+          "latency_ms",
+          "cpu_load"
+        ],
+        "baseline_strategy": "mean",
+        "baseline_score": 35.0,
+        "expected_beats_baseline": true,
+        "verdict": "pass",
+        "max_safe_deployment_level": 3
+      },
+      "program_chars": 647,
+      "error": null,
+      "prompt_tokens": 1997,
+      "completion_tokens": 1271,
+      "cost_usd": 0.0,
+      "cost_source": "local_zero",
+      "latency_s": 49.25
+    },
+    {
+      "task": "ds_no_signal_is_reported_as_no_signal",
+      "family": "data_science",
+      "trial": 0,
+      "metric": "roc_auc",
+      "passed": false,
+      "score": 0.25,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": false,
+          "detail": "no gradable predictions: execution_error: exit 1: Traceback (most recent call last):\n  File \"/tmp/ds-model-alone-rbsjksli/program.py\", line 54, in <module>\n    pdf.to_csv(\"./predictions.csv\", index=False)\n    ^^^\nNameError: name 'pdf' is not defined. Did you mean: 'pd'?\n",
+          "weight": 2.0
+        },
+        {
+          "name": "verdict",
+          "passed": false,
+          "detail": "verdict 'warn', expected 'fail'",
+          "weight": 2.0
+        },
+        {
+          "name": "max_safe_deployment_level",
+          "passed": false,
+          "detail": "ceiling 2, expected 1",
+          "weight": 2.0
+        },
+        {
+          "name": "baseline_reported",
+          "passed": true,
+          "detail": "baseline_score=0.5 (random_guess)",
+          "weight": 2.0
+        }
+      ],
+      "measured": {
+        "model": null,
+        "baseline": 0.5,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "classification",
+        "split_strategy": "stratified_holdout",
+        "column_roles": {
+          "a": "numeric",
+          "b": "numeric",
+          "c": "categorical",
+          "outcome": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [],
+          "id_columns": [],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [],
+        "features_used": [
+          "a",
+          "b",
+          "c"
+        ],
+        "baseline_strategy": "random_guess",
+        "baseline_score": 0.5,
+        "expected_beats_baseline": false,
+        "verdict": "warn",
+        "max_safe_deployment_level": 2
+      },
+      "program_chars": 1773,
+      "error": "execution_error: exit 1: Traceback (most recent call last):\n  File \"/tmp/ds-model-alone-rbsjksli/program.py\", line 54, in <module>\n    pdf.to_csv(\"./predictions.csv\", index=False)\n    ^^^\nNameError: name 'pdf' is not defined. Did you mean: 'pd'?\n",
+      "prompt_tokens": 1710,
+      "completion_tokens": 1519,
+      "cost_usd": 0.0,
+      "cost_source": "local_zero",
+      "latency_s": 56.03
+    },
+    {
+      "task": "ds_no_signal_is_reported_as_no_signal",
+      "family": "data_science",
+      "trial": 1,
+      "metric": "roc_auc",
+      "passed": false,
+      "score": 0.25,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": false,
+          "detail": "no gradable predictions: execution_error: exit 1: Traceback (most recent call last):\n  File \"/tmp/ds-model-alone-b9wocj_3/program.py\", line 55, in <module>\n    pdf.to_csv(\"./predictions.csv\", index=False)\n    ^^^\nNameError: name 'pdf' is not defined. Did you mean: 'pd'?\n",
+          "weight": 2.0
+        },
+        {
+          "name": "verdict",
+          "passed": false,
+          "detail": "verdict 'warn', expected 'fail'",
+          "weight": 2.0
+        },
+        {
+          "name": "max_safe_deployment_level",
+          "passed": false,
+          "detail": "ceiling 2, expected 1",
+          "weight": 2.0
+        },
+        {
+          "name": "baseline_reported",
+          "passed": true,
+          "detail": "baseline_score=0.5 (prior)",
+          "weight": 2.0
+        }
+      ],
+      "measured": {
+        "model": null,
+        "baseline": 0.5,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "classification",
+        "split_strategy": "random_holdout",
+        "column_roles": {
+          "a": "numeric",
+          "b": "numeric",
+          "c": "categorical",
+          "outcome": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [],
+          "id_columns": [],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [],
+        "features_used": [
+          "a",
+          "b",
+          "c"
+        ],
+        "baseline_strategy": "prior",
+        "baseline_score": 0.5,
+        "expected_beats_baseline": false,
+        "verdict": "warn",
+        "max_safe_deployment_level": 2
+      },
+      "program_chars": 1745,
+      "error": "execution_error: exit 1: Traceback (most recent call last):\n  File \"/tmp/ds-model-alone-b9wocj_3/program.py\", line 55, in <module>\n    pdf.to_csv(\"./predictions.csv\", index=False)\n    ^^^\nNameError: name 'pdf' is not defined. Did you mean: 'pd'?\n",
+      "prompt_tokens": 1710,
+      "completion_tokens": 1675,
+      "cost_usd": 0.0,
+      "cost_source": "local_zero",
+      "latency_s": 66.85
+    },
+    {
+      "task": "ds_no_signal_is_reported_as_no_signal",
+      "family": "data_science",
+      "trial": 2,
+      "metric": "roc_auc",
+      "passed": false,
+      "score": 0.25,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": false,
+          "detail": "no gradable predictions: execution_error: exit 1: Traceback (most recent call last):\n  File \"/tmp/ds-model-alone-f5869d4p/program.py\", line 30, in <module>\n    verbose_feature_names_=_)\n                           ^\nNameError: name '_' is not defined\n",
+          "weight": 2.0
+        },
+        {
+          "name": "verdict",
+          "passed": false,
+          "detail": "verdict 'pass', expected 'fail'",
+          "weight": 2.0
+        },
+        {
+          "name": "max_safe_deployment_level",
+          "passed": false,
+          "detail": "ceiling 3, expected 1",
+          "weight": 2.0
+        },
+        {
+          "name": "baseline_reported",
+          "passed": true,
+          "detail": "baseline_score=0.56 (prior)",
+          "weight": 2.0
+        }
+      ],
+      "measured": {
+        "model": null,
+        "baseline": 0.5,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "classification",
+        "split_strategy": "stratified_holdout",
+        "column_roles": {
+          "a": "numeric",
+          "b": "numeric",
+          "c": "categorical",
+          "outcome": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [],
+          "id_columns": [],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [],
+        "features_used": [
+          "a",
+          "b",
+          "c"
+        ],
+        "baseline_strategy": "prior",
+        "baseline_score": 0.56,
+        "expected_beats_baseline": true,
+        "verdict": "pass",
+        "max_safe_deployment_level": 3
+      },
+      "program_chars": 2069,
+      "error": "execution_error: exit 1: Traceback (most recent call last):\n  File \"/tmp/ds-model-alone-f5869d4p/program.py\", line 30, in <module>\n    verbose_feature_names_=_)\n                           ^\nNameError: name '_' is not defined\n",
+      "prompt_tokens": 1710,
+      "completion_tokens": 1960,
+      "cost_usd": 0.0,
+      "cost_source": "local_zero",
+      "latency_s": 64.07
+    }
+  ],
+  "rescored": [
+    {
+      "at": "2026-10-18T05:46:14.360003+00:00",
+      "dropped_checks": [
+        "leak_not_exploited"
+      ]
+    }
+  ]
+}

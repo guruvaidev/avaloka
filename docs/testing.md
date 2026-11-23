@@ -293,11 +293,10 @@ export GCP_ZONE="us-central1-c"             # Optional
 gcloud components install gke-gcloud-auth-plugin
 ```
 
-**Run Test:**
-
-```bash
-python -m unittest tests/test_e2e_gke_groupby_sum.py
-```
+**Run Test:** `tests/infra/test_k8s_deployment.py` (above) creates the cluster
+and deploys the chart's `/execute` service (`executeService.enabled=true`). The
+GKE group-by end-to-end test went with the unauthenticated `app/infra/python_app`
+service it built.
 
 #### AWS Tests
 

@@ -437,9 +437,13 @@ POST /api/database/tables-to-analysis   pull tables into a thread
 GET  /buckets/list                      list object-store buckets
 ```
 
-Credentials are encrypted at rest
+Cloud, MCP and GitHub credentials are encrypted at rest under `DB_ENCRYPTION_KEY`
 (`POST /api/mcp-connections/{id}/encrypt` · `.../decrypt`) and redacted from
-logs and generated code.
+logs and generated code. Database passwords are encrypted at rest under
+`DB_ENCRYPTION_KEY` too, and sent to the MCP server sealed, never in plaintext;
+a password typed into the chat is sealed the same way before it is stored. The
+API opens a password in process only to run a transfer. `DB_ENCRYPTION_KEY` is
+generated on first install and kept (see [INSTALL.md](INSTALL.md), Configuration).
 
 *Database and cloud connectors are commercial capabilities; file connectors are
 open in every edition.*
@@ -456,6 +460,21 @@ cloud-to-cloud, cloud-to-database, database-to-cloud, and database-to-database.
 The agent deduces schema, handles format conversion, and validates the transfer.
 Large transfers run distributed. Cross-account and cross-cloud moves are
 supported where both connections are registered.
+
+**Either end of a transfer can be any database you connected, and only one you
+connected.** The onboarding API's credential route (`/customers/{id}/credentials`)
+answers only that database's own API key and returns no password: it returns a
+handle, the connection string sealed under `DB_ENCRYPTION_KEY`, which the
+planner opens in process. On every chat turn the server gives the planner one
+sealed API key per database the signed-in user connected
+(`db_credential_handles`, built from that user's own connect sessions), plus
+the database being analysed (`active_db_customer_id` /
+`active_db_credential_handle`). So "transfer from my database to my other
+database" resolves both ends, while naming a database another user connected
+answers *not registered* and nothing is fetched. A collaborator on a shared
+analysis gets the handles for their own databases, not the owner's. The handles
+stay ciphertext in graph state and are never logged, traced or sent in
+telemetry.
 
 **Reads and writes are not symmetric, and this catches people out:**
 
@@ -516,7 +535,7 @@ Avaloka is not tied to one LLM vendor. The switch is `INFERENCE_PROVIDER`
 
 | Value | Provider |
 | --- | --- |
-| `openrouter` | OpenRouter (**the default**) |
+| `openrouter` | OpenRouter |
 | `groq` | Groq Cloud |
 | `openai` | OpenAI |
 | `bedrock` | AWS Bedrock |
@@ -524,19 +543,25 @@ Avaloka is not tied to one LLM vendor. The switch is `INFERENCE_PROVIDER`
 | `azure` | Azure AI / Azure OpenAI |
 | `local` | In-cluster or local OpenAI-spec model — `vllm` and `ollama` are aliases for this |
 
-**The default is OpenRouter, and it is key-aware.** With `INFERENCE_PROVIDER`
-unset, `_default_provider_with_a_usable_key()` picks OpenRouter if
-`OPENROUTER_API_KEY` is set, else Groq if a Groq key is, else OpenAI if an
-OpenAI key is, else OpenRouter so the failure reports itself
-(`app/core/inference.py:129`). An **explicit** setting is never second-guessed:
+**The default is OpenRouter running `openai/gpt-oss-120b`, matching the Helm
+chart, and it is key-aware** (MP-01, owner decision 2026-11-01). With
+`INFERENCE_PROVIDER` unset, `_default_provider_with_a_usable_key()` picks
+OpenRouter if `OPENROUTER_API_KEY` is set, else Groq if a Groq key is, else
+OpenAI if an OpenAI key is, else OpenRouter so the failure reports itself
+(`app/core/inference.py`). OpenRouter requests are pinned to a provider
+allowlist with `allow_fallbacks: false`, and GPT-6 Luna is the fallback tier
+(`AVALOKA_OPENROUTER_*`, see [privacy-and-egress.md](privacy-and-egress.md)). An **explicit** setting is never second-guessed:
 `INFERENCE_PROVIDER=openrouter` with no key disables the LLM and logs why. The
 provider can also be set per agent — `INFERENCE_PROVIDER_PLANNING`,
 `INFERENCE_PROVIDER_CODING`, `AVALOKA_<AGENT>_PROVIDER`.
 
-> The module docstring in `app/core/inference.py:22` still says "Groq stays the
-> default". It is stale — `_PROVIDER_ALIASES[""]` resolves to `openrouter`
-> (`app/core/inference.py:82`). Trust the code, and expect some log messages to
-> still name Groq.
+The default model is `openai/gpt-oss-120b` (owner decision 2026-11-01), and the
+Helm chart ships the same provider. OpenRouter requests are pinned to a
+provider allowlist with `allow_fallbacks: false` and `sort: "throughput"`. The fallback
+chain is GPT-6 Luna on OpenRouter, then gpt-oss-120b on Groq when a Groq key is
+set; a reply answered by a fallback says which model answered and why
+(`AVALOKA_OPENROUTER_*`, `AVALOKA_GROQ_FALLBACK_MODEL`, see
+[privacy-and-egress.md](privacy-and-egress.md)).
 
 `tool_choice` is resolved per provider rather than per client class, because
 `local`, `openrouter` and `openai` all build the same `ChatOpenAI` object and the
@@ -652,7 +677,7 @@ Two caveats worth knowing before you plan around this list:
 | A model reports poor results | It did not beat the baseline | This is a real finding, not a failure — the signal may not be in the data |
 | Startup fails naming a variable | Cloud identity is unconfigured | Set the named variable; Avaloka does not assume a project or registry |
 | A provider returns 404 for a model | Model deprecated upstream | Fallback should engage automatically; verify with `scripts/ops/verify_models.py` |
-| "LLM disabled" in the logs | No key for the selected provider | The default provider is OpenRouter — set `OPENROUTER_API_KEY`, or set `INFERENCE_PROVIDER` to one whose key you have (§8.6) |
+| "LLM disabled" in the logs | No key for the selected provider | The default provider is Groq — set `GROQ_API_KEY`, or set `INFERENCE_PROVIDER` to one whose key you have (§8.6) |
 | `401` on every API call | `SUPABASE_JWT_SECRET` unset or not matching your token | See [api.md](api.md); `GET /debug/whoami` returns `null` when the token does not verify |
 
 ---
@@ -687,7 +712,7 @@ Two caveats worth knowing before you plan around this list:
 | `AVALOKA_DEPLOYMENT_PROFILE` | `laptop` \| `cluster` — sizes the local model tier |
 | `AVALOKA_EDITION` · licence key | Edition selection |
 | `DEFAULT_SAMPLE_MAX_ROWS` | Sampling ceiling for exploration (default `50000`, `app/agents/sampling_agent.py:18`) |
-| `INFERENCE_PROVIDER` | LLM provider; default `openrouter`, see §8.6 |
+| `INFERENCE_PROVIDER` | LLM provider; default `groq`, see §8.6 |
 | `SUPABASE_JWT_SECRET` · `SUPABASE_URL` | API authentication — see [api.md](api.md) |
 | `AVALOKA_MAX_UPLOAD_FILE_BYTES` · `AVALOKA_MAX_UPLOAD_FILES` · `AVALOKA_MAX_UPLOAD_TOTAL_BYTES` | Upload ceilings (100 MB · 10 · 200 MB) |
 | `INFERENCE_IDLE_TIMEOUT_S` | Idle seconds before a served model scales to zero (default `7200`) |

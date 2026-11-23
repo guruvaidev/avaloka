@@ -1,0 +1,251 @@
+[
+ {
+  "question": "Compare revenue this quarter vs last quarter",
+  "columns": {
+   "order_date": "time",
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "units": "measure",
+   "customer_id": "id",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "compare_periods",
+   "params": {
+    "measure": "revenue",
+    "time": "order_date",
+    "window": "last_quarter"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "How did sales change since last year?",
+  "columns": {
+   "order_date": "time",
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "units": "measure",
+   "customer_id": "id",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "compare_periods",
+   "params": {
+    "measure": "revenue",
+    "time": "order_date",
+    "window": "last_year"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "mrr versus the previous month",
+  "columns": {
+   "signup_date": "time",
+   "user_id": "id",
+   "plan": "dimension",
+   "mrr": "measure",
+   "churned": "measure",
+   "sessions": "measure",
+   "country": "dimension"
+  },
+  "expected": {
+   "recipe": "compare_periods",
+   "params": {
+    "measure": "mrr",
+    "time": "signup_date",
+    "window": "last_month"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Year over year change in cost by region",
+  "columns": {
+   "order_date": "time",
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "units": "measure",
+   "customer_id": "id",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "compare_periods",
+   "params": {
+    "measure": "cost",
+    "time": "order_date",
+    "window": "last_year",
+    "dimension": "region"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "What changed in errors compared with the prior period?",
+  "columns": {
+   "ts": "time",
+   "latency_ms": "measure",
+   "errors": "measure",
+   "service": "dimension",
+   "host": "high_card_dimension"
+  },
+  "expected": {
+   "recipe": "compare_periods",
+   "params": {
+    "measure": "errors",
+    "time": "ts"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Is revenue up or down vs last month?",
+  "columns": {
+   "order_date": "time",
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "units": "measure",
+   "customer_id": "id",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "compare_periods",
+   "params": {
+    "measure": "revenue",
+    "time": "order_date",
+    "window": "last_month"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "YTD units against last year",
+  "columns": {
+   "order_date": "time",
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "units": "measure",
+   "customer_id": "id",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "compare_periods",
+   "params": {
+    "measure": "units",
+    "time": "order_date",
+    "window": "ytd"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Comparison of latency before and after",
+  "columns": {
+   "ts": "time",
+   "latency_ms": "measure",
+   "errors": "measure",
+   "service": "dimension",
+   "host": "high_card_dimension"
+  },
+  "expected": {
+   "recipe": "compare_periods",
+   "params": {
+    "measure": "latency_ms",
+    "time": "ts"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Q1 vs Q2 revenue",
+  "columns": {
+   "order_date": "time",
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "units": "measure",
+   "customer_id": "id",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "compare_periods",
+   "params": {
+    "measure": "revenue",
+    "time": "order_date"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Why did revenue drop compared to last month?",
+  "columns": {
+   "order_date": "time",
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "units": "measure",
+   "customer_id": "id",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "compare_periods",
+   "params": {
+    "measure": "revenue",
+    "time": "order_date",
+    "window": "last_month"
+   },
+   "flags": [
+    "causal_question"
+   ]
+  }
+ },
+ {
+  "question": "month over month sessions",
+  "columns": {
+   "signup_date": "time",
+   "user_id": "id",
+   "plan": "dimension",
+   "mrr": "measure",
+   "churned": "measure",
+   "sessions": "measure",
+   "country": "dimension"
+  },
+  "expected": {
+   "recipe": "compare_periods",
+   "params": {
+    "measure": "sessions",
+    "time": "signup_date",
+    "window": "last_month"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Did salary go up versus last year because of the new policy?",
+  "columns": {
+   "employee_id": "id",
+   "salary": "measure",
+   "age": "measure",
+   "department": "dimension",
+   "hire_date": "time",
+   "tenure_years": "measure"
+  },
+  "expected": {
+   "recipe": "compare_periods",
+   "params": {
+    "measure": "salary",
+    "time": "hire_date",
+    "window": "last_year"
+   },
+   "flags": [
+    "causal_question"
+   ]
+  }
+ }
+]

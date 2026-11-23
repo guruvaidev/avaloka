@@ -1,0 +1,14 @@
+{
+  "recipe": "describe",
+  "version_major": 1,
+  "verdict": "refuse",
+  "reason": "constant_column",
+  "figures": [],
+  "caveats": [],
+  "must_not_say": [
+    "causes",
+    "drives",
+    "because",
+    "proves"
+  ]
+}

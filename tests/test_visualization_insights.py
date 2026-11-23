@@ -22,6 +22,28 @@ import pytest
 from app.agents import visualization_agent as va
 
 
+# The zero-retention pinning every OpenRouter viz call must carry (a per-call
+# extra_body replaces the client's, so the viz agent re-sends it itself).
+_GPT_OSS = "openai/gpt-oss-120b"
+_PIN = {
+    "only": ["deepinfra/bf16", "together", "crusoe", "parasail"],
+    "allow_fallbacks": False,
+    "data_collection": "deny",
+    "zdr": True,
+}
+_PIN_ENV = (
+    "AVALOKA_OPENROUTER_ONLY", "AVALOKA_VIZ_OPENROUTER_ONLY",
+    "AVALOKA_OPENROUTER_SORT", "AVALOKA_VIZ_OPENROUTER_SORT",
+    "AVALOKA_OPENROUTER_PROVIDERS", "AVALOKA_VIZ_OPENROUTER_PROVIDERS",
+)
+
+
+def _pinned_model(monkeypatch):
+    monkeypatch.setattr(va, "_VIZ_ACTIVE_MODEL", _GPT_OSS)
+    for name in _PIN_ENV:
+        monkeypatch.delenv(name, raising=False)
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -88,6 +110,7 @@ def openrouter(monkeypatch):
     monkeypatch.setattr(va, "_VIZ_IS_REASONING", True)
     monkeypatch.setattr(va, "_VIZ_OPENROUTER_SORT", "throughput")
     monkeypatch.setattr(va, "_VIZ_SORT_ACTIVE", True)
+    _pinned_model(monkeypatch)
 
 
 @pytest.fixture
@@ -118,25 +141,26 @@ class FakeLLM:
 def test_openrouter_sends_reasoning_and_provider_sort_in_extra_body(openrouter):
     kw = va._viz_request_kwargs("high")
     assert kw["max_tokens"] == va._VIZ_MAX_TOKENS
-    assert kw["extra_body"] == {"reasoning": {"effort": "high"}, "provider": {"sort": "throughput"}}
+    assert kw["extra_body"] == {"reasoning": {"effort": "high"}, "provider": {**_PIN, "sort": "throughput"}}
     assert "reasoning_effort" not in kw          # Groq's flag must never reach OpenRouter
 
 
-def test_openrouter_sort_can_be_turned_off(openrouter, monkeypatch):
+def test_openrouter_sort_can_be_turned_off_but_the_pinning_stays(openrouter, monkeypatch):
     monkeypatch.setattr(va, "_VIZ_SORT_ACTIVE", False)
     kw = va._viz_request_kwargs("medium")
-    assert kw["extra_body"] == {"reasoning": {"effort": "medium"}}
+    assert kw["extra_body"] == {"reasoning": {"effort": "medium"}, "provider": _PIN}
 
 
-def test_openrouter_non_reasoning_model_sends_only_the_sort(openrouter, monkeypatch):
+def test_openrouter_non_reasoning_model_sends_only_the_sort_and_the_pinning(openrouter, monkeypatch):
     monkeypatch.setattr(va, "_VIZ_IS_REASONING", False)
-    assert va._viz_request_kwargs("high")["extra_body"] == {"provider": {"sort": "throughput"}}
+    assert va._viz_request_kwargs("high")["extra_body"] == {"provider": {**_PIN, "sort": "throughput"}}
 
 
-def test_openrouter_with_nothing_to_send_has_no_extra_body(openrouter, monkeypatch):
+def test_openrouter_with_no_sort_and_no_reasoning_still_sends_the_pinning(openrouter, monkeypatch):
     monkeypatch.setattr(va, "_VIZ_IS_REASONING", False)
     monkeypatch.setattr(va, "_VIZ_SORT_ACTIVE", False)
-    assert va._viz_request_kwargs("high") == {"max_tokens": va._VIZ_MAX_TOKENS}
+    assert va._viz_request_kwargs("high") == {"max_tokens": va._VIZ_MAX_TOKENS,
+                                              "extra_body": {"provider": _PIN}}
 
 
 def test_groq_uses_top_level_reasoning_effort_and_no_extra_body(groq):
@@ -207,7 +231,7 @@ def test_invoke_passes_the_routing_kwargs(openrouter, monkeypatch):
     llm = FakeLLM()
     monkeypatch.setattr(va, "viz_llm", llm)
     va.invoke_viz_llm("prompt", effort="medium")
-    assert llm.calls[0]["extra_body"]["provider"] == {"sort": "throughput"}
+    assert llm.calls[0]["extra_body"]["provider"] == {**_PIN, "sort": "throughput"}
     assert llm.calls[0]["extra_body"]["reasoning"] == {"effort": "medium"}
 
 
@@ -320,7 +344,9 @@ def test_merge_with_a_single_even_chart_changes_nothing():
 def test_enrich_column_stats_adds_meaning_and_predictive_value():
     stats = [{"name": "Age"}, {"name": "Blood Type"}, {"name": "Room Number"}]
     va._enrich_column_stats(stats, PROFILE)
-    assert stats[0]["meaning"] == "Patient age in years at admission."
+    # The profiling model's meaning: commentary (c-strict).
+    assert stats[0]["meaning"] == "Patient age in years at admission. (commentary — not checked)"
+    assert stats[0]["meaning_segments"] == [{"text": "Patient age in years at admission.", "kind": "commentary"}]
     assert "predictive_value" not in stats[0]
     assert stats[1]["predictive_value"] == "low"
     assert stats[2] == {"name": "Room Number"}
@@ -362,7 +388,8 @@ def test_upload_message_uses_total_rows_not_the_sample():
                                   total_rows=55500, n_columns=15)
     assert "55,500 rows × 15 columns" in msg
     assert "**Healthcare** dataset" in msg
-    assert "**Data readiness: 78/100.**" in msg
+    # The score is the profiling model's: commentary, so marked inside the bold.
+    assert "**Data readiness: 78/100. (commentary — not checked)**" in msg
     assert "- Obesity patients are billed the most" in msg      # headline preferred over insight
     assert "**Watch out for**" in msg and "108 negative billing amounts" in msg
     assert "**Try asking**" in msg
@@ -400,11 +427,13 @@ def test_builder_with_profile_adds_overview_message_and_context(no_llm):
     assert cfg["visualization_status"] == "ready"
     assert cfg["dataset_context"]["domain"] == "Healthcare"
     assert cfg["profile_overview"]["domain"] == "Healthcare"
-    assert cfg["upload_message"].startswith("**Healthcare** dataset · 55,500 rows")
+    # PROFILE's domain records no provenance, so a model chose it: commentary.
+    assert cfg["upload_message"].startswith(
+        "**Healthcare** dataset (commentary — not checked) · 55,500 rows")
     assert cfg["dataset"]["total_rows"] == 55500
     assert cfg["dataset"]["rows_sampled"] == 120
     age = next(c for c in cfg["column_stats"] if c["name"] == "Age")
-    assert age["meaning"] == "Patient age in years at admission."
+    assert age["meaning"] == "Patient age in years at admission. (commentary — not checked)"
     assert cfg["insight_model"]["used"] is False
 
 
@@ -642,7 +671,7 @@ def test_builder_on_outcome_data_keeps_meaning_and_predictive_value(no_llm):
     cfg = va.build_visualization_config_from_sample(
         dataset_id="icu", sample_rows=_icu_rows(), profiling_result=profile)
     stats = {c["name"]: c for c in cfg["column_stats"]}
-    assert stats["age"]["meaning"] == "Patient's age in years at admission."
+    assert stats["age"]["meaning"] == "Patient's age in years at admission. (commentary — not checked)"
     assert stats["age"]["predictive_value"] == "high"
     assert stats["ethnicity"]["predictive_value"] == "low"
     flag = cfg["profile_overview"]["red_flags"][0]

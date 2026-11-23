@@ -188,6 +188,9 @@ def test_groq_models_pass_the_guard():
 
 
 def test_resolve_validates_as_well_as_resolves(monkeypatch):
+    # The guard is the Groq path's; MP-01: re-pinned 2026-11-01 — owner decision: default is openai/gpt-oss-120b via OpenRouter (was groq from 2026-10-31),
+    # so the Groq path is selected explicitly here.
+    monkeypatch.setenv("INFERENCE_PROVIDER", "groq")
     monkeypatch.setenv("AVALOKA_CODER_MODEL", "gpt-5")
     with pytest.raises(UnsupportedModelError):
         resolve("coder")

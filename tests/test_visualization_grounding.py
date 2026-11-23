@@ -24,6 +24,28 @@ import pytest
 from app.agents import visualization_agent as va
 
 
+# The zero-retention pinning every OpenRouter viz call must carry (a per-call
+# extra_body replaces the client's, so the viz agent re-sends it itself).
+_GPT_OSS = "openai/gpt-oss-120b"
+_PIN = {
+    "only": ["deepinfra/bf16", "together", "crusoe", "parasail"],
+    "allow_fallbacks": False,
+    "data_collection": "deny",
+    "zdr": True,
+}
+_PIN_ENV = (
+    "AVALOKA_OPENROUTER_ONLY", "AVALOKA_VIZ_OPENROUTER_ONLY",
+    "AVALOKA_OPENROUTER_SORT", "AVALOKA_VIZ_OPENROUTER_SORT",
+    "AVALOKA_OPENROUTER_PROVIDERS", "AVALOKA_VIZ_OPENROUTER_PROVIDERS",
+)
+
+
+def _pinned_model(monkeypatch):
+    monkeypatch.setattr(va, "_VIZ_ACTIVE_MODEL", _GPT_OSS)
+    for name in _PIN_ENV:
+        monkeypatch.delenv(name, raising=False)
+
+
 def _profiles(rows, schema=None):
     return {p["name"]: p for p in va.profile_columns(rows, schema=schema)}
 
@@ -58,8 +80,9 @@ def test_histogram_bins_account_for_every_numeric_row():
     assert (meta["n"], meta["min"], meta["max"]) == (100, 0.0, 99.0)
     assert meta["median"] == 49.5
     assert "ranges from 0 to 99" in text
-    # None is missing; "n/a" is present but not a number, so it is not "missing".
-    assert "1 rows (1.0%) have no value" in text
+    # None is missing, and so is "n/a": a null-like word in a numeric column is a
+    # gap by the one null-word rule (file_handler/null_policy.py gap_cells).
+    assert "2 rows (2.0%) have no value" in text
 
 
 def test_histogram_of_a_constant_column_is_one_bar_not_a_division_by_zero():
@@ -144,7 +167,7 @@ def test_count_bar_orders_groups_and_reports_shares_of_the_present_rows():
         "total": 9.0,
     }
     assert "East (6 rows, 66.7%)" in text and "West (3 rows, 33.3%)" in text
-    assert "1 rows (10.0%) have no region and are left out of the chart" in text
+    assert "1 row (10.0%) has no region and is left out of the chart" in text
 
 
 def test_missing_labels_never_become_a_bar():
@@ -161,7 +184,8 @@ def test_sum_bar_adds_the_measure_per_group():
 def test_mean_bar_reports_highest_and_lowest_not_shares():
     points, _, text = va._ground_categories(_REGION_ROWS, "region", "sales", "mean", 15, False)
     assert points == [{"x": "West", "y": 40.0}, {"x": "East", "y": 10.0}]
-    assert "highest is West (40), lowest is East (10)" in text
+    # Averages over groups under 20 rows say how many rows they are over.
+    assert "highest is West (40, from 3 rows), lowest is East (10, from 6 rows)" in text
     assert "The top group is 4.0× the lowest." in text
     assert "%" not in text.split("Rows with no")[0]
 
@@ -516,12 +540,13 @@ def test_openrouter_takes_the_effort_as_a_reasoning_object(monkeypatch):
     monkeypatch.setattr(va, "_VIZ_BACKEND", "openrouter")
     monkeypatch.setattr(va, "_VIZ_PROVIDER", "openrouter")
     monkeypatch.setattr(va, "_VIZ_SORT_ACTIVE", False)
+    _pinned_model(monkeypatch)
 
     va.invoke_viz_llm("prompt", effort="low")
 
     assert llm.calls == [{
         "max_tokens": va._VIZ_MAX_TOKENS,
-        "extra_body": {"reasoning": {"effort": "low"}},
+        "extra_body": {"reasoning": {"effort": "low"}, "provider": _PIN},
     }]
 
 
@@ -532,12 +557,13 @@ def test_openrouter_is_asked_for_the_fastest_host_when_sorting_is_on(monkeypatch
     monkeypatch.setattr(va, "_VIZ_PROVIDER", "openrouter")
     monkeypatch.setattr(va, "_VIZ_SORT_ACTIVE", True)
     monkeypatch.setattr(va, "_VIZ_OPENROUTER_SORT", "throughput")
+    _pinned_model(monkeypatch)
 
     va.invoke_viz_llm("prompt", effort="low")
 
     assert llm.calls == [{
         "max_tokens": va._VIZ_MAX_TOKENS,
-        "extra_body": {"reasoning": {"effort": "low"}, "provider": {"sort": "throughput"}},
+        "extra_body": {"reasoning": {"effort": "low"}, "provider": {**_PIN, "sort": "throughput"}},
     }]
 
 

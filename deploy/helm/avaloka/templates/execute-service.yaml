@@ -1,0 +1,190 @@
+{{- if (.Values.executeService).enabled }}
+{{- $fullname := include "avaloka.fullname" . }}
+# The /execute service (app/executor/execute_service.py): where the k8s
+# execution path (the execute_on_k8s graph node, and Celery's deploy_on_k8s
+# branch) sends model-written code. Off by default.
+#
+# It replaces app/infra/python_app, which the agent docker-built and
+# kubectl-applied at runtime: unauthenticated exec() behind a LoadBalancer,
+# with the namespace's default ServiceAccount token mounted. Here:
+#
+#   network      ClusterIP only; the NetworkPolicy below admits the pods that
+#                run the graph (api, langgraph, celery) and denies ALL egress
+#   auth         every POST needs EXECUTE_SERVICE_TOKEN (generated into the
+#                release Secret, kept across upgrades); it is mounted as a file,
+#                one key, never the whole Secret, never envFrom
+#   identity     its own ServiceAccount with no Role, no token mounted, uid
+#                65534, read-only root, every capability dropped, no privilege
+#                escalation, RuntimeDefault seccomp
+#   execution    each request in a child with a scrubbed environment, a private
+#                workspace under /tmp (an emptyDir) deleted afterwards, and
+#                time and memory limits
+#
+# Same image as the API, so the normal image pipeline builds it.
+#
+# NetworkPolicy is enforced by the CNI (Calico, Cilium, GKE Dataplane V2 do;
+# some do not). Without enforcement the token still guards every call.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $fullname }}-execute-service
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: execute-service
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-execute-service
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: execute-service
+spec:
+  replicas: {{ .Values.executeService.replicas }}
+  selector:
+    matchLabels:
+      {{- include "avaloka.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: execute-service
+  template:
+    metadata:
+      labels:
+        {{- include "avaloka.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: execute-service
+    spec:
+      serviceAccountName: {{ $fullname }}-execute-service
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: execute-service
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["python", "-m", "app.executor.execute_service", "--host", "0.0.0.0", "--port", "{{ .Values.executeService.port }}"]
+          ports:
+            - name: http
+              containerPort: {{ .Values.executeService.port }}
+          securityContext:
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          # An explicit, short list: no envFrom, so no server secret is here.
+          env:
+            - name: EXECUTE_SERVICE_TOKEN_FILE
+              value: /var/run/avaloka/execute-service/token
+            - name: AVALOKA_EXECUTE_TIMEOUT
+              value: {{ .Values.executeService.timeoutSeconds | quote }}
+            - name: AVALOKA_EXECUTE_MEMORY_MB
+              value: {{ .Values.executeService.memoryMb | quote }}
+            - name: HOME
+              value: /tmp
+            - name: TMPDIR
+              value: /tmp
+            - name: MPLCONFIGDIR
+              value: /tmp/.mpl
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+            - name: AWS_EC2_METADATA_DISABLED
+              value: "true"
+            # Third-party usage beacons off (app/core/thirdparty_optout.py); this
+            # pod reads no ConfigMap.
+            {{- include "avaloka.thirdPartyOptoutEnv" . | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.executeService.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: token
+              mountPath: /var/run/avaloka/execute-service
+              readOnly: true
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: {{ .Values.executeService.scratchSize | quote }}
+        - name: token
+          secret:
+            secretName: {{ include "avaloka.secretName" . }}
+            defaultMode: 0440
+            items:
+              - key: EXECUTE_SERVICE_TOKEN
+                path: token
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-execute-service
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: execute-service
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "avaloka.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: execute-service
+  ports:
+    - name: http
+      port: {{ .Values.executeService.port }}
+      targetPort: http
+      protocol: TCP
+---
+# Ingress only from the pods that run the agent graph; an empty egress list
+# allows nothing, not even DNS, which it does not need: it only answers.
+# celery-executor (scheduled-pod code) is deliberately not admitted.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-execute-service
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: execute-service
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "avaloka.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: execute-service
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "avaloka.selectorLabels" . | nindent 14 }}
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values: [api, langgraph, celery]
+      ports:
+        - port: {{ .Values.executeService.port }}
+          protocol: TCP
+  egress: []
+{{- end }}

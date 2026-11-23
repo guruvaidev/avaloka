@@ -112,7 +112,9 @@ def spreadsheet_tasks() -> list[BenchmarkTask]:
         tasks.append(BenchmarkTask(
             name=f"xlsx_{name}",
             family="format_comprehension", kind="analyze",
-            goal=("Find the table inside the workbook and profile it, "
+            # The declared question when the task grades a planted answer;
+            # the generic request cannot produce a figure to grade.
+            goal=(truth.question or "Find the table inside the workbook and profile it, "
                   "naming the columns the file actually has."),
             dataset=DatasetSpec(name, "synthetic", builder=builder,
                                 suffix=".xlsx", declared_format="xlsx",

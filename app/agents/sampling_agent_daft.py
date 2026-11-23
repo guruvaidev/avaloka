@@ -19,6 +19,9 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from pathlib import Path
 from collections import Counter
 
+from app.core.thirdparty_optout import disable_thirdparty_telemetry
+from file_handler.null_policy import gap_cells  # pandas only: imports no daft
+
 # Daft draws a progress bar on stderr for any query that runs longer than a
 # moment ("🗡️ 🐟[1/5] In Memory Scan ..."). It interleaves with the server log
 # and can overwrite log lines. Off by default; set DAFT_PROGRESS_BAR=1 to see it.
@@ -81,7 +84,7 @@ logger = logging.getLogger(__name__)
 # code, which is exactly the question DAFT_AVAILABLE was asking.
 DAFT_AVAILABLE = importlib.util.find_spec("daft") is not None
 if not DAFT_AVAILABLE:
-    logger.warning("Daft not available. Install with: pip install getdaft")
+    logger.warning("Daft not available. Install with: pip install 'daft>=0.7.1,<0.8'")
 
 
 class _LazyDaft:
@@ -102,6 +105,7 @@ class _LazyDaft:
     @classmethod
     def _real(cls):
         if cls._module is None:
+            disable_thirdparty_telemetry()  # before daft: its import-time usage beacon
             import daft as _daft          # may raise, or die on SIGILL -- but
             cls._module = _daft           # only for a caller that needs Daft
         return cls._module
@@ -407,12 +411,18 @@ def init_ray_cluster(num_cpus: Optional[int] = None, memory_gb: Optional[float] 
             if RAY_ADDRESS:
                 _RAY_LAST_INIT_MODE = "remote"
                 logger.info(f"🚀 Connecting to remote Ray cluster: {RAY_ADDRESS}")
-                # Setup runtime environment with required packages
+                # The cluster image already runs the pinned Ray; never let a job's
+                # runtime_env pip-install another one. The workers do need daft,
+                # which the Ray image lacks: pin it to the release requirements.txt
+                # resolves (daft>=0.7.1,<0.8). Not `getdaft`: 0.5.0 is a shim that only
+                # requires an unversioned daft, so it pulls whatever is newest. Pinned, so
+                # the client and the workers run the same daft.
+                # tests/test_ray_version_alignment.py holds this pin.
                 runtime_env = {
-                    "pip": ["getdaft", "ray"],
-                    "env_vars": {"PIP_DISABLE_PIP_VERSION_CHECK": "1"},
+                    "pip": ["daft==0.7.26"],
+                    "env_vars": {"PIP_DISABLE_PIP_VERSION_CHECK": "1", **disable_thirdparty_telemetry()},
                 }
-                logger.info("📦 Setting up runtime environment with getdaft...")
+                logger.info("📦 Setting up runtime environment with daft...")
                 ray.init(
                     address=RAY_ADDRESS, 
                     ignore_reinit_error=True,
@@ -767,7 +777,7 @@ def _load_file_with_daft(path: str, source_type: str, **kwargs) -> Tuple[Optiona
     Returns: (DataFrame, temp_files_list)
     """
     if not DAFT_AVAILABLE:
-        raise ImportError("Daft is not available. Install with: pip install getdaft")
+        raise ImportError("Daft is not available. Install with: pip install 'daft>=0.7.1,<0.8'")
     
     temp_files: List[str] = []
     
@@ -826,21 +836,24 @@ def _load_file_with_daft(path: str, source_type: str, **kwargs) -> Tuple[Optiona
             return df, temp_files
         
         abs_path = os.path.abspath(path)
-        
+        # A directory of parts is one dataset. Daft's own readers take a list
+        # of files; the pandas-backed formats are read part by part and stacked.
+        parts = _local_source_files(abs_path, source_fmt) if os.path.isdir(abs_path) else [abs_path]
+        if not parts:
+            raise ValueError(f"No {source_fmt} files found under the directory")
+
         # TSV rides the CSV reader: _sniff_delimiter_daft detects the tab, so the
         # only thing that was missing was the branch. /api/upload advertises tsv
         # in SUPPORTED_UPLOAD_EXTS, and without this it answered HTTP 500
         # "File type not supported" for a format it says it supports.
         if source_fmt in ("csv", "tsv"):
-            encoding = kwargs.get("encoding") or _detect_csv_encoding(abs_path)
-            delimiter = kwargs.get("delimiter") or _sniff_delimiter_daft(abs_path, encoding)
-            daft_path = _convert_to_utf8_if_needed(abs_path, encoding, delimiter)
-            
-            if daft_path != abs_path:
-                temp_files.append(daft_path)
-            
+            encoding = kwargs.get("encoding") or _detect_csv_encoding(parts[0])
+            delimiter = kwargs.get("delimiter") or _sniff_delimiter_daft(parts[0], encoding)
+            daft_paths = [_convert_to_utf8_if_needed(part, encoding, delimiter) for part in parts]
+            temp_files.extend(p for p, part in zip(daft_paths, parts) if p != part)
+
             df = daft.read_csv(
-                daft_path,
+                daft_paths if len(daft_paths) > 1 else daft_paths[0],
                 has_headers=True,
                 delimiter=delimiter,
                 **{k: v for k, v in kwargs.items() if k not in ["delimiter", "encoding"]}
@@ -858,31 +871,38 @@ def _load_file_with_daft(path: str, source_type: str, **kwargs) -> Tuple[Optiona
         elif source_fmt == "avro":
             from file_handler.handler import FileHandler
             import pandas as pd
-            handler = FileHandler(path, source_type)
-            df = daft.from_pandas(pd.DataFrame(handler.load_data(), columns=handler.get_columns()))
+            frames = []
+            for part in parts:
+                handler = FileHandler(part, source_type)
+                frames.append(pd.DataFrame(handler.load_data(), columns=handler.get_columns()))
+            df = daft.from_pandas(pd.concat(frames, ignore_index=True))
         elif source_fmt == "orc":
             # Declared in SUPPORTED_UPLOAD_EXTS and, until the ORC connector
             # landed, readable by nothing: the upload path had no branch and
             # this one fell through to the ValueError below. Daft has no ORC
             # reader, so go via pyarrow -- already a dependency on both sides.
             import pandas as pd
-            df = daft.from_pandas(pd.read_orc(abs_path))
-        elif source_fmt == "json":
-            df = daft.read_json(abs_path, **kwargs)
+            df = daft.from_pandas(pd.concat([pd.read_orc(part) for part in parts], ignore_index=True))
+        elif source_fmt in ("json", "jsonl", "ndjson"):
+            # One reader for both shapes: Daft reads a top-level array and
+            # newline-delimited records alike (checked on daft 0.7.25).
+            df = daft.read_json(parts if len(parts) > 1 else parts[0], **kwargs)
         elif source_fmt == "xml":
             # Daft has no XML reader and FileHandler has none either, so this
             # advertised format used to fall straight to the ValueError below.
             # pandas reads XML; hand the frame to Daft.
             import pandas as pd
-            try:
-                pdf = pd.read_xml(abs_path)
-            except Exception:
-                pdf = pd.read_xml(abs_path, xpath=".//*[*]")
-            df = daft.from_pandas(pdf)
+            frames = []
+            for part in parts:
+                try:
+                    frames.append(pd.read_xml(part))
+                except Exception:
+                    frames.append(pd.read_xml(part, xpath=".//*[*]"))
+            df = daft.from_pandas(pd.concat(frames, ignore_index=True))
         else:
             raise ValueError(
                 f"Unsupported source type: {source_fmt}. Supported: "
-                f"csv, tsv, json, xml, parquet, orc, avro, xls, xlsx.")
+                f"csv, tsv, json, jsonl, ndjson, xml, parquet, orc, avro, xls, xlsx.")
         
         return df, temp_files
     except Exception as e:
@@ -1472,18 +1492,6 @@ def create_sample_portfolio(
 
 # Statistics Aggregation
 
-def _is_missing(value: Any) -> bool:
-    """Check if value is missing/null."""
-    if value is None:
-        return True
-    if isinstance(value, float):
-        return math.isnan(value)
-    if isinstance(value, str):
-        v = value.strip().lower()
-        return v in ("", "na", "nan", "null", "none", "n/a")
-    return False
-
-
 def _to_float(value: Any) -> Optional[float]:
     """Safe float conversion helper."""
     try:
@@ -1536,7 +1544,14 @@ def _compute_categorical_stats_hybrid(
             if "_weight" in strat_dict.column_names else [1.0] * len(values_strat)
         )
 
-        norm_vals = [str(v) if not _is_missing(v) else "<missing>" for v in values_strat]
+        # From base sample: missing ratio. Gaps follow the one null-word rule
+        # (file_handler/null_policy.py), decided over the column's cells from
+        # both samples: "n/a" in a text column is a label, not a gap.
+        values_base = base_dict.column(col_name).to_pylist() if col_name in base_dict.column_names else []
+        gaps = gap_cells(list(values_base) + list(values_strat))
+        base_gaps, strat_gaps = gaps[:len(values_base)], gaps[len(values_base):]
+
+        norm_vals = [str(v) if not gap else "<missing>" for v, gap in zip(values_strat, strat_gaps)]
 
         # weight-correct the K-cap oversampling of rare categories
         raw_counts = Counter(norm_vals)
@@ -1547,9 +1562,7 @@ def _compute_categorical_stats_hybrid(
         total_weight = sum(weighted.values()) or 1.0
         top_values = sorted(weighted.items(), key=lambda kv: kv[1], reverse=True)[:15]
 
-        # From base sample: missing ratio
-        values_base = base_dict.column(col_name).to_pylist() if col_name in base_dict.column_names else []
-        missing_count = sum(1 for v in values_base if _is_missing(v))
+        missing_count = sum(base_gaps)
         missing_ratio = missing_count / len(values_base) if values_base else 0.0
 
         return {
@@ -1603,8 +1616,8 @@ def _compute_numeric_stats_hybrid(
         mean = float(base_arr.mean())
         std = float(base_arr.std()) if len(base_arr) > 1 else 0.0
         
-        # Missing ratio from base
-        missing_count = sum(1 for v in values_base if _is_missing(v))
+        # Missing ratio from base, by the null-word rule
+        missing_count = sum(gap_cells(values_base))
         missing_ratio = missing_count / len(values_base) if values_base else 0.0
         
         # Skewness from quantile sample (better tail coverage)
@@ -1668,28 +1681,34 @@ def _compute_stats_from_base(values: List[Any]) -> Dict[str, Any]:
 
     One pass over the values (the old version converted each value twice), and
     NumPy instead of the statistics module for the numeric summary. A column is
-    numeric when >=10% of values parse as floats (NaN counts, as before); NaN
-    and inf are excluded from the summary numbers themselves.
+    numeric when >=10% of values parse as floats (NaN counts, as before) and
+    no string that is not a gap fails to parse: "V45" among ICD-9 codes is a
+    real value, and a numeric summary would drop it silently. NaN and inf are
+    excluded from the summary numbers themselves.
     """
     n_total = len(values)
-    missing_count = 0
+    # Gaps by the one null-word rule (file_handler/null_policy.py): a null-like
+    # word is a gap in a typed column and a label in a text column.
+    gaps = gap_cells(values)
+    missing_count = sum(gaps)
     parsed = 0
+    real_text = False
     finite: List[float] = []
-    for v in values:
-        if _is_missing(v):
-            missing_count += 1
+    for v, gap in zip(values, gaps):
         f = _to_float(v)
         if f is not None:
             parsed += 1
             if math.isfinite(f):
                 finite.append(f)
+        elif isinstance(v, str) and not gap:
+            real_text = True
     missing_ratio = missing_count / n_total if n_total else 0.0
 
-    if parsed and parsed >= max(3, n_total * 0.1):
+    if parsed and parsed >= max(3, n_total * 0.1) and not real_text:
         return _numeric_stats_dict(finite, missing_count, missing_ratio)
 
     # Categorical column
-    norm_vals = [str(v) if not _is_missing(v) else "<missing>" for v in values]
+    norm_vals = [str(v) if not gap else "<missing>" for v, gap in zip(values, gaps)]
     counts = Counter(norm_vals)
     top_values = counts.most_common(15)
 
@@ -1789,6 +1808,208 @@ def aggregate_statistics_from_portfolio(
 
 
 # Main Sampling Entry Point
+# ── What is on disk, before anything is read ────────────────────────────────
+# The size estimate used to count newlines in the first 64 KB of whatever file
+# it was handed and divide the byte total by the average line. That is a CSV
+# heuristic, and every other declared format went through it: a 120-row ORC
+# file came back as 23 rows, an Avro file as 1, an XML document as 602, a JSON
+# array as 25, and a two-part Parquet directory as the first part's rows times
+# the part count. The sizing tier, the adaptive sample sizes and the Ray
+# decision all key on that number. Measured 2026-10-17 in the arm64 CI image.
+#
+# Columnar containers record their row count in a footer, so for Parquet, ORC
+# and Avro the count is exact and no data is decoded. Text formats are
+# estimated per format from the head -- a JSON array by its depth-1 objects,
+# an XML document by its repeated row element, delimited text by its lines --
+# and the count is exact, and says so, when the head is the whole file.
+
+#: Which files in a directory belong to each declared format. Hidden files and
+#: job markers (``_SUCCESS``, ``.crc``) are never data.
+_FORMAT_SUFFIXES: Dict[str, Tuple[str, ...]] = {
+    "parquet": (".parquet", ".pq"),
+    "csv": (".csv",),
+    "tsv": (".tsv",),
+    "json": (".json", ".jsonl", ".ndjson"),
+    "jsonl": (".jsonl", ".ndjson", ".json"),
+    "ndjson": (".ndjson", ".jsonl", ".json"),
+    "orc": (".orc",),
+    "avro": (".avro",),
+    "xml": (".xml",),
+    "xlsx": (".xlsx", ".xlsm"),
+    "xls": (".xls",),
+}
+
+_HEAD_BYTES = 64 * 1024
+_XML_TAG_RE = re.compile(rb"<([A-Za-z_][\w.\-]*)[\s>/]")
+
+
+def _local_source_files(path: str, source_type: str) -> List[str]:
+    """The data files a local path stands for, sorted: the file itself, or
+    every part under a directory that carries the format's extension."""
+    abs_path = os.path.abspath(path)
+    if not os.path.isdir(abs_path):
+        return [abs_path]
+    suffixes = _FORMAT_SUFFIXES.get((source_type or "").lower(), ())
+    files: List[str] = []
+    for root, dirs, names in os.walk(abs_path):
+        dirs[:] = sorted(d for d in dirs if not d.startswith((".", "_")))
+        for name in sorted(names):
+            if name.startswith((".", "_")):
+                continue
+            if suffixes and not name.lower().endswith(suffixes):
+                continue
+            files.append(os.path.join(root, name))
+    return files
+
+
+def _exact_rows_in_file(file_path: str, source_fmt: str) -> Optional[int]:
+    """The row count a container records about itself, without decoding any
+    row; ``None`` when the format keeps no such count or the footer is unreadable."""
+    try:
+        if source_fmt == "parquet":
+            import pyarrow.parquet as pq
+            return int(pq.read_metadata(file_path).num_rows)
+        if source_fmt == "orc":
+            import pyarrow.orc as orc
+            return int(orc.ORCFile(file_path).nrows)
+        if source_fmt == "avro":
+            import fastavro
+            with open(file_path, "rb") as handle:
+                # Each block header carries its record count; the records
+                # themselves stay undecoded.
+                return int(sum(block.num_records for block in fastavro.block_reader(handle)))
+    except Exception as exc:
+        logger.debug("[size_estimate] no footer count for %s file: %s", source_fmt, exc)
+    return None
+
+
+def _count_depth_one_objects(text: str) -> int:
+    """Objects directly inside a top-level JSON array, string-aware."""
+    depth = 0
+    in_string = False
+    escaped = False
+    count = 0
+    for ch in text:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch in "[{":
+            depth += 1
+            if depth == 2:
+                count += 1
+        elif ch in "]}":
+            depth -= 1
+    return count
+
+
+def _rows_from_head(head: bytes, source_fmt: str, total_bytes: int) -> Tuple[int, bool]:
+    """Row estimate for a text file from its first bytes, per format.
+
+    Returns ``(rows, exact)``; ``exact`` is True only when ``head`` is the
+    whole file and the format's count is unambiguous.
+    """
+    whole = len(head) >= total_bytes
+    if not head.strip():
+        return 0, whole
+    text = head.decode("utf-8", errors="replace")
+    if source_fmt in ("json", "jsonl", "ndjson"):
+        if text.lstrip().startswith("["):
+            if whole:
+                try:
+                    document = json.loads(text)
+                    return (len(document) if isinstance(document, list) else 1), True
+                except ValueError:
+                    pass
+            n_objects = max(_count_depth_one_objects(text), 1)
+            return int(total_bytes / (len(head) / n_objects)), False
+        lines = [line for line in text.split("\n") if line.strip()]
+        if whole:
+            return len(lines), True
+        return int(total_bytes / (len(head) / max(len(lines), 1))), False
+    if source_fmt == "xml":
+        # The row element is the root's first child; count its openings.
+        tags = _XML_TAG_RE.findall(head)
+        if len(tags) < 2:
+            return 1, whole
+        n_rows = len(re.findall(rb"<" + re.escape(tags[1]) + rb"[\s>/]", head))
+        if whole:
+            return n_rows, True
+        return int(total_bytes / (len(head) / max(n_rows, 1))), False
+    # Delimited text: one row per line after the header.
+    if whole:
+        # A quoted field may hold a newline, so a whole small file is counted
+        # as records, not lines; quoting is delimiter-independent here.
+        import csv
+        import io
+        records = sum(1 for row in csv.reader(io.StringIO(text)) if any(cell.strip() for cell in row))
+        return max(records - 1, 0), True
+    lines = [line for line in text.split("\n") if line.strip()]
+    data_lines = lines[1:] if len(lines) > 1 else lines
+    avg = sum(len(line) + 1 for line in data_lines) / max(len(data_lines), 1)
+    return int(total_bytes / max(avg, 10.0)), False
+
+
+def _rows_in_workbook(file_path: str) -> Optional[int]:
+    """Data rows of the fullest sheet, from the sheet dimensions alone."""
+    try:
+        from openpyxl import load_workbook
+        workbook = load_workbook(file_path, read_only=True)
+        try:
+            return max((max(int(ws.max_row or 0) - 1, 0) for ws in workbook.worksheets), default=0)
+        finally:
+            workbook.close()
+    except Exception:
+        return None
+
+
+def describe_source(path: str, source_type: str) -> Dict[str, Any]:
+    """Size and row count of a local source from metadata alone, per file.
+
+    Returns ``format``, ``n_files``, ``total_bytes``, ``rows``, ``rows_exact``
+    and ``partitions``: one ``{"bytes", "rows"}`` per data file in listing
+    order, so an uneven split is visible to the optimizer. File names are left
+    out on purpose -- this dict travels in ``sample_statistics`` toward
+    telemetry projections, which carry counts and types only. Cloud paths
+    return ``{}``; their metadata probe is in ``_estimate_dataset_size``.
+    """
+    source_fmt = (source_type or "csv").lower()
+    if any(path.startswith(prefix) for prefix in ("gs://", "s3://", "az://", "http://", "https://")):
+        return {}
+    partitions: List[Dict[str, Any]] = []
+    rows_exact = True
+    for file_path in _local_source_files(path, source_fmt):
+        try:
+            n_bytes = os.path.getsize(file_path)
+        except OSError:
+            continue
+        rows = _exact_rows_in_file(file_path, source_fmt)
+        if rows is None and source_fmt in ("xlsx", "xls"):
+            rows, rows_exact = _rows_in_workbook(file_path) or 0, False
+        elif rows is None:
+            try:
+                with open(file_path, "rb") as handle:
+                    head = handle.read(_HEAD_BYTES)
+            except OSError:
+                head = b""
+            rows, exact = _rows_from_head(head, source_fmt, n_bytes)
+            rows_exact = rows_exact and exact
+        partitions.append({"bytes": int(n_bytes), "rows": int(rows)})
+    return {
+        "format": source_fmt,
+        "n_files": len(partitions),
+        "total_bytes": sum(part["bytes"] for part in partitions),
+        "rows": sum(part["rows"] for part in partitions),
+        "rows_exact": bool(partitions) and rows_exact,
+        "partitions": partitions,
+    }
+
 
 def _estimate_dataset_size(
     path: str,
@@ -1952,47 +2173,16 @@ def _estimate_dataset_size(
 
 
         else:
-            # ── Local path ──
-            abs_path = os.path.abspath(path)
-
-            if os.path.isdir(abs_path):
-                import glob as glob_mod
-                ext = ".parquet" if source_fmt == "parquet" else (".csv" if source_fmt == "csv" else ".json")
-                all_files = glob_mod.glob(os.path.join(abs_path, "**", f"*{ext}"), recursive=True)
-                if not all_files:
-                    all_files = glob_mod.glob(os.path.join(abs_path, "**", "*"), recursive=True)
-                    all_files = [f for f in all_files if os.path.isfile(f)]
-                total_bytes = sum(os.path.getsize(f) for f in all_files if os.path.isfile(f))
-                sample_file = all_files[0] if all_files else None
-            else:
-                total_bytes = os.path.getsize(abs_path)
-                sample_file = abs_path
-
-            size_mb = total_bytes / (1024 * 1024)
-
-            if source_fmt == "parquet" and sample_file:
-                try:
-                    import pyarrow.parquet as pq
-                    meta = pq.read_metadata(sample_file)
-                    rows_per_file = meta.num_rows
-                    n_files = max(len(all_files) if os.path.isdir(abs_path) else 1, 1)
-                    estimated_rows = rows_per_file * n_files
-                    logger.info(f"📐 Size estimate (local Parquet metadata): {estimated_rows:,} rows, {size_mb:.1f} MB")
-                    return estimated_rows, size_mb
-                except Exception:
-                    pass
-
-            head_bytes = b""
-            if sample_file:
-                try:
-                    with open(sample_file, "rb") as f:
-                        head_bytes = f.read(SAMPLE_BYTES)
-                except Exception:
-                    pass
-
-            avg_row = _avg_row_bytes_from_head(head_bytes, source_fmt) if head_bytes else 100.0
-            estimated_rows = int(total_bytes / avg_row)
-            logger.info(f"📐 Size estimate (local head): ~{estimated_rows:,} rows, {size_mb:.1f} MB")
+            # ── Local path: per-file metadata, per format (describe_source) ──
+            described = describe_source(path, source_fmt)
+            size_mb = described.get("total_bytes", 0) / (1024 * 1024)
+            estimated_rows = int(described.get("rows", 0))
+            logger.info(
+                "📐 Size estimate (local %s, %d file(s), %s): %s rows, %.1f MB",
+                source_fmt, described.get("n_files", 0),
+                "exact" if described.get("rows_exact") else "estimated",
+                f"{estimated_rows:,}", size_mb,
+            )
             return estimated_rows, size_mb
 
     except Exception as e:
@@ -2004,6 +2194,93 @@ def _estimate_dataset_size(
             )
             return 500_000, 0.0
         return 0, 0.0
+
+
+COMPLEX_SOURCE_TYPES = frozenset({
+    "pdf", "jpg", "jpeg", "png", "tif", "tiff", "bmp", "webp",
+    "mp4", "mov", "mkv", "avi", "webm", "m4v",
+})
+
+
+def _sample_complex_source(
+    path: str,
+    source_type: str,
+    sample_size: Union[int, float],
+) -> Dict[str, Any]:
+    """Build a deterministic single-portfolio view of a complex local source."""
+    from avaloka.io import ComplexDataOptions, load_dataset
+
+    options = ComplexDataOptions(
+        ocr=os.getenv("AVALOKA_COMPLEX_OCR", "auto").strip().lower(),
+        max_pdf_pages=max(1, int(os.getenv("AVALOKA_MAX_PDF_PAGES", "100"))),
+        max_video_frames=max(1, int(os.getenv("AVALOKA_MAX_VIDEO_FRAMES", "32"))),
+        max_text_chars_per_page=max(
+            1, int(os.getenv("AVALOKA_MAX_TEXT_CHARS_PER_PAGE", "200000"))
+        ),
+    )
+    handle = load_dataset(path, complex_options=options)
+    frame = handle.frame
+    total_rows = int(len(frame))
+    if total_rows == 0:
+        return {
+            "error": "Complex source produced no inspectable rows.",
+            "rows": [],
+            "portfolio_samples": {},
+            "schema": {},
+            "profiling_result": {},
+        }
+
+    if isinstance(sample_size, float):
+        requested = max(1, int(total_rows * sample_size))
+    else:
+        requested = max(1, int(sample_size))
+    requested = min(total_rows, requested, DEFAULT_SAMPLE_MAX_ROWS)
+    if requested == total_rows:
+        selected = frame
+    elif requested == 1:
+        selected = frame.iloc[[0]]
+    else:
+        indices = sorted({
+            round(index * (total_rows - 1) / (requested - 1))
+            for index in range(requested)
+        })
+        selected = frame.iloc[indices]
+    rows = json.loads(selected.to_json(orient="records", date_format="iso"))
+    schema = {str(name): str(dtype) for name, dtype in frame.dtypes.items()}
+    ddl_columns = ",\n  ".join(f'"{name}" VARCHAR' for name in schema)
+    ddl = f'CREATE TABLE "{Path(path).stem}" (\n  {ddl_columns}\n);'
+    structure = handle.structure
+    profile = {
+        "data_shape": {"rows": total_rows, "columns": len(schema)},
+        "complex_format": handle.fmt,
+        "complex_structure": structure,
+        "portfolio_metadata": {
+            "num_samples": 1,
+            "sample_names": ["random_baseline"],
+            "portfolio_sample_size": len(rows),
+            "display_sample_size": len(rows),
+            "adaptive_sizing_used": False,
+            "sizing_tier": "COMPLEX_BOUNDED",
+            "ray_used": False,
+            "ray_requested": False,
+            "sampled_percentage": f"{(len(rows) / total_rows * 100):.2f}%",
+        },
+    }
+    return {
+        "schema": schema,
+        "rows": rows,
+        "portfolio_samples": {"random_baseline": rows},
+        "ddl_schema": ddl,
+        "profiling_result": profile,
+        "complex_structure": structure,
+        "error": None,
+        "full_sample_rows": rows,
+        "sample_statistics": {},
+        "sample_status": "complex_bounded_sample",
+        "total_rows_exact": total_rows,
+        "sample_pct": round(len(rows) / total_rows * 100, 4),
+    }
+
 
 
 def sample_with_profiling(
@@ -2024,6 +2301,10 @@ def sample_with_profiling(
     ray_was_initialized = False
     
     try:
+        source_fmt = (source_type or "").strip().lower()
+        if source_fmt in COMPLEX_SOURCE_TYPES:
+            return _sample_complex_source(path, source_fmt, sample_size)
+
         logger.info(f"=== Starting sampling for {path} ===")
         
         # Fast metadata-based size estimate (no full file scan)
@@ -2031,6 +2312,9 @@ def sample_with_profiling(
             path, source_type, cloud_credentials=extra_args.get("cloud_credentials")
         )
         logger.info(f"File: {file_size_mb:.1f}MB, ~{estimated_rows:,} rows (estimated)")
+        # Per-file sizes and row counts, for the optimizer and the profile
+        # (empty for cloud paths, whose probe is inside the estimate above).
+        source_summary = describe_source(path, source_type)
         
         if use_ray is True:
             logger.info("Ray forced ON by caller")
@@ -2206,6 +2490,8 @@ def sample_with_profiling(
                 # the whole frame's estimated uncompressed in-memory footprint.
                 "bytes_per_row": round(bytes_per_row, 2),
                 "estimated_full_bytes": int(total_rows * bytes_per_row),
+                # Format, file count, bytes and rows per partition (no names).
+                "source": source_summary,
             },
             "sample_status": "full_sample",
             "total_rows_exact": total_rows,

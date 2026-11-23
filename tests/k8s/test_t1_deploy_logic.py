@@ -263,7 +263,7 @@ def test_t1_8_api_port_probes_and_nodeport(rendered_chart):
 
 # --------------------------------------------------------------------------- T1.9
 def test_t1_9_single_source_ray_version():
-    """D2 guard: ray image tag == both CR rayVersion == requirements ray pin == 2.49.2."""
+    """D2 guard: ray image tag == both CR rayVersion == requirements ray pin == RAY_VERSION."""
     dockerfile = (REPO_ROOT / "deploy/docker/Dockerfile.ray").read_text()
     m = re.search(r"FROM rayproject/ray:([0-9.]+)-py311", dockerfile)
     assert m, "could not find ray base image tag"

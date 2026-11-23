@@ -9,6 +9,10 @@ import os
 import sys
 import json
 import argparse
+# onnxruntime's 1DS telemetry (mobile.events.data.microsoft.com) is off unless
+# the deployment opts in; this script runs without the app package, so it sets
+# the switch itself (app/core/thirdparty_optout.py), before the import.
+os.environ.setdefault("ORT_DISABLE_TELEMETRY", "1")
 import numpy as np
 import pandas as pd
 import onnxruntime as ort

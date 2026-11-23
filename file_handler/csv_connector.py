@@ -76,9 +76,9 @@ class CSVConnector(BaseConnector):
         if self._row_count is None:
             with open(self.path) as f:
                 reader = csv.reader(f, delimiter=self.delimiter)
-                for _row_count, _ in enumerate(reader):
-                    ...
-        return _row_count
+                next(reader, None)
+                self._row_count = sum(1 for _ in reader)
+        return self._row_count
 
     def get_row(self, row: int) -> list[Any]:
         with open(self.path) as f:
@@ -92,14 +92,30 @@ class CSVConnector(BaseConnector):
         return list(map(CSVConnector._convert_type, row))
 
     def sample_rows(
-        self, num_rows: int = 10, random_rows: bool = True
+        self,
+        num_rows: int = 10,
+        random_rows: bool = True,
+        seed: int | None = None,
     ) -> list[list[Any]]:
-        total_rows = self.get_row_count()
+        """Up to ``num_rows`` data rows, in file order.
 
+        ``random_rows`` picks the positions uniformly over every data row
+        (1-based, the header excluded); otherwise the first ``num_rows``. A
+        file with fewer rows than asked for yields all of them. ``seed`` makes
+        the random pick reproducible without touching the process-wide
+        ``random`` state; left unset, the pick differs run to run as before.
+        The positions are drawn from a ``range``, never a materialised list,
+        and the file is read once up to the last chosen position, so the
+        cost is bounded by the file and the sample, not by both.
+        """
+        total_rows = self.get_row_count()
+        n = min(num_rows, total_rows)
+
+        rng = random if seed is None else random.Random(seed)
         rows_to_sample = sorted(
-            random.sample(range(1, total_rows), k=num_rows)
+            rng.sample(range(1, total_rows + 1), k=n)
             if random_rows
-            else range(1, num_rows + 1)
+            else range(1, n + 1)
         )
 
         data = []

@@ -25,7 +25,6 @@ ingress:
   className: nginx
   annotations:
     kubernetes.io/ingress.class: nginx
-    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
   hosts:
     - host: localhost
       paths:
@@ -38,3 +37,13 @@ httpRoute:
 
 autoscaling:
   enabled: false
+
+# Largest request body nginx passes to the app. The API enforces the real upload
+# limit -- the hosted plan, or a self-hosted server's disk and memory -- and
+# refuses an over-limit Content-Length before reading the body. This is the
+# outer bound, including for requests the API cannot pre-check (no
+# Content-Length). Keep it finite, and above the 300 MB a self-hosted install
+# must accept (D5). Rendered as nginx.ingress.kubernetes.io/proxy-body-size;
+# a copy left in ingress.annotations is ignored.
+upload:
+  maxBodySize: "1024m"

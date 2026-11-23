@@ -42,10 +42,10 @@ def load_chroma_collection(
     
     client = chromadb.PersistentClient(path=str(abs_db_path))
     
-    sentence_transformer_ef = embedding_functions.SentenceTransformerEmbeddingFunction(
-        model_name=embedding_model,
-        normalize_embeddings=True
-    )
+    # Offline-aware: a model missing from the cache is one plain error, not a
+    # download attempt (app/core/offline.py).
+    from app.core.offline import sentence_transformer_ef as _st_ef
+    sentence_transformer_ef = _st_ef(embedding_model, normalize_embeddings=True)
     
     try:
         collection = client.get_collection(

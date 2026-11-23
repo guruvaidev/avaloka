@@ -19,12 +19,12 @@ Azure AI — selected purely by environment configuration.
 
 Design guarantees
 -----------------
-* **Groq stays the default.** When ``INFERENCE_PROVIDER`` is unset or
-  ``groq``, :func:`build_chat_model` returns a ``ChatGroq`` configured
-  exactly as the agents configured it before this abstraction existed —
-  including the gpt-oss reasoning kwargs — so the planner and every other
-  agent behave byte-for-byte identically. Nothing about planner/agent logic
-  changes; only the *backend* moves when you ask it to.
+* **OpenRouter is the default** (owner decision 2026-11-01): when
+  ``INFERENCE_PROVIDER`` is unset, agents run ``openai/gpt-oss-120b`` through
+  OpenRouter, pinned to a short list of upstream providers (see "OpenRouter
+  provider pinning" below). ``INFERENCE_PROVIDER=groq`` still returns a
+  ``ChatGroq`` configured exactly as before, including the gpt-oss reasoning
+  kwargs.
 * **"Disabled when unconfigured" is preserved.** If the selected provider
   has no credentials/endpoint, :func:`build_chat_model` returns ``None`` and
   the caller falls back to its deterministic path — exactly as it did when a
@@ -36,11 +36,11 @@ Design guarantees
 
 Selecting a provider
 --------------------
-Global switch (default ``groq``)::
+Global switch (default ``openrouter``)::
 
     INFERENCE_PROVIDER=local        # laptop / kind: OpenAI-spec model in-cluster
-    INFERENCE_PROVIDER=groq         # Groq Cloud (default)
-    INFERENCE_PROVIDER=openrouter   # OpenRouter
+    INFERENCE_PROVIDER=groq         # Groq Cloud
+    INFERENCE_PROVIDER=openrouter   # OpenRouter (default)
     INFERENCE_PROVIDER=bedrock      # AWS Bedrock
     INFERENCE_PROVIDER=vertex       # GCP Vertex AI
     INFERENCE_PROVIDER=azure        # Azure AI / Azure OpenAI
@@ -59,6 +59,16 @@ OpenRouter routing (applies to EVERY agent on the OpenRouter path)::
     AVALOKA_OPENROUTER_SORT=throughput        # default; "price"/"latency", or "none"
     AVALOKA_<AGENT>_OPENROUTER_SORT=latency   # per-agent override
     AVALOKA_OPENROUTER_PROVIDERS=Groq,Cerebras  # optional preferred providers, in order
+
+OpenRouter provider pinning (owner decision 2026-11-01; privacy: prompts carry
+schemas and sample rows, so they go only to the providers listed)::
+
+    AVALOKA_OPENROUTER_ONLY=deepinfra/bf16,together   # primary's allowlist; "none" = any
+    AVALOKA_OPENROUTER_ALLOW_FALLBACKS=false          # default: never leave the list
+    AVALOKA_OPENROUTER_DATA_COLLECTION=deny           # providers that train are excluded
+    AVALOKA_OPENROUTER_ZDR=true                       # zero-data-retention endpoints only
+    AVALOKA_OPENROUTER_FALLBACK_MODEL=openai/gpt-6-luna  # next tier; "none" disables
+    AVALOKA_OPENROUTER_FALLBACK_ONLY=azure            # the fallback tier's allowlist
 """
 from __future__ import annotations
 
@@ -67,6 +77,12 @@ import os
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+# Every chat model built anywhere in this process sends a sealed credential
+# token as an opaque placeholder, never the token (app/core/typed_secrets.py).
+from app.core.typed_secrets import install_model_scrub as _install_model_scrub  # noqa: E402
+
+_install_model_scrub()
 
 # --------------------------------------------------------------------------
 # Provider names
@@ -84,7 +100,9 @@ _PROVIDER_ALIASES = {
     # The empty string is what an unset INFERENCE_PROVIDER looks like by the
     # time it reaches here, so this entry -- not the `or` below -- is what
     # actually decides the default. It said GROQ, which is why setting the
-    # fallback alone changed nothing.
+    # fallback alone changed nothing. MP-01 (owner decision 2026-11-01):
+    # OpenRouter, matching the Helm chart's inference.provider
+    # (deploy/helm/avaloka/values.yaml). It was Groq from 2026-10-31.
     "": OPENROUTER,
     "groqcloud": GROQ,
     "groq-cloud": GROQ,
@@ -133,12 +151,16 @@ def _env_first(*names: str, default: Optional[str] = None) -> Optional[str]:
 
 
 def _default_provider_with_a_usable_key(groq_api_key: Optional[str] = None) -> str:
-    """OpenRouter when it has a key, else a provider that does.
+    """OpenRouter when it has a key (or nothing has one), else a provider that does.
 
-    Only consulted when no provider was configured at all. Order is the
-    preferred default first, then the providers whose keys are a single env var
-    to check; anything needing cloud credentials is out of scope here and must
-    be selected explicitly.
+    Only consulted when no provider was configured at all. OpenRouter is the
+    default the Helm chart ships (deploy/helm/avaloka/values.yaml
+    ``inference.provider``), so an unconfigured install and a chart install pick
+    the same provider (MP-01, owner decision 2026-11-01: gpt-oss-120b via
+    OpenRouter; it was Groq from 2026-10-31). The providers whose keys are a
+    single env var are checked next, so an install holding only a Groq or
+    OpenAI key keeps a working LLM on upgrade; anything needing cloud
+    credentials must be selected explicitly.
     """
     if _env_first("OPENROUTER_API_KEY", "INFERENCE_OPENROUTER_API_KEY"):
         return OPENROUTER
@@ -161,7 +183,10 @@ def _canonical_provider(raw: Optional[str], groq_api_key: Optional[str] = None) 
     The default was Groq, which meant a first run required a Groq account
     specifically. OpenRouter fronts many providers behind one key -- including
     Groq itself -- so one credential reaches whatever model a user already has
-    access to, which is the better default for an open-source install.
+    access to, which is the better default for an open-source install. The
+    owner's decision of 2026-11-01 keeps it: openai/gpt-oss-120b via OpenRouter
+    (the cheapest per correct answer), pinned to a provider allowlist, with
+    GPT-6 Luna as the optional higher tier; the Helm chart now ships the same.
 
     Groq remains fully supported and is still the fastest path: set
     INFERENCE_PROVIDER=groq, or AVALOKA_<AGENT>_PROVIDER=groq per agent.
@@ -169,7 +194,7 @@ def _canonical_provider(raw: Optional[str], groq_api_key: Optional[str] = None) 
     key = (raw or "").strip().lower()
     if not key:
         # Nothing was configured, so this is the implicit default. Prefer
-        # OpenRouter, but only if it can actually be used: selecting a provider
+        # OpenRouter, but fall back to a provider whose key is present: selecting a provider
         # whose key is absent returns no LLM at all, and the only signal is a
         # log line. Anyone who had GROQ_API_KEY set and nothing else -- which is
         # what the older docs tell you to do -- would silently lose the LLM on
@@ -209,6 +234,50 @@ def tool_choice_for_provider(provider: str, client_name: str = "") -> str:
     if provider == OPENROUTER:
         return "auto"
     return "required"
+
+
+#: The strongest tool_choice each provider ACCEPTS when a reply came back with
+#: no tool call and the caller wants to insist. None means the provider has no
+#: accepted forcing value (or none has been measured), so the caller keeps the
+#: portable value from :func:`tool_choice_for_provider` and relies on the
+#: prompt instead.
+#:
+#: Accepting a value and enforcing it are different things, and the table only
+#: promises the first:
+#:
+#:   groq        "required"  accepted and enforced (dispatch relies on it)
+#:   openai      "required"  accepted (OpenAI spec)
+#:   local       "required"  accepted by Ollama, NOT enforced: gemma4:e4b on
+#:                           Ollama answered "what predicts a stroke?" in prose
+#:                           under "required" and under a named function
+#:                           (measured 2026-10-17). An explicit instruction
+#:                           that a tool call is mandatory, sent with it, got
+#:                           a tool call 2/2.
+#:   vertex      "any"       Vertex's spelling
+#:   openrouter  None        "required" -> finish_reason="error", 0 tool calls
+#:                           (see tool_choice_for_provider)
+#:   bedrock/azure           not measured; None, never a guess
+_FORCED_TOOL_CHOICE = {
+    GROQ: "required",
+    OPENAI: "required",
+    LOCAL: "required",
+    VERTEX: "any",
+    OPENROUTER: None,
+}
+
+
+def forced_tool_choice_for_provider(provider: str, client_name: str = "") -> Optional[str]:
+    """The tool_choice to retry with when a provider returned no tool call.
+
+    Returns None when the provider rejects every forcing value or none has
+    been measured for it; the caller then retries with the portable choice
+    and an explicit instruction, which is the part that actually moved Ollama.
+    """
+    if client_name == "ChatVertexAI":
+        return "any"
+    return _FORCED_TOOL_CHOICE.get(provider)
+
+
 def resolve_provider(*, role: str, agent: str, groq_api_key: Optional[str] = None) -> str:
     """
     Resolve the active provider for an agent, most specific wins:
@@ -216,7 +285,7 @@ def resolve_provider(*, role: str, agent: str, groq_api_key: Optional[str] = Non
     1. ``AVALOKA_<AGENT>_PROVIDER``            (per-agent)
     2. ``INFERENCE_PROVIDER_<ROLE>``           (per-role: PLANNING/CODING/VIZ)
     3. ``INFERENCE_PROVIDER``                  (global)
-    4. OpenRouter if it has a key, else a provider that does
+    4. OpenRouter if it has a key (or nothing has one), else a provider that does
     """
     raw = _env_first(
         f"AVALOKA_{agent.upper()}_PROVIDER",
@@ -239,11 +308,23 @@ def resolve_provider(*, role: str, agent: str, groq_api_key: Optional[str] = Non
 #   3. INFERENCE_<PROVIDER>_MODEL           (all agents)
 #   4. built-in default below
 # --------------------------------------------------------------------------
+#: The default locally served model: Qwen3-4B-Instruct-2507 at Q4_K_M, as the
+#: Ollama library publishes it. Apache-2.0 on both the Hugging Face card and the
+#: licence layer of this Ollama tag. It replaced qwen2.5:3b-instruct, whose
+#: weights are under the Qwen RESEARCH licence (non-commercial) -- a commercial
+#: edition must not default to them. This is the Instruct-2507 build, which has
+#: no thinking mode, so tool calls arrive without a <think> preamble and nothing
+#: has to send /no_think. (The bare ``qwen3:4b`` tag is the Thinking-2507 build;
+#: do not swap to it without handling reasoning output.)
+#: tests/test_local_model_licence.py holds every shipped local tag to a licence
+#: allowlist; a new default must be added there with its licence, or CI fails.
+DEFAULT_LOCAL_MODEL = "qwen3:4b-instruct-2507-q4_K_M"
+
 _PROVIDER_MODEL_DEFAULTS = {
     # Laptop/kind default is the small model for BOTH tiers so a CPU-only
     # dev box never tries to serve a 14B model. Point _LARGE at the GPU-served
     # model (e.g. qwen2.5-14b/32b) when you run the vLLM GPU deployment.
-    LOCAL: {"large": "qwen2.5:3b-instruct", "small": "qwen2.5:3b-instruct"},
+    LOCAL: {"large": DEFAULT_LOCAL_MODEL, "small": DEFAULT_LOCAL_MODEL},
     OPENAI: {"large": "gpt-4o", "small": "gpt-4o-mini"},
     # Same models the Groq path uses, and the ones every measurement in
     # docs/test-reports was taken on -- openai/gpt-oss-120b routing accuracy
@@ -323,11 +404,81 @@ def _build_groq(*, model, temperature, api_key, reasoning_effort, reasoning_form
 _OPENROUTER_SORTS = ("throughput", "price", "latency")
 
 
-def _openrouter_routing(agent: str) -> Optional[dict]:
-    """The OpenRouter ``provider`` preferences for *agent*, or None for default routing."""
+#: Upstream providers OpenRouter may send each model family to (owner decision
+#: 2026-11-01). Prompts carry table schemas and sample rows, so the default is a
+#: short allowlist with ``allow_fallbacks: false``, ``data_collection: "deny"`` and
+#: ``zdr: true`` -- egress stays inside the list, and a request no listed provider
+#: can serve fails instead of going elsewhere. Measured 2026-11-02: HTTP 404 "No
+#: allowed providers are available for the selected model" when no listed provider
+#: serves the model; OpenRouter documents 503 for "no available model provider that
+#: meets your routing requirements". Both move to the optional fallback tier
+#: (AVALOKA_OPENROUTER_FALLBACK_MODEL).
+#: Request-body fields per https://openrouter.ai/docs/features/provider-routing.
+#: Chosen from OpenRouter's endpoint list and ZDR list (2026-11-01) and the
+#: providers' own terms: US-based, no training on API data, no retention, on the
+#: ZDR list, and tool calling supported. gpt-oss-20b (the small tier) is served
+#: by DeepInfra and Parasail of these; Together and Crusoe serve 120b only.
+#: GPT-6 Luna's ZDR endpoints are Azure's (OpenAI's own endpoint is not on
+#: OpenRouter's ZDR list). See docs/privacy-and-egress.md for the evidence.
+OPENROUTER_PROVIDER_ALLOWLISTS = (
+    ("openai/gpt-oss-", ("deepinfra/bf16", "together", "crusoe", "parasail")),
+    ("openai/gpt-6-luna", ("azure",)),
+)
+
+#: The optional higher-quality tier behind the default model (owner decision
+#: 2026-11-01): GPT-6 Luna via OpenRouter. "none" (or AVALOKA_DISABLE_MODEL_FALLBACK=1)
+#: switches it off; a primary that IS this model gets no fallback.
+DEFAULT_OPENROUTER_FALLBACK_MODEL = "openai/gpt-6-luna"
+
+#: Models whose function calling on Chat Completions needs reasoning switched
+#: off (GPT-6 Luna supports tools there only with reasoning effort "none"; its
+#: OpenRouter entry lists reasoning as optional with "none" a supported effort).
+REASONING_OFF_MODEL_PREFIXES = ("openai/gpt-6-luna",)
+
+_FALSE = ("0", "false", "no", "off")
+
+
+def openrouter_allowlist(model: str, *, agent: str = "", fallback: bool = False) -> Optional[list]:
+    """The providers OpenRouter may route *model* to, or None for its whole pool.
+
+    An explicit setting wins (``AVALOKA_<AGENT>_OPENROUTER_ONLY`` /
+    ``AVALOKA_OPENROUTER_ONLY`` for the primary, ``AVALOKA_OPENROUTER_FALLBACK_ONLY``
+    for the fallback tier); "none" lifts the restriction. Otherwise the family
+    default from :data:`OPENROUTER_PROVIDER_ALLOWLISTS`; a model with no family
+    entry is not restricted.
+    """
+    names = (("AVALOKA_OPENROUTER_FALLBACK_ONLY",) if fallback else
+             (f"AVALOKA_{agent.upper()}_OPENROUTER_ONLY" if agent else "",
+              "AVALOKA_OPENROUTER_ONLY"))
+    raw = _env_first(*names)
+    if raw is not None:
+        if raw.strip().lower() in ("none", "any", "off", "*"):
+            return None
+        return [p.strip() for p in raw.split(",") if p.strip()] or None
+    for prefix, providers in OPENROUTER_PROVIDER_ALLOWLISTS:
+        if (model or "").lower().startswith(prefix):
+            return list(providers)
+    return None
+
+
+def openrouter_fallback_model() -> Optional[str]:
+    """The model the OpenRouter primary falls back to, or None when switched off."""
+    if (os.getenv("AVALOKA_DISABLE_MODEL_FALLBACK") or "").strip().lower() in {"1", "true", "yes"}:
+        return None
+    raw = _env_first("AVALOKA_OPENROUTER_FALLBACK_MODEL", default=DEFAULT_OPENROUTER_FALLBACK_MODEL)
+    raw = (raw or "").strip()
+    return None if raw.lower() in ("", "none", "off") else raw
+
+
+def _openrouter_routing(agent: str, model: str = "", *, fallback: bool = False) -> Optional[dict]:
+    """The OpenRouter ``provider`` preferences for *agent* and *model*, or None."""
     sort = (_env_first(
         f"AVALOKA_{agent.upper()}_OPENROUTER_SORT",
         "AVALOKA_OPENROUTER_SORT",
+        # Owner ruling 2026-11-04: the fastest listed provider first. It was
+        # "price" from 2026-11-02; a smoke sample showed price-sorted calls about
+        # 4x slower and one of three chat turns without its tool call.
+        # AVALOKA_OPENROUTER_SORT=price still selects the cheapest listed host.
         default="throughput",
     ) or "").strip().lower()
     order = [
@@ -345,16 +496,118 @@ def _openrouter_routing(agent: str) -> Optional[dict]:
     elif sort not in ("", "none", "off", "default"):
         logger.warning("Ignoring unknown OpenRouter sort %r for %s (use %s or none).",
                        sort, agent, "/".join(_OPENROUTER_SORTS))
+    only = openrouter_allowlist(model, agent=agent, fallback=fallback)
+    if only:
+        routing["only"] = only
+        # Decision 2026-11-01: never leave the allowlist. With fallbacks allowed,
+        # OpenRouter may send the prompt to any provider when the listed ones are
+        # busy, which is exactly the egress the list exists to prevent.
+        allow = (_env_first("AVALOKA_OPENROUTER_ALLOW_FALLBACKS", default="false") or "")
+        routing["allow_fallbacks"] = allow.strip().lower() not in _FALSE
     if order:
         routing["order"] = order
-        # Preferred providers first, but never fail the request because they
-        # are busy: fall back to the rest of the pool.
-        routing["allow_fallbacks"] = True
+        if not only:
+            # Preferred providers first, but never fail the request because they
+            # are busy: fall back to the rest of the pool.
+            routing["allow_fallbacks"] = True
+    collection = (_env_first("AVALOKA_OPENROUTER_DATA_COLLECTION", default="deny") or "").strip().lower()
+    if collection in ("allow", "deny"):
+        routing["data_collection"] = collection
+    zdr = (_env_first("AVALOKA_OPENROUTER_ZDR", default="true") or "").strip().lower()
+    if zdr not in _FALSE:
+        routing["zdr"] = True
     return routing or None
 
 
+def _reasoning_off(model: str) -> bool:
+    return (model or "").lower().startswith(REASONING_OFF_MODEL_PREFIXES)
+
+
+def openrouter_extra_body(agent: str, model: str) -> dict:
+    """The request-body additions for a client built outside the factory.
+
+    The Groq primary's OpenRouter backup and the visualization agent's own
+    OpenRouter client send prompts too, so they carry the same pinning.
+    """
+    extra: dict = {}
+    routing = _openrouter_routing(agent, model)
+    if routing:
+        extra["provider"] = routing
+    if _reasoning_off(model):
+        extra["reasoning"] = {"effort": "none"}
+    return extra
+
+
+_OPENROUTER_CLASSES: dict = {}
+
+
+def _openrouter_chat_class(*, reasoning_off: bool, primary: bool):
+    """The ChatOpenAI subclass every OpenRouter client is built from.
+
+    * It classifies its own failures (app/core/model_tiers.py): a 402, 404, 408, 429
+      or 5xx, or a transport error, is raised as TierUnavailable, an OSError, which
+      with_fallbacks hands to the next tier. 402 has no openai-SDK class of its own,
+      so this cannot be done by listing SDK classes. A primary starts a fresh record.
+    * With *reasoning_off* (GPT-6 Luna) it always sends reasoning effort "none" and
+      never reasoning_effort: Luna calls functions on Chat Completions only with
+      reasoning off, and the planner passes reasoning_effort at invoke time, which
+      would override a constructor setting, so the payload is fixed where it is built.
+
+    The class keeps the name ChatOpenAI: callers and tests identify the client by it.
+    """
+    key = (reasoning_off, primary)
+    if key in _OPENROUTER_CLASSES:
+        return _OPENROUTER_CLASSES[key]
+    from langchain_openai import ChatOpenAI as _Base
+
+    from app.core import model_tiers
+
+    def _failed(self, exc):
+        failure = model_tiers.classify(exc, model=self.model_name, provider=OPENROUTER)
+        if failure is None:
+            return None
+        model_tiers.record(failure)
+        return failure
+
+    class ChatOpenAI(_Base):
+        def _get_request_payload(self, input_, *, stop=None, **kwargs):
+            payload = super()._get_request_payload(input_, stop=stop, **kwargs)
+            if reasoning_off:
+                payload.pop("reasoning_effort", None)
+                extra = dict(payload.get("extra_body") or {})
+                extra["reasoning"] = {"effort": "none"}
+                payload["extra_body"] = extra
+            return payload
+
+        def _generate(self, *args, **kwargs):
+            if primary:
+                model_tiers.begin()
+            try:
+                return super()._generate(*args, **kwargs)
+            except Exception as exc:  # noqa: BLE001 - re-raised, classified or as is
+                failure = _failed(self, exc)
+                if failure is None:
+                    raise
+                raise failure from exc
+
+        async def _agenerate(self, *args, **kwargs):
+            if primary:
+                model_tiers.begin()
+            try:
+                return await super()._agenerate(*args, **kwargs)
+            except Exception as exc:  # noqa: BLE001
+                failure = _failed(self, exc)
+                if failure is None:
+                    raise
+                raise failure from exc
+
+    _OPENROUTER_CLASSES[key] = ChatOpenAI
+    return ChatOpenAI
+
+
 def _build_openai_compatible(*, provider, model, temperature, agent: str = "",
-                             reasoning_effort: Optional[str] = None):
+                             reasoning_effort: Optional[str] = None,
+                             fallback: bool = False):
     """Local vLLM/Ollama, hosted OpenAI, and OpenRouter — all OpenAI-spec."""
     from langchain_openai import ChatOpenAI
 
@@ -389,7 +642,7 @@ def _build_openai_compatible(*, provider, model, temperature, agent: str = "",
     kwargs = dict(model=model, temperature=temperature, api_key=api_key, base_url=base_url)
     if provider == OPENROUTER:
         extra_body: dict = {}
-        routing = _openrouter_routing(agent)
+        routing = _openrouter_routing(agent, model, fallback=fallback)
         if routing:
             extra_body["provider"] = routing
         # Same reasoning effort the Groq path sends. Without it OpenRouter used
@@ -397,8 +650,11 @@ def _build_openai_compatible(*, provider, model, temperature, agent: str = "",
         # reasoning (validator: 648 of 780 tokens).
         if reasoning_effort is not None and supports_reasoning(model):
             extra_body["reasoning"] = {"effort": reasoning_effort}
+        if _reasoning_off(model):
+            extra_body["reasoning"] = {"effort": "none"}
         if extra_body:
             kwargs["extra_body"] = extra_body
+        return _openrouter_chat_class(reasoning_off=_reasoning_off(model), primary=not fallback)(**kwargs)
     return ChatOpenAI(**kwargs)
 
 
@@ -480,18 +736,145 @@ def _with_fallback(llm, *, model: str, temperature: float, agent: str,
     if llm is None:
         return None
     if provider == OPENROUTER:
-        # The backup IS OpenRouter. Wrapping an OpenRouter primary in an
-        # OpenRouter fallback buys nothing and costs something: a 429 or an
-        # outage is retried against the provider that just produced it, and the
-        # wrapper changes the returned type, so callers that introspect the
-        # model see RunnableWithFallbacks instead of the chat model. This could
-        # not happen while Groq was the default primary.
-        return llm
+        # The Groq-era backup IS OpenRouter, so it is never attached here: a 429
+        # or an outage would be retried against the provider that just produced
+        # it. The OpenRouter primary gets the next TIER instead (owner decision
+        # 2026-11-01): gpt-oss-120b -> GPT-6 Luna, each pinned to its own
+        # provider allowlist. With allow_fallbacks false, "no listed provider can
+        # serve this" arrives as HTTP 404 or 503 and lands here; with the tier
+        # switched off (AVALOKA_OPENROUTER_FALLBACK_MODEL=none) it reaches the caller.
+        return _with_openrouter_tier(llm, model=model, temperature=temperature, agent=agent)
     try:
         from app.core.model_fallback import attach_fallback
     except Exception:  # noqa: BLE001
         return llm
     return attach_fallback(llm, model, temperature=temperature, agent=(agent or "").lower())
+
+
+def _instrument(llm, *, agent: str, provider: str, model: str):
+    """Record each call's provider, model, tokens, cost and latency on the
+    agent-trace step that made it (app/trace). A no-op outside a graph node, and
+    never fatal: a model that cannot take a callback is returned as built."""
+    if llm is None:
+        return None
+    try:
+        from app.trace.recorder import instrument
+    except Exception:  # noqa: BLE001
+        return llm
+    return instrument(llm, agent=(agent or "").lower(), provider=provider, model=model)
+
+
+#: The last tier, outside OpenRouter (owner ruling 2026-11-02): it answers when
+#: OpenRouter itself cannot -- out of credit (402), an account-level 429, an outage.
+DEFAULT_GROQ_LAST_TIER_MODEL = "openai/gpt-oss-120b"
+
+
+def groq_last_tier_model() -> Optional[str]:
+    """The Groq model at the end of the OpenRouter chain, or None when switched off."""
+    if (os.getenv("AVALOKA_DISABLE_MODEL_FALLBACK") or "").strip().lower() in {"1", "true", "yes"}:
+        return None
+    raw = (_env_first("AVALOKA_GROQ_FALLBACK_MODEL", default=DEFAULT_GROQ_LAST_TIER_MODEL) or "").strip()
+    return None if raw.lower() in ("", "none", "off") else raw
+
+
+def _groq_tier_key() -> Optional[str]:
+    return _env_first("GROQ_API_KEY_PLANNING_AGENT", "GROQ_API_KEY", "GROQ_API_KEY_CODING_AGENT")
+
+
+def openrouter_chain(model: str) -> list:
+    """The tiers behind an OpenRouter primary *model*, in order: (provider, model, armed).
+
+    ``armed`` is False when the tier is configured but cannot be built (no Groq key):
+    the model screen shows it that way rather than hiding it.
+    """
+    chain = []
+    luna = openrouter_fallback_model()
+    if luna and luna != model:
+        chain.append((OPENROUTER, luna, bool(_env_first("OPENROUTER_API_KEY",
+                                                        "INFERENCE_OPENROUTER_API_KEY"))))
+    groq = groq_last_tier_model()
+    if groq:
+        chain.append((GROQ, groq, bool(_groq_tier_key())))
+    return chain
+
+
+def _instrument_tier(llm, *, agent: str, provider: str, model: str, configured_model: str):
+    try:
+        from app.trace.recorder import instrument
+    except Exception:  # noqa: BLE001
+        return llm
+    return instrument(llm, agent=(agent or "").lower(), provider=provider, model=model,
+                      configured_model=configured_model, primary_provider=OPENROUTER)
+
+
+def _with_openrouter_tier(llm, *, model: str, temperature: float, agent: str):
+    """*llm* with the fallback tiers behind it, or *llm* unchanged.
+
+    gpt-oss-120b (OpenRouter, pinned) -> GPT-6 Luna (OpenRouter, pinned) -> gpt-oss-120b
+    (Groq). Each tier that answers in place of *model* stamps the reply with which
+    model answered and why (app/core/model_tiers.py), so the swap is never silent.
+    With no tier armed, the primary's error -- a TierUnavailable naming the reason --
+    reaches the caller.
+    """
+    try:
+        from app.core.model_fallback import _TierCompat, openrouter_failover_exception_types
+    except Exception:  # noqa: BLE001
+        return llm
+    tiers = []
+    for provider, tier_model, armed in openrouter_chain(model):
+        if not armed:
+            continue
+        if provider == OPENROUTER:
+            backup = _build_openai_compatible(provider=OPENROUTER, model=tier_model,
+                                              temperature=temperature, agent=agent, fallback=True)
+        else:
+            backup = _build_groq(model=tier_model, temperature=temperature, api_key=_groq_tier_key(),
+                                 reasoning_effort=None, reasoning_format=None)
+        if backup is not None:
+            # On the agent trace like the primary: a failover shows as the failed
+            # call, then the tier that answered and why (app/trace/recorder.py).
+            backup = _instrument_tier(backup, agent=agent, provider=provider, model=tier_model,
+                                      configured_model=model)
+            tiers.append(_TierCompat(backup, tier_model, primary_model=model,
+                                     primary_provider=OPENROUTER, provider=provider))
+    if not tiers:
+        return llm
+    logger.info("[models] %s: fallback tiers armed (%s -> %s)", agent or model, model,
+                " -> ".join(f"{t.provider}/{t.model}" for t in tiers))
+    from app.core import model_tiers
+
+    return model_tiers.chain(llm, tiers, openrouter_failover_exception_types())
+
+
+def describe_llm_setup() -> dict:
+    """What the model screen shows: each role's provider and model, and the chain behind it.
+
+    No credentials: only whether a tier is armed (its key is present). The answering
+    model of a given reply is reported with the reply itself (ChatResponse.answered_by).
+    """
+    roles = []
+    for role, agent in (("planning", "PLANNER"), ("coding", "CODER"), ("viz", "VIZ")):
+        provider = resolve_provider(role=role, agent=agent)
+        if provider == GROQ:
+            model = os.getenv(f"AVALOKA_{agent}_MODEL") or "openai/gpt-oss-120b"
+        elif provider == AZURE:
+            model = "azure-deployment"
+        else:
+            model = _resolve_model(provider, agent, "large")
+        chain = [{"provider": provider, "model": model, "armed": True,
+                  "providers_only": openrouter_allowlist(model, agent=agent) if provider == OPENROUTER else None}]
+        if provider == OPENROUTER:
+            for tier_provider, tier_model, armed in openrouter_chain(model):
+                chain.append({"provider": tier_provider, "model": tier_model, "armed": armed,
+                              "providers_only": (openrouter_allowlist(tier_model, fallback=True)
+                                                 if tier_provider == OPENROUTER else None)})
+        routing = None
+        if provider == OPENROUTER:
+            routing = {k: v for k, v in (_openrouter_routing(agent, model) or {}).items() if k != "only"}
+        roles.append({"role": role, "agent": agent, "provider": provider, "model": model,
+                      "chain": chain, "routing": routing})
+    return {"roles": roles,
+            "note": "Each reply states which model answered it when a fallback tier stood in."}
 
 
 def build_chat_model(
@@ -562,6 +945,7 @@ def build_chat_model(
                 model,
                 reasoning_effort if (reasoning_effort and supports_reasoning(model)) else "off",
             )
+        llm = _instrument(llm, agent=agent, provider=provider, model=model)
         return _with_fallback(llm, model=model, temperature=temperature, agent=agent, provider=provider)
 
     # ---- non-Groq providers -------------------------------------------------
@@ -586,7 +970,7 @@ def build_chat_model(
 
     if llm is not None:
         if provider == OPENROUTER:
-            routing = _openrouter_routing(agent)
+            routing = _openrouter_routing(agent, model_desc)
             effort = reasoning_effort if (reasoning_effort and supports_reasoning(model_desc)) else "default"
             logger.info("%s LLM: %s/%s (routing=%s, reasoning=%s)",
                         agent, provider, model_desc, routing or "openrouter-default", effort)
@@ -595,4 +979,5 @@ def build_chat_model(
     # model_desc, not model: the Azure branch never assigns `model` because Azure
     # addresses a deployment name rather than a model id, and referencing it here
     # raised UnboundLocalError on that path alone.
+    llm = _instrument(llm, agent=agent, provider=provider, model=model_desc)
     return _with_fallback(llm, model=model_desc, temperature=temperature, agent=agent, provider=provider)

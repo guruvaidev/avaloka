@@ -1,0 +1,53 @@
+{{- /*
+One-shot Job: copy Celery results that live only in Redis into Postgres, then
+give each key a TTL (scripts/ops/backfill_celery_results.py). Off by default.
+
+  helm upgrade ... --set ops.backfillCeleryResults.enabled=true                 # dry run
+  helm upgrade ... --set ops.backfillCeleryResults.enabled=true \
+                   --set ops.backfillCeleryResults.apply=true                   # real run
+
+Named per release revision, so each upgrade that enables it runs it once.
+Read with dig: an install whose values have no `ops` key renders nothing.
+*/ -}}
+{{- $job := dig "backfillCeleryResults" (dict) (.Values.ops | default dict) }}
+{{- if dig "enabled" false $job }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ printf "%s-backfill-celery-results-%d" (include "avaloka.fullname" .) (int .Release.Revision) | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ops-backfill-celery-results
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 604800
+  template:
+    metadata:
+      labels:
+        {{- include "avaloka.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: ops-backfill-celery-results
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      containers:
+        - name: backfill
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["python", "/app/scripts/ops/backfill_celery_results.py"]
+          args:
+            - {{ if dig "apply" false $job }}"--apply"{{ else }}"--dry-run"{{ end }}
+            - "--batch"
+            - {{ dig "batch" 200 $job | int | quote }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "avaloka.fullname" . }}-config
+            - secretRef:
+                name: {{ include "avaloka.secretName" . }}
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+{{- end }}

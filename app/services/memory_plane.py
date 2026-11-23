@@ -37,6 +37,8 @@
 #                                      (default: 6000)
 #   MEMORY_SESSION_HINTS_MAX         – Learned hints kept per session (default: 30)
 #   MEMORY_PAST_QUERIES_MAX          – Past queries sent to the learner LLM (default: 8)
+#   MEMORY_FORGET_LEARNER_WAIT       – Seconds a memory delete waits for running learner
+#                                      threads before deleting (default: 10)
 #
 # Latency design (why a turn used to take 20s here):
 #   * All four stores were re-connected on every request -> now once per process.
@@ -62,7 +64,7 @@ import json
 import logging
 import threading
 import time
-from typing import Callable, Dict, List, Any, Optional, Tuple
+from typing import Callable, Dict, Iterable, List, Any, Optional, Tuple
 from dotenv import load_dotenv
 from cachetools import TTLCache
 
@@ -70,6 +72,10 @@ from app.core.inference import build_chat_model
 from langchain_core.messages import SystemMessage, HumanMessage
 from app.graph.etl_state import ETLState
 from app.services.memory_runtime import validate_memory_runtime_config
+from app.services.memory_actions import (
+    describes_write_action, drop_write_actions, is_write_action_turn, strip_write_actions,
+)
+from app.services import memory_scope as scope_rule
 from app.core.model_config import resolve as resolve_model
 from app.core.model_fallback import attach_fallback  # noqa: F401
 
@@ -122,6 +128,9 @@ _HINTS_MAX_CHARS          = int(os.environ.get("MEMORY_HINTS_MAX_CHARS", "6000")
 _SESSION_HINTS_MAX        = int(os.environ.get("MEMORY_SESSION_HINTS_MAX", "30"))
 _PAST_QUERIES_MAX         = int(os.environ.get("MEMORY_PAST_QUERIES_MAX", "8"))
 _PAST_QUERY_MAX_CHARS     = 500
+# How long deleting a thread's or user's memory waits for learner threads
+# still running, so one cannot write back what was just deleted.
+_FORGET_LEARNER_WAIT      = float(os.environ.get("MEMORY_FORGET_LEARNER_WAIT", "10.0"))
 
 
 # ---------------------------------------------------------------------------
@@ -225,6 +234,49 @@ def _memory_scope(user_id: str, session_id: str) -> str:
     if user_id and user_id != "default":
         return user_id
     return session_id
+
+
+def _thread_scope(state: Optional[Dict], session_id: str) -> str:
+    """The thread a turn belongs to. Learned hints, past queries and explicit
+    preferences are kept per thread (app/services/memory_scope.py). A caller
+    with no thread (CLI, tests, the 1.x routes) is its own thread: the session."""
+    thread = str((state or {}).get("thread_id") or "").strip()
+    return thread or session_id
+
+
+_UNKNOWN_DATASETS = ("", "unknown", "unknown_dataset")
+
+
+def _dataset_scope(state: Optional[Dict], dataset_id: Optional[str]) -> Optional[str]:
+    """What identifies "the same dataset" for domain facts, or None when it is
+    not known (then no fact crosses threads). A database table is the same
+    dataset whichever thread or upload session opened it."""
+    state = state or {}
+    table = str(state.get("active_db_source_table") or "").strip()
+    if table:
+        conn = state.get("active_db_customer_id") or state.get("connection_id") or ""
+        return f"db:{conn}:{table}"
+    for candidate in (state.get("dataset_id"), dataset_id):
+        candidate = str(candidate or "").strip()
+        if candidate not in _UNKNOWN_DATASETS:
+            return candidate
+    return None
+
+
+def _known_columns(state: Optional[Dict]) -> Tuple[str, ...]:
+    """The dataset's column names, where the state has them: an item that names
+    one is about a question, not a style (memory_scope.classify)."""
+    state = state or {}
+    cols = state.get("uploaded_csv_columns")
+    if isinstance(cols, str):
+        try:
+            cols = json.loads(cols)
+        except ValueError:
+            cols = None
+    if not isinstance(cols, (list, tuple)):
+        schema = state.get("schema")
+        cols = list(schema.keys()) if isinstance(schema, dict) else []
+    return tuple(str(c) for c in cols if isinstance(c, str) and c)
 
 
 def _k_ctxmem_hints(session_id: str) -> str:
@@ -575,14 +627,25 @@ If the query is too simple to extract anything meaningful, return {"new_hints": 
             logger.error(f"Failed to dynamically extract memory context: {e}")
             return {}
 
-    def _artifact_hint(self, query: str, user_id: str) -> Tuple[bool, Optional[str]]:
+    def _artifact_hint(self, query: str, user_id: str,
+                       thread: Optional[str] = None) -> Tuple[bool, Optional[str]]:
         """Layer 3: (prior_artifact_found, hint). Surfaces metadata from prior
-        runs so the planner can reuse chart URLs / metrics / outputs."""
+        runs so the planner can reuse chart URLs / metrics / outputs.
+
+        Only an artifact this thread produced: the row is keyed by the query
+        text, so the same question asked in another thread found that thread's
+        output file (memory_scope). Rows record the thread that made them;
+        older rows record only the session, which is the thread for callers
+        that have no thread id, and is no thread at all otherwise."""
         if not self.postgres.check_artifact_exists(query, user_id):
             return False, None
         prior_meta = self.postgres.get_artifact(query, user_id)
         if not prior_meta:
             return True, None
+        if thread is not None and isinstance(prior_meta, dict):
+            owner = prior_meta.get("thread_id") or prior_meta.get("session")
+            if not owner or str(owner) != thread:
+                return False, None
         hint_parts = []
         if prior_meta.get("status"):
             hint_parts.append(f"status={prior_meta['status']}")
@@ -638,11 +701,19 @@ If the query is too simple to extract anything meaningful, return {"new_hints": 
 
     def _learn_in_background(self, query: str, past_queries: List[str],
                              session_id: str, memory_scope: str,
-                             already_surfaced: Tuple[str, ...] = ()) -> None:
+                             already_surfaced: Tuple[str, ...] = (),
+                             dataset: Optional[str] = None,
+                             columns: Tuple[str, ...] = ()) -> None:
         """LLM extraction + Milvus/Chroma/Redis writes. Never raises.
 
         Runs off the request path: what is learned here is served from the
-        NEXT turn of this session, as session history.
+        NEXT turn of this thread (`session_id` is the thread scope), as
+        session history.
+
+        Each hint and each sentence of the signature is classified as it is
+        written (memory_scope.classify) and filed under the key of its scope:
+        a preference under the user, a domain fact under the dataset, anything
+        else under this thread. Other threads read only the first two.
 
         `already_surfaced` is what this turn's retrieval returned. A hint the
         LLM merely repeats from it is not added to session history: there it
@@ -653,8 +724,10 @@ If the query is too simple to extract anything meaningful, return {"new_hints": 
         start = time.monotonic()
         try:
             extracted = self._extract_context_with_llm(query, past_queries) or {}
+            # A write or transfer is never learned as a preference (memory_actions).
             new_hints = [_compact_hint(h.strip()) for h in (extracted.get("new_hints") or [])
-                         if isinstance(h, str) and h.strip()][:10]
+                         if isinstance(h, str) and h.strip()
+                         and not describes_write_action(h)][:10]
             added = False
             for hint in new_hints:
                 with self._store_lock:
@@ -672,16 +745,26 @@ If the query is too simple to extract anything meaningful, return {"new_hints": 
                         hints[:] = old + hints[-_SESSION_HINTS_MAX:]
                 if not self._store_ready.get("milvus"):
                     continue  # Milvus not connected: keep the hint in session memory only
+                key = scope_rule.storage_key(scope_rule.classify(hint, columns),
+                                             memory_scope, session_id, dataset)
                 try:
-                    self.milvus.insert_insight(memory_scope, hint, "memory_llm", vector=self._embed(hint))
+                    self.milvus.insert_insight(key, hint, "memory_llm", vector=self._embed(hint))
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("[memory] Milvus insert failed: %s", exc)
-            new_sig = extracted.get("logic_signature")
+            new_sig = strip_write_actions(extracted.get("logic_signature"))
             if new_sig and self._store_ready.get("chroma"):
-                try:
-                    self.chroma.update_user_signature(memory_scope, new_sig)
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("[memory] signature update failed: %s", exc)
+                # A signature mixes style ("concise answers") with what this
+                # thread asked for ("Return the work_type with ..."): only the
+                # style is the user's.
+                pref_sig, thread_sig = scope_rule.split_by_kind(new_sig, columns)
+                for key, part in ((scope_rule.preference_key(memory_scope), pref_sig),
+                                  (scope_rule.thread_key(memory_scope, session_id), thread_sig)):
+                    if not part:
+                        continue
+                    try:
+                        self.chroma.update_user_signature(key, part)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("[memory] signature update failed: %s", exc)
             if added:
                 self._persist_session_memory(session_id)
             logger.info("[memory] background learning %.2fs: %d new hints",
@@ -709,6 +792,14 @@ If the query is too simple to extract anything meaningful, return {"new_hints": 
         # Cross-session tiers (Chroma L2, Milvus L4) key off this rather than the
         # session, so a returning user reaches what an earlier session learned.
         memory_scope = _memory_scope(user_id, session_id)
+        # ...but only what is not specific to the thread that learned it
+        # (memory_scope.py): this thread's own memory, the user's preferences,
+        # and facts about this dataset. The in-process stores below are kept
+        # per thread; `session_id` names the thread from here on.
+        session_id = _thread_scope(state, session_id)
+        dataset = _dataset_scope(state, dataset_id)
+        columns = _known_columns(state)
+        readable = scope_rule.readable_keys(memory_scope, session_id, dataset)
         timings: Dict[str, float] = {}
         t_start = time.monotonic()
         # The stages share one budget that ends before the breaker does, so
@@ -775,17 +866,27 @@ If the query is too simple to extract anything meaningful, return {"new_hints": 
         if ok("redis"):
             run("hydrate", lambda: self._hydrate_session_memory(session_id))
 
+        # A turn that is part of a transfer or other write is neither learned
+        # from nor kept as a past query: the learner must never see a write as
+        # something the user prefers (memory_actions).
+        write_turn = is_write_action_turn(query, state)
         with self._store_lock:
-            past_queries = list(self._past_queries_store.get(session_id, []))
+            past_queries = [q for q in self._past_queries_store.get(session_id, [])
+                            if not describes_write_action(q)]
             # Bounded: the list was copied and grown on every turn, forever.
-            self._past_queries_store[session_id] = (past_queries + [query])[-_PAST_QUERIES_MAX * 2:]
+            self._past_queries_store[session_id] = (
+                past_queries + ([] if write_turn else [query]))[-_PAST_QUERIES_MAX * 2:]
 
         with self._store_lock:
-            accumulated_hints = list(self._session_hints_store.get(session_id, []))
+            # Learned before this fix, or explicitly asked for: a write is
+            # still never served (memory_actions).
+            accumulated_hints = drop_write_actions(self._session_hints_store.get(session_id, []))
         # Provenance buckets for the top-3 contract (see _compose_top_hints).
         tiered_hints: Dict[str, List[str]] = {"session": list(accumulated_hints)}
 
         def _add_hint(tier: str, hint: Optional[str]) -> None:
+            if tier != "domain" and describes_write_action(hint):
+                return
             if hint and hint not in accumulated_hints:
                 accumulated_hints.append(hint)
                 tiered_hints.setdefault(tier, []).append(hint)
@@ -793,15 +894,20 @@ If the query is too simple to extract anything meaningful, return {"new_hints": 
         logic_sig = _DEFAULT_STYLE_HINT
 
         # Layer 3: prior artifacts for this exact query.
-        found, artifact_hint = (run("artifact", lambda: self._artifact_hint(query, user_id),
+        found, artifact_hint = (run("artifact", lambda: self._artifact_hint(query, user_id, session_id),
                                     default=(False, None))
                                 if ok("postgres") else (False, None))
         prior_artifact_found = bool(found)
         _add_hint("artifact", artifact_hint)
 
-        # Layer 1: semantic schema cache; MCP hot-load only for database sources.
-        schema_info = (run("schema_cache", lambda: self.redis.search_schema_semantically(user_id, query))
-                       if ok("redis") else None)
+        # Layer 1: the schema of THIS dataset; MCP hot-load only for database
+        # sources. The cache holds every dataset the user has opened, and a
+        # search across all of them handed one dataset's schema to another's
+        # thread, so with no known dataset there is no schema hint.
+        known_dataset = dataset_id not in _UNKNOWN_DATASETS
+        schema_info = (run("schema_cache", lambda: self.redis.search_schema_semantically(
+                           user_id, query, dataset_id=dataset_id))
+                       if known_dataset and ok("redis") else None)
         if schema_info:
             _add_hint("domain", f"Domain insight: {schema_info}")
         elif (dataset_id and dataset_id not in ("unknown", "unknown_dataset")
@@ -810,29 +916,39 @@ If the query is too simple to extract anything meaningful, return {"new_hints": 
                                     lambda: self._hot_load_schema(user_id, dataset_id, state),
                                     timeout=_MCP_SCHEMA_TIMEOUT))
 
-        # Layer 2: style signature. User-scoped first, legacy session-scoped
-        # second, so signatures written before user scoping are not stranded.
+        # Layer 2: style signature -- the user's style preferences, then what
+        # this thread's own turns added. Signatures stored before the scope
+        # rule are keyed by the bare user or session and say nothing about the
+        # thread they came from; they are not read (memory_scope.py).
         def _signature():
-            sig = self.chroma.get_user_signature(memory_scope)
-            if not sig and memory_scope != session_id:
-                sig = self.chroma.get_user_signature(session_id)
-            return sig
+            parts = [self.chroma.get_user_signature(scope_rule.preference_key(memory_scope)),
+                     self.chroma.get_user_signature(scope_rule.thread_key(memory_scope, session_id))]
+            # The same style is learned again on many turns; say it once.
+            sentences = scope_rule.split_sentences(" ".join(p for p in parts if p))
+            return " ".join(dict.fromkeys(sentences)) or None
 
         user_sig = run("signature", _signature) if ok("chroma") else None
+        # The stored signature is merged LLM text; what it says about writes
+        # or transfers is dropped, the analysis style it describes is kept.
+        user_sig = strip_write_actions(user_sig)
         if user_sig:
             logic_sig = user_sig
 
-        # Layer 4: similar past insights. Embed the query ONCE. Legacy rows are
-        # keyed by session, hence the second read.
+        # Layer 4: similar past insights. Embed the query ONCE. The query is
+        # embedded raw, so the nearest rows are whatever earlier questions most
+        # resembled this one -- across every thread, before the scope rule.
+        # Now only the keys this thread may read are searched, each on its own
+        # so this thread's hints cannot crowd out a preference: its own, the
+        # user's preferences, and facts about this dataset. Rows written before
+        # the rule (bare user or session key) are not read.
         query_vec = (run("embed", lambda: self._embed(query), timeout=_EMBED_TIMEOUT)
                      if ok("milvus") else None)
 
         def _similar():
-            rows = self.milvus.search_similar_insights(
-                memory_scope, query_vector=query_vec, top_k=_MILVUS_TOP_K)
-            if not rows and memory_scope != session_id:
-                rows = self.milvus.search_similar_insights(
-                    session_id, query_vector=query_vec, top_k=_MILVUS_TOP_K)
+            rows: List[Any] = []
+            for key in readable:
+                rows.extend(self.milvus.search_similar_insights(
+                    key, query_vector=query_vec, top_k=_MILVUS_TOP_K) or [])
             return rows
 
         similar_rows = run("milvus", _similar, default=[]) if ok("milvus") else []
@@ -845,7 +961,7 @@ If the query is too simple to extract anything meaningful, return {"new_hints": 
         top_3_hints = self._compose_top_hints(session_id, tiered_hints)
 
         # Learning runs after we return; its hints are served from next turn.
-        if self.llm and _BACKGROUND_LEARNING:
+        if self.llm and _BACKGROUND_LEARNING and not write_turn:
             with self._store_lock:
                 # In place: _learning is the class-level set wait_for_learning reads.
                 for finished in [t for t in self._learning if t.ident and not t.is_alive()]:
@@ -859,7 +975,7 @@ If the query is too simple to extract anything meaningful, return {"new_hints": 
                 learner = threading.Thread(
                     target=self._learn_in_background,
                     args=(query, past_queries, session_id, memory_scope,
-                          tuple(accumulated_hints)),
+                          tuple(accumulated_hints), dataset, columns),
                     name="memory-learn", daemon=True,
                 )
                 # Registered before it starts, so a caller that waits straight
@@ -907,7 +1023,9 @@ If the query is too simple to extract anything meaningful, return {"new_hints": 
     # ------------------------------------------------------------------
 
     def store_user_preference(self, preference: str, session_id: str = "default",
-                              scope_id: Optional[str] = None) -> bool:
+                              scope_id: Optional[str] = None,
+                              dataset: Optional[str] = None,
+                              columns: Tuple[str, ...] = ()) -> bool:
         """
         Persist an explicitly stated user preference (e.g. "The user's favorite
         column is 'reordered'") so future retrievals surface it as a hint.
@@ -918,6 +1036,10 @@ If the query is too simple to extract anything meaningful, return {"new_hints": 
         Layer 4 Milvus write is best-effort in a background thread so a slow or
         down Milvus can never block the planner turn. Returns True when the
         session-store write succeeded — the tier retrieval actually reads.
+
+        `session_id` is the thread scope. Other threads see the preference only
+        if it is one (memory_scope.classify): "remember: Return the work_type
+        with ..." is filed under this thread like any task instruction.
         """
         preference = (preference or "").strip()
         if not preference:
@@ -948,8 +1070,10 @@ If the query is too simple to extract anything meaningful, return {"new_hints": 
             self._persist_session_memory(session_id)
 
         if is_new:
+            key = scope_rule.storage_key(scope_rule.classify(preference, columns),
+                                         scope_id or session_id, session_id, dataset)
             _spawn(self._persist_preference_to_milvus, "memory-pref-milvus",
-                   (scope_id or session_id, preference))
+                   (key, preference))
 
         if stored:
             logger.info(f"🧠 AVALOKA CONTEXT MEMORY STORED (session={session_id}): {preference}")
@@ -958,14 +1082,122 @@ If the query is too simple to extract anything meaningful, return {"new_hints": 
     def _persist_preference_to_milvus(self, scope_id: str, preference: str) -> None:
         """Best-effort durable write for an explicit preference. Never raises.
 
-        scope_id is the memory scope (user where known, session otherwise): an
-        explicit preference is something a user expects to still hold next
-        time they log in.
+        scope_id is the key from memory_scope.storage_key: a preference is filed
+        under the user (it should still hold next time they log in), anything
+        else under its thread.
         """
         try:
             self.milvus.insert_insight(scope_id, preference, "user_explicit", vector=self._embed(preference))
         except Exception as e:
             logger.error(f"Failed to persist user preference to Milvus: {e}")
+
+    # ------------------------------------------------------------------
+    # Deletion (forget)
+    # ------------------------------------------------------------------
+    # Memory is filed by the keys of memory_scope.py, so deleting it is a key
+    # operation in each store: Milvus insights and Chroma signatures by key or
+    # id, the Redis write-through copy and the in-process stores by thread.
+    # Each method returns {store: rows removed, or "failed: <error type>"} and
+    # never raises: it runs inside thread and dataset deletion, which must not
+    # fail because a memory store is down. A failure is logged with the store
+    # named, so it can be retried. Only ids and counts are logged, never text.
+
+    def _forget_in(self, store: str, fn: Callable[[], Any], result: Dict[str, Any]) -> None:
+        try:
+            if not self._connect_store(store):
+                raise RuntimeError(f"{store} is not connected")
+            result[store] = fn()
+        except Exception as exc:  # noqa: BLE001
+            result[store] = f"failed: {type(exc).__name__}"
+            logger.warning("[memory] forget: %s not cleared (%s)", store, exc)
+
+    def _forget_threads_local(self, thread_ids: Iterable[str], result: Dict[str, Any]) -> None:
+        """Drop these threads' hints, explicit preferences and past queries
+        (all keyed by thread): the in-process copy here, which needs no store,
+        then the Redis write-through copy. Other API processes keep their own
+        in-process copy until it expires (24h); a deleted thread gets no turn
+        that could read or write it back."""
+        ids = [str(t) for t in thread_ids if t]
+        with self._store_lock:
+            for tid in ids:
+                for store in (self._session_hints_store, self._session_preferences_store,
+                              self._past_queries_store):
+                    store.pop(tid, None)
+                self._hydration_failed.discard(tid)
+
+        def _redis() -> int:
+            for tid in ids:
+                self.redis.delete_key(_k_ctxmem_hints(tid))
+                self.redis.delete_key(_k_ctxmem_prefs(tid))
+            return len(ids)
+
+        self._forget_in("redis", _redis, result)
+
+    def forget_thread(self, user_id: str, thread_id: str,
+                      session_id: Optional[str] = None) -> Dict[str, Any]:
+        """Delete everything one thread learned: its task hints and signature
+        parts (Milvus, Chroma), and its session hints, explicit preferences and
+        past queries (Redis, in-process). What it filed as the user's
+        preference or a dataset fact is shared with the user's other threads
+        and stays until the user or the dataset is deleted."""
+        thread_id = str(thread_id or "").strip()
+        if not thread_id:
+            return {}
+        scope = _memory_scope(user_id, session_id or thread_id)
+        # A learner still running for this thread would write after the delete.
+        self.wait_for_learning(timeout=_FORGET_LEARNER_WAIT)
+        result: Dict[str, Any] = {}
+        self._forget_in("milvus", lambda: self.milvus.delete_thread(scope, thread_id), result)
+        self._forget_in("chroma", lambda: self.chroma.delete_thread(scope, thread_id), result)
+        self._forget_threads_local([thread_id], result)
+        logger.info("[memory] forgot thread %s: %s", thread_id, result)
+        return result
+
+    def forget_user(self, user_id: str, thread_ids: Iterable[str] = (),
+                    session_ids: Iterable[str] = ()) -> Dict[str, Any]:
+        """Delete all of a user's memory: every Milvus insight and Chroma
+        signature filed under the user (threads, preferences, dataset facts,
+        and rows written before the thread scope under the bare user), rows
+        filed under the user's session ids (before user scoping; execution
+        insights still are), and the Redis/in-process copies of the given
+        threads and sessions."""
+        user_id = str(user_id or "").strip()
+        if not user_id or user_id == "default":
+            return {}
+        sessions = [str(s) for s in session_ids if s]
+        self.wait_for_learning(timeout=_FORGET_LEARNER_WAIT)
+        result: Dict[str, Any] = {}
+        self._forget_in("milvus", lambda: self.milvus.delete_user(user_id, sessions), result)
+        self._forget_in("chroma", lambda: self.chroma.delete_user(user_id, sessions), result)
+        self._forget_threads_local(list(thread_ids) + sessions, result)
+        logger.info("[memory] forgot user %s: %s", user_id, result)
+        return result
+
+    def forget_dataset(self, user_id: str, dataset_id: str) -> Dict[str, Any]:
+        """Delete the facts learned about one of the user's datasets."""
+        user_id, dataset_id = str(user_id or "").strip(), str(dataset_id or "").strip()
+        if not user_id or user_id == "default" or not dataset_id:
+            return {}
+        result: Dict[str, Any] = {}
+        self._forget_in("milvus", lambda: self.milvus.delete_keys(
+            [scope_rule.dataset_key(user_id, dataset_id)]), result)
+        logger.info("[memory] forgot dataset %s: %s", dataset_id, result)
+        return result
+
+    def forget_items(self, user_id: str, milvus_ids: Iterable[int] = (),
+                     chroma_ids: Iterable[str] = ()) -> Dict[str, Any]:
+        """Delete single items by id -- only those that belong to the user."""
+        user_id = str(user_id or "").strip()
+        if not user_id or user_id == "default":
+            return {}
+        result: Dict[str, Any] = {}
+        milvus_ids, chroma_ids = list(milvus_ids), list(chroma_ids)
+        if milvus_ids:
+            self._forget_in("milvus", lambda: self.milvus.delete_by_ids(milvus_ids, user_id), result)
+        if chroma_ids:
+            self._forget_in("chroma", lambda: self.chroma.delete_by_ids(chroma_ids, user_id), result)
+        logger.info("[memory] forgot items of user %s: %s", user_id, result)
+        return result
 
     # ------------------------------------------------------------------
     # Durable session memory (Redis write-through)
@@ -1074,7 +1306,8 @@ If the query is too simple to extract anything meaningful, return {"new_hints": 
         hints — or a flat list, treated entirely as session history.
         """
         tiered = hints if isinstance(hints, dict) else {"session": list(hints)}
-        prefs = list(self._session_preferences_store.get(session_id, []))[-limit:]
+        # A preference to write or move data never takes a slot (memory_actions).
+        prefs = drop_write_actions(self._session_preferences_store.get(session_id, []))[-limit:]
         slots = limit - len(prefs)
         if slots <= 0:
             return prefs
@@ -1102,9 +1335,11 @@ If the query is too simple to extract anything meaningful, return {"new_hints": 
         If it is exceeded, returns a payload flagged unavailable that carries only
         what this process already holds, so LangGraph nodes are never blocked.
         """
+        thread = _thread_scope(state, session_id)
+
         def _fallback() -> Dict:
             """The stores could not be consulted. What this process already
-            holds for the session -- explicit preferences above all -- needs no
+            holds for the thread -- explicit preferences above all -- needs no
             store, so it is still served."""
             held: List[str] = []
             top: List[str] = []
@@ -1112,8 +1347,8 @@ If the query is too simple to extract anything meaningful, return {"new_hints": 
             # lock, and the breaker must not then stall on it too.
             if self._store_lock.acquire(timeout=0.5):
                 try:
-                    held = list(self._session_hints_store.get(session_id, []))
-                    top = self._compose_top_hints(session_id, held)
+                    held = drop_write_actions(self._session_hints_store.get(thread, []))
+                    top = self._compose_top_hints(thread, held)
                 except Exception as exc:  # noqa: BLE001 - breaker must never raise
                     logger.warning("[memory] could not read in-process memory: %s", exc)
                     held, top = [], []
@@ -1200,6 +1435,33 @@ def store_user_preference(preference: str, state: ETLState) -> bool:
     """
     session_id = (state or {}).get("session_id", "default")
     user_id = (state or {}).get("user_id", "default")
+    data_source = (state or {}).get("data_source_location", "")
     return _orchestrator.store_user_preference(
-        preference, session_id, scope_id=_memory_scope(user_id, session_id)
+        preference, _thread_scope(state, session_id),
+        scope_id=_memory_scope(user_id, session_id),
+        dataset=_dataset_scope(state, os.path.basename(data_source) if data_source else None),
+        columns=_known_columns(state),
     )
+
+
+def forget_thread_memory(user_id: str, thread_id: str,
+                         session_id: Optional[str] = None) -> Dict[str, Any]:
+    """Delete what a thread learned (thread deletion). Never raises."""
+    return _orchestrator.forget_thread(user_id, thread_id, session_id)
+
+
+def forget_user_memory(user_id: str, thread_ids: Iterable[str] = (),
+                       session_ids: Iterable[str] = ()) -> Dict[str, Any]:
+    """Delete all of a user's memory (account deletion). Never raises."""
+    return _orchestrator.forget_user(user_id, thread_ids, session_ids)
+
+
+def forget_dataset_memory(user_id: str, dataset_id: str) -> Dict[str, Any]:
+    """Delete the facts learned about a dataset (dataset deletion). Never raises."""
+    return _orchestrator.forget_dataset(user_id, dataset_id)
+
+
+def forget_memory_items(user_id: str, milvus_ids: Iterable[int] = (),
+                        chroma_ids: Iterable[str] = ()) -> Dict[str, Any]:
+    """Delete single memory items of a user by id. Never raises."""
+    return _orchestrator.forget_items(user_id, milvus_ids, chroma_ids)

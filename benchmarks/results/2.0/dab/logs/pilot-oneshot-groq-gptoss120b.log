@@ -1,0 +1,37 @@
+
+Estimated spend (before running):
+
+| Config | Model | Calls | $ low | $ high | price source |
+| --- | --- | --- | --- | --- | --- |
+| dab_avaloka_native | `groq/openai/gpt-oss-120b` | 3 | $0.0000 | $0.0000 | unpriced |
+
+**Total: $0.0000 – $0.0000 over 3 calls.**
+
+The high figure assumes every answer uses its full `max_tokens` allowance, so it is a ceiling the provider cannot exceed for these configs — not a forecast.
+
+> ⚠️  UNPRICED, and therefore **excluded from both totals**: `dab_avaloka_native`. No catalog quote exists for these models, so their real spend is unknown — it is not zero.
+
+Running suite 'dab': 3 tasks x 1 configs
+config dab_avaloka_native (sut=avaloka_dab, sampling=entire_dataset, llm=groq/openai/gpt-oss-120b) over 3 tasks x 1 trials
+  [dab_avaloka_native] dab:bookreview:1 trial 1/1 ok q=0.000 $0.0008 8.14s
+  [dab_avaloka_native] dab:bookreview:2 trial 1/1 ok q=0.000 $0.0014 8.76s
+  [dab_avaloka_native] dab:bookreview:3 trial 1/1 ok q=0.000 $0.0009 5.61s
+
+Observed spend: $0.0031 over 3 calls
+
+# Scorecard — suite `dab` (harness 0.2.0)
+
+- Observed spend: **$0.0031** over 3 calls · ceiling $1.00
+
+## Config `dab_avaloka_native`
+
+- sut: `avaloka_dab` · llm: `groq/openai/gpt-oss-120b` · sampling: `entire_dataset` · env: `dab-local` · agents: `full_swarm` · trials: 1 · internet: False
+
+| Task | Pass@1 | Best-of-N | Quality (mean) | Cost $ (mean) | Latency s (mean) | Data scanned (mean) | Errors | Price src |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| dab:bookreview:1 | 0.00 | 0.00 | 0 | 0.0008118 | 8.143 | — | — | `operator_rate` |
+| dab:bookreview:2 | 0.00 | 0.00 | 0 | 0.001442 | 8.757 | — | — | `operator_rate` |
+| dab:bookreview:3 | 0.00 | 0.00 | 0 | 0.0008509 | 5.608 | — | — | `operator_rate` |
+
+
+Wrote /private/tmp/claude-505/-Users-leelakrishna-code-ki-avaloka-dev/523f2974-7c63-4383-8c84-7340f46500b7/scratchpad/results/dab/pilot-oneshot-groq-gptoss120b/dab.json, /private/tmp/claude-505/-Users-leelakrishna-code-ki-avaloka-dev/523f2974-7c63-4383-8c84-7340f46500b7/scratchpad/results/dab/pilot-oneshot-groq-gptoss120b/dab.md, and /private/tmp/claude-505/-Users-leelakrishna-code-ki-avaloka-dev/523f2974-7c63-4383-8c84-7340f46500b7/scratchpad/results/dab/pilot-oneshot-groq-gptoss120b/dab.trials.jsonl

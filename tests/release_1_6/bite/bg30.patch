@@ -1,0 +1,20 @@
+diff --git a/ui/src/components/dashboard/AutoInsightsModal.tsx b/ui/src/components/dashboard/AutoInsightsModal.tsx
+index 345e6f4b..cd629d4b 100644
+--- a/ui/src/components/dashboard/AutoInsightsModal.tsx
++++ b/ui/src/components/dashboard/AutoInsightsModal.tsx
+@@ -306,7 +306,6 @@ function InsightCard({ slide, config, outputRows, samples, defaultView = "chart"
+     </div>
+     <ChartScopeStrip dataset={config?.dataset} />
+     <div ref={setPlotNode} className="ai-plot">{view === 'table' && tableRows?.length ? <div className="ai-data-table"><AnalysisOutputTable rows={tableRows} title="Output" filename={`${slugify(slide.title || 'output')}.csv`} /></div> : <DynamicChart key={chartId} slide={slide} height={plotHeight} stackPresentation chartKey={chartId} />}</div>
+-    <ChartNavigation index={index} total={total} onSelect={onSelect} />
+   </section>;
+ }
+ 
+@@ -594,6 +593,7 @@ function AutoInsightsModalInner({ open, onOpenChange, config, status, datasetNam
+           {isPending || !activeEntry || !activeSlide ? <div className="ai-surface ai-empty-card">{isPending ? "Generating insights…" : "No auto-insights available for this dataset"}</div> : <>
+             <InsightCard slide={activeSlide} config={activeEntry.group.config} outputRows={activeEntry.group.outputRows} samples={activeEntry.group.samples} defaultView={defaultView} chartId={chartIdOf(activeSlide, activeEntry.group.id, activeEntry.si)} index={index} total={total} onSelect={setIndex} />
+             <ChartStatsRail config={activeEntry.group.config} slide={activeSlide} onAllColumns={() => setLayout("columns")} />
++            <ChartNavigation index={index} total={total} onSelect={setIndex} />
+           </>}
+         </div>
+       )}

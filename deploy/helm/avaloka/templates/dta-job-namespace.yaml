@@ -1,0 +1,13 @@
+{{- if .Values.config.createDtaJobNamespace }}
+{{- $jobNs := include "avaloka.dtaJobNamespace" . }}
+{{- if ne $jobNs .Release.Namespace }}
+# Where the data transfer agent's KubeRay RayJobs and their per-job credential
+# Secrets live (see rbac.yaml, "-dta-jobs").
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ $jobNs }}
+  labels:
+    {{- include "avaloka.labels" . | nindent 4 }}
+{{- end }}
+{{- end }}

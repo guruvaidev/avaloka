@@ -1,0 +1,1404 @@
+{
+ "rw7/messy_xlsx": {
+  "dataset": {
+   "total_rows": 20000,
+   "n_columns": 8
+  },
+  "charts": [
+   {
+    "id": "llm_0",
+    "type": "bar",
+    "title": "UK dominates sales volume",
+    "llm_title": "UK dominates sales volume",
+    "insight": "United Kingdom drives the vast majority of revenue, so focusing on this market will capture most of the business impact. Total Quantity by Country: the largest groups are United Kingdom (138,377, 89.1%), Norway (3,582, 2.3%), EIRE (3,436, 2.2%) in the full file. The top 3 of 16 make up 94% of the total.",
+    "reason": "United Kingdom drives the vast majority of revenue, so focusing on this market will capture most of the business impact. Total Quantity by Country: the largest groups are United Kingdom (138,377, 89.1%), Norway (3,582, 2.3%), EIRE (3,436, 2.2%) in the full file. The top 3 of 16 make up 94% of the total.",
+    "headline": "United Kingdom drives the vast majority of revenue, so focusing on this market will capture most of the business impact.",
+    "insight_source": "llm",
+    "llm_insight": "United Kingdom drives the vast majority of revenue, so focusing on this market will capture most of the business impact.",
+    "insight_facts": "Total Quantity by Country: the largest groups are United Kingdom (138,377, 89.1%), Norway (3,582, 2.3%), EIRE (3,436, 2.2%) in the full file. The top 3 of 16 make up 94% of the total.",
+    "derived_data": {}
+   },
+   {
+    "id": "llm_1",
+    "type": "scatter",
+    "title": "Quantity vs UnitPrice",
+    "llm_title": "Price vs quantity inverse relationship",
+    "insight": "UnitPrice and Quantity show no meaningful linear relationship (r = -0.00) across 20,000 rows in the full file: knowing one tells you almost nothing about the other. 394 extreme points are left off the plot so the rest is readable; the correlation uses every row.",
+    "reason": "UnitPrice and Quantity show no meaningful linear relationship (r = -0.00) across 20,000 rows in the full file: knowing one tells you almost nothing about the other. 394 extreme points are left off the plot so the rest is readable; the correlation uses every row.",
+    "headline": null,
+    "insight_source": "data",
+    "llm_insight": "Higher unit prices are associated with lower purchase quantities, indicating customers buy fewer items when they cost more.",
+    "insight_facts": "UnitPrice and Quantity show no meaningful linear relationship (r = -0.00) across 20,000 rows in the full file: knowing one tells you almost nothing about the other. 394 extreme points are left off the plot so the rest is readable; the correlation uses every row.",
+    "derived_data": {
+     "llm_title_replaced": "Price vs quantity inverse relationship"
+    }
+   },
+   {
+    "id": "llm_2",
+    "type": "line",
+    "title": "Mid‑week sales peak",
+    "llm_title": "Mid‑week sales peak",
+    "insight": "Daily sales rise toward the middle of the week before tapering off, suggesting mid‑week promotions could be effective. All dated rows in the full file fall in 2010-12, so there is no trend to show.",
+    "reason": "Daily sales rise toward the middle of the week before tapering off, suggesting mid‑week promotions could be effective. All dated rows in the full file fall in 2010-12, so there is no trend to show.",
+    "headline": "Daily sales rise toward the middle of the week before tapering off, suggesting mid‑week promotions could be effective.",
+    "insight_source": "llm",
+    "llm_insight": "Daily sales rise toward the middle of the week before tapering off, suggesting mid‑week promotions could be effective.",
+    "insight_facts": "All dated rows in the full file fall in 2010-12, so there is no trend to show.",
+    "derived_data": {}
+   },
+   {
+    "id": "llm_3",
+    "type": "histogram",
+    "title": "Quantity distribution with returns",
+    "llm_title": "Quantity distribution with returns",
+    "insight": "Quantity values are heavily skewed with many extreme negatives, reflecting a large volume of returns that could distort sales analysis. Quantity ranges from -9,360 to 2,880 (median 2, mean 7.77) across 20,000 rows in the full file. It is left-skewed (skewness -80.99): a few small values pull the mean below the median. The lowest 200 values (below -1.01, down to -9,360) are grouped in the first bar so the rest of the distribution is readable. 309 values are negative, which may be data-entry errors worth checking.",
+    "reason": "Quantity values are heavily skewed with many extreme negatives, reflecting a large volume of returns that could distort sales analysis. Quantity ranges from -9,360 to 2,880 (median 2, mean 7.77) across 20,000 rows in the full file. It is left-skewed (skewness -80.99): a few small values pull the mean below the median. The lowest 200 values (below -1.01, down to -9,360) are grouped in the first bar so the rest of the distribution is readable. 309 values are negative, which may be data-entry errors worth checking.",
+    "headline": "Quantity values are heavily skewed with many extreme negatives, reflecting a large volume of returns that could distort sales analysis.",
+    "insight_source": "llm",
+    "llm_insight": "Quantity values are heavily skewed with many extreme negatives, reflecting a large volume of returns that could distort sales analysis.",
+    "insight_facts": "Quantity ranges from -9,360 to 2,880 (median 2, mean 7.77) across 20,000 rows in the full file. It is left-skewed (skewness -80.99): a few small values pull the mean below the median. The lowest 200 values (below -1.01, down to -9,360) are grouped in the first bar so the rest of the distribution is readable. 309 values are negative, which may be data-entry errors worth checking.",
+    "derived_data": {}
+   },
+   {
+    "id": "llm_4",
+    "type": "bar",
+    "title": "Invoice line‑item concentration",
+    "llm_title": "Invoice line‑item concentration",
+    "insight": "The most frequent invoices each contain many line items, indicating the need for a distinct line‑item key to prevent double‑counting. Total Quantity by InvoiceNo: highest is 536830 (4,280), lowest is C536757 (-9,360) in the full file.",
+    "reason": "The most frequent invoices each contain many line items, indicating the need for a distinct line‑item key to prevent double‑counting. Total Quantity by InvoiceNo: highest is 536830 (4,280), lowest is C536757 (-9,360) in the full file.",
+    "headline": "The most frequent invoices each contain many line items, indicating the need for a distinct line‑item key to prevent double‑counting.",
+    "insight_source": "llm",
+    "llm_insight": "The most frequent invoices each contain many line items, indicating the need for a distinct line‑item key to prevent double‑counting.",
+    "insight_facts": "Total Quantity by InvoiceNo: highest is 536830 (4,280), lowest is C536757 (-9,360) in the full file.",
+    "derived_data": {}
+   },
+   {
+    "id": "pie_StockCode",
+    "type": "pie",
+    "title": "Share of records by StockCode",
+    "llm_title": null,
+    "insight": "Records by StockCode: the largest groups are 85123A (106 rows, 0.5%), 22867 (102 rows, 0.5%), 22633 (95 rows, 0.5%) in the full file. The top 3 of 2408 make up 2% of the total.",
+    "reason": "Records by StockCode: the largest groups are 85123A (106 rows, 0.5%), 22867 (102 rows, 0.5%), 22633 (95 rows, 0.5%) in the full file. The top 3 of 2408 make up 2% of the total.",
+    "headline": null,
+    "insight_source": "data",
+    "llm_insight": null,
+    "insight_facts": "Records by StockCode: the largest groups are 85123A (106 rows, 0.5%), 22867 (102 rows, 0.5%), 22633 (95 rows, 0.5%) in the full file. The top 3 of 2408 make up 2% of the total.",
+    "derived_data": {}
+   }
+  ],
+  "profile_overview": {
+   "domain": "retail",
+   "domain_reasoning": "2 distinct cue(s) matched column names (Quantity, UnitPrice)",
+   "readiness_score": 78,
+   "readiness_reasoning": "High completeness but missing key customer identifier and lack of unique line key reduce readiness.",
+   "red_flags": [
+    "CustomerID missing in 33.3% of rows.",
+    "InvoiceNo repeats across multiple items.",
+    "Potential duplicate rows without distinct identifiers."
+   ],
+   "quick_wins": [
+    "Create TotalPrice column for immediate revenue analysis.",
+    "Impute or drop rows with missing CustomerID.",
+    "Generate monthly sales summary by Country.",
+    "Define composite key InvoiceNo+StockCode for deduplication.",
+    "Convert InvoiceDate to datetime for time‑based filters."
+   ],
+   "strengths": [
+    "Overall completeness 95.8% indicates most fields are populated.",
+    "All essential columns (price, quantity, date) are present.",
+    "No constant columns, providing variability for modeling.",
+    "Rich textual product descriptions enable category analysis.",
+    "Date column includes timestamp for time‑series work."
+   ],
+   "concerns": [
+    "CustomerID column has high missing rate, limiting customer‑level insights.",
+    "InvoiceNo repeats across rows, may need line‑item key.",
+    "Potential duplicate rows could inflate sales totals.",
+    "No explicit unique identifier for each transaction line.",
+    "Missing CustomerID may bias segmentation analyses."
+   ],
+   "analysis_suggestions": [
+    "RFM (Recency, Frequency, Monetary) segmentation using CustomerID and purchase dates.",
+    "Market basket analysis to discover product affinities.",
+    "Time‑series sales trend by month and country."
+   ]
+  },
+  "dataset_summary_insights": [
+   "8 columns profiled on 11,000 sampled rows (of 20,000 in the file): 3 numeric measures, 4 categories, 1 date column.",
+   "1 column is more than 20% empty in the sample; the emptiest is CustomerID (28%). Analyses using it will drop or need to fill many rows.",
+   "Quantity is heavily left-skewed in the sample (skewness -72.0): median 2 vs mean 7.63, so use the median for a typical value. Also strongly skewed: UnitPrice."
+  ],
+  "upload_message": "**retail** dataset · 20,000 rows × 8 columns.\n2 distinct cue(s) matched column names (Quantity, UnitPrice)\n\n**Data readiness: 78/100.** High completeness but missing key customer identifier and lack of unique line key reduce readiness.\n\n**Key findings**\n- United Kingdom drives the vast majority of revenue, so focusing on this market will capture most of the business impact.\n- UnitPrice and Quantity show no meaningful linear relationship (r = -0.00) across 20,000 rows in the full file: knowing one tells you almost nothing about the other. 394 extreme points are left off the plot so the rest is readable; the correlation uses every r…\n- Daily sales rise toward the middle of the week before tapering off, suggesting mid‑week promotions could be effective.\n\n**Watch out for**\n- CustomerID missing in 33.3% of rows.\n- InvoiceNo repeats across multiple items.\n- Potential duplicate rows without distinct identifiers.\n\n**Try asking**\n- RFM (Recency, Frequency, Monetary) segmentation using CustomerID and purchase dates.\n- Market basket analysis to discover product affinities.\n- Time‑series sales trend by month and country."
+ },
+ "rw7/nullxlsx": {
+  "dataset": {
+   "total_rows": 60,
+   "n_columns": 5
+  },
+  "charts": [
+   {
+    "id": "llm_2",
+    "type": "pie",
+    "title": "Records by Outcome",
+    "llm_title": "Outcome distribution shows many readmissions",
+    "insight": "Records by Outcome: the groups are Recovered (20 rows, 33.3%), RECOVERED (20 rows, 33.3%), Readmitted (20 rows, 33.3%) in the sample. The groups are nearly equal in size, so Outcome on its own does not separate the data much.",
+    "reason": "Records by Outcome: the groups are Recovered (20 rows, 33.3%), RECOVERED (20 rows, 33.3%), Readmitted (20 rows, 33.3%) in the sample. The groups are nearly equal in size, so Outcome on its own does not separate the data much.",
+    "headline": null,
+    "insight_source": "data",
+    "llm_insight": "The outcome mix reveals that readmissions make up roughly half of all discharges, indicating a substantial risk that should be addressed.",
+    "insight_facts": "Records by Outcome: the groups are Recovered (20 rows, 33.3%), RECOVERED (20 rows, 33.3%), Readmitted (20 rows, 33.3%) in the sample. The groups are nearly equal in size, so Outcome on its own does not separate the data much.",
+    "derived_data": {
+     "llm_insight_replaced": "The outcome mix reveals that readmissions make up roughly half of all discharges, indicating a substantial risk that should be addressed.",
+     "llm_title_replaced": "Outcome distribution shows many readmissions"
+    }
+   },
+   {
+    "id": "dist_Glucose",
+    "type": "histogram",
+    "title": "Distribution of Glucose",
+    "llm_title": null,
+    "insight": "Glucose ranges from 71 to 174 (median 107.50, mean 111.45) across 58 rows in the sample. Values are spread fairly evenly across the range, with no strong peak. 2 rows (3.3%) have no value.",
+    "reason": "Glucose ranges from 71 to 174 (median 107.50, mean 111.45) across 58 rows in the sample. Values are spread fairly evenly across the range, with no strong peak. 2 rows (3.3%) have no value.",
+    "headline": null,
+    "insight_source": "data",
+    "llm_insight": null,
+    "insight_facts": "Glucose ranges from 71 to 174 (median 107.50, mean 111.45) across 58 rows in the sample. Values are spread fairly evenly across the range, with no strong peak. 2 rows (3.3%) have no value.",
+    "derived_data": {}
+   },
+   {
+    "id": "bar_Notes",
+    "type": "bar",
+    "title": "Counts by Notes",
+    "llm_title": null,
+    "insight": "Records by Notes: the largest groups are follow-up booked (9 rows, 21.4%), n/a (9 rows, 21.4%), - (8 rows, 19.0%) (out of the 42 rows with a value for Notes) in the sample. The top 3 of 5 make up 62% of the total. 18 rows (30.0%) have no Notes and are left out of the chart.",
+    "reason": "Records by Notes: the largest groups are follow-up booked (9 rows, 21.4%), n/a (9 rows, 21.4%), - (8 rows, 19.0%) (out of the 42 rows with a value for Notes) in the sample. The top 3 of 5 make up 62% of the total. 18 rows (30.0%) have no Notes and are left out of the chart.",
+    "headline": null,
+    "insight_source": "data",
+    "llm_insight": null,
+    "insight_facts": "Records by Notes: the largest groups are follow-up booked (9 rows, 21.4%), n/a (9 rows, 21.4%), - (8 rows, 19.0%) (out of the 42 rows with a value for Notes) in the sample. The top 3 of 5 make up 62% of the total. 18 rows (30.0%) have no Notes and are left out of the chart.",
+    "derived_data": {}
+   }
+  ],
+  "profile_overview": {
+   "domain": "healthcare",
+   "domain_reasoning": "2 distinct cue(s) matched column names (Glucose, patient_id)",
+   "readiness_score": 78,
+   "readiness_reasoning": "High completeness but format inconsistencies lower readiness.",
+   "red_flags": [
+    "Inconsistent date formats",
+    "Outcome case variance",
+    "Notes placeholders",
+    "Glucose as string",
+    "Ambiguous date '20220505'"
+   ],
+   "quick_wins": [
+    "Standardize dates",
+    "Normalize outcome case",
+    "Replace placeholder notes with null",
+    "Cast glucose to numeric",
+    "Check patient_id uniqueness"
+   ],
+   "strengths": [
+    "Overall completeness 99%.",
+    "No columns with high missing rates.",
+    "Patient IDs appear unique.",
+    "Glucose recorded for all rows.",
+    "Small dataset easy to profile."
+   ],
+   "concerns": [
+    "Visit_date uses multiple formats.",
+    "Outcome values vary in case.",
+    "Notes contain placeholders like 'NULL', 'n/a', empty.",
+    "Glucose stored as string, not numeric.",
+    "Date '20220505' ambiguous format."
+   ],
+   "analysis_suggestions": [
+    "Assess relationship between Glucose levels and Outcome (Recovered vs Readmitted) over time."
+   ]
+  },
+  "dataset_summary_insights": [
+   "5 columns profiled on 60 sampled rows: 1 numeric measures, 2 categories, 2 ID or free-text columns that are not charted.",
+   "Data is largely complete: 1.0% of cells are empty in the sample, and no column is more than 20% empty.",
+   "Outcome is also split into groups of nearly equal size, so it does not separate the data on its own."
+  ],
+  "upload_message": "**healthcare** dataset · 60 rows × 5 columns.\n2 distinct cue(s) matched column names (Glucose, patient_id)\n\n**Data readiness: 78/100.** High completeness but format inconsistencies lower readiness.\n\n**Key findings**\n- Records by Outcome: the groups are Recovered (20 rows, 33.3%), RECOVERED (20 rows, 33.3%), Readmitted (20 rows, 33.3%) in the sample. The groups are nearly equal in size, so Outcome on its own does not separate the data much.\n- Glucose ranges from 71 to 174 (median 107.50, mean 111.45) across 58 rows in the sample. Values are spread fairly evenly across the range, with no strong peak. 2 rows (3.3%) have no value.\n- Records by Notes: the largest groups are follow-up booked (9 rows, 21.4%), n/a (9 rows, 21.4%), - (8 rows, 19.0%) (out of the 42 rows with a value for Notes) in the sample. The top 3 of 5 make up 62% of the total. 18 rows (30.0%) have no Notes and are left ou…\n\n**Watch out for**\n- Inconsistent date formats\n- Outcome case variance\n- Notes placeholders\n\n**Try asking**\n- Assess relationship between Glucose levels and Outcome (Recovered vs Readmitted) over time."
+ },
+ "rw7/recipes_jsonl": {
+  "dataset": {
+   "total_rows": 12190,
+   "n_columns": 8
+  },
+  "charts": [
+   {
+    "id": "llm_0",
+    "type": "bar",
+    "title": "Records by Url",
+    "llm_title": "Dominant URLs skew the data",
+    "insight": "Records by Url: the largest groups are https://www.chefkoch.de/rezepte/1547251261244879/ (133 rows, 3.3%), https://www.chefkoch.de/rezepte/508111146130787/ (115 rows, 2.9%), https://www.chefkoch.de/rezepte/72871027332969/ (40 rows, 1.0%) in the sample. The top 3 of 193 make up 7% of the total.",
+    "reason": "Records by Url: the largest groups are https://www.chefkoch.de/rezepte/1547251261244879/ (133 rows, 3.3%), https://www.chefkoch.de/rezepte/508111146130787/ (115 rows, 2.9%), https://www.chefkoch.de/rezepte/72871027332969/ (40 rows, 1.0%) in the sample. The top 3 of 193 make up 7% of the total.",
+    "headline": null,
+    "insight_source": "data",
+    "llm_insight": "A few URLs dominate the dataset, representing a large share of the rows, which can skew any analysis toward those recipes.",
+    "insight_facts": "Records by Url: the largest groups are https://www.chefkoch.de/rezepte/1547251261244879/ (133 rows, 3.3%), https://www.chefkoch.de/rezepte/508111146130787/ (115 rows, 2.9%), https://www.chefkoch.de/rezepte/72871027332969/ (40 rows, 1.0%) in the sample. The top 3 of 193 make up 7% of the total.",
+    "derived_data": {
+     "llm_insight_replaced": "A few URLs dominate the dataset, representing a large share of the rows, which can skew any analysis toward those recipes.",
+     "llm_title_replaced": "Dominant URLs skew the data"
+    }
+   },
+   {
+    "id": "llm_1",
+    "type": "bar",
+    "title": "Skewed instruction length",
+    "llm_title": "Skewed instruction length",
+    "insight": "Instruction texts vary widely in length, with most being relatively short but a long tail of very detailed recipes, indicating a skewed complexity distribution. Records by Instructions: the largest groups are Das Suppengemüse (2 große Möhren, ein Stück Sellerie, eine halbe Stange Porree - das Weiße) und die Zwiebel in gleich große Würfelchen schneiden, den Porree längs halbieren und in Streifen schneiden, Knoblauch und Chilischote hacken.Alles zusammen in der Kräuterbutter anschwitzen. Mit gut 200 ml Weißwein ablöschen und etwas einkochen lassen. Fischfond mit derselben Menge Wasser dazugeben. Hummer- und Krustentierpaste und die Crème fraîche einrühren. Mit Salz abschmecken. Alles zusammen kurz aufkochen lassen.Jetzt die Fischfilets in nicht zu kleinen Stücken, die Shrimps und die Flusskrebsschwänze dazugeben und alles zusammen auf ganz kleiner Flamme 15 Minuten ziehen lassen.Zitronenviertel und frischen, gehackten Dill extra dazu reichen, das Fischaroma soll nicht schon im Topf erschlagen werden.Alle mageren, festen Fischsorten sind geeignet (wer mag, kann auch Wels, Pangasius, Rotbarben und Kabeljau nehmen). (67 rows, 1.7%), Die Eier pochieren. Dafür in einem mittleren Topf Essigwasser zum Kochen bringen und danach ein bisschen herunterdrehen, bis das Wasser simmert. Mit einem Schneebesen im Wasser einen Strudel erzeugen. In diesen Strudel die Eier schlagen. Wichtig ist, dass das Wasser an diesem Punkt noch in Bewegung ist. Danach den Deckel auf den Topf setzen und je nach Eiergröße 2 - 3 Minuten simmern lassen. Danach die Eier mit einem Sieb vorsichtig aus dem Wasser heben und auf Küchenpapier abtropfen lassen.Die Toastbrötchenhälften im Toaster, einer Pfanne oder im Ofen kross toasten bzw. backen. Den Speck ohne Fett in einer Pfanne von beiden Seiten kross anbraten und ebenfalls auf Küchenpapier abtropfen lassen. Alternativ kann man den Speck auch im Ofen auslassen. Die Sauce Hollandaise in einem Topf oder ebenfalls im Ofen erhitzen.Alles zusammen mit den pochierten Eiern auf den Toastbrötchen anrichten. Ein paar Kräuter darüber streuen. (48 rows, 1.2%), Die Schinkentranchen halbieren. Die Schwarzwurzeln abtropfen lassen und jede (oder jeweils mehrere) in eine halbe Schinkentranche wickeln. In eine ausgebutterte Auflaufform legen.Rahm, Eigelb und geriebenen Käse verquirlen. Nach eigenem Geschmack würzen. Mit einigen Spritzern Cognac abschmecken. Alles über die Schwarzwurzel-Schinkenrollen gießen.Im heißen Backofen bei 220 °C Ober-/Unterhitze 20 Minuten gratinieren. Petersilie darüber streuen.Dazu passt gekochter Reis. (22 rows, 0.5%) in the sample. The top 3 of 2447 make up 3% of the total.",
+    "reason": "Instruction texts vary widely in length, with most being relatively short but a long tail of very detailed recipes, indicating a skewed complexity distribution. Records by Instructions: the largest groups are Das Suppengemüse (2 große Möhren, ein Stück Sellerie, eine halbe Stange Porree - das Weiße) und die Zwiebel in gleich große Würfelchen schneiden, den Porree längs halbieren und in Streifen schneiden, Knoblauch und Chilischote hacken.Alles zusammen in der Kräuterbutter anschwitzen. Mit gut 200 ml Weißwein ablöschen und etwas einkochen lassen. Fischfond mit derselben Menge Wasser dazugeben. Hummer- und Krustentierpaste und die Crème fraîche einrühren. Mit Salz abschmecken. Alles zusammen kurz aufkochen lassen.Jetzt die Fischfilets in nicht zu kleinen Stücken, die Shrimps und die Flusskrebsschwänze dazugeben und alles zusammen auf ganz kleiner Flamme 15 Minuten ziehen lassen.Zitronenviertel und frischen, gehackten Dill extra dazu reichen, das Fischaroma soll nicht schon im Topf erschlagen werden.Alle mageren, festen Fischsorten sind geeignet (wer mag, kann auch Wels, Pangasius, Rotbarben und Kabeljau nehmen). (67 rows, 1.7%), Die Eier pochieren. Dafür in einem mittleren Topf Essigwasser zum Kochen bringen und danach ein bisschen herunterdrehen, bis das Wasser simmert. Mit einem Schneebesen im Wasser einen Strudel erzeugen. In diesen Strudel die Eier schlagen. Wichtig ist, dass das Wasser an diesem Punkt noch in Bewegung ist. Danach den Deckel auf den Topf setzen und je nach Eiergröße 2 - 3 Minuten simmern lassen. Danach die Eier mit einem Sieb vorsichtig aus dem Wasser heben und auf Küchenpapier abtropfen lassen.Die Toastbrötchenhälften im Toaster, einer Pfanne oder im Ofen kross toasten bzw. backen. Den Speck ohne Fett in einer Pfanne von beiden Seiten kross anbraten und ebenfalls auf Küchenpapier abtropfen lassen. Alternativ kann man den Speck auch im Ofen auslassen. Die Sauce Hollandaise in einem Topf oder ebenfalls im Ofen erhitzen.Alles zusammen mit den pochierten Eiern auf den Toastbrötchen anrichten. Ein paar Kräuter darüber streuen. (48 rows, 1.2%), Die Schinkentranchen halbieren. Die Schwarzwurzeln abtropfen lassen und jede (oder jeweils mehrere) in eine halbe Schinkentranche wickeln. In eine ausgebutterte Auflaufform legen.Rahm, Eigelb und geriebenen Käse verquirlen. Nach eigenem Geschmack würzen. Mit einigen Spritzern Cognac abschmecken. Alles über die Schwarzwurzel-Schinkenrollen gießen.Im heißen Backofen bei 220 °C Ober-/Unterhitze 20 Minuten gratinieren. Petersilie darüber streuen.Dazu passt gekochter Reis. (22 rows, 0.5%) in the sample. The top 3 of 2447 make up 3% of the total.",
+    "headline": "Instruction texts vary widely in length, with most being relatively short but a long tail of very detailed recipes, indicating a skewed complexity distribution.",
+    "insight_source": "llm",
+    "llm_insight": "Instruction texts vary widely in length, with most being relatively short but a long tail of very detailed recipes, indicating a skewed complexity distribution.",
+    "insight_facts": "Records by Instructions: the largest groups are Das Suppengemüse (2 große Möhren, ein Stück Sellerie, eine halbe Stange Porree - das Weiße) und die Zwiebel in gleich große Würfelchen schneiden, den Porree längs halbieren und in Streifen schneiden, Knoblauch und Chilischote hacken.Alles zusammen in der Kräuterbutter anschwitzen. Mit gut 200 ml Weißwein ablöschen und etwas einkochen lassen. Fischfond mit derselben Menge Wasser dazugeben. Hummer- und Krustentierpaste und die Crème fraîche einrühren. Mit Salz abschmecken. Alles zusammen kurz aufkochen lassen.Jetzt die Fischfilets in nicht zu kleinen Stücken, die Shrimps und die Flusskrebsschwänze dazugeben und alles zusammen auf ganz kleiner Flamme 15 Minuten ziehen lassen.Zitronenviertel und frischen, gehackten Dill extra dazu reichen, das Fischaroma soll nicht schon im Topf erschlagen werden.Alle mageren, festen Fischsorten sind geeignet (wer mag, kann auch Wels, Pangasius, Rotbarben und Kabeljau nehmen). (67 rows, 1.7%), Die Eier pochieren. Dafür in einem mittleren Topf Essigwasser zum Kochen bringen und danach ein bisschen herunterdrehen, bis das Wasser simmert. Mit einem Schneebesen im Wasser einen Strudel erzeugen. In diesen Strudel die Eier schlagen. Wichtig ist, dass das Wasser an diesem Punkt noch in Bewegung ist. Danach den Deckel auf den Topf setzen und je nach Eiergröße 2 - 3 Minuten simmern lassen. Danach die Eier mit einem Sieb vorsichtig aus dem Wasser heben und auf Küchenpapier abtropfen lassen.Die Toastbrötchenhälften im Toaster, einer Pfanne oder im Ofen kross toasten bzw. backen. Den Speck ohne Fett in einer Pfanne von beiden Seiten kross anbraten und ebenfalls auf Küchenpapier abtropfen lassen. Alternativ kann man den Speck auch im Ofen auslassen. Die Sauce Hollandaise in einem Topf oder ebenfalls im Ofen erhitzen.Alles zusammen mit den pochierten Eiern auf den Toastbrötchen anrichten. Ein paar Kräuter darüber streuen. (48 rows, 1.2%), Die Schinkentranchen halbieren. Die Schwarzwurzeln abtropfen lassen und jede (oder jeweils mehrere) in eine halbe Schinkentranche wickeln. In eine ausgebutterte Auflaufform legen.Rahm, Eigelb und geriebenen Käse verquirlen. Nach eigenem Geschmack würzen. Mit einigen Spritzern Cognac abschmecken. Alles über die Schwarzwurzel-Schinkenrollen gießen.Im heißen Backofen bei 220 °C Ober-/Unterhitze 20 Minuten gratinieren. Petersilie darüber streuen.Dazu passt gekochter Reis. (22 rows, 0.5%) in the sample. The top 3 of 2447 make up 3% of the total.",
+    "derived_data": {}
+   },
+   {
+    "id": "llm_2",
+    "type": "bar",
+    "title": "Records by Month",
+    "llm_title": "Recipe count by month shows peak in Jan and Feb",
+    "insight": "Records by Month: the largest groups are February (448 rows, 11.1%), January (448 rows, 11.1%), September (340 rows, 8.5%) in the sample. The top 3 of 12 make up 31% of the total.",
+    "reason": "Records by Month: the largest groups are February (448 rows, 11.1%), January (448 rows, 11.1%), September (340 rows, 8.5%) in the sample. The top 3 of 12 make up 31% of the total.",
+    "headline": null,
+    "insight_source": "data",
+    "llm_insight": "January and February contain the largest share of recipes, indicating a seasonal posting peak.",
+    "insight_facts": "Records by Month: the largest groups are February (448 rows, 11.1%), January (448 rows, 11.1%), September (340 rows, 8.5%) in the sample. The top 3 of 12 make up 31% of the total.",
+    "derived_data": {
+     "llm_insight_replaced": "January and February contain the largest share of recipes, indicating a seasonal posting peak.",
+     "llm_title_replaced": "Recipe count by month shows peak in Jan and Feb"
+    }
+   },
+   {
+    "id": "llm_3",
+    "type": "bar",
+    "title": "Recipes posted by weekday – Tuesday leads",
+    "llm_title": "Recipes posted by weekday – Tuesday leads",
+    "insight": "Tuesday sees the highest posting activity, suggesting mid‑week engagement. Records by Weekday: the largest groups are Tuesday (668 rows, 16.6%), Saturday (593 rows, 14.8%), Friday (580 rows, 14.4%) in the sample. The top 3 of 7 make up 46% of the total.",
+    "reason": "Tuesday sees the highest posting activity, suggesting mid‑week engagement. Records by Weekday: the largest groups are Tuesday (668 rows, 16.6%), Saturday (593 rows, 14.8%), Friday (580 rows, 14.4%) in the sample. The top 3 of 7 make up 46% of the total.",
+    "headline": "Tuesday sees the highest posting activity, suggesting mid‑week engagement.",
+    "insight_source": "llm",
+    "llm_insight": "Tuesday sees the highest posting activity, suggesting mid‑week engagement.",
+    "insight_facts": "Records by Weekday: the largest groups are Tuesday (668 rows, 16.6%), Saturday (593 rows, 14.8%), Friday (580 rows, 14.4%) in the sample. The top 3 of 7 make up 46% of the total.",
+    "derived_data": {}
+   },
+   {
+    "id": "llm_4",
+    "type": "bar",
+    "title": "Top recipe titles – Herzhafte Pfannkuchen leads",
+    "llm_title": "Top recipe titles – Herzhafte Pfannkuchen leads",
+    "insight": "Herzhafte Pfannkuchen stands out as the most frequent recipe title, highlighting a popular dish. Records by Name: the largest groups are Herzhafte Pfannkuchen (133 rows, 3.3%), Fischsuppe (115 rows, 2.9%), Eier in Senfsauce (42 rows, 1.0%) in the sample. The top 3 of 192 make up 7% of the total.",
+    "reason": "Herzhafte Pfannkuchen stands out as the most frequent recipe title, highlighting a popular dish. Records by Name: the largest groups are Herzhafte Pfannkuchen (133 rows, 3.3%), Fischsuppe (115 rows, 2.9%), Eier in Senfsauce (42 rows, 1.0%) in the sample. The top 3 of 192 make up 7% of the total.",
+    "headline": "Herzhafte Pfannkuchen stands out as the most frequent recipe title, highlighting a popular dish.",
+    "insight_source": "llm",
+    "llm_insight": "Herzhafte Pfannkuchen stands out as the most frequent recipe title, highlighting a popular dish.",
+    "insight_facts": "Records by Name: the largest groups are Herzhafte Pfannkuchen (133 rows, 3.3%), Fischsuppe (115 rows, 2.9%), Eier in Senfsauce (42 rows, 1.0%) in the sample. The top 3 of 192 make up 7% of the total.",
+    "derived_data": {}
+   },
+   {
+    "id": "pie_Year",
+    "type": "pie",
+    "title": "Share of records by Year",
+    "llm_title": null,
+    "insight": "Records by Year: the largest groups are 2019 (248 rows, 6.2%), 2003 (244 rows, 6.1%), 2015 (244 rows, 6.1%) in the sample. The top 3 of 17 make up 18% of the total. The groups are nearly equal in size, so Year on its own does not separate the data much.",
+    "reason": "Records by Year: the largest groups are 2019 (248 rows, 6.2%), 2003 (244 rows, 6.1%), 2015 (244 rows, 6.1%) in the sample. The top 3 of 17 make up 18% of the total. The groups are nearly equal in size, so Year on its own does not separate the data much.",
+    "headline": null,
+    "insight_source": "data",
+    "llm_insight": null,
+    "insight_facts": "Records by Year: the largest groups are 2019 (248 rows, 6.2%), 2003 (244 rows, 6.1%), 2015 (244 rows, 6.1%) in the sample. The top 3 of 17 make up 18% of the total. The groups are nearly equal in size, so Year on its own does not separate the data much.",
+    "derived_data": {}
+   }
+  ],
+  "profile_overview": {
+   "domain": null,
+   "domain_reasoning": "no column name matched a domain cue; treating the data as generic",
+   "readiness_score": 82,
+   "readiness_reasoning": "Data is complete but needs cleaning of constant fields and text standardization before modeling.",
+   "red_flags": [
+    "Constant Day column",
+    "Month as string",
+    "Unstructured ingredient lists",
+    "Possible URL duplicates",
+    "Special characters in text"
+   ],
+   "quick_wins": [
+    "Drop Day column",
+    "Convert Month to number",
+    "Count ingredients per recipe",
+    "Create URL index",
+    "Standardize text encoding"
+   ],
+   "strengths": [
+    "100% completeness",
+    "Consistent column types",
+    "Rich textual fields",
+    "Unique URLs",
+    "Clear recipe identifiers"
+   ],
+   "concerns": [
+    "Day column constant",
+    "Month stored as text",
+    "Ingredients list unstructured",
+    "Potential duplicate URLs",
+    "Mixed language characters"
+   ],
+   "analysis_suggestions": [
+    "Ingredient frequency across years",
+    "Seasonality of recipes by Month",
+    "Cluster recipes by ingredient similarity",
+    "Sentiment analysis of Instructions",
+    "Predict popularity from Year and Weekday"
+   ]
+  },
+  "dataset_summary_insights": [
+   "8 columns profiled on 4,018 sampled rows (of 12,190 in the file): 1 numeric measures, 7 categories.",
+   "No empty values in the sampled rows.",
+   "1 column holds a single value in the sample and adds no information: Day."
+  ],
+  "upload_message": "Dataset · 12,190 rows × 8 columns.\n\n**Data readiness: 82/100.** Data is complete but needs cleaning of constant fields and text standardization before modeling.\n\n**Key findings**\n- Records by Url: the largest groups are https://www.chefkoch.de/rezepte/1547251261244879/ (133 rows, 3.3%), https://www.chefkoch.de/rezepte/508111146130787/ (115 rows, 2.9%), https://www.chefkoch.de/rezepte/72871027332969/ (40 rows, 1.0%) in the sample. The to…\n- Instruction texts vary widely in length, with most being relatively short but a long tail of very detailed recipes, indicating a skewed complexity distribution.\n- Records by Month: the largest groups are February (448 rows, 11.1%), January (448 rows, 11.1%), September (340 rows, 8.5%) in the sample. The top 3 of 12 make up 31% of the total.\n\n**Watch out for**\n- Constant Day column\n- Month as string\n- Unstructured ingredient lists\n\n**Try asking**\n- Ingredient frequency across years\n- Seasonality of recipes by Month\n- Cluster recipes by ingredient similarity"
+ },
+ "rw7/stroke": {
+  "dataset": {
+   "total_rows": 5110,
+   "n_columns": 12
+  },
+  "charts": [
+   {
+    "id": "llm_0",
+    "type": "bar",
+    "title": "stroke rate by smoking_status",
+    "llm_title": null,
+    "insight": "stroke rate by smoking_status: 4.9% overall across 5,110 rows in the sample; highest for formerly smoked (7.9% of 885 rows), lowest for Unknown (3.0% of 1,544 rows). The highest group's rate is 2.6× the lowest.",
+    "reason": "stroke rate by smoking_status: 4.9% overall across 5,110 rows in the sample; highest for formerly smoked (7.9% of 885 rows), lowest for Unknown (3.0% of 1,544 rows). The highest group's rate is 2.6× the lowest.",
+    "headline": null,
+    "insight_source": "data",
+    "llm_insight": "Patients who have ever smoked show a noticeably higher stroke rate than those who never smoked.",
+    "insight_facts": "stroke rate by smoking_status: 4.9% overall across 5,110 rows in the sample; highest for formerly smoked (7.9% of 885 rows), lowest for Unknown (3.0% of 1,544 rows). The highest group's rate is 2.6× the lowest.",
+    "derived_data": {
+     "llm_insight_replaced": "Patients who have ever smoked show a noticeably higher stroke rate than those who never smoked."
+    }
+   },
+   {
+    "id": "llm_1",
+    "type": "bar",
+    "title": "stroke rate by work_type",
+    "llm_title": null,
+    "insight": "stroke rate by work_type: 4.9% overall across 5,110 rows in the sample; highest for Self-employed (7.9% of 819 rows), lowest for Never_worked (0.0% of 22 rows).",
+    "reason": "stroke rate by work_type: 4.9% overall across 5,110 rows in the sample; highest for Self-employed (7.9% of 819 rows), lowest for Never_worked (0.0% of 22 rows).",
+    "headline": null,
+    "insight_source": "data",
+    "llm_insight": "Stroke incidence is most pronounced among individuals employed in the private sector compared with other work types.",
+    "insight_facts": "stroke rate by work_type: 4.9% overall across 5,110 rows in the sample; highest for Self-employed (7.9% of 819 rows), lowest for Never_worked (0.0% of 22 rows).",
+    "derived_data": {
+     "llm_insight_replaced": "Stroke incidence is most pronounced among individuals employed in the private sector compared with other work types."
+    }
+   },
+   {
+    "id": "llm_2",
+    "type": "bar",
+    "title": "stroke rate by hypertension",
+    "llm_title": null,
+    "insight": "Having hypertension is linked to a markedly higher stroke rate than not having hypertension. stroke rate by hypertension: 4.9% overall across 5,110 rows in the sample; highest for Yes (13.3% of 498 rows), lowest for No (4.0% of 4,612 rows). The highest group's rate is 3.3× the lowest.",
+    "reason": "Having hypertension is linked to a markedly higher stroke rate than not having hypertension. stroke rate by hypertension: 4.9% overall across 5,110 rows in the sample; highest for Yes (13.3% of 498 rows), lowest for No (4.0% of 4,612 rows). The highest group's rate is 3.3× the lowest.",
+    "headline": "Having hypertension is linked to a markedly higher stroke rate than not having hypertension.",
+    "insight_source": "llm",
+    "llm_insight": "Having hypertension is linked to a markedly higher stroke rate than not having hypertension.",
+    "insight_facts": "stroke rate by hypertension: 4.9% overall across 5,110 rows in the sample; highest for Yes (13.3% of 498 rows), lowest for No (4.0% of 4,612 rows). The highest group's rate is 3.3× the lowest.",
+    "derived_data": {}
+   },
+   {
+    "id": "llm_3",
+    "type": "bar",
+    "title": "stroke rate by avg_glucose_level",
+    "llm_title": null,
+    "insight": "stroke rate by avg_glucose_level: 4.9% overall across 5,110 rows in the sample; highest for avg_glucose_level 244.66–271.74 (19.4% of 36 rows), lowest for 82.20–109.27 (3.2% of 1,891 rows). The highest band's rate is 6.0× the lowest.",
+    "reason": "stroke rate by avg_glucose_level: 4.9% overall across 5,110 rows in the sample; highest for avg_glucose_level 244.66–271.74 (19.4% of 36 rows), lowest for 82.20–109.27 (3.2% of 1,891 rows). The highest band's rate is 6.0× the lowest.",
+    "headline": null,
+    "insight_source": "data",
+    "llm_insight": "Average glucose levels are substantially higher for patients who suffered a stroke, suggesting a strong relationship between glucose and stroke risk.",
+    "insight_facts": "stroke rate by avg_glucose_level: 4.9% overall across 5,110 rows in the sample; highest for avg_glucose_level 244.66–271.74 (19.4% of 36 rows), lowest for 82.20–109.27 (3.2% of 1,891 rows). The highest band's rate is 6.0× the lowest.",
+    "derived_data": {
+     "llm_insight_replaced": "Average glucose levels are substantially higher for patients who suffered a stroke, suggesting a strong relationship between glucose and stroke risk."
+    }
+   },
+   {
+    "id": "llm_4",
+    "type": "histogram",
+    "title": "BMI distribution and quality",
+    "llm_title": "BMI distribution and quality",
+    "insight": "BMI values exhibit a right‑skewed distribution with a long tail of high values, and some records are non‑numeric, indicating potential data‑quality concerns. bmi ranges from 10.30 to 97.60 (median 28.10, mean 28.89) across 4,909 rows in the sample. It is right-skewed (skewness 1.06): a few large values pull the mean above the median.",
+    "reason": "BMI values exhibit a right‑skewed distribution with a long tail of high values, and some records are non‑numeric, indicating potential data‑quality concerns. bmi ranges from 10.30 to 97.60 (median 28.10, mean 28.89) across 4,909 rows in the sample. It is right-skewed (skewness 1.06): a few large values pull the mean above the median.",
+    "headline": "BMI values exhibit a right‑skewed distribution with a long tail of high values, and some records are non‑numeric, indicating potential data‑quality concerns.",
+    "insight_source": "llm",
+    "llm_insight": "BMI values exhibit a right‑skewed distribution with a long tail of high values, and some records are non‑numeric, indicating potential data‑quality concerns.",
+    "insight_facts": "bmi ranges from 10.30 to 97.60 (median 28.10, mean 28.89) across 4,909 rows in the sample. It is right-skewed (skewness 1.06): a few large values pull the mean above the median.",
+    "derived_data": {}
+   },
+   {
+    "id": "pie_gender",
+    "type": "pie",
+    "title": "Share of records by gender",
+    "llm_title": null,
+    "insight": "gender is split into Female (2,994 rows, 58.6%), Male (2,115 rows, 41.4%), Other (1 rows, 0.0%) in the sample.",
+    "reason": "gender is split into Female (2,994 rows, 58.6%), Male (2,115 rows, 41.4%), Other (1 rows, 0.0%) in the sample.",
+    "headline": null,
+    "insight_source": "data",
+    "llm_insight": null,
+    "insight_facts": "Records by gender: the groups are Female (2,994 rows, 58.6%), Male (2,115 rows, 41.4%), Other (1 rows, 0.0%) in the sample.",
+    "derived_data": {}
+   }
+  ],
+  "profile_overview": {
+   "domain": "healthcare",
+   "domain_reasoning": "2 distinct cue(s) matched column names (avg_glucose_level, bmi)",
+   "readiness_score": 84,
+   "readiness_reasoning": "High completeness but type inconsistencies and class imbalance lower readiness.",
+   "red_flags": [
+    "BMI non-numeric values hinder analysis.",
+    "Stroke label may be heavily skewed.",
+    "'N/A' strings masquerade as missing data.",
+    "Potential leakage if ID used as predictor."
+   ],
+   "quick_wins": [
+    "Parse BMI column to float, flag 'N/A' as NaN.",
+    "Run basic descriptive stats for each feature.",
+    "Encode categorical variables with one-hot.",
+    "Balance stroke classes using oversampling.",
+    "Visualize age vs. stroke distribution."
+   ],
+   "strengths": [
+    "Overall completeness 99.7% indicates minimal missing data.",
+    "12 columns cover demographics, clinical, lifestyle factors.",
+    "No constant columns; all features vary."
+   ],
+   "concerns": [
+    "BMI stored as string with 'N/A' entries, causing type issues.",
+    "Potential class imbalance: stroke label appears 1 in sample.",
+    "Categorical variables need encoding for modeling.",
+    "Possible outliers in avg_glucose_level (e.g., >200)."
+   ],
+   "analysis_suggestions": [
+    "Logistic regression to identify stroke risk factors.",
+    "Random forest for feature importance and non-linear patterns.",
+    "Survival analysis to model time-to-stroke if timestamps available."
+   ]
+  },
+  "dataset_summary_insights": [
+   "12 columns profiled on 5,110 sampled rows: 3 numeric measures, 3 yes/no columns (hypertension, heart_disease, stroke), 5 categories, 1 ID or free-text column that is not charted.",
+   "Data is largely complete: 0.3% of cells are empty in the sample, and no column is more than 20% empty."
+  ],
+  "upload_message": "**healthcare** dataset · 5,110 rows × 12 columns.\n2 distinct cue(s) matched column names (avg_glucose_level, bmi)\n\n**Data readiness: 84/100.** High completeness but type inconsistencies and class imbalance lower readiness.\n\n**Key findings**\n- stroke rate by smoking_status: 4.9% overall across 5,110 rows in the sample; highest for formerly smoked (7.9% of 885 rows), lowest for Unknown (3.0% of 1,544 rows). The highest group's rate is 2.6× the lowest.\n- stroke rate by work_type: 4.9% overall across 5,110 rows in the sample; highest for Self-employed (7.9% of 819 rows), lowest for Never_worked (0.0% of 22 rows).\n- Having hypertension is linked to a markedly higher stroke rate than not having hypertension.\n\n**Watch out for**\n- BMI non-numeric values hinder analysis.\n- Stroke label may be heavily skewed.\n- 'N/A' strings masquerade as missing data.\n\n**Try asking**\n- Logistic regression to identify stroke risk factors.\n- Random forest for feature importance and non-linear patterns.\n- Survival analysis to model time-to-stroke if timestamps available."
+ },
+ "rw7/taxi_rg": {
+  "dataset": {
+   "total_rows": 200000,
+   "n_columns": 19
+  },
+  "charts": [
+   {
+    "id": "llm_0",
+    "type": "bar",
+    "title": "Higher tips with credit card payments",
+    "llm_title": "Higher tips with credit card payments",
+    "insight": "Tips tend to be higher when passengers pay with credit cards than with cash, suggesting an opportunity to encourage card use. Average tip_amount by payment_type: highest is 1 (4.62), lowest is 2 (0.00) in the full file. The top group is 3795.1× the lowest.",
+    "reason": "Tips tend to be higher when passengers pay with credit cards than with cash, suggesting an opportunity to encourage card use. Average tip_amount by payment_type: highest is 1 (4.62), lowest is 2 (0.00) in the full file. The top group is 3795.1× the lowest.",
+    "headline": "Tips tend to be higher when passengers pay with credit cards than with cash, suggesting an opportunity to encourage card use.",
+    "insight_source": "llm",
+    "llm_insight": "Tips tend to be higher when passengers pay with credit cards than with cash, suggesting an opportunity to encourage card use.",
+    "insight_facts": "Average tip_amount by payment_type: highest is 1 (4.62), lowest is 2 (0.00) in the full file. The top group is 3795.1× the lowest.",
+    "derived_data": {}
+   },
+   {
+    "id": "llm_1",
+    "type": "histogram",
+    "title": "Total amount below fare amount",
+    "llm_title": "Total amount below fare amount",
+    "insight": "A noticeable share of trips have total charges lower than the base fare, flagging potential billing errors that could affect revenue. total_amount ranges from -426.54 to 1,618 (median 20.30, mean 29.75) across 200,000 rows in the full file. It is right-skewed (skewness 3.23): a few large values pull the mean above the median. The top 2,000 values (above 110.00, up to 1,618) are grouped in the last bar so the rest of the distribution is readable. 3,021 values are negative, which may be data-entry errors worth checking.",
+    "reason": "A noticeable share of trips have total charges lower than the base fare, flagging potential billing errors that could affect revenue. total_amount ranges from -426.54 to 1,618 (median 20.30, mean 29.75) across 200,000 rows in the full file. It is right-skewed (skewness 3.23): a few large values pull the mean above the median. The top 2,000 values (above 110.00, up to 1,618) are grouped in the last bar so the rest of the distribution is readable. 3,021 values are negative, which may be data-entry errors worth checking.",
+    "headline": "A noticeable share of trips have total charges lower than the base fare, flagging potential billing errors that could affect revenue.",
+    "insight_source": "llm",
+    "llm_insight": "A noticeable share of trips have total charges lower than the base fare, flagging potential billing errors that could affect revenue.",
+    "insight_facts": "total_amount ranges from -426.54 to 1,618 (median 20.30, mean 29.75) across 200,000 rows in the full file. It is right-skewed (skewness 3.23): a few large values pull the mean above the median. The top 2,000 values (above 110.00, up to 1,618) are grouped in the last bar so the rest of the distribution is readable. 3,021 values are negative, which may be data-entry errors worth checking.",
+    "derived_data": {}
+   },
+   {
+    "id": "llm_2",
+    "type": "histogram",
+    "title": "Skewed trip distance distribution",
+    "llm_title": "Skewed trip distance distribution",
+    "insight": "Trip distances are dominated by short rides, while a long tail of unusually long trips may reflect outliers or special services. trip_distance ranges from 0 to 10,879 (median 1.87, mean 4.09) across 200,000 rows in the full file. It is right-skewed (skewness 408.16): a few large values pull the mean above the median. The top 2,000 values (above 21.35, up to 10,879) are grouped in the last bar so the rest of the distribution is readable.",
+    "reason": "Trip distances are dominated by short rides, while a long tail of unusually long trips may reflect outliers or special services. trip_distance ranges from 0 to 10,879 (median 1.87, mean 4.09) across 200,000 rows in the full file. It is right-skewed (skewness 408.16): a few large values pull the mean above the median. The top 2,000 values (above 21.35, up to 10,879) are grouped in the last bar so the rest of the distribution is readable.",
+    "headline": "Trip distances are dominated by short rides, while a long tail of unusually long trips may reflect outliers or special services.",
+    "insight_source": "llm",
+    "llm_insight": "Trip distances are dominated by short rides, while a long tail of unusually long trips may reflect outliers or special services.",
+    "insight_facts": "trip_distance ranges from 0 to 10,879 (median 1.87, mean 4.09) across 200,000 rows in the full file. It is right-skewed (skewness 408.16): a few large values pull the mean above the median. The top 2,000 values (above 21.35, up to 10,879) are grouped in the last bar so the rest of the distribution is readable.",
+    "derived_data": {}
+   },
+   {
+    "id": "llm_3",
+    "type": "bar",
+    "title": "Records by store_and_fwd_flag",
+    "llm_title": "Store‑and‑forward flag distribution",
+    "insight": "Records by store_and_fwd_flag: the groups are N (199,246 rows, 99.6%), Y (754 rows, 0.4%) in the full file.",
+    "reason": "Records by store_and_fwd_flag: the groups are N (199,246 rows, 99.6%), Y (754 rows, 0.4%) in the full file.",
+    "headline": null,
+    "insight_source": "data",
+    "llm_insight": "Almost all trips are recorded in real time, with only a tiny fraction flagged as stored before forwarding, which may warrant checking network reliability for those rare cases.",
+    "insight_facts": "Records by store_and_fwd_flag: the groups are N (199,246 rows, 99.6%), Y (754 rows, 0.4%) in the full file.",
+    "derived_data": {
+     "llm_title_replaced": "Store‑and‑forward flag distribution"
+    }
+   },
+   {
+    "id": "llm_4",
+    "type": "scatter",
+    "title": "Total amount vs trip distance",
+    "llm_title": "Total amount vs trip distance",
+    "insight": "Total charges increase with miles traveled, yet the spread suggests additional fees influencing the final amount. trip_distance and total_amount show a weak positive relationship (r = 0.19) across 200,000 rows in the full file. 3,083 extreme points are left off the plot so the rest is readable; the correlation uses every row.",
+    "reason": "Total charges increase with miles traveled, yet the spread suggests additional fees influencing the final amount. trip_distance and total_amount show a weak positive relationship (r = 0.19) across 200,000 rows in the full file. 3,083 extreme points are left off the plot so the rest is readable; the correlation uses every row.",
+    "headline": "Total charges increase with miles traveled, yet the spread suggests additional fees influencing the final amount.",
+    "insight_source": "llm",
+    "llm_insight": "Total charges increase with miles traveled, yet the spread suggests additional fees influencing the final amount.",
+    "insight_facts": "trip_distance and total_amount show a weak positive relationship (r = 0.19) across 200,000 rows in the full file. 3,083 extreme points are left off the plot so the rest is readable; the correlation uses every row.",
+    "derived_data": {}
+   }
+  ],
+  "profile_overview": {
+   "domain": "logistics",
+   "domain_reasoning": "3 distinct cue(s) matched column names (VendorID, tpep_pickup_datetime, trip_distance)",
+   "readiness_score": 92,
+   "readiness_reasoning": "Data is complete and well-typed, but needs validation of monetary consistency and outlier handling.",
+   "red_flags": [
+    "Zero Airport_fee for all trips",
+    "Total_amount sometimes lower than fare_amount",
+    "Extra charge unusually high in some rows",
+    "Potential duplicate timestamps",
+    "Unusual high tip percentages"
+   ],
+   "quick_wins": [
+    "Calculate trip duration from timestamps",
+    "Flag rows where total_amount < fare_amount",
+    "Plot pickup location density",
+    "Summarize payment type distribution",
+    "Compute average tip per passenger"
+   ],
+   "strengths": [
+    "100% completeness across all rows",
+    "No missing values in any column",
+    "All key datetime fields present",
+    "Numeric fields correctly typed",
+    "Diverse categorical variables included"
+   ],
+   "concerns": [
+    "Potential outliers in fare and tip amounts",
+    "No validation of total_amount consistency",
+    "Possible duplicate trip records",
+    "Timezones not specified"
+   ],
+   "analysis_suggestions": [
+    "Fare vs distance regression",
+    "Tip amount patterns by payment type",
+    "Peak hour demand heatmap",
+    "Spatial analysis of PULocationID/DOLocationID",
+    "Impact of congestion surcharge on total fare"
+   ]
+  },
+  "dataset_summary_insights": [
+   "19 columns profiled on 22,000 sampled rows (of 200,000 in the file): 16 numeric measures, 1 categories, 2 date columns.",
+   "No empty values in the sampled rows.",
+   "Strongest relationships between numeric columns in the sample: mta_tax and improvement_surcharge rise together (r = 0.88); trip_distance and total_amount rise together (r = 0.86).",
+   "RatecodeID is heavily right-skewed in the sample (skewness 10.1): median 1 vs mean 2.06, so use the median for a typical value. Also strongly skewed: improvement_surcharge, mta_tax, tip_amount."
+  ],
+  "upload_message": "**logistics** dataset · 200,000 rows × 19 columns.\n3 distinct cue(s) matched column names (VendorID, tpep_pickup_datetime, trip_distance)\n\n**Data readiness: 92/100.** Data is complete and well-typed, but needs validation of monetary consistency and outlier handling.\n\n**Key findings**\n- Tips tend to be higher when passengers pay with credit cards than with cash, suggesting an opportunity to encourage card use.\n- A noticeable share of trips have total charges lower than the base fare, flagging potential billing errors that could affect revenue.\n- Trip distances are dominated by short rides, while a long tail of unusually long trips may reflect outliers or special services.\n\n**Watch out for**\n- Zero Airport_fee for all trips\n- Total_amount sometimes lower than fare_amount\n- Extra charge unusually high in some rows\n\n**Try asking**\n- Fare vs distance regression\n- Tip amount patterns by payment type\n- Peak hour demand heatmap"
+ },
+ "rw7b/messy_xlsx": {
+  "dataset": {
+   "total_rows": 20000,
+   "n_columns": 8
+  },
+  "charts": [
+   {
+    "id": "llm_0",
+    "type": "pie",
+    "title": "Records by Country",
+    "llm_title": "UK dominates sales",
+    "insight": "Records by Country: the largest groups are United Kingdom (19,012 rows, 95.1%), Germany (256 rows, 1.3%), France (197 rows, 1.0%) in the full file. The top 3 of 16 make up 97% of the total.",
+    "reason": "Records by Country: the largest groups are United Kingdom (19,012 rows, 95.1%), Germany (256 rows, 1.3%), France (197 rows, 1.0%) in the full file. The top 3 of 16 make up 97% of the total.",
+    "headline": null,
+    "insight_source": "data",
+    "llm_insight": "The overwhelming majority of transactions come from the United Kingdom, showing that the business is almost entirely UK‑focused.",
+    "insight_facts": "Records by Country: the largest groups are United Kingdom (19,012 rows, 95.1%), Germany (256 rows, 1.3%), France (197 rows, 1.0%) in the full file. The top 3 of 16 make up 97% of the total.",
+    "derived_data": {
+     "llm_title_replaced": "UK dominates sales"
+    }
+   },
+   {
+    "id": "llm_1",
+    "type": "histogram",
+    "title": "Skewed quantity distribution",
+    "llm_title": "Skewed quantity distribution",
+    "insight": "Quantities are heavily skewed, with most line items being very small purchases, a long tail of very large orders, and a noticeable presence of negative quantities that represent returns. Quantity ranges from -9,360 to 2,880 (median 2, mean 7.77) across 20,000 rows in the full file. It is left-skewed (skewness -80.99): a few small values pull the mean below the median. The lowest 200 values (below -1.01, down to -9,360) are grouped in the first bar so the rest of the distribution is readable. 309 values are negative, which may be data-entry errors worth checking.",
+    "reason": "Quantities are heavily skewed, with most line items being very small purchases, a long tail of very large orders, and a noticeable presence of negative quantities that represent returns. Quantity ranges from -9,360 to 2,880 (median 2, mean 7.77) across 20,000 rows in the full file. It is left-skewed (skewness -80.99): a few small values pull the mean below the median. The lowest 200 values (below -1.01, down to -9,360) are grouped in the first bar so the rest of the distribution is readable. 309 values are negative, which may be data-entry errors worth checking.",
+    "headline": "Quantities are heavily skewed, with most line items being very small purchases, a long tail of very large orders, and a noticeable presence of negative quantities that represent returns.",
+    "insight_source": "llm",
+    "llm_insight": "Quantities are heavily skewed, with most line items being very small purchases, a long tail of very large orders, and a noticeable presence of negative quantities that represent returns.",
+    "insight_facts": "Quantity ranges from -9,360 to 2,880 (median 2, mean 7.77) across 20,000 rows in the full file. It is left-skewed (skewness -80.99): a few small values pull the mean below the median. The lowest 200 values (below -1.01, down to -9,360) are grouped in the first bar so the rest of the distribution is readable. 309 values are negative, which may be data-entry errors worth checking.",
+    "derived_data": {}
+   },
+   {
+    "id": "llm_2",
+    "type": "histogram",
+    "title": "Right‑skewed price distribution",
+    "llm_title": "Right‑skewed price distribution",
+    "insight": "Unit prices are right‑skewed, meaning the bulk of items are low‑priced while a small number of products are priced very high, highlighting a pricing mix focused on inexpensive goods. UnitPrice ranges from 0 to 13,541 (median 2.51, mean 7.65) across 20,000 rows in the full file. It is right-skewed (skewness 62.90): a few large values pull the mean above the median. The top 196 values (above 20.38, up to 13,541) are grouped in the last bar so the rest of the distribution is readable.",
+    "reason": "Unit prices are right‑skewed, meaning the bulk of items are low‑priced while a small number of products are priced very high, highlighting a pricing mix focused on inexpensive goods. UnitPrice ranges from 0 to 13,541 (median 2.51, mean 7.65) across 20,000 rows in the full file. It is right-skewed (skewness 62.90): a few large values pull the mean above the median. The top 196 values (above 20.38, up to 13,541) are grouped in the last bar so the rest of the distribution is readable.",
+    "headline": "Unit prices are right‑skewed, meaning the bulk of items are low‑priced while a small number of products are priced very high, highlighting a pricing mix focused on inexpensive goods.",
+    "insight_source": "llm",
+    "llm_insight": "Unit prices are right‑skewed, meaning the bulk of items are low‑priced while a small number of products are priced very high, highlighting a pricing mix focused on inexpensive goods.",
+    "insight_facts": "UnitPrice ranges from 0 to 13,541 (median 2.51, mean 7.65) across 20,000 rows in the full file. It is right-skewed (skewness 62.90): a few large values pull the mean above the median. The top 196 values (above 20.38, up to 13,541) are grouped in the last bar so the rest of the distribution is readable.",
+    "derived_data": {}
+   }
+  ],
+  "profile_overview": {
+   "domain": "retail",
+   "domain_reasoning": "2 distinct cue(s) matched column names (Quantity, UnitPrice)",
+   "readiness_score": 85,
+   "readiness_reasoning": "High completeness but missing key identifier reduces confidence",
+   "red_flags": [
+    "CustomerID missing in 33.3% rows",
+    "Negative Quantity values observed",
+    "Potential duplicate line items per invoice"
+   ],
+   "quick_wins": [
+    "Add TotalPrice column",
+    "Impute missing CustomerID via last known value",
+    "Remove or flag negative quantities",
+    "Summarize sales by Country"
+   ],
+   "strengths": [
+    "Overall completeness ~96%",
+    "All essential columns present",
+    "No constant columns detected"
+   ],
+   "concerns": [
+    "CustomerID has high missing rate",
+    "Potential duplicate InvoiceNo entries per transaction",
+    "Quantity may include returns (negative values)"
+   ],
+   "analysis_suggestions": [
+    "RFM segmentation by CustomerID",
+    "Market basket analysis on StockCode"
+   ]
+  },
+  "dataset_summary_insights": [
+   "8 columns profiled on 11,000 sampled rows (of 20,000 in the file): 3 numeric measures, 4 categories, 1 date column.",
+   "1 column is more than 20% empty in the sample; the emptiest is CustomerID (28%). Analyses using it will drop or need to fill many rows.",
+   "Quantity is heavily left-skewed in the sample (skewness -72.0): median 2 vs mean 7.63, so use the median for a typical value. Also strongly skewed: UnitPrice."
+  ],
+  "upload_message": "**retail** dataset · 20,000 rows × 8 columns.\n2 distinct cue(s) matched column names (Quantity, UnitPrice)\n\n**Data readiness: 85/100.** High completeness but missing key identifier reduces confidence\n\n**Key findings**\n- Records by Country: the largest groups are United Kingdom (19,012 rows, 95.1%), Germany (256 rows, 1.3%), France (197 rows, 1.0%) in the full file. The top 3 of 16 make up 97% of the total.\n- Quantities are heavily skewed, with most line items being very small purchases, a long tail of very large orders, and a noticeable presence of negative quantities that represent returns.\n- Unit prices are right‑skewed, meaning the bulk of items are low‑priced while a small number of products are priced very high, highlighting a pricing mix focused on inexpensive goods.\n\n**Watch out for**\n- CustomerID missing in 33.3% rows\n- Negative Quantity values observed\n- Potential duplicate line items per invoice\n\n**Try asking**\n- RFM segmentation by CustomerID\n- Market basket analysis on StockCode"
+ },
+ "rw7b/nullxlsx": {
+  "dataset": {
+   "total_rows": 60,
+   "n_columns": 5
+  },
+  "charts": [
+   {
+    "id": "llm_0",
+    "type": "bar",
+    "title": "Average glucose by outcome",
+    "llm_title": "Average glucose by outcome",
+    "insight": "Patients who were readmitted had a higher average glucose level than those who recovered, indicating that elevated glucose may be a risk factor for readmission. Average Glucose by Outcome: highest is Recovered (115.50), lowest is RECOVERED (105.70) in the sample. The gap between groups is small (9% from lowest to highest).",
+    "reason": "Patients who were readmitted had a higher average glucose level than those who recovered, indicating that elevated glucose may be a risk factor for readmission. Average Glucose by Outcome: highest is Recovered (115.50), lowest is RECOVERED (105.70) in the sample. The gap between groups is small (9% from lowest to highest).",
+    "headline": "Patients who were readmitted had a higher average glucose level than those who recovered, indicating that elevated glucose may be a risk factor for readmission.",
+    "insight_source": "llm",
+    "llm_insight": "Patients who were readmitted had a higher average glucose level than those who recovered, indicating that elevated glucose may be a risk factor for readmission.",
+    "insight_facts": "Average Glucose by Outcome: highest is Recovered (115.50), lowest is RECOVERED (105.70) in the sample. The gap between groups is small (9% from lowest to highest).",
+    "derived_data": {}
+   },
+   {
+    "id": "llm_1",
+    "type": "bar",
+    "title": "Records by Outcome",
+    "llm_title": "Outcome label casing",
+    "insight": "Records by Outcome: the groups are Recovered (20 rows, 33.3%), RECOVERED (20 rows, 33.3%), Readmitted (20 rows, 33.3%) in the sample. The groups are nearly equal in size, so Outcome on its own does not separate the data much.",
+    "reason": "Records by Outcome: the groups are Recovered (20 rows, 33.3%), RECOVERED (20 rows, 33.3%), Readmitted (20 rows, 33.3%) in the sample. The groups are nearly equal in size, so Outcome on its own does not separate the data much.",
+    "headline": null,
+    "insight_source": "data",
+    "llm_insight": "The outcome column contains both capitalized and lower‑case versions of the recovered label, which can split the recovered group in analysis and lead to inaccurate reporting.",
+    "insight_facts": "Records by Outcome: the groups are Recovered (20 rows, 33.3%), RECOVERED (20 rows, 33.3%), Readmitted (20 rows, 33.3%) in the sample. The groups are nearly equal in size, so Outcome on its own does not separate the data much.",
+    "derived_data": {
+     "llm_insight_replaced": "The outcome column contains both capitalized and lower‑case versions of the recovered label, which can split the recovered group in analysis and lead to inaccurate reporting.",
+     "llm_title_replaced": "Outcome label casing"
+    }
+   },
+   {
+    "id": "llm_4",
+    "type": "histogram",
+    "title": "Glucose distribution",
+    "llm_title": "Glucose distribution",
+    "insight": "Glucose measurements exhibit a right‑skewed distribution, with a tail of high values that may signal patients at risk of hyperglycemia. Glucose ranges from 71 to 174 (median 107.50, mean 111.45) across 58 rows in the sample. Values are spread fairly evenly across the range, with no strong peak. 2 rows (3.3%) have no value.",
+    "reason": "Glucose measurements exhibit a right‑skewed distribution, with a tail of high values that may signal patients at risk of hyperglycemia. Glucose ranges from 71 to 174 (median 107.50, mean 111.45) across 58 rows in the sample. Values are spread fairly evenly across the range, with no strong peak. 2 rows (3.3%) have no value.",
+    "headline": "Glucose measurements exhibit a right‑skewed distribution, with a tail of high values that may signal patients at risk of hyperglycemia.",
+    "insight_source": "llm",
+    "llm_insight": "Glucose measurements exhibit a right‑skewed distribution, with a tail of high values that may signal patients at risk of hyperglycemia.",
+    "insight_facts": "Glucose ranges from 71 to 174 (median 107.50, mean 111.45) across 58 rows in the sample. Values are spread fairly evenly across the range, with no strong peak. 2 rows (3.3%) have no value.",
+    "derived_data": {}
+   },
+   {
+    "id": "pie_Notes",
+    "type": "pie",
+    "title": "Share of records by Notes",
+    "llm_title": null,
+    "insight": "Clinician notes are dominated by placeholder entries such as 'nan', 'n/a', '-' and '?', limiting their usefulness for extracting clinical insights. Records by Notes: the largest groups are follow-up booked (9 rows, 21.4%), n/a (9 rows, 21.4%), - (8 rows, 19.0%) (out of the 42 rows with a value for Notes) in the sample. The top 3 of 5 make up 62% of the total. 18 rows (30.0%) have no Notes and are left out of the chart.",
+    "reason": "Clinician notes are dominated by placeholder entries such as 'nan', 'n/a', '-' and '?', limiting their usefulness for extracting clinical insights. Records by Notes: the largest groups are follow-up booked (9 rows, 21.4%), n/a (9 rows, 21.4%), - (8 rows, 19.0%) (out of the 42 rows with a value for Notes) in the sample. The top 3 of 5 make up 62% of the total. 18 rows (30.0%) have no Notes and are left out of the chart.",
+    "headline": "Clinician notes are dominated by placeholder entries such as 'nan', 'n/a', '-' and '?', limiting their usefulness for extracting clinical insights.",
+    "insight_source": "llm",
+    "llm_insight": "Clinician notes are dominated by placeholder entries such as 'nan', 'n/a', '-' and '?', limiting their usefulness for extracting clinical insights.",
+    "insight_facts": "Records by Notes: the largest groups are follow-up booked (9 rows, 21.4%), n/a (9 rows, 21.4%), - (8 rows, 19.0%) (out of the 42 rows with a value for Notes) in the sample. The top 3 of 5 make up 62% of the total. 18 rows (30.0%) have no Notes and are left out of the chart.",
+    "derived_data": {}
+   }
+  ],
+  "profile_overview": {
+   "domain": "healthcare",
+   "domain_reasoning": "2 distinct cue(s) matched column names (Glucose, patient_id)",
+   "readiness_score": 78,
+   "readiness_reasoning": "High completeness but format inconsistencies and type issues lower immediate usability.",
+   "red_flags": [
+    "Mixed date formats",
+    "Inconsistent outcome casing",
+    "Non‑numeric glucose values",
+    "Placeholder text in Notes"
+   ],
+   "quick_wins": [
+    "Parse and unify all visit_date entries",
+    "Standardize Outcome strings",
+    "Cast Glucose to numeric type",
+    "Replace empty/NULL Notes with proper missing indicator"
+   ],
+   "strengths": [
+    "99% overall completeness",
+    "Only five columns, easy to manage",
+    "Patient IDs appear unique",
+    "Glucose values present for all rows"
+   ],
+   "concerns": [
+    "Visit_date uses multiple formats",
+    "Outcome values have inconsistent casing",
+    "Notes contain empty strings and placeholders",
+    "Glucose stored as text, not numeric"
+   ],
+   "analysis_suggestions": [
+    "Model the relationship between Glucose levels and Outcome (Recovered vs Readmitted) over time"
+   ]
+  },
+  "dataset_summary_insights": [
+   "5 columns profiled on 60 sampled rows: 1 numeric measures, 2 categories, 2 ID or free-text columns that are not charted.",
+   "Data is largely complete: 1.0% of cells are empty in the sample, and no column is more than 20% empty."
+  ],
+  "upload_message": "**healthcare** dataset · 60 rows × 5 columns.\n2 distinct cue(s) matched column names (Glucose, patient_id)\n\n**Data readiness: 78/100.** High completeness but format inconsistencies and type issues lower immediate usability.\n\n**Key findings**\n- Patients who were readmitted had a higher average glucose level than those who recovered, indicating that elevated glucose may be a risk factor for readmission.\n- Records by Outcome: the groups are Recovered (20 rows, 33.3%), RECOVERED (20 rows, 33.3%), Readmitted (20 rows, 33.3%) in the sample. The groups are nearly equal in size, so Outcome on its own does not separate the data much.\n- Glucose measurements exhibit a right‑skewed distribution, with a tail of high values that may signal patients at risk of hyperglycemia.\n\n**Watch out for**\n- Mixed date formats\n- Inconsistent outcome casing\n- Non‑numeric glucose values\n\n**Try asking**\n- Model the relationship between Glucose levels and Outcome (Recovered vs Readmitted) over time"
+ },
+ "rw7b/recipes_jsonl": {
+  "dataset": {
+   "total_rows": 12190,
+   "n_columns": 8
+  },
+  "charts": [
+   {
+    "id": "llm_0",
+    "type": "bar",
+    "title": "Records by Url",
+    "llm_title": "Few URLs dominate",
+    "insight": "Records by Url: the largest groups are https://www.chefkoch.de/rezepte/1547251261244879/ (133 rows, 3.3%), https://www.chefkoch.de/rezepte/508111146130787/ (115 rows, 2.9%), https://www.chefkoch.de/rezepte/72871027332969/ (40 rows, 1.0%) in the sample. The top 3 of 193 make up 7% of the total.",
+    "reason": "Records by Url: the largest groups are https://www.chefkoch.de/rezepte/1547251261244879/ (133 rows, 3.3%), https://www.chefkoch.de/rezepte/508111146130787/ (115 rows, 2.9%), https://www.chefkoch.de/rezepte/72871027332969/ (40 rows, 1.0%) in the sample. The top 3 of 193 make up 7% of the total.",
+    "headline": null,
+    "insight_source": "data",
+    "llm_insight": "A handful of recipe URLs account for a large share of the data, indicating that a few recipes dominate the collection.",
+    "insight_facts": "Records by Url: the largest groups are https://www.chefkoch.de/rezepte/1547251261244879/ (133 rows, 3.3%), https://www.chefkoch.de/rezepte/508111146130787/ (115 rows, 2.9%), https://www.chefkoch.de/rezepte/72871027332969/ (40 rows, 1.0%) in the sample. The top 3 of 193 make up 7% of the total.",
+    "derived_data": {
+     "llm_insight_replaced": "A handful of recipe URLs account for a large share of the data, indicating that a few recipes dominate the collection.",
+     "llm_title_replaced": "Few URLs dominate"
+    }
+   },
+   {
+    "id": "llm_1",
+    "type": "bar",
+    "title": "Records by Instructions",
+    "llm_title": "Dominant instruction texts",
+    "insight": "Records by Instructions: the largest groups are Das Suppengemüse (2 große Möhren, ein Stück Sellerie, eine halbe Stange Porree - das Weiße) und die Zwiebel in gleich große Würfelchen schneiden, den Porree längs halbieren und in Streifen schneiden, Knoblauch und Chilischote hacken.Alles zusammen in der Kräuterbutter anschwitzen. Mit gut 200 ml Weißwein ablöschen und etwas einkochen lassen. Fischfond mit derselben Menge Wasser dazugeben. Hummer- und Krustentierpaste und die Crème fraîche einrühren. Mit Salz abschmecken. Alles zusammen kurz aufkochen lassen.Jetzt die Fischfilets in nicht zu kleinen Stücken, die Shrimps und die Flusskrebsschwänze dazugeben und alles zusammen auf ganz kleiner Flamme 15 Minuten ziehen lassen.Zitronenviertel und frischen, gehackten Dill extra dazu reichen, das Fischaroma soll nicht schon im Topf erschlagen werden.Alle mageren, festen Fischsorten sind geeignet (wer mag, kann auch Wels, Pangasius, Rotbarben und Kabeljau nehmen). (67 rows, 1.7%), Die Eier pochieren. Dafür in einem mittleren Topf Essigwasser zum Kochen bringen und danach ein bisschen herunterdrehen, bis das Wasser simmert. Mit einem Schneebesen im Wasser einen Strudel erzeugen. In diesen Strudel die Eier schlagen. Wichtig ist, dass das Wasser an diesem Punkt noch in Bewegung ist. Danach den Deckel auf den Topf setzen und je nach Eiergröße 2 - 3 Minuten simmern lassen. Danach die Eier mit einem Sieb vorsichtig aus dem Wasser heben und auf Küchenpapier abtropfen lassen.Die Toastbrötchenhälften im Toaster, einer Pfanne oder im Ofen kross toasten bzw. backen. Den Speck ohne Fett in einer Pfanne von beiden Seiten kross anbraten und ebenfalls auf Küchenpapier abtropfen lassen. Alternativ kann man den Speck auch im Ofen auslassen. Die Sauce Hollandaise in einem Topf oder ebenfalls im Ofen erhitzen.Alles zusammen mit den pochierten Eiern auf den Toastbrötchen anrichten. Ein paar Kräuter darüber streuen. (48 rows, 1.2%), Die Schinkentranchen halbieren. Die Schwarzwurzeln abtropfen lassen und jede (oder jeweils mehrere) in eine halbe Schinkentranche wickeln. In eine ausgebutterte Auflaufform legen.Rahm, Eigelb und geriebenen Käse verquirlen. Nach eigenem Geschmack würzen. Mit einigen Spritzern Cognac abschmecken. Alles über die Schwarzwurzel-Schinkenrollen gießen.Im heißen Backofen bei 220 °C Ober-/Unterhitze 20 Minuten gratinieren. Petersilie darüber streuen.Dazu passt gekochter Reis. (22 rows, 0.5%) in the sample. The top 3 of 2447 make up 3% of the total.",
+    "reason": "Records by Instructions: the largest groups are Das Suppengemüse (2 große Möhren, ein Stück Sellerie, eine halbe Stange Porree - das Weiße) und die Zwiebel in gleich große Würfelchen schneiden, den Porree längs halbieren und in Streifen schneiden, Knoblauch und Chilischote hacken.Alles zusammen in der Kräuterbutter anschwitzen. Mit gut 200 ml Weißwein ablöschen und etwas einkochen lassen. Fischfond mit derselben Menge Wasser dazugeben. Hummer- und Krustentierpaste und die Crème fraîche einrühren. Mit Salz abschmecken. Alles zusammen kurz aufkochen lassen.Jetzt die Fischfilets in nicht zu kleinen Stücken, die Shrimps und die Flusskrebsschwänze dazugeben und alles zusammen auf ganz kleiner Flamme 15 Minuten ziehen lassen.Zitronenviertel und frischen, gehackten Dill extra dazu reichen, das Fischaroma soll nicht schon im Topf erschlagen werden.Alle mageren, festen Fischsorten sind geeignet (wer mag, kann auch Wels, Pangasius, Rotbarben und Kabeljau nehmen). (67 rows, 1.7%), Die Eier pochieren. Dafür in einem mittleren Topf Essigwasser zum Kochen bringen und danach ein bisschen herunterdrehen, bis das Wasser simmert. Mit einem Schneebesen im Wasser einen Strudel erzeugen. In diesen Strudel die Eier schlagen. Wichtig ist, dass das Wasser an diesem Punkt noch in Bewegung ist. Danach den Deckel auf den Topf setzen und je nach Eiergröße 2 - 3 Minuten simmern lassen. Danach die Eier mit einem Sieb vorsichtig aus dem Wasser heben und auf Küchenpapier abtropfen lassen.Die Toastbrötchenhälften im Toaster, einer Pfanne oder im Ofen kross toasten bzw. backen. Den Speck ohne Fett in einer Pfanne von beiden Seiten kross anbraten und ebenfalls auf Küchenpapier abtropfen lassen. Alternativ kann man den Speck auch im Ofen auslassen. Die Sauce Hollandaise in einem Topf oder ebenfalls im Ofen erhitzen.Alles zusammen mit den pochierten Eiern auf den Toastbrötchen anrichten. Ein paar Kräuter darüber streuen. (48 rows, 1.2%), Die Schinkentranchen halbieren. Die Schwarzwurzeln abtropfen lassen und jede (oder jeweils mehrere) in eine halbe Schinkentranche wickeln. In eine ausgebutterte Auflaufform legen.Rahm, Eigelb und geriebenen Käse verquirlen. Nach eigenem Geschmack würzen. Mit einigen Spritzern Cognac abschmecken. Alles über die Schwarzwurzel-Schinkenrollen gießen.Im heißen Backofen bei 220 °C Ober-/Unterhitze 20 Minuten gratinieren. Petersilie darüber streuen.Dazu passt gekochter Reis. (22 rows, 0.5%) in the sample. The top 3 of 2447 make up 3% of the total.",
+    "headline": null,
+    "insight_source": "data",
+    "llm_insight": "A handful of instruction texts dominate the dataset, accounting for a large share of the recipes.",
+    "insight_facts": "Records by Instructions: the largest groups are Das Suppengemüse (2 große Möhren, ein Stück Sellerie, eine halbe Stange Porree - das Weiße) und die Zwiebel in gleich große Würfelchen schneiden, den Porree längs halbieren und in Streifen schneiden, Knoblauch und Chilischote hacken.Alles zusammen in der Kräuterbutter anschwitzen. Mit gut 200 ml Weißwein ablöschen und etwas einkochen lassen. Fischfond mit derselben Menge Wasser dazugeben. Hummer- und Krustentierpaste und die Crème fraîche einrühren. Mit Salz abschmecken. Alles zusammen kurz aufkochen lassen.Jetzt die Fischfilets in nicht zu kleinen Stücken, die Shrimps und die Flusskrebsschwänze dazugeben und alles zusammen auf ganz kleiner Flamme 15 Minuten ziehen lassen.Zitronenviertel und frischen, gehackten Dill extra dazu reichen, das Fischaroma soll nicht schon im Topf erschlagen werden.Alle mageren, festen Fischsorten sind geeignet (wer mag, kann auch Wels, Pangasius, Rotbarben und Kabeljau nehmen). (67 rows, 1.7%), Die Eier pochieren. Dafür in einem mittleren Topf Essigwasser zum Kochen bringen und danach ein bisschen herunterdrehen, bis das Wasser simmert. Mit einem Schneebesen im Wasser einen Strudel erzeugen. In diesen Strudel die Eier schlagen. Wichtig ist, dass das Wasser an diesem Punkt noch in Bewegung ist. Danach den Deckel auf den Topf setzen und je nach Eiergröße 2 - 3 Minuten simmern lassen. Danach die Eier mit einem Sieb vorsichtig aus dem Wasser heben und auf Küchenpapier abtropfen lassen.Die Toastbrötchenhälften im Toaster, einer Pfanne oder im Ofen kross toasten bzw. backen. Den Speck ohne Fett in einer Pfanne von beiden Seiten kross anbraten und ebenfalls auf Küchenpapier abtropfen lassen. Alternativ kann man den Speck auch im Ofen auslassen. Die Sauce Hollandaise in einem Topf oder ebenfalls im Ofen erhitzen.Alles zusammen mit den pochierten Eiern auf den Toastbrötchen anrichten. Ein paar Kräuter darüber streuen. (48 rows, 1.2%), Die Schinkentranchen halbieren. Die Schwarzwurzeln abtropfen lassen und jede (oder jeweils mehrere) in eine halbe Schinkentranche wickeln. In eine ausgebutterte Auflaufform legen.Rahm, Eigelb und geriebenen Käse verquirlen. Nach eigenem Geschmack würzen. Mit einigen Spritzern Cognac abschmecken. Alles über die Schwarzwurzel-Schinkenrollen gießen.Im heißen Backofen bei 220 °C Ober-/Unterhitze 20 Minuten gratinieren. Petersilie darüber streuen.Dazu passt gekochter Reis. (22 rows, 0.5%) in the sample. The top 3 of 2447 make up 3% of the total.",
+    "derived_data": {
+     "llm_insight_replaced": "A handful of instruction texts dominate the dataset, accounting for a large share of the recipes.",
+     "llm_title_replaced": "Dominant instruction texts"
+    }
+   },
+   {
+    "id": "llm_2",
+    "type": "bar",
+    "title": "Early‑year posting peak",
+    "llm_title": "Early‑year posting peak",
+    "insight": "Recipes are most frequently posted in the first two months of the year, with January and February together accounting for a large share of the data. This suggests a seasonal peak that could be leveraged for planning content releases. Total Day by Month: the largest groups are February (448, 11.1%), January (448, 11.1%), September (340, 8.5%) in the sample. The top 3 of 12 make up 31% of the total.",
+    "reason": "Recipes are most frequently posted in the first two months of the year, with January and February together accounting for a large share of the data. This suggests a seasonal peak that could be leveraged for planning content releases. Total Day by Month: the largest groups are February (448, 11.1%), January (448, 11.1%), September (340, 8.5%) in the sample. The top 3 of 12 make up 31% of the total.",
+    "headline": "Recipes are most frequently posted in the first two months of the year, with January and February together accounting for a large share of the data. This suggests a seasonal peak that could be leveraged for planning content releases.",
+    "insight_source": "llm",
+    "llm_insight": "Recipes are most frequently posted in the first two months of the year, with January and February together accounting for a large share of the data. This suggests a seasonal peak that could be leveraged for planning content releases.",
+    "insight_facts": "Total Day by Month: the largest groups are February (448, 11.1%), January (448, 11.1%), September (340, 8.5%) in the sample. The top 3 of 12 make up 31% of the total.",
+    "derived_data": {}
+   },
+   {
+    "id": "llm_3",
+    "type": "bar",
+    "title": "Tuesday dominates posting days",
+    "llm_title": "Tuesday dominates posting days",
+    "insight": "Tuesday sees the highest number of recipe postings, followed by Saturday and Friday, indicating a weekly rhythm that could inform scheduling of promotions. Total Day by Weekday: the largest groups are Tuesday (668, 16.6%), Saturday (593, 14.8%), Friday (580, 14.4%) in the sample. The top 3 of 7 make up 46% of the total.",
+    "reason": "Tuesday sees the highest number of recipe postings, followed by Saturday and Friday, indicating a weekly rhythm that could inform scheduling of promotions. Total Day by Weekday: the largest groups are Tuesday (668, 16.6%), Saturday (593, 14.8%), Friday (580, 14.4%) in the sample. The top 3 of 7 make up 46% of the total.",
+    "headline": "Tuesday sees the highest number of recipe postings, followed by Saturday and Friday, indicating a weekly rhythm that could inform scheduling of promotions.",
+    "insight_source": "llm",
+    "llm_insight": "Tuesday sees the highest number of recipe postings, followed by Saturday and Friday, indicating a weekly rhythm that could inform scheduling of promotions.",
+    "insight_facts": "Total Day by Weekday: the largest groups are Tuesday (668, 16.6%), Saturday (593, 14.8%), Friday (580, 14.4%) in the sample. The top 3 of 7 make up 46% of the total.",
+    "derived_data": {}
+   },
+   {
+    "id": "llm_4",
+    "type": "line",
+    "title": "Stable yearly posting volume",
+    "llm_title": "Stable yearly posting volume",
+    "insight": "The volume of recipes posted each year has remained fairly steady over the observed period, showing no clear upward or downward trajectory. Total Day by Year: the largest groups are 2019 (248, 6.2%), 2003 (244, 6.1%), 2015 (244, 6.1%) in the sample. The top 3 of 17 make up 18% of the total. The groups are nearly equal in size, so Year on its own does not separate the data much.",
+    "reason": "The volume of recipes posted each year has remained fairly steady over the observed period, showing no clear upward or downward trajectory. Total Day by Year: the largest groups are 2019 (248, 6.2%), 2003 (244, 6.1%), 2015 (244, 6.1%) in the sample. The top 3 of 17 make up 18% of the total. The groups are nearly equal in size, so Year on its own does not separate the data much.",
+    "headline": "The volume of recipes posted each year has remained fairly steady over the observed period, showing no clear upward or downward trajectory.",
+    "insight_source": "llm",
+    "llm_insight": "The volume of recipes posted each year has remained fairly steady over the observed period, showing no clear upward or downward trajectory.",
+    "insight_facts": "Total Day by Year: the largest groups are 2019 (248, 6.2%), 2003 (244, 6.1%), 2015 (244, 6.1%) in the sample. The top 3 of 17 make up 18% of the total. The groups are nearly equal in size, so Year on its own does not separate the data much.",
+    "derived_data": {}
+   },
+   {
+    "id": "pie_Name",
+    "type": "pie",
+    "title": "Share of records by Name",
+    "llm_title": null,
+    "insight": "Records by Name: the largest groups are Herzhafte Pfannkuchen (133 rows, 3.3%), Fischsuppe (115 rows, 2.9%), Eier in Senfsauce (42 rows, 1.0%) in the sample. The top 3 of 192 make up 7% of the total.",
+    "reason": "Records by Name: the largest groups are Herzhafte Pfannkuchen (133 rows, 3.3%), Fischsuppe (115 rows, 2.9%), Eier in Senfsauce (42 rows, 1.0%) in the sample. The top 3 of 192 make up 7% of the total.",
+    "headline": null,
+    "insight_source": "data",
+    "llm_insight": null,
+    "insight_facts": "Records by Name: the largest groups are Herzhafte Pfannkuchen (133 rows, 3.3%), Fischsuppe (115 rows, 2.9%), Eier in Senfsauce (42 rows, 1.0%) in the sample. The top 3 of 192 make up 7% of the total.",
+    "derived_data": {}
+   }
+  ],
+  "profile_overview": {
+   "domain": null,
+   "domain_reasoning": "no column name matched a domain cue; treating the data as generic",
+   "readiness_score": 78,
+   "readiness_reasoning": "Data is complete and well‑structured, but constant column, string month, and unparsed ingredient lists require preprocessing.",
+   "red_flags": [
+    "Constant Day column",
+    "Month as textual month",
+    "Ingredients not normalized",
+    "Potential special‑character encoding issues",
+    "Limited row count for robust modeling"
+   ],
+   "quick_wins": [
+    "Drop Day column",
+    "Convert Month to numeric",
+    "Add recipe_id column",
+    "Trim whitespace and normalize Unicode",
+    "Count ingredients per recipe"
+   ],
+   "strengths": [
+    "Complete records, no missing values",
+    "Consistent column schema across rows",
+    "Rich textual fields enable NLP",
+    "Year, Month, Weekday give temporal context",
+    "URL uniquely identifies each recipe"
+   ],
+   "concerns": [
+    "\"Day\" column constant, no analytical value",
+    "Month stored as string, hampers chronological sorting",
+    "Ingredients as free‑text list, hard to aggregate",
+    "Potential language encoding characters in text",
+    "Small sample size limits statistical power"
+   ],
+   "analysis_suggestions": [
+    "Compute ingredient frequency and co‑occurrence network to discover popular combos"
+   ]
+  },
+  "dataset_summary_insights": [
+   "8 columns profiled on 4,018 sampled rows (of 12,190 in the file): 1 numeric measures, 7 categories.",
+   "No empty values in the sampled rows.",
+   "1 column holds a single value in the sample and adds no information: Day."
+  ],
+  "upload_message": "Dataset · 12,190 rows × 8 columns.\n\n**Data readiness: 78/100.** Data is complete and well‑structured, but constant column, string month, and unparsed ingredient lists require preprocessing.\n\n**Key findings**\n- Records by Url: the largest groups are https://www.chefkoch.de/rezepte/1547251261244879/ (133 rows, 3.3%), https://www.chefkoch.de/rezepte/508111146130787/ (115 rows, 2.9%), https://www.chefkoch.de/rezepte/72871027332969/ (40 rows, 1.0%) in the sample. The to…\n- Records by Instructions: the largest groups are Das Suppengemüse (2 große Möhren, ein Stück Sellerie, eine halbe Stange Porree - das Weiße) und die Zwiebel in gleich große Würfelchen schneiden, den Porree längs halbieren und in Streifen schneiden, Knoblauch u…\n- Recipes are most frequently posted in the first two months of the year, with January and February together accounting for a large share of the data. This suggests a seasonal peak that could be leveraged for planning content releases.\n\n**Watch out for**\n- Constant Day column\n- Month as textual month\n- Ingredients not normalized\n\n**Try asking**\n- Compute ingredient frequency and co‑occurrence network to discover popular combos"
+ },
+ "rw7b/stroke": {
+  "dataset": {
+   "total_rows": 5110,
+   "n_columns": 12
+  },
+  "charts": [
+   {
+    "id": "llm_0",
+    "type": "bar",
+    "title": "stroke rate by hypertension",
+    "llm_title": null,
+    "insight": "Patients with hypertension experience a noticeably higher stroke rate than those without, indicating a key risk factor to monitor. stroke rate by hypertension: 4.9% overall across 5,110 rows in the sample; highest for Yes (13.3% of 498 rows), lowest for No (4.0% of 4,612 rows). The highest group's rate is 3.3× the lowest.",
+    "reason": "Patients with hypertension experience a noticeably higher stroke rate than those without, indicating a key risk factor to monitor. stroke rate by hypertension: 4.9% overall across 5,110 rows in the sample; highest for Yes (13.3% of 498 rows), lowest for No (4.0% of 4,612 rows). The highest group's rate is 3.3× the lowest.",
+    "headline": "Patients with hypertension experience a noticeably higher stroke rate than those without, indicating a key risk factor to monitor.",
+    "insight_source": "llm",
+    "llm_insight": "Patients with hypertension experience a noticeably higher stroke rate than those without, indicating a key risk factor to monitor.",
+    "insight_facts": "stroke rate by hypertension: 4.9% overall across 5,110 rows in the sample; highest for Yes (13.3% of 498 rows), lowest for No (4.0% of 4,612 rows). The highest group's rate is 3.3× the lowest.",
+    "derived_data": {}
+   },
+   {
+    "id": "llm_1",
+    "type": "bar",
+    "title": "stroke rate by smoking_status",
+    "llm_title": null,
+    "insight": "Current smokers show a higher stroke occurrence compared with never‑smoked individuals, highlighting smoking as an important modifiable risk. stroke rate by smoking_status: 4.9% overall across 5,110 rows in the sample; highest for formerly smoked (7.9% of 885 rows), lowest for Unknown (3.0% of 1,544 rows). The highest group's rate is 2.6× the lowest.",
+    "reason": "Current smokers show a higher stroke occurrence compared with never‑smoked individuals, highlighting smoking as an important modifiable risk. stroke rate by smoking_status: 4.9% overall across 5,110 rows in the sample; highest for formerly smoked (7.9% of 885 rows), lowest for Unknown (3.0% of 1,544 rows). The highest group's rate is 2.6× the lowest.",
+    "headline": "Current smokers show a higher stroke occurrence compared with never‑smoked individuals, highlighting smoking as an important modifiable risk.",
+    "insight_source": "llm",
+    "llm_insight": "Current smokers show a higher stroke occurrence compared with never‑smoked individuals, highlighting smoking as an important modifiable risk.",
+    "insight_facts": "stroke rate by smoking_status: 4.9% overall across 5,110 rows in the sample; highest for formerly smoked (7.9% of 885 rows), lowest for Unknown (3.0% of 1,544 rows). The highest group's rate is 2.6× the lowest.",
+    "derived_data": {}
+   },
+   {
+    "id": "llm_2",
+    "type": "bar",
+    "title": "stroke rate by age",
+    "llm_title": null,
+    "insight": "stroke rate by age: 4.9% overall across 5,110 rows in the sample; highest for age 71.76–82 (18.6% of 649 rows), lowest for 20.56–30.80 (0.0% of 545 rows).",
+    "reason": "stroke rate by age: 4.9% overall across 5,110 rows in the sample; highest for age 71.76–82 (18.6% of 649 rows), lowest for 20.56–30.80 (0.0% of 545 rows).",
+    "headline": null,
+    "insight_source": "data",
+    "llm_insight": "Stroke becomes increasingly common as age rises, with older patients markedly more likely to have experienced a stroke.",
+    "insight_facts": "stroke rate by age: 4.9% overall across 5,110 rows in the sample; highest for age 71.76–82 (18.6% of 649 rows), lowest for 20.56–30.80 (0.0% of 545 rows).",
+    "derived_data": {
+     "llm_insight_replaced": "Stroke becomes increasingly common as age rises, with older patients markedly more likely to have experienced a stroke."
+    }
+   },
+   {
+    "id": "llm_3",
+    "type": "histogram",
+    "title": "Missing BMI Data",
+    "llm_title": "Missing BMI Data",
+    "insight": "Around four percent of records lack a valid BMI value, marked as “N/A”, which may introduce bias into any analysis that uses body‑mass index. bmi ranges from 10.30 to 97.60 (median 28.10, mean 28.89) across 4,909 rows in the sample. It is right-skewed (skewness 1.06): a few large values pull the mean above the median.",
+    "reason": "Around four percent of records lack a valid BMI value, marked as “N/A”, which may introduce bias into any analysis that uses body‑mass index. bmi ranges from 10.30 to 97.60 (median 28.10, mean 28.89) across 4,909 rows in the sample. It is right-skewed (skewness 1.06): a few large values pull the mean above the median.",
+    "headline": "Around four percent of records lack a valid BMI value, marked as “N/A”, which may introduce bias into any analysis that uses body‑mass index.",
+    "insight_source": "llm",
+    "llm_insight": "Around four percent of records lack a valid BMI value, marked as “N/A”, which may introduce bias into any analysis that uses body‑mass index.",
+    "insight_facts": "bmi ranges from 10.30 to 97.60 (median 28.10, mean 28.89) across 4,909 rows in the sample. It is right-skewed (skewness 1.06): a few large values pull the mean above the median.",
+    "derived_data": {}
+   },
+   {
+    "id": "pie_work_type",
+    "type": "pie",
+    "title": "Share of records by work_type",
+    "llm_title": null,
+    "insight": "work_type is split into Private (2,925 rows, 57.2%), Self-employed (819 rows, 16.0%), children (687 rows, 13.4%), Govt_job (657 rows, 12.9%), Never_worked (22 rows, 0.4%) in the sample.",
+    "reason": "work_type is split into Private (2,925 rows, 57.2%), Self-employed (819 rows, 16.0%), children (687 rows, 13.4%), Govt_job (657 rows, 12.9%), Never_worked (22 rows, 0.4%) in the sample.",
+    "headline": null,
+    "insight_source": "data",
+    "llm_insight": null,
+    "insight_facts": "Records by work_type: the largest groups are Private (2,925 rows, 57.2%), Self-employed (819 rows, 16.0%), children (687 rows, 13.4%) in the sample. The top 3 of 5 make up 87% of the total.",
+    "derived_data": {}
+   }
+  ],
+  "profile_overview": {
+   "domain": "healthcare",
+   "domain_reasoning": "2 distinct cue(s) matched column names (avg_glucose_level, bmi)",
+   "readiness_score": 92,
+   "readiness_reasoning": "High completeness but requires cleaning of BMI and categorical consistency",
+   "red_flags": [
+    "BMI \"N/A\" strings",
+    "Potential stroke imbalance",
+    "Mixed case in Residence_type"
+   ],
+   "quick_wins": [
+    "Cast BMI to numeric and flag N/A",
+    "One‑hot encode gender/work_type/smoking_status",
+    "Run class balance check on stroke",
+    "Create age bins for quick EDA",
+    "Verify unique IDs"
+   ],
+   "strengths": [
+    "Overall completeness 99.7%",
+    "All 12 columns present",
+    "Clear categorical labels",
+    "Numeric age and glucose",
+    "Balanced gender distribution"
+   ],
+   "concerns": [
+    "BMI stored as string",
+    "Missing BMI marked \"N/A\"",
+    "Potential stroke class imbalance",
+    "Inconsistent capitalization in Residence_type",
+    "No constant columns to flag"
+   ],
+   "analysis_suggestions": [
+    "Build a multivariate logistic regression model to predict stroke risk using age, hypertension, heart disease, BMI, glucose, and smoking status"
+   ]
+  },
+  "dataset_summary_insights": [
+   "12 columns profiled on 5,110 sampled rows: 3 numeric measures, 3 yes/no columns (hypertension, heart_disease, stroke), 5 categories, 1 ID or free-text column that is not charted.",
+   "Data is largely complete: 0.3% of cells are empty in the sample, and no column is more than 20% empty."
+  ],
+  "upload_message": "**healthcare** dataset · 5,110 rows × 12 columns.\n2 distinct cue(s) matched column names (avg_glucose_level, bmi)\n\n**Data readiness: 92/100.** High completeness but requires cleaning of BMI and categorical consistency\n\n**Key findings**\n- Patients with hypertension experience a noticeably higher stroke rate than those without, indicating a key risk factor to monitor.\n- Current smokers show a higher stroke occurrence compared with never‑smoked individuals, highlighting smoking as an important modifiable risk.\n- stroke rate by age: 4.9% overall across 5,110 rows in the sample; highest for age 71.76–82 (18.6% of 649 rows), lowest for 20.56–30.80 (0.0% of 545 rows).\n\n**Watch out for**\n- BMI \"N/A\" strings\n- Potential stroke imbalance\n- Mixed case in Residence_type\n\n**Try asking**\n- Build a multivariate logistic regression model to predict stroke risk using age, hypertension, heart disease, BMI, glucose, and smoking status"
+ },
+ "rw7b/taxi_rg": {
+  "dataset": {
+   "total_rows": 200000,
+   "n_columns": 19
+  },
+  "charts": [
+   {
+    "id": "llm_0",
+    "type": "bar",
+    "title": "Extra charge variation",
+    "llm_title": "Extra charge variation",
+    "insight": "Most trips carry the standard extra fee of one dollar, while a small minority show a higher extra fee of three and a half dollars, which may reflect special pricing or a data entry issue. Records by extra: the largest groups are 0 (90,976 rows, 45.5%), 2.5 (43,563 rows, 21.8%), 1 (33,899 rows, 16.9%) in the full file. The top 3 of 26 make up 84% of the total.",
+    "reason": "Most trips carry the standard extra fee of one dollar, while a small minority show a higher extra fee of three and a half dollars, which may reflect special pricing or a data entry issue. Records by extra: the largest groups are 0 (90,976 rows, 45.5%), 2.5 (43,563 rows, 21.8%), 1 (33,899 rows, 16.9%) in the full file. The top 3 of 26 make up 84% of the total.",
+    "headline": "Most trips carry the standard extra fee of one dollar, while a small minority show a higher extra fee of three and a half dollars, which may reflect special pricing or a data entry issue.",
+    "insight_source": "llm",
+    "llm_insight": "Most trips carry the standard extra fee of one dollar, while a small minority show a higher extra fee of three and a half dollars, which may reflect special pricing or a data entry issue.",
+    "insight_facts": "Records by extra: the largest groups are 0 (90,976 rows, 45.5%), 2.5 (43,563 rows, 21.8%), 1 (33,899 rows, 16.9%) in the full file. The top 3 of 26 make up 84% of the total.",
+    "derived_data": {}
+   },
+   {
+    "id": "llm_1",
+    "type": "bar",
+    "title": "Tip amount across payment methods",
+    "llm_title": "Tip amount across payment methods",
+    "insight": "A notable share of rides paid with the primary card method have no tip recorded, indicating possible missing tip data that could understate driver earnings. Average tip_amount by payment_type: highest is 1 (4.62), lowest is 2 (0.00) in the full file. The top group is 3795.1× the lowest.",
+    "reason": "A notable share of rides paid with the primary card method have no tip recorded, indicating possible missing tip data that could understate driver earnings. Average tip_amount by payment_type: highest is 1 (4.62), lowest is 2 (0.00) in the full file. The top group is 3795.1× the lowest.",
+    "headline": "A notable share of rides paid with the primary card method have no tip recorded, indicating possible missing tip data that could understate driver earnings.",
+    "insight_source": "llm",
+    "llm_insight": "A notable share of rides paid with the primary card method have no tip recorded, indicating possible missing tip data that could understate driver earnings.",
+    "insight_facts": "Average tip_amount by payment_type: highest is 1 (4.62), lowest is 2 (0.00) in the full file. The top group is 3795.1× the lowest.",
+    "derived_data": {}
+   },
+   {
+    "id": "llm_2",
+    "type": "bar",
+    "title": "Vendor revenue comparison",
+    "llm_title": "Vendor revenue comparison",
+    "insight": "One taxi vendor consistently generates higher total fares than the other, suggesting a revenue advantage that could be explored for best practices. Average total_amount by VendorID: highest is 2 (30.21), lowest is 1 (28.25) in the full file. The gap between groups is small (7% from lowest to highest).",
+    "reason": "One taxi vendor consistently generates higher total fares than the other, suggesting a revenue advantage that could be explored for best practices. Average total_amount by VendorID: highest is 2 (30.21), lowest is 1 (28.25) in the full file. The gap between groups is small (7% from lowest to highest).",
+    "headline": "One taxi vendor consistently generates higher total fares than the other, suggesting a revenue advantage that could be explored for best practices.",
+    "insight_source": "llm",
+    "llm_insight": "One taxi vendor consistently generates higher total fares than the other, suggesting a revenue advantage that could be explored for best practices.",
+    "insight_facts": "Average total_amount by VendorID: highest is 2 (30.21), lowest is 1 (28.25) in the full file. The gap between groups is small (7% from lowest to highest).",
+    "derived_data": {}
+   },
+   {
+    "id": "llm_3",
+    "type": "histogram",
+    "title": "Distribution of trip_distance",
+    "llm_title": "Trip distance skew",
+    "insight": "trip_distance ranges from 0 to 10,879 (median 1.87, mean 4.09) across 200,000 rows in the full file. It is right-skewed (skewness 408.16): a few large values pull the mean above the median. The top 2,000 values (above 21.35, up to 10,879) are grouped in the last bar so the rest of the distribution is readable.",
+    "reason": "trip_distance ranges from 0 to 10,879 (median 1.87, mean 4.09) across 200,000 rows in the full file. It is right-skewed (skewness 408.16): a few large values pull the mean above the median. The top 2,000 values (above 21.35, up to 10,879) are grouped in the last bar so the rest of the distribution is readable.",
+    "headline": null,
+    "insight_source": "data",
+    "llm_insight": "Trip distances are heavily right‑skewed, with the majority of rides being short but a long tail of much longer trips, affecting fuel cost and pricing models.",
+    "insight_facts": "trip_distance ranges from 0 to 10,879 (median 1.87, mean 4.09) across 200,000 rows in the full file. It is right-skewed (skewness 408.16): a few large values pull the mean above the median. The top 2,000 values (above 21.35, up to 10,879) are grouped in the last bar so the rest of the distribution is readable.",
+    "derived_data": {
+     "llm_title_replaced": "Trip distance skew"
+    }
+   },
+   {
+    "id": "pie_store_and_fwd_flag",
+    "type": "pie",
+    "title": "Share of records by store_and_fwd_flag",
+    "llm_title": null,
+    "insight": "Records by store_and_fwd_flag: the groups are N (199,246 rows, 99.6%), Y (754 rows, 0.4%) in the full file.",
+    "reason": "Records by store_and_fwd_flag: the groups are N (199,246 rows, 99.6%), Y (754 rows, 0.4%) in the full file.",
+    "headline": null,
+    "insight_source": "data",
+    "llm_insight": null,
+    "insight_facts": "Records by store_and_fwd_flag: the groups are N (199,246 rows, 99.6%), Y (754 rows, 0.4%) in the full file.",
+    "derived_data": {}
+   }
+  ],
+  "profile_overview": {
+   "domain": "logistics",
+   "domain_reasoning": "3 distinct cue(s) matched column names (VendorID, tpep_pickup_datetime, trip_distance)",
+   "readiness_score": 88,
+   "readiness_reasoning": null,
+   "red_flags": [
+    "Extra charge 3.5 deviates from typical 1.0",
+    "Zero tip despite credit card payment",
+    "No timezone in datetime strings",
+    "Potential duplicate timestamps"
+   ],
+   "quick_wins": [
+    "Calculate trip duration from timestamps",
+    "Create fare per mile metric",
+    "Flag trips with tip=0 for review",
+    "Summarize top 5 pickup locations",
+    "Plot payment type distribution"
+   ],
+   "strengths": [
+    "100% completeness across all rows",
+    "No missing values in any column",
+    "Rich set of fare-related columns",
+    "Timestamp fields present for pickup/dropoff",
+    "Diverse location IDs"
+   ],
+   "concerns": [
+    "Potential outliers in extra and surcharge values",
+    "Zero tip entries may indicate data issues",
+    "No timezone info in datetime fields",
+    "Possible duplicate trips not checked"
+   ],
+   "analysis_suggestions": [
+    "Fare vs distance regression analysis",
+    "Tip amount patterns by payment type",
+    "Peak hour demand by location pair"
+   ]
+  },
+  "dataset_summary_insights": [
+   "19 columns profiled on 22,000 sampled rows (of 200,000 in the file): 16 numeric measures, 1 categories, 2 date columns.",
+   "No empty values in the sampled rows.",
+   "Strongest relationships between numeric columns in the sample: mta_tax and improvement_surcharge rise together (r = 0.88); trip_distance and total_amount rise together (r = 0.86).",
+   "RatecodeID is heavily right-skewed in the sample (skewness 10.1): median 1 vs mean 2.06, so use the median for a typical value. Also strongly skewed: improvement_surcharge, mta_tax, tip_amount."
+  ],
+  "upload_message": "**logistics** dataset · 200,000 rows × 19 columns.\n3 distinct cue(s) matched column names (VendorID, tpep_pickup_datetime, trip_distance)\n\n**Data readiness: 88/100.**\n\n**Key findings**\n- Most trips carry the standard extra fee of one dollar, while a small minority show a higher extra fee of three and a half dollars, which may reflect special pricing or a data entry issue.\n- A notable share of rides paid with the primary card method have no tip recorded, indicating possible missing tip data that could understate driver earnings.\n- One taxi vendor consistently generates higher total fares than the other, suggesting a revenue advantage that could be explored for best practices.\n\n**Watch out for**\n- Extra charge 3.5 deviates from typical 1.0\n- Zero tip despite credit card payment\n- No timezone in datetime strings\n\n**Try asking**\n- Fare vs distance regression analysis\n- Tip amount patterns by payment type\n- Peak hour demand by location pair"
+ },
+ "rw7c/stroke": {
+  "dataset": {
+   "total_rows": 5110,
+   "n_columns": 12
+  },
+  "charts": [
+   {
+    "id": "llm_0",
+    "type": "bar",
+    "title": "stroke rate by smoking_status",
+    "llm_title": null,
+    "insight": "stroke rate by smoking_status: 4.9% overall across 5,110 rows in the sample; highest for formerly smoked (7.9% of 885 rows), lowest for Unknown (3.0% of 1,544 rows). The highest group's rate is 2.6× the lowest.",
+    "reason": "stroke rate by smoking_status: 4.9% overall across 5,110 rows in the sample; highest for formerly smoked (7.9% of 885 rows), lowest for Unknown (3.0% of 1,544 rows). The highest group's rate is 2.6× the lowest.",
+    "headline": null,
+    "insight_source": "data",
+    "llm_insight": "Patients who currently smoke have the highest stroke rate, while those who never smoked have the lowest.",
+    "insight_facts": "stroke rate by smoking_status: 4.9% overall across 5,110 rows in the sample; highest for formerly smoked (7.9% of 885 rows), lowest for Unknown (3.0% of 1,544 rows). The highest group's rate is 2.6× the lowest.",
+    "derived_data": {
+     "llm_insight_replaced": "Patients who currently smoke have the highest stroke rate, while those who never smoked have the lowest."
+    }
+   },
+   {
+    "id": "llm_1",
+    "type": "bar",
+    "title": "stroke rate by work_type",
+    "llm_title": null,
+    "insight": "stroke rate by work_type: 4.9% overall across 5,110 rows in the sample; highest for Self-employed (7.9% of 819 rows), lowest for Never_worked (0.0% of 22 rows).",
+    "reason": "stroke rate by work_type: 4.9% overall across 5,110 rows in the sample; highest for Self-employed (7.9% of 819 rows), lowest for Never_worked (0.0% of 22 rows).",
+    "headline": null,
+    "insight_source": "data",
+    "llm_insight": "Among employment categories, private‑sector patients show a higher stroke proportion than self‑employed or never‑worked patients.",
+    "insight_facts": "stroke rate by work_type: 4.9% overall across 5,110 rows in the sample; highest for Self-employed (7.9% of 819 rows), lowest for Never_worked (0.0% of 22 rows).",
+    "derived_data": {
+     "llm_insight_replaced": "Among employment categories, private‑sector patients show a higher stroke proportion than self‑employed or never‑worked patients."
+    }
+   },
+   {
+    "id": "llm_2",
+    "type": "bar",
+    "title": "Glucose level vs stroke",
+    "llm_title": "Glucose level vs stroke",
+    "insight": "Average glucose levels are noticeably higher for patients who experienced a stroke compared with those who did not. Average avg_glucose_level by stroke: highest is 1 (132.54), lowest is 0 (104.80) in the sample. The gap between groups is small (26% from lowest to highest).",
+    "reason": "Average glucose levels are noticeably higher for patients who experienced a stroke compared with those who did not. Average avg_glucose_level by stroke: highest is 1 (132.54), lowest is 0 (104.80) in the sample. The gap between groups is small (26% from lowest to highest).",
+    "headline": "Average glucose levels are noticeably higher for patients who experienced a stroke compared with those who did not.",
+    "insight_source": "llm",
+    "llm_insight": "Average glucose levels are noticeably higher for patients who experienced a stroke compared with those who did not.",
+    "insight_facts": "Average avg_glucose_level by stroke: highest is 1 (132.54), lowest is 0 (104.80) in the sample. The gap between groups is small (26% from lowest to highest).",
+    "derived_data": {}
+   },
+   {
+    "id": "llm_3",
+    "type": "histogram",
+    "title": "BMI data quality",
+    "llm_title": "BMI data quality",
+    "insight": "The BMI column contains non‑numeric entries and a noticeable amount of missing data, which could distort risk assessments. bmi ranges from 10.30 to 97.60 (median 28.10, mean 28.89) across 4,909 rows in the sample. It is right-skewed (skewness 1.06): a few large values pull the mean above the median.",
+    "reason": "The BMI column contains non‑numeric entries and a noticeable amount of missing data, which could distort risk assessments. bmi ranges from 10.30 to 97.60 (median 28.10, mean 28.89) across 4,909 rows in the sample. It is right-skewed (skewness 1.06): a few large values pull the mean above the median.",
+    "headline": "The BMI column contains non‑numeric entries and a noticeable amount of missing data, which could distort risk assessments.",
+    "insight_source": "llm",
+    "llm_insight": "The BMI column contains non‑numeric entries and a noticeable amount of missing data, which could distort risk assessments.",
+    "insight_facts": "bmi ranges from 10.30 to 97.60 (median 28.10, mean 28.89) across 4,909 rows in the sample. It is right-skewed (skewness 1.06): a few large values pull the mean above the median.",
+    "derived_data": {}
+   },
+   {
+    "id": "llm_4",
+    "type": "pie",
+    "title": "Stroke prevalence",
+    "llm_title": "Stroke prevalence",
+    "insight": "Stroke events represent only a small fraction of the cohort, indicating a strong class imbalance that may challenge predictive modeling. stroke is 1 for 249 of 5,110 rows (4.9%) in the sample, and 0 for the other 4,861 (95.1%).",
+    "reason": "Stroke events represent only a small fraction of the cohort, indicating a strong class imbalance that may challenge predictive modeling. stroke is 1 for 249 of 5,110 rows (4.9%) in the sample, and 0 for the other 4,861 (95.1%).",
+    "headline": "Stroke events represent only a small fraction of the cohort, indicating a strong class imbalance that may challenge predictive modeling.",
+    "insight_source": "llm",
+    "llm_insight": "Stroke events represent only a small fraction of the cohort, indicating a strong class imbalance that may challenge predictive modeling.",
+    "insight_facts": "stroke is 1 for 249 of 5,110 rows (4.9%) in the sample, and 0 for the other 4,861 (95.1%).",
+    "derived_data": {}
+   }
+  ],
+  "profile_overview": {
+   "domain": "healthcare",
+   "domain_reasoning": "2 distinct cue(s) matched column names (avg_glucose_level, bmi)",
+   "readiness_score": 82,
+   "readiness_reasoning": "High completeness but BMI datatype issues and class imbalance lower immediate readiness",
+   "red_flags": [
+    "Non‑numeric BMI entries",
+    "Potential label imbalance",
+    "Irrelevant ID column",
+    "String \"N/A\" treated as missing",
+    "Unverified duplicate rows"
+   ],
+   "quick_wins": [
+    "Convert BMI to numeric and impute missing",
+    "Drop ID column",
+    "One‑hot encode categorical variables",
+    "Check and rebalance stroke classes",
+    "Run basic logistic regression for baseline"
+   ],
+   "strengths": [
+    "Overall completeness 99.7%",
+    "No columns with high missing values",
+    "Diverse categorical features",
+    "Numeric glucose and age available",
+    "Target variable present"
+   ],
+   "concerns": [
+    "BMI column contains \"N/A\" strings",
+    "BMI stored as string, needs conversion",
+    "Potential stroke class imbalance",
+    "ID column adds no predictive value",
+    "Possible duplicate records not checked"
+   ],
+   "analysis_suggestions": [
+    "Build a predictive model for stroke using logistic regression and tree‑based methods; evaluate feature importance and interactions"
+   ]
+  },
+  "dataset_summary_insights": [
+   "12 columns profiled on 5,110 sampled rows: 3 numeric measures, 3 yes/no columns (hypertension, heart_disease, stroke), 5 categories, 1 ID or free-text column that is not charted.",
+   "Data is largely complete: 0.3% of cells are empty in the sample, and no column is more than 20% empty."
+  ],
+  "upload_message": "**healthcare** dataset · 5,110 rows × 12 columns.\n2 distinct cue(s) matched column names (avg_glucose_level, bmi)\n\n**Data readiness: 82/100.** High completeness but BMI datatype issues and class imbalance lower immediate readiness\n\n**Key findings**\n- stroke rate by smoking_status: 4.9% overall across 5,110 rows in the sample; highest for formerly smoked (7.9% of 885 rows), lowest for Unknown (3.0% of 1,544 rows). The highest group's rate is 2.6× the lowest.\n- stroke rate by work_type: 4.9% overall across 5,110 rows in the sample; highest for Self-employed (7.9% of 819 rows), lowest for Never_worked (0.0% of 22 rows).\n- Average glucose levels are noticeably higher for patients who experienced a stroke compared with those who did not.\n\n**Watch out for**\n- Non‑numeric BMI entries\n- Potential label imbalance\n- Irrelevant ID column\n\n**Try asking**\n- Build a predictive model for stroke using logistic regression and tree‑based methods; evaluate feature importance and interactions"
+ },
+ "rw7c/taxi_rg": {
+  "dataset": {
+   "total_rows": 200000,
+   "n_columns": 19
+  },
+  "charts": [
+   {
+    "id": "llm_0",
+    "type": "bar",
+    "title": "Tip amount varies by payment method",
+    "llm_title": "Tip amount varies by payment method",
+    "insight": "Trips paid with credit cards tend to have little or no tip, while cash payments show higher average tips, suggesting payment method influences driver earnings. Average tip_amount by payment_type: highest is 1 (4.62), lowest is 2 (0.00) in the full file. The top group is 3795.1× the lowest.",
+    "reason": "Trips paid with credit cards tend to have little or no tip, while cash payments show higher average tips, suggesting payment method influences driver earnings. Average tip_amount by payment_type: highest is 1 (4.62), lowest is 2 (0.00) in the full file. The top group is 3795.1× the lowest.",
+    "headline": "Trips paid with credit cards tend to have little or no tip, while cash payments show higher average tips, suggesting payment method influences driver earnings.",
+    "insight_source": "llm",
+    "llm_insight": "Trips paid with credit cards tend to have little or no tip, while cash payments show higher average tips, suggesting payment method influences driver earnings.",
+    "insight_facts": "Average tip_amount by payment_type: highest is 1 (4.62), lowest is 2 (0.00) in the full file. The top group is 3795.1× the lowest.",
+    "derived_data": {}
+   },
+   {
+    "id": "llm_1",
+    "type": "scatter",
+    "title": "total_amount vs trip_distance",
+    "llm_title": "Total amount grows faster than fare with distance",
+    "insight": "trip_distance and total_amount show a weak positive relationship (r = 0.19) across 200,000 rows in the full file. 3,083 extreme points are left off the plot so the rest is readable; the correlation uses every row.",
+    "reason": "trip_distance and total_amount show a weak positive relationship (r = 0.19) across 200,000 rows in the full file. 3,083 extreme points are left off the plot so the rest is readable; the correlation uses every row.",
+    "headline": null,
+    "insight_source": "data",
+    "llm_insight": "Total fare charged often rises faster than the base fare as trip distance increases, leading to many rides where the total amount far exceeds the fare alone.",
+    "insight_facts": "trip_distance and total_amount show a weak positive relationship (r = 0.19) across 200,000 rows in the full file. 3,083 extreme points are left off the plot so the rest is readable; the correlation uses every row.",
+    "derived_data": {
+     "llm_title_replaced": "Total amount grows faster than fare with distance"
+    }
+   },
+   {
+    "id": "llm_2",
+    "type": "histogram",
+    "title": "Skewed distribution of trip distance",
+    "llm_title": "Skewed distribution of trip distance",
+    "insight": "Most rides cover a short distance, with a long right‑hand tail of very long trips, indicating a heavily skewed distance distribution. trip_distance ranges from 0 to 10,879 (median 1.87, mean 4.09) across 200,000 rows in the full file. It is right-skewed (skewness 408.16): a few large values pull the mean above the median. The top 2,000 values (above 21.35, up to 10,879) are grouped in the last bar so the rest of the distribution is readable.",
+    "reason": "Most rides cover a short distance, with a long right‑hand tail of very long trips, indicating a heavily skewed distance distribution. trip_distance ranges from 0 to 10,879 (median 1.87, mean 4.09) across 200,000 rows in the full file. It is right-skewed (skewness 408.16): a few large values pull the mean above the median. The top 2,000 values (above 21.35, up to 10,879) are grouped in the last bar so the rest of the distribution is readable.",
+    "headline": "Most rides cover a short distance, with a long right‑hand tail of very long trips, indicating a heavily skewed distance distribution.",
+    "insight_source": "llm",
+    "llm_insight": "Most rides cover a short distance, with a long right‑hand tail of very long trips, indicating a heavily skewed distance distribution.",
+    "insight_facts": "trip_distance ranges from 0 to 10,879 (median 1.87, mean 4.09) across 200,000 rows in the full file. It is right-skewed (skewness 408.16): a few large values pull the mean above the median. The top 2,000 values (above 21.35, up to 10,879) are grouped in the last bar so the rest of the distribution is readable.",
+    "derived_data": {}
+   },
+   {
+    "id": "llm_3",
+    "type": "pie",
+    "title": "Records by store_and_fwd_flag",
+    "llm_title": "Composition of store_and_fwd_flag",
+    "insight": "Records by store_and_fwd_flag: the groups are N (199,246 rows, 99.6%), Y (754 rows, 0.4%) in the full file.",
+    "reason": "Records by store_and_fwd_flag: the groups are N (199,246 rows, 99.6%), Y (754 rows, 0.4%) in the full file.",
+    "headline": null,
+    "insight_source": "data",
+    "llm_insight": "Almost all records show the data was not stored before forwarding, with only a tiny fraction flagged as stored, so any stored rows may need separate quality checks.",
+    "insight_facts": "Records by store_and_fwd_flag: the groups are N (199,246 rows, 99.6%), Y (754 rows, 0.4%) in the full file.",
+    "derived_data": {
+     "llm_title_replaced": "Composition of store_and_fwd_flag"
+    }
+   }
+  ],
+  "profile_overview": {
+   "domain": "logistics",
+   "domain_reasoning": "3 distinct cue(s) matched column names (VendorID, tpep_pickup_datetime, trip_distance)",
+   "readiness_score": 85,
+   "readiness_reasoning": "High completeness, but needs type validation, outlier checks, and derived fields.",
+   "red_flags": [
+    "Zero tip with credit card payment.",
+    "Total amount exceeds fare by >50%.",
+    "Trip duration over 2 hours.",
+    "Missing Airport_fee on long trips.",
+    "Duplicate timestamp rows."
+   ],
+   "quick_wins": [
+    "Create trip_duration column.",
+    "Flag trips with extreme fare values.",
+    "Map location IDs to borough names.",
+    "Summarize payment type distribution.",
+    "Calculate tip percentage metric."
+   ],
+   "strengths": [
+    "Complete records, no missing values.",
+    "All 19 columns present.",
+    "Timestamp fields correctly formatted.",
+    "Numeric fare components available.",
+    "Consistent vendor IDs."
+   ],
+   "concerns": [
+    "Possible outliers in fare amounts.",
+    "Unusual zero tip with credit card.",
+    "No explicit trip duration column.",
+    "Location IDs need zone mapping.",
+    "Potential duplicate rows."
+   ],
+   "analysis_suggestions": [
+    "Analyze fare amount versus trip distance.",
+    "Explore tip amount patterns across payment types.",
+    "Identify peak demand hours using pickup timestamps."
+   ]
+  },
+  "dataset_summary_insights": [
+   "19 columns profiled on 22,000 sampled rows (of 200,000 in the file): 16 numeric measures, 1 categories, 2 date columns.",
+   "No empty values in the sampled rows.",
+   "Strongest relationships between numeric columns in the sample: mta_tax and improvement_surcharge rise together (r = 0.88); trip_distance and total_amount rise together (r = 0.86).",
+   "RatecodeID is heavily right-skewed in the sample (skewness 10.1): median 1 vs mean 2.06, so use the median for a typical value. Also strongly skewed: improvement_surcharge, mta_tax, tip_amount."
+  ],
+  "upload_message": "**logistics** dataset · 200,000 rows × 19 columns.\n3 distinct cue(s) matched column names (VendorID, tpep_pickup_datetime, trip_distance)\n\n**Data readiness: 85/100.** High completeness, but needs type validation, outlier checks, and derived fields.\n\n**Key findings**\n- Trips paid with credit cards tend to have little or no tip, while cash payments show higher average tips, suggesting payment method influences driver earnings.\n- trip_distance and total_amount show a weak positive relationship (r = 0.19) across 200,000 rows in the full file. 3,083 extreme points are left off the plot so the rest is readable; the correlation uses every row.\n- Most rides cover a short distance, with a long right‑hand tail of very long trips, indicating a heavily skewed distance distribution.\n\n**Watch out for**\n- Zero tip with credit card payment.\n- Total amount exceeds fare by >50%.\n- Trip duration over 2 hours.\n\n**Try asking**\n- Analyze fare amount versus trip distance.\n- Explore tip amount patterns across payment types.\n- Identify peak demand hours using pickup timestamps."
+ }
+}

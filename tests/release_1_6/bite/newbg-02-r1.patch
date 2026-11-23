@@ -1,0 +1,28 @@
+diff --git a/deploy/helm/avaloka/files/supabase-migrations/0-schema.sql b/deploy/helm/avaloka/files/supabase-migrations/0-schema.sql
+index 5ad182c7..cdfa1298 100644
+--- a/deploy/helm/avaloka/files/supabase-migrations/0-schema.sql
++++ b/deploy/helm/avaloka/files/supabase-migrations/0-schema.sql
+@@ -3938,9 +3938,7 @@ CREATE POLICY "own projects insert" ON "public"."projects" FOR INSERT TO "authen
+ 
+ 
+ 
+-CREATE POLICY "own projects select" ON "public"."projects" FOR SELECT TO "authenticated" USING (("owner_id" = ( SELECT "profiles"."id"
+-   FROM "public"."profiles"
+-  WHERE ("profiles"."user_id" = "auth"."uid"()))));
++CREATE POLICY "own projects select" ON "public"."projects" FOR SELECT TO "authenticated" USING (("owner_id" = "auth"."uid"()));
+ 
+ 
+ 
+diff --git a/deploy/helm/avaloka/files/supabase-migrations/20260716082753_7e1145a2-9d76-430a-9427-5c0d8d0b494f.sql b/deploy/helm/avaloka/files/supabase-migrations/20260716082753_7e1145a2-9d76-430a-9427-5c0d8d0b494f.sql
+index 8fbc2f62..bf4bd08d 100644
+--- a/deploy/helm/avaloka/files/supabase-migrations/20260716082753_7e1145a2-9d76-430a-9427-5c0d8d0b494f.sql
++++ b/deploy/helm/avaloka/files/supabase-migrations/20260716082753_7e1145a2-9d76-430a-9427-5c0d8d0b494f.sql
+@@ -10,7 +10,7 @@ CREATE POLICY "owners insert own projects" ON public.projects
+   WITH CHECK (owner_id = public.current_profile_id());
+ CREATE POLICY "owners read own projects" ON public.projects
+   FOR SELECT TO authenticated
+-  USING (owner_id = public.current_profile_id());
++  USING (owner_id = auth.uid());
+ CREATE POLICY "owners update own projects" ON public.projects
+   FOR UPDATE TO authenticated
+   USING (owner_id = public.current_profile_id())

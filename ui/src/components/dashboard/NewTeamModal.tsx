@@ -12,7 +12,9 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { TeamsIcon } from "@/components/dashboard/icons/ConfigSectionIcons";
 import { cn } from "@/lib/utils";
-import { listAppUsers, listBranches, upsertTeam } from "@/lib/configurations.functions";
+import { createProfessionalTeam, listAppUsers, listBranches, upsertTeam } from "@/lib/configurations.functions";
+import { useTeamMemberGate } from "@/lib/use-team-member-gate";
+import { usePlanFeatures } from "@/lib/use-plan-features";
 
 type Step = "form" | "confirm" | "success";
 
@@ -28,6 +30,9 @@ export function NewTeamModal({ open, onOpenChange }: Props) {
   const listUsersFn = useServerFn(listAppUsers);
   const listBranchesFn = useServerFn(listBranches);
   const upsertTeamFn = useServerFn(upsertTeam);
+  const createProfessionalTeamFn = useServerFn(createProfessionalTeam);
+  const planFeatures = usePlanFeatures();
+  const isProfessional = planFeatures.isProfessional;
 
   const usersQ = useQuery<UserOpt[]>({
     queryKey: ["config", "users", "active"],
@@ -61,7 +66,7 @@ export function NewTeamModal({ open, onOpenChange }: Props) {
       const rows = (await listBranchesFn()) as Array<{ name: string; location: string }>;
       return rows.map((b) => `${b.name}${b.location ? `, ${b.location}` : ""}`);
     },
-    enabled: open,
+    enabled: open && !isProfessional,
   });
 
   const USERS = usersQ.data ?? [];
@@ -75,7 +80,9 @@ export function NewTeamModal({ open, onOpenChange }: Props) {
   const [lead, setLead] = useState<UserOpt | null>(null);
   const [branch, setBranch] = useState("");
   const [members, setMembers] = useState<UserOpt[]>([]);
+  const memberGate = useTeamMemberGate(open, USERS.map((u) => u.id));
   const [submitting, setSubmitting] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const [leadOpen, setLeadOpen] = useState(false);
   const [branchOpen, setBranchOpen] = useState(false);
@@ -88,6 +95,7 @@ export function NewTeamModal({ open, onOpenChange }: Props) {
     setLead(null);
     setBranch("");
     setMembers([]);
+    setSaveError(null);
   };
 
   const handleOpenChange = (o: boolean) => {
@@ -96,11 +104,13 @@ export function NewTeamModal({ open, onOpenChange }: Props) {
   };
 
   const canSubmit = useMemo(
-    () => Boolean(name.trim() && lead && branch),
-    [name, lead, branch],
+    () => Boolean(name.trim() && (isProfessional || (lead && branch))),
+    [name, lead, branch, isProfessional],
   );
 
   const toggleMember = (m: UserOpt) => {
+    const adding = !members.find((x) => x.name === m.name);
+    if (adding && !memberGate.tryAdd(m.id)) return;
     setMembers((prev) =>
       prev.find((x) => x.name === m.name)
         ? prev.filter((x) => x.name !== m.name)
@@ -112,24 +122,37 @@ export function NewTeamModal({ open, onOpenChange }: Props) {
     setMembers((prev) => prev.filter((m) => m.name !== n));
 
   const handleConfirm = async () => {
-    if (!lead) return;
+    if (!lead && !isProfessional) return;
+    setSaveError(null);
     setSubmitting(true);
     try {
-      await upsertTeamFn({
-        data: {
-          name: name.trim(),
-          description: description.trim() || null,
-          lead_user_id: lead.id,
-          member_ids: members.map((m) => m.id),
-          branch,
-          status: "Active",
-        },
-      });
+      if (isProfessional) {
+        await createProfessionalTeamFn({
+          data: {
+            name: name.trim(),
+            description: description.trim() || null,
+            lead_user_id: lead?.id ?? null,
+            member_ids: members.map((m) => m.id),
+          },
+        });
+      } else {
+        await upsertTeamFn({
+          data: {
+            name: name.trim(),
+            description: description.trim() || null,
+            lead_user_id: lead!.id,
+            member_ids: members.map((m) => m.id),
+            branch,
+            status: "Active",
+          },
+        });
+      }
       await qc.invalidateQueries({ queryKey: ["config", "teams"] });
       setStep("success");
       setTimeout(() => handleOpenChange(false), 1500);
     } catch (e) {
       console.error(e);
+      setSaveError(e instanceof Error ? e.message : "Could not save the team.");
       setStep("form");
     } finally {
       setSubmitting(false);
@@ -177,8 +200,8 @@ export function NewTeamModal({ open, onOpenChange }: Props) {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1.5">
+              <div className={cn("grid gap-4", isProfessional ? "grid-cols-1" : "grid-cols-2")}>
+                {(!isProfessional || USERS.length > 0) && <div className="space-y-1.5">
                   <label className="text-sm font-medium text-foreground">Team Lead</label>
                   <Popover open={leadOpen} onOpenChange={setLeadOpen}>
                     <PopoverTrigger asChild>
@@ -211,10 +234,12 @@ export function NewTeamModal({ open, onOpenChange }: Props) {
                           <button
                             key={l.email || l.name}
                             onClick={() => {
+                              if (isProfessional && !memberGate.allowed(l.id)) return;
                               setLead(l);
                               setLeadOpen(false);
                             }}
-                            className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-sm hover:bg-muted dark:hover:bg-white/5"
+                            disabled={isProfessional && !memberGate.allowed(l.id)}
+                            className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-sm hover:bg-muted dark:hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
                           >
                             <Avatar className="h-6 w-6">
                               <AvatarImage src={l.avatar} alt={l.name} />
@@ -229,8 +254,8 @@ export function NewTeamModal({ open, onOpenChange }: Props) {
                       )}
                     </PopoverContent>
                   </Popover>
-                </div>
-                <div className="space-y-1.5">
+                </div>}
+                {!isProfessional && <div className="space-y-1.5">
                   <label className="text-sm font-medium text-foreground">Branch</label>
                   <Popover open={branchOpen} onOpenChange={setBranchOpen}>
                     <PopoverTrigger asChild>
@@ -265,10 +290,10 @@ export function NewTeamModal({ open, onOpenChange }: Props) {
                       )}
                     </PopoverContent>
                   </Popover>
-                </div>
+                </div>}
               </div>
 
-              <div className="space-y-1.5">
+              {(!isProfessional || USERS.length > 0) && <div className="space-y-1.5">
                 <label className="text-sm font-medium text-foreground">Team member</label>
                 <Popover open={membersOpen} onOpenChange={setMembersOpen}>
                   <PopoverTrigger asChild>
@@ -303,7 +328,12 @@ export function NewTeamModal({ open, onOpenChange }: Props) {
                           <button
                             key={m.email || m.name}
                             onClick={() => toggleMember(m)}
-                            className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-sm hover:bg-muted dark:hover:bg-white/5"
+                            aria-disabled={!memberGate.allowed(m.id)}
+                            data-testid={`team-member-option-${m.id}`}
+                            className={cn(
+                              "flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-sm hover:bg-muted dark:hover:bg-white/5",
+                              !memberGate.allowed(m.id) && "opacity-60",
+                            )}
                           >
                             <Avatar className="h-6 w-6">
                               <AvatarImage src={m.avatar} alt={m.name} />
@@ -313,6 +343,9 @@ export function NewTeamModal({ open, onOpenChange }: Props) {
                               <span className="text-sm text-foreground">{m.name}</span>
                               <span className="text-xs text-muted-foreground">{m.role}</span>
                             </span>
+                            {!memberGate.allowed(m.id) && (
+                              <span className="text-xs text-muted-foreground">No account yet</span>
+                            )}
                             {selected && <Check className="h-4 w-4 text-primary" />}
                           </button>
                         );
@@ -320,7 +353,12 @@ export function NewTeamModal({ open, onOpenChange }: Props) {
                     )}
                   </PopoverContent>
                 </Popover>
-              </div>
+                {memberGate.error && (
+                  <p role="alert" className="text-xs text-rose-600">
+                    {memberGate.error}
+                  </p>
+                )}
+              </div>}
 
               {members.length > 0 && (
                 <div className="space-y-3">
@@ -353,6 +391,7 @@ export function NewTeamModal({ open, onOpenChange }: Props) {
             </div>
 
             <div className="flex justify-end border-t border-border dark:border-white/10 px-5 py-4">
+              {saveError && <p role="alert" className="mr-auto self-center text-sm text-destructive">{saveError}</p>}
               <Button
                 onClick={() => setStep("confirm")}
                 disabled={!canSubmit}

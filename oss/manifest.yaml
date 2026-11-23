@@ -29,6 +29,18 @@ exclude:
       Windows path and username.
   - path: docs/Avaloka-1.6-Master-Test-Plan.xlsx
     reason: Superseded by docs/TEST_PLAN-1.6.md.
+  - path: docs/test-plan/
+    reason: >-
+      Internal test-planning material (the case source and its generator),
+      written for the team running the release pass and not reviewed for
+      publication. This file is itself published, so the reason stays general
+      on purpose.
+  - path: docs/Avaloka-1.7-Master-Test-Plan.xlsx
+    reason: Generated from docs/test-plan/; internal, like the 1.6 workbook above.
+  - path: docs/TEST_PLAN-1.7.md
+    reason: >-
+      The internal plan's summary. Withheld with the plan it summarises; the
+      public summary stays docs/TEST_PLAN-1.6.md.
   - path: research_paper/
     reason: >-
       Pre-move copy of the paper; docs/research/ is the live one.
@@ -53,6 +65,106 @@ exclude:
       publishes whatever the source branch carries, so the first sync after it
       lands would otherwise ship it. This file is itself published, so the
       reason stays general on purpose.
+  - path: docs/defects/
+    reason: >-
+      The team's working defect register. Not reviewed for publication, and it
+      does not record which entries are resolved, so published as it stands it
+      would misstate the project's open defects. Withheld rather than
+      sanitised, because a register edited for publication stops being usable
+      internally. This file is itself published, so the reason stays general
+      on purpose.
+  - path: docs/design/1.6-CAPABILITY-GAPS.md
+    reason: >-
+      Internal planning document, written for the team scheduling work and not
+      reviewed for publication. Withheld by path before it reaches a sync; the
+      rest of docs/design/ stays published. This file is itself published, so
+      the reason stays general on purpose.
+  - path: docs/design/1.7-DATA-PLATFORM.md
+    reason: >-
+      Internal planning document, written for the team scheduling work and not
+      reviewed for publication. Withheld by path before it reaches a sync; the
+      rest of docs/design/ stays published. This file is itself published, so
+      the reason stays general on purpose.
+  - path: docs/design/1.6-CHATBOT-INTRO.md
+    reason: >-
+      Internal planning document, written for the team scheduling work and not
+      reviewed for publication. Withheld by path before it reaches a sync; the
+      rest of docs/design/ stays published. This file is itself published, so
+      the reason stays general on purpose.
+  - path: docs/design/1.7-SUPPORT-AGENT.md
+    reason: >-
+      Internal planning document, written for the team scheduling work and not
+      reviewed for publication. Withheld by path before it reaches a sync; the
+      rest of docs/design/ stays published. This file is itself published, so
+      the reason stays general on purpose.
+  - path: docs/design/DOMAIN-UNDERSTANDING-1.6-1.8.md
+    reason: >-
+      Internal planning document, written for the team scheduling work and not
+      reviewed for publication. Withheld by path before it reaches a sync; the
+      rest of docs/design/ stays published. This file is itself published, so
+      the reason stays general on purpose.
+  - path: docs/design/1.7-INSTANT-ANALYSIS.md
+    reason: >-
+      Internal planning document, written for the team scheduling work and not
+      reviewed for publication. Withheld by path before it reaches a sync; the
+      rest of docs/design/ stays published. This file is itself published, so
+      the reason stays general on purpose.
+  - path: docs/design/2.0-ADVANCED-PLAN.md
+    reason: >-
+      Internal planning document covering editions and product direction, not
+      reviewed for publication. This file is itself published, so the reason
+      stays general on purpose.
+  - path: docs/design/2.0-OUTCOMES.md
+    reason: >-
+      Internal planning document covering editions and product direction, not
+      reviewed for publication. This file is itself published, so the reason
+      stays general on purpose.
+  - path: docs/design/HINDSIGHT-TELEMETRY-INTELLIGENCE.md
+    reason: >-
+      Internal planning document covering editions and product direction, not
+      reviewed for publication. This file is itself published, so the reason
+      stays general on purpose.
+  - path: docs/design/PERCEPTION-PHYSICAL-AI.md
+    reason: >-
+      Internal planning document covering editions and product direction, not
+      reviewed for publication. This file is itself published, so the reason
+      stays general on purpose.
+  - path: docs/dab-agent-improvement-design.md
+    reason: >-
+      Internal planning document covering editions and product direction, not
+      reviewed for publication. This file is itself published, so the reason
+      stays general on purpose.
+  - path: docs/develop-1.6-to-1.7-data-ui-impact.md
+    reason: >-
+      Internal planning document covering editions and product direction, not
+      reviewed for publication. This file is itself published, so the reason
+      stays general on purpose.
+  - path: docs/campaign/
+    reason: >-
+      Internal planning document covering editions and product direction, not
+      reviewed for publication. This file is itself published, so the reason
+      stays general on purpose.
+  - path: docs/papers/submission-plan.md
+    reason: >-
+      Internal planning document covering editions and product direction, not
+      reviewed for publication. This file is itself published, so the reason
+      stays general on purpose.
+  - path: benchmarks.md
+    reason: >-
+      Internal planning document covering editions and product direction, not
+      reviewed for publication. This file is itself published, so the reason
+      stays general on purpose.
+  - path: docs/operations/PLATFORM-ADMIN-AND-SUPPORT.md
+    reason: >-
+      Internal operations runbook, written for the team running the service
+      and not reviewed for publication. Withheld by path; the public product
+      rules are in docs/EDITIONS.md. This file is itself published, so the
+      reason stays general on purpose.
+  - path: docs/operations/PLATFORM-ADMIN-DESIGN.md
+    reason: >-
+      Internal design document, written for the team planning the work and
+      not reviewed for publication. Withheld by path before it reaches a sync.
+      This file is itself published, so the reason stays general on purpose.
   - path: .claude/
     reason: >-
       Local agent tooling configuration; not part of the product. Untracked
@@ -69,6 +181,19 @@ exclude:
       Deployment configuration for the hosted telemetry ingest service. It
       executes nothing for anyone deploying from the public tree; the service
       itself (telemetry_service/) and its tests are published.
+  - path: scripts/dab-bin/
+    reason: >-
+      Shim binaries for an internal benchmark environment; not exercised from
+      the public tree. Withheld until someone has run them from it. This file
+      is itself published, so the reason stays general on purpose.
+  - path: scripts/setup_dab.sh
+    reason: >-
+      Setup helper for the same internal benchmark environment; not exercised
+      from the public tree.
+  - path: deploy/openclaw/skills/
+    reason: >-
+      Agent skill definitions for an internal deployment; not exercised from
+      the public tree. Withheld until someone has run them from it.
   - path: docs/research/
     keep_globs: ["*.pdf", "README.md", "*.png"]
     reason: >-
@@ -78,6 +203,61 @@ exclude:
       submission. The LaTeX templates (natbib.sty, iclr2026_conference.bst,
       fancyhdr.sty) are third-party licensed on top of that and cannot ship
       under Apache-2.0.
+  # --- provider selection record (default-model switch, owner ruling 2026-11-02) ---
+  - path: docs/internal/provider-selection.md
+    reason: >-
+      Internal record of how model providers were selected. Not reviewed for
+      publication; the public page is docs/privacy-and-egress.md. This file is
+      itself published, so the reason stays general on purpose.
+
+# Every top-level file and directory the public tree carries, on purpose.
+# The exclusions above say what is withheld; this says what is published, so a
+# new top-level path cannot slip through by being neither. The generator does
+# not read it: tests/contract/test_c8_public_tree_generator.py computes the
+# top-level entries of the tracked tree that survive the exclusions and holds
+# them to this list exactly. A new directory that is neither listed here nor
+# excluded above fails that test, and so does a listed entry that no longer
+# exists. benchmarks/ and tests/benchmark/ are published on purpose;
+# benchmarks.md (the benchmark strategy) is withheld above.
+top_level:
+  - .dockerignore
+  - .env.example
+  - .gcloudignore
+  - .gitattributes
+  - .github
+  - .gitignore
+  - CHANGELOG.md
+  - CODE_OF_CONDUCT.md
+  - CONTRIBUTING.md
+  - LICENSE
+  - NOTICE
+  - README.md
+  - README_CLI.md
+  - SECURITY.md
+  - VERSION
+  - app
+  - avaloka
+  # the architecture diagram's source, cited by docs/architecture.md and
+  # docs/research/README.md; the rendered PNG ships under docs/images
+  - avaloka-architecture-2026-08.mermaid
+  - benchmarks
+  - deploy
+  # the web quickstart (scripts/quickstart.sh): the documented laptop trial path
+  - docker-compose.quickstart.yml
+  - docker-compose.yml
+  - docs
+  - file_handler
+  - langgraph.json
+  - oss
+  - pyproject.toml
+  - pytest.ini
+  - requirements-cloud-llm.txt
+  - requirements-langgraph-server.txt
+  - requirements.txt
+  - scripts
+  - telemetry_service
+  - tests
+  - ui
 
 # Files that exist only on the public tree, applied after the exclusions.
 overlay:
@@ -102,10 +282,14 @@ splice:
     section: "## Quickstart"
     from: oss/overlay/README.quickstart.md
 
+
 # Invariants checked after every generation. A failure blocks the push.
 assert_present:
   README.md:
     - "support@avaloka.ai"
+    # Merged on the public repository (GitHub #82); kept so a later sync
+    # cannot quietly revert an outside contribution.
+    - "img.shields.io/github/stars/guruvaidev/avaloka"
     - "at your own risk"
     - "Not tested on"
   app/infra/providers/factory.py:
@@ -132,7 +316,7 @@ assert_absent:
   # a hardcoded version. Assert the hardened state rather than trusting the
   # operator to pass the right SRC_BRANCH.
   tests/kaggle_yellow_taxi_trip_data.py:
-    - "C:/Users/lowta"
+    - "C:/Users/"
   avaloka/version.py:
     - "__version__ = \"0.3.0\""
 
@@ -148,9 +332,22 @@ assert_absent:
 #     and references the old module nowhere. Generation keeps the newer work
 #     and drops the older standalone overlay. Verified by date, not by shape.
 
+# --- provider selection record (owner ruling 2026-11-02) ---
+# The public egress page names only the allowed providers. The names it must not
+# carry are themselves withheld: they are read from a marked block in the
+# withheld record, so this published file lists none of them. Generation fails if
+# the record or its block is missing (scripts/generate-oss.sh, withheld-needle
+# invariants).
+assert_absent_from_withheld:
+  - file: docs/privacy-and-egress.md
+    needles_from: docs/internal/provider-selection.md
+
 # Tree-level invariants. Globs that must match nothing in the generated tree.
 # These are the leaks that actually happened, not hypotheticals.
 assert_no_paths:
+  - "docs/test-plan/**/*"   # internal test plan source, withheld above
+  - "docs/Avaloka-1.7-Master-Test-Plan.xlsx"   # internal test plan, withheld above
+  - "docs/TEST_PLAN-1.7.md"   # internal test plan summary, withheld above
   - "**/*.sty"          # third-party LaTeX packages, not Apache-2.0
   - "**/*.bst"
   - "**/math_commands.tex"
@@ -165,11 +362,37 @@ assert_no_paths:
   # Not in the source tree yet. The guard is here first so that the day the
   # directory lands, a dropped or mistyped exclude entry fails the generation.
   - "docs/evaluations/**/*"   # internal assessments, withheld above
+  - "docs/defects/**/*"       # the defect register, withheld above
+  - "docs/design/1.7-DATA-PLATFORM.md"   # internal planning, withheld above
+  - "docs/design/1.7-SUPPORT-AGENT.md"   # internal planning, withheld above
+  - "docs/design/DOMAIN-UNDERSTANDING-1.6-1.8.md"   # internal planning, withheld above
+  - "docs/design/1.7-INSTANT-ANALYSIS.md"   # internal planning, withheld above
+  - "docs/design/2.0-ADVANCED-PLAN.md"   # internal planning, withheld above
+  - "docs/design/2.0-OUTCOMES.md"   # internal planning, withheld above
+  - "docs/design/HINDSIGHT-TELEMETRY-INTELLIGENCE.md"   # internal planning, withheld above
+  - "docs/design/PERCEPTION-PHYSICAL-AI.md"   # internal planning, withheld above
+  - "docs/dab-agent-improvement-design.md"   # internal planning, withheld above
+  - "docs/develop-1.6-to-1.7-data-ui-impact.md"   # internal planning, withheld above
+  - "docs/campaign/**/*"   # internal planning, withheld above
+  - "docs/papers/submission-plan.md"   # internal planning, withheld above
+  - "benchmarks.md"   # internal planning, withheld above
+  - "docs/design/1.6-CAPABILITY-GAPS.md"   # internal planning, withheld above
+  - "docs/design/1.6-CHATBOT-INTRO.md"     # internal planning, withheld above
+  - "docs/operations/PLATFORM-ADMIN-AND-SUPPORT.md"   # internal runbook, withheld above
+  - "docs/operations/PLATFORM-ADMIN-DESIGN.md"   # internal design, withheld above
   - ".claude/**/*"            # agent definitions and skills, withheld above
   - "**/bitbucket-pipelines.yml"   # internal CI configuration, withheld above
   - "deploy/telemetry/**/*"   # hosted-service deployment configuration, withheld above
+  # Written as **/* rather than **: before Python 3.13 a trailing ** matches
+  # directories only, and the generator filters to files, so dir/** would count
+  # zero and report ok while the files shipped.
+  - "scripts/dab-bin/**/*"           # internal benchmark shims, withheld above
+  - "scripts/setup_dab.sh"           # internal benchmark setup, withheld above
+  - "deploy/openclaw/skills/**/*"    # internal deployment's skills, withheld above
   - "avaloka/arena/**"         # asserted by tests/test_oss_readiness.py
   - "tests/arena/**"
+  # --- provider selection record (owner ruling 2026-11-02) ---
+  - "docs/internal/provider-selection.md"   # internal record, withheld above
 
 # Credential shapes that must not appear with a plausible payload attached.
 # A bare prefix, or a short obviously-fake tail, is a test fixture asserting
@@ -188,6 +411,37 @@ assert_no_secrets:
   # The scanner builds the headers at runtime instead; see pem_private_keys.
   pem_private_keys: true
 
+# Names of the internal hosting that must not appear in any published text
+# file, matched case-insensitively. The patterns are regexes written with a
+# character class so that this manifest, which is published, does not itself
+# contain the words. `allow` phrases are exact and case-sensitive; each says
+# why it may stay. Add to `allow` only with a reason that names what the
+# phrase is, never because a file is inconvenient to fix.
+assert_no_words:
+  patterns:
+    - "b[i]tbucket"
+    - "kamal[i]incteam"
+  allow:
+    - phrase: "bitbucket-pipelines.yml"
+      reason: the name of a CI file the exclude list withholds; the generator and the release-coherence tests must name it to withhold it and to skip when it is absent
+    - phrase: "BITBUCKET_COMMIT"
+      reason: the commit variable that CI service sets; the benchmark scorecard reads it so a run on that CI records its commit
+    - phrase: "BITBUCKET_ACCESS_TOKEN"
+      reason: a variable name labelling the SHA-256 digest of a rotated credential the secret scan must never find again
+    - phrase: "BITBUCKET_PIPELINE_TOKEN"
+      reason: a variable name labelling the SHA-256 digest of a rotated credential the secret scan must never find again
+
+# No publicly routable IPv4 literal in the generated tree (oss/address_scan.py;
+# tests/test_oss_no_addresses.py applies the same rule to every tracked file).
+# Loopback, 0.0.0.0, RFC 5737 documentation ranges (203.0.113.x, 198.51.100.x,
+# 192.0.2.x), RFC 1918 private ranges and the Kubernetes cluster-local defaults
+# do not route and pass without being listed; examples and tests use those.
+# `allow` is for a routable address that must be published, quoted, one per line.
+# The leak that happened: Dockerfile.train-plus-dta named the shared GKE Ray
+# cluster's dashboard IP:port in its first line.
+assert_no_addresses:
+  allow: []
+
 # Paths that must not be reachable from the published ref -- not merely absent
 # from its tree. A tree-only check passes while the history behind the ref still
 # carries the file, which is how a .env that was force-added in July 2026 and
@@ -195,3 +449,4 @@ assert_no_secrets:
 assert_unreachable:
   - ".env"
   - ".env.bak.pre-docker-switch"
+

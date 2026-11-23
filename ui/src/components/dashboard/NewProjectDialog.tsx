@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { Loader2 } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { Button as PrimaryButton } from "@/components/base/buttons/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 
@@ -76,14 +76,23 @@ export function NewProjectDialog({
               className="min-h-[72px] resize-none border-input bg-background text-foreground"
             />
           </label>
-          <DialogFooter className="gap-2">
+          <DialogFooter className="gap-3 sm:space-x-0">
             <Button type="button" variant="outline" disabled={pending} onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button type="submit" disabled={!canCreate} aria-busy={pending}>
-              {pending ? <Loader2 className="size-4 animate-spin" aria-label="Creating project" /> : null}
-              Create
-            </Button>
+            <PrimaryButton
+              type="submit"
+              color="primary"
+              size="sm"
+              className="h-9 rounded-md"
+              isDisabled={!canCreate}
+              aria-disabled={!canCreate}
+              aria-busy={pending}
+              isLoading={pending}
+              showTextWhileLoading
+            >
+              {pending ? "Creating…" : "Create"}
+            </PrimaryButton>
           </DialogFooter>
         </form>
       </DialogContent>

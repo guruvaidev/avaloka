@@ -1,0 +1,4411 @@
+{
+  "harness_version": "0.2.0",
+  "suite": "track5_reliability",
+  "meta": {
+    "captured_at": "2026-10-18T05:04:28.223970+00:00",
+    "git_commit": "51f694a4c0546be72c9ee0b5574c5314e966b6f9",
+    "git_branch": "bench/2.0-vs-1.0",
+    "git_dirty": true,
+    "python": "3.12.12",
+    "spend": {
+      "spent_usd": 1.3700000000000008,
+      "ceiling_usd": 5.0,
+      "calls": 40,
+      "unpriced_calls": 40,
+      "usage_missing_calls": 0,
+      "blind_calls": 40,
+      "remaining_usd": 3.629999999999999
+    },
+    "estimate": {
+      "total_low_usd": 0.0,
+      "total_high_usd": 0.0,
+      "total_calls": 40,
+      "unpriced_configs": [
+        "t5_no_fault",
+        "t5_transient_no_recovery",
+        "t5_transient_with_recovery",
+        "t5_worker_crash_with_recovery",
+        "t5_structural_blind_retry",
+        "t5_structural_with_mitigation",
+        "t5_corrupt_parquet_no_recovery",
+        "t5_corrupt_parquet_with_mitigation"
+      ],
+      "configs": [
+        {
+          "config_id": "t5_no_fault",
+          "provider": "groq",
+          "model": "local-fault-injection",
+          "calls": 5,
+          "prompt_tokens": 855,
+          "max_completion_tokens": 2000,
+          "low_usd": 0.0,
+          "high_usd": 0.0,
+          "cost_source": "unpriced"
+        },
+        {
+          "config_id": "t5_transient_no_recovery",
+          "provider": "groq",
+          "model": "local-fault-injection",
+          "calls": 5,
+          "prompt_tokens": 855,
+          "max_completion_tokens": 2000,
+          "low_usd": 0.0,
+          "high_usd": 0.0,
+          "cost_source": "unpriced"
+        },
+        {
+          "config_id": "t5_transient_with_recovery",
+          "provider": "groq",
+          "model": "local-fault-injection",
+          "calls": 5,
+          "prompt_tokens": 855,
+          "max_completion_tokens": 2000,
+          "low_usd": 0.0,
+          "high_usd": 0.0,
+          "cost_source": "unpriced"
+        },
+        {
+          "config_id": "t5_worker_crash_with_recovery",
+          "provider": "groq",
+          "model": "local-fault-injection",
+          "calls": 5,
+          "prompt_tokens": 855,
+          "max_completion_tokens": 2000,
+          "low_usd": 0.0,
+          "high_usd": 0.0,
+          "cost_source": "unpriced"
+        },
+        {
+          "config_id": "t5_structural_blind_retry",
+          "provider": "groq",
+          "model": "local-fault-injection",
+          "calls": 5,
+          "prompt_tokens": 855,
+          "max_completion_tokens": 2000,
+          "low_usd": 0.0,
+          "high_usd": 0.0,
+          "cost_source": "unpriced"
+        },
+        {
+          "config_id": "t5_structural_with_mitigation",
+          "provider": "groq",
+          "model": "local-fault-injection",
+          "calls": 5,
+          "prompt_tokens": 855,
+          "max_completion_tokens": 2000,
+          "low_usd": 0.0,
+          "high_usd": 0.0,
+          "cost_source": "unpriced"
+        },
+        {
+          "config_id": "t5_corrupt_parquet_no_recovery",
+          "provider": "groq",
+          "model": "local-fault-injection",
+          "calls": 5,
+          "prompt_tokens": 855,
+          "max_completion_tokens": 2000,
+          "low_usd": 0.0,
+          "high_usd": 0.0,
+          "cost_source": "unpriced"
+        },
+        {
+          "config_id": "t5_corrupt_parquet_with_mitigation",
+          "provider": "groq",
+          "model": "local-fault-injection",
+          "calls": 5,
+          "prompt_tokens": 855,
+          "max_completion_tokens": 2000,
+          "low_usd": 0.0,
+          "high_usd": 0.0,
+          "cost_source": "unpriced"
+        }
+      ]
+    },
+    "aborted_reason": null
+  },
+  "configs": [
+    {
+      "config_id": "t5_no_fault",
+      "sut": "fault_injecting",
+      "llm": "local-fault-injection",
+      "agents_enabled": "full_swarm",
+      "sampling_mode": "fixed",
+      "model_routing": "default",
+      "environment": "local",
+      "trials": 5,
+      "internet_allowed": false,
+      "budget": {
+        "max_cost_usd": null,
+        "max_latency_s": null,
+        "max_tokens": null,
+        "max_data_scanned_ratio": null
+      },
+      "seed": 0,
+      "extra": {
+        "fault": "none",
+        "mitigations": "",
+        "recovery": "off",
+        "sample_fraction": "0.2"
+      }
+    },
+    {
+      "config_id": "t5_transient_no_recovery",
+      "sut": "fault_injecting",
+      "llm": "local-fault-injection",
+      "agents_enabled": "full_swarm",
+      "sampling_mode": "fixed",
+      "model_routing": "default",
+      "environment": "local",
+      "trials": 5,
+      "internet_allowed": false,
+      "budget": {
+        "max_cost_usd": null,
+        "max_latency_s": null,
+        "max_tokens": null,
+        "max_data_scanned_ratio": null
+      },
+      "seed": 0,
+      "extra": {
+        "fault": "rate_limit",
+        "mitigations": "",
+        "recovery": "off",
+        "sample_fraction": "0.2"
+      }
+    },
+    {
+      "config_id": "t5_transient_with_recovery",
+      "sut": "fault_injecting",
+      "llm": "local-fault-injection",
+      "agents_enabled": "full_swarm",
+      "sampling_mode": "fixed",
+      "model_routing": "default",
+      "environment": "local",
+      "trials": 5,
+      "internet_allowed": false,
+      "budget": {
+        "max_cost_usd": null,
+        "max_latency_s": null,
+        "max_tokens": null,
+        "max_data_scanned_ratio": null
+      },
+      "seed": 0,
+      "extra": {
+        "fault": "rate_limit",
+        "mitigations": "",
+        "recovery": "on",
+        "sample_fraction": "0.2"
+      }
+    },
+    {
+      "config_id": "t5_worker_crash_with_recovery",
+      "sut": "fault_injecting",
+      "llm": "local-fault-injection",
+      "agents_enabled": "full_swarm",
+      "sampling_mode": "fixed",
+      "model_routing": "default",
+      "environment": "local",
+      "trials": 5,
+      "internet_allowed": false,
+      "budget": {
+        "max_cost_usd": null,
+        "max_latency_s": null,
+        "max_tokens": null,
+        "max_data_scanned_ratio": null
+      },
+      "seed": 0,
+      "extra": {
+        "fault": "worker_crash",
+        "mitigations": "",
+        "recovery": "on",
+        "sample_fraction": "0.2"
+      }
+    },
+    {
+      "config_id": "t5_structural_blind_retry",
+      "sut": "fault_injecting",
+      "llm": "local-fault-injection",
+      "agents_enabled": "full_swarm",
+      "sampling_mode": "fixed",
+      "model_routing": "default",
+      "environment": "local",
+      "trials": 5,
+      "internet_allowed": false,
+      "budget": {
+        "max_cost_usd": null,
+        "max_latency_s": null,
+        "max_tokens": null,
+        "max_data_scanned_ratio": null
+      },
+      "seed": 0,
+      "extra": {
+        "fault": "schema_change",
+        "mitigations": "",
+        "recovery": "on",
+        "sample_fraction": "0.2"
+      }
+    },
+    {
+      "config_id": "t5_structural_with_mitigation",
+      "sut": "fault_injecting",
+      "llm": "local-fault-injection",
+      "agents_enabled": "full_swarm",
+      "sampling_mode": "fixed",
+      "model_routing": "default",
+      "environment": "local",
+      "trials": 5,
+      "internet_allowed": false,
+      "budget": {
+        "max_cost_usd": null,
+        "max_latency_s": null,
+        "max_tokens": null,
+        "max_data_scanned_ratio": null
+      },
+      "seed": 0,
+      "extra": {
+        "fault": "schema_change",
+        "mitigations": "schema_change",
+        "recovery": "on",
+        "sample_fraction": "0.2"
+      }
+    },
+    {
+      "config_id": "t5_corrupt_parquet_no_recovery",
+      "sut": "fault_injecting",
+      "llm": "local-fault-injection",
+      "agents_enabled": "full_swarm",
+      "sampling_mode": "fixed",
+      "model_routing": "default",
+      "environment": "local",
+      "trials": 5,
+      "internet_allowed": false,
+      "budget": {
+        "max_cost_usd": null,
+        "max_latency_s": null,
+        "max_tokens": null,
+        "max_data_scanned_ratio": null
+      },
+      "seed": 0,
+      "extra": {
+        "fault": "corrupt_parquet",
+        "mitigations": "",
+        "recovery": "off",
+        "sample_fraction": "0.2"
+      }
+    },
+    {
+      "config_id": "t5_corrupt_parquet_with_mitigation",
+      "sut": "fault_injecting",
+      "llm": "local-fault-injection",
+      "agents_enabled": "full_swarm",
+      "sampling_mode": "fixed",
+      "model_routing": "default",
+      "environment": "local",
+      "trials": 5,
+      "internet_allowed": false,
+      "budget": {
+        "max_cost_usd": null,
+        "max_latency_s": null,
+        "max_tokens": null,
+        "max_data_scanned_ratio": null
+      },
+      "seed": 0,
+      "extra": {
+        "fault": "corrupt_parquet",
+        "mitigations": "corrupt_parquet",
+        "recovery": "on",
+        "sample_fraction": "0.2"
+      }
+    }
+  ],
+  "results": {
+    "t5_no_fault": {
+      "config": {
+        "config_id": "t5_no_fault",
+        "sut": "fault_injecting",
+        "llm": "local-fault-injection",
+        "agents_enabled": "full_swarm",
+        "sampling_mode": "fixed",
+        "model_routing": "default",
+        "environment": "local",
+        "trials": 5,
+        "internet_allowed": false,
+        "budget": {
+          "max_cost_usd": null,
+          "max_latency_s": null,
+          "max_tokens": null,
+          "max_data_scanned_ratio": null
+        },
+        "seed": 0,
+        "extra": {
+          "fault": "none",
+          "mitigations": "",
+          "recovery": "off",
+          "sample_fraction": "0.2"
+        }
+      },
+      "tasks": {
+        "t5_mean_amount": {
+          "track": "reliability",
+          "stats": {
+            "n_trials": 5,
+            "pass_at_1": 1.0,
+            "best_of_n": 1.0,
+            "quality": {
+              "answer_rel_error": {
+                "mean": 0.011350483159604349,
+                "median": 0.006602548092344166,
+                "std": 0.008817419802781609,
+                "min": 0.0012406181922049403,
+                "max": 0.024471431111361557,
+                "n": 5
+              },
+              "ci_coverage": {
+                "mean": 1.0,
+                "median": 1.0,
+                "std": 0.0,
+                "min": 1.0,
+                "max": 1.0,
+                "n": 5
+              },
+              "cost_wasted_usd": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 5
+              },
+              "pass": {
+                "mean": 1.0,
+                "median": 1.0,
+                "std": 0.0,
+                "min": 1.0,
+                "max": 1.0,
+                "n": 5
+              },
+              "recovered": {
+                "mean": 1.0,
+                "median": 1.0,
+                "std": 0.0,
+                "min": 1.0,
+                "max": 1.0,
+                "n": 5
+              },
+              "score": {
+                "mean": 0.9886495168403957,
+                "median": 0.9933974519076558,
+                "std": 0.008817419802781607,
+                "min": 0.9755285688886385,
+                "max": 0.9987593818077951,
+                "n": 5
+              },
+              "user_informed": {
+                "mean": 1.0,
+                "median": 1.0,
+                "std": 0.0,
+                "min": 1.0,
+                "max": 1.0,
+                "n": 5
+              },
+              "work_repeated_ratio": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 5
+              }
+            },
+            "tuple": {
+              "cost_usd": {
+                "mean": 0.04,
+                "median": 0.04,
+                "std": 0.0,
+                "min": 0.04,
+                "max": 0.04,
+                "n": 5
+              },
+              "latency_s": {
+                "mean": 0.02,
+                "median": 0.02,
+                "std": 0.0,
+                "min": 0.02,
+                "max": 0.02,
+                "n": 5
+              },
+              "data_scanned_ratio": {
+                "mean": 0.2,
+                "median": 0.2,
+                "std": 0.0,
+                "min": 0.2,
+                "max": 0.2,
+                "n": 5
+              },
+              "tool_calls": {
+                "mean": 3.0,
+                "median": 3,
+                "std": 0.0,
+                "min": 3,
+                "max": 3,
+                "n": 5
+              },
+              "tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 5
+              },
+              "prompt_tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 5
+              },
+              "completion_tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 5
+              },
+              "retries": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 5
+              }
+            },
+            "total_cost_usd": 0.2,
+            "n_cost_unknown": 0,
+            "cost_sources": [
+              "unknown"
+            ],
+            "n_errors": 0,
+            "errors": [],
+            "failure_kinds": {}
+          },
+          "trials": [
+            {
+              "task_id": "t5_mean_amount",
+              "track": "reliability",
+              "config_id": "t5_no_fault",
+              "trial_index": 0,
+              "quality": {
+                "score": 0.9987593818077951,
+                "answer_rel_error": 0.0012406181922049403,
+                "ci_coverage": 1.0,
+                "pass": 1.0,
+                "recovered": 1.0,
+                "work_repeated_ratio": 0.0,
+                "cost_wasted_usd": 0.0,
+                "user_informed": 1.0
+              },
+              "outcome": {
+                "answer": {
+                  "estimate": 37.3982825,
+                  "ci": [
+                    36.05443833838504,
+                    38.74212666161496
+                  ],
+                  "se": 0.6856347763341635,
+                  "n_scanned": 4000,
+                  "_recovered": null,
+                  "_work_repeated_ratio": 0.0,
+                  "_cost_wasted_usd": 0.0,
+                  "_user_informed": true,
+                  "_fault": "none"
+                },
+                "cost_usd": 0.04,
+                "latency_s": 0.02,
+                "data_scanned_ratio": 0.2,
+                "tool_calls": 3,
+                "tokens": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "unknown",
+                "retries": 0,
+                "recovered": null,
+                "trajectory": [
+                  {
+                    "fault": "none"
+                  }
+                ],
+                "artifacts": {
+                  "budget": {
+                    "limits": {
+                      "max_cost_usd": null,
+                      "max_latency_s": null,
+                      "max_tokens": null,
+                      "max_data_scanned_ratio": null
+                    },
+                    "actual": {
+                      "cost_usd": 0.04,
+                      "latency_s": 0.02,
+                      "tokens": 0,
+                      "data_scanned_ratio": 0.2
+                    },
+                    "violations": []
+                  }
+                },
+                "error": null,
+                "error_kind": null
+              }
+            },
+            {
+              "task_id": "t5_mean_amount",
+              "track": "reliability",
+              "config_id": "t5_no_fault",
+              "trial_index": 1,
+              "quality": {
+                "score": 0.9755285688886385,
+                "answer_rel_error": 0.024471431111361557,
+                "ci_coverage": 1.0,
+                "pass": 1.0,
+                "recovered": 1.0,
+                "work_repeated_ratio": 0.0,
+                "cost_wasted_usd": 0.0,
+                "user_informed": 1.0
+              },
+              "outcome": {
+                "answer": {
+                  "estimate": 36.437887499999995,
+                  "ci": [
+                    35.23111459617741,
+                    37.64466040382258
+                  ],
+                  "se": 0.6157004611339721,
+                  "n_scanned": 4000,
+                  "_recovered": null,
+                  "_work_repeated_ratio": 0.0,
+                  "_cost_wasted_usd": 0.0,
+                  "_user_informed": true,
+                  "_fault": "none"
+                },
+                "cost_usd": 0.04,
+                "latency_s": 0.02,
+                "data_scanned_ratio": 0.2,
+                "tool_calls": 3,
+                "tokens": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "unknown",
+                "retries": 0,
+                "recovered": null,
+                "trajectory": [
+                  {
+                    "fault": "none"
+                  }
+                ],
+                "artifacts": {
+                  "budget": {
+                    "limits": {
+                      "max_cost_usd": null,
+                      "max_latency_s": null,
+                      "max_tokens": null,
+                      "max_data_scanned_ratio": null
+                    },
+                    "actual": {
+                      "cost_usd": 0.04,
+                      "latency_s": 0.02,
+                      "tokens": 0,
+                      "data_scanned_ratio": 0.2
+                    },
+                    "violations": []
+                  }
+                },
+                "error": null,
+                "error_kind": null
+              }
+            },
+            {
+              "task_id": "t5_mean_amount",
+              "track": "reliability",
+              "config_id": "t5_no_fault",
+              "trial_index": 2,
+              "quality": {
+                "score": 0.9933974519076558,
+                "answer_rel_error": 0.006602548092344166,
+                "ci_coverage": 1.0,
+                "pass": 1.0,
+                "recovered": 1.0,
+                "work_repeated_ratio": 0.0,
+                "cost_wasted_usd": 0.0,
+                "user_informed": 1.0
+              },
+              "outcome": {
+                "answer": {
+                  "estimate": 37.105325,
+                  "ci": [
+                    35.75619227802191,
+                    38.45445772197809
+                  ],
+                  "se": 0.6883330214173905,
+                  "n_scanned": 4000,
+                  "_recovered": null,
+                  "_work_repeated_ratio": 0.0,
+                  "_cost_wasted_usd": 0.0,
+                  "_user_informed": true,
+                  "_fault": "none"
+                },
+                "cost_usd": 0.04,
+                "latency_s": 0.02,
+                "data_scanned_ratio": 0.2,
+                "tool_calls": 3,
+                "tokens": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "unknown",
+                "retries": 0,
+                "recovered": null,
+                "trajectory": [
+                  {
+                    "fault": "none"
+                  }
+                ],
+                "artifacts": {
+                  "budget": {
+                    "limits": {
+                      "max_cost_usd": null,
+                      "max_latency_s": null,
+                      "max_tokens": null,
+                      "max_data_scanned_ratio": null
+                    },
+                    "actual": {
+                      "cost_usd": 0.04,
+                      "latency_s": 0.02,
+                      "tokens": 0,
+                      "data_scanned_ratio": 0.2
+                    },
+                    "violations": []
+                  }
+                },
+                "error": null,
+                "error_kind": null
+              }
+            },
+            {
+              "task_id": "t5_mean_amount",
+              "track": "reliability",
+              "config_id": "t5_no_fault",
+              "trial_index": 3,
+              "quality": {
+                "score": 0.9945010089568834,
+                "answer_rel_error": 0.005498991043116617,
+                "ci_coverage": 1.0,
+                "pass": 1.0,
+                "recovered": 1.0,
+                "work_repeated_ratio": 0.0,
+                "cost_wasted_usd": 0.0,
+                "user_informed": 1.0
+              },
+              "outcome": {
+                "answer": {
+                  "estimate": 37.146544999999996,
+                  "ci": [
+                    35.69782099839352,
+                    38.595269001606475
+                  ],
+                  "se": 0.7391448987788144,
+                  "n_scanned": 4000,
+                  "_recovered": null,
+                  "_work_repeated_ratio": 0.0,
+                  "_cost_wasted_usd": 0.0,
+                  "_user_informed": true,
+                  "_fault": "none"
+                },
+                "cost_usd": 0.04,
+                "latency_s": 0.02,
+                "data_scanned_ratio": 0.2,
+                "tool_calls": 3,
+                "tokens": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "unknown",
+                "retries": 0,
+                "recovered": null,
+                "trajectory": [
+                  {
+                    "fault": "none"
+                  }
+                ],
+                "artifacts": {
+                  "budget": {
+                    "limits": {
+                      "max_cost_usd": null,
+                      "max_latency_s": null,
+                      "max_tokens": null,
+                      "max_data_scanned_ratio": null
+                    },
+                    "actual": {
+                      "cost_usd": 0.04,
+                      "latency_s": 0.02,
+                      "tokens": 0,
+                      "data_scanned_ratio": 0.2
+                    },
+                    "violations": []
+                  }
+                },
+                "error": null,
+                "error_kind": null
+              }
+            },
+            {
+              "task_id": "t5_mean_amount",
+              "track": "reliability",
+              "config_id": "t5_no_fault",
+              "trial_index": 4,
+              "quality": {
+                "score": 0.9810611726410056,
+                "answer_rel_error": 0.018938827358994468,
+                "ci_coverage": 1.0,
+                "pass": 1.0,
+                "recovered": 1.0,
+                "work_repeated_ratio": 0.0,
+                "cost_wasted_usd": 0.0,
+                "user_informed": 1.0
+              },
+              "outcome": {
+                "answer": {
+                  "estimate": 38.059345,
+                  "ci": [
+                    36.69540211592414,
+                    39.42328788407586
+                  ],
+                  "se": 0.6958892265693182,
+                  "n_scanned": 4000,
+                  "_recovered": null,
+                  "_work_repeated_ratio": 0.0,
+                  "_cost_wasted_usd": 0.0,
+                  "_user_informed": true,
+                  "_fault": "none"
+                },
+                "cost_usd": 0.04,
+                "latency_s": 0.02,
+                "data_scanned_ratio": 0.2,
+                "tool_calls": 3,
+                "tokens": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "unknown",
+                "retries": 0,
+                "recovered": null,
+                "trajectory": [
+                  {
+                    "fault": "none"
+                  }
+                ],
+                "artifacts": {
+                  "budget": {
+                    "limits": {
+                      "max_cost_usd": null,
+                      "max_latency_s": null,
+                      "max_tokens": null,
+                      "max_data_scanned_ratio": null
+                    },
+                    "actual": {
+                      "cost_usd": 0.04,
+                      "latency_s": 0.02,
+                      "tokens": 0,
+                      "data_scanned_ratio": 0.2
+                    },
+                    "violations": []
+                  }
+                },
+                "error": null,
+                "error_kind": null
+              }
+            }
+          ]
+        }
+      }
+    },
+    "t5_transient_no_recovery": {
+      "config": {
+        "config_id": "t5_transient_no_recovery",
+        "sut": "fault_injecting",
+        "llm": "local-fault-injection",
+        "agents_enabled": "full_swarm",
+        "sampling_mode": "fixed",
+        "model_routing": "default",
+        "environment": "local",
+        "trials": 5,
+        "internet_allowed": false,
+        "budget": {
+          "max_cost_usd": null,
+          "max_latency_s": null,
+          "max_tokens": null,
+          "max_data_scanned_ratio": null
+        },
+        "seed": 0,
+        "extra": {
+          "fault": "rate_limit",
+          "mitigations": "",
+          "recovery": "off",
+          "sample_fraction": "0.2"
+        }
+      },
+      "tasks": {
+        "t5_mean_amount": {
+          "track": "reliability",
+          "stats": {
+            "n_trials": 5,
+            "pass_at_1": 0.0,
+            "best_of_n": 0.0,
+            "quality": {
+              "answer_rel_error": {
+                "mean": NaN,
+                "median": NaN,
+                "std": NaN,
+                "min": NaN,
+                "max": NaN,
+                "n": 0
+              },
+              "ci_coverage": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 5
+              },
+              "cost_wasted_usd": {
+                "mean": 0.022000000000000002,
+                "median": 0.022000000000000002,
+                "std": 0.0,
+                "min": 0.022000000000000002,
+                "max": 0.022000000000000002,
+                "n": 5
+              },
+              "pass": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 5
+              },
+              "recovered": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 5
+              },
+              "score": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 5
+              },
+              "user_informed": {
+                "mean": 1.0,
+                "median": 1.0,
+                "std": 0.0,
+                "min": 1.0,
+                "max": 1.0,
+                "n": 5
+              },
+              "work_repeated_ratio": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 5
+              }
+            },
+            "tuple": {
+              "cost_usd": {
+                "mean": 0.022000000000000002,
+                "median": 0.022000000000000002,
+                "std": 0.0,
+                "min": 0.022000000000000002,
+                "max": 0.022000000000000002,
+                "n": 5
+              },
+              "latency_s": {
+                "mean": 0.011000000000000001,
+                "median": 0.011000000000000001,
+                "std": 0.0,
+                "min": 0.011000000000000001,
+                "max": 0.011000000000000001,
+                "n": 5
+              },
+              "data_scanned_ratio": {
+                "mean": 0.11000000000000001,
+                "median": 0.11,
+                "std": 0.0,
+                "min": 0.11,
+                "max": 0.11,
+                "n": 5
+              },
+              "tool_calls": {
+                "mean": 4.0,
+                "median": 4,
+                "std": 0.0,
+                "min": 4,
+                "max": 4,
+                "n": 5
+              },
+              "tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 5
+              },
+              "prompt_tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 5
+              },
+              "completion_tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 5
+              },
+              "retries": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 5
+              }
+            },
+            "total_cost_usd": 0.11000000000000001,
+            "n_cost_unknown": 0,
+            "cost_sources": [
+              "unknown"
+            ],
+            "n_errors": 0,
+            "errors": [],
+            "failure_kinds": {}
+          },
+          "trials": [
+            {
+              "task_id": "t5_mean_amount",
+              "track": "reliability",
+              "config_id": "t5_transient_no_recovery",
+              "trial_index": 0,
+              "quality": {
+                "score": 0.0,
+                "answer_rel_error": NaN,
+                "ci_coverage": 0.0,
+                "recovered": 0.0,
+                "work_repeated_ratio": 0.0,
+                "cost_wasted_usd": 0.022000000000000002,
+                "user_informed": 1.0,
+                "pass": 0.0
+              },
+              "outcome": {
+                "answer": {
+                  "estimate": null,
+                  "rate_estimate": null,
+                  "retained_ids": [],
+                  "n_scanned": 2200,
+                  "_recovered": false,
+                  "_work_repeated_ratio": 0.0,
+                  "_cost_wasted_usd": 0.022000000000000002,
+                  "_user_informed": true,
+                  "_fault": "rate_limit"
+                },
+                "cost_usd": 0.022000000000000002,
+                "latency_s": 0.011000000000000001,
+                "data_scanned_ratio": 0.11,
+                "tool_calls": 4,
+                "tokens": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "unknown",
+                "retries": 0,
+                "recovered": false,
+                "trajectory": [
+                  {
+                    "fault": "rate_limit",
+                    "recovered": false,
+                    "reason": "no_recovery"
+                  }
+                ],
+                "artifacts": {
+                  "budget": {
+                    "limits": {
+                      "max_cost_usd": null,
+                      "max_latency_s": null,
+                      "max_tokens": null,
+                      "max_data_scanned_ratio": null
+                    },
+                    "actual": {
+                      "cost_usd": 0.022000000000000002,
+                      "latency_s": 0.011000000000000001,
+                      "tokens": 0,
+                      "data_scanned_ratio": 0.11
+                    },
+                    "violations": []
+                  }
+                },
+                "error": null,
+                "error_kind": null
+              }
+            },
+            {
+              "task_id": "t5_mean_amount",
+              "track": "reliability",
+              "config_id": "t5_transient_no_recovery",
+              "trial_index": 1,
+              "quality": {
+                "score": 0.0,
+                "answer_rel_error": NaN,
+                "ci_coverage": 0.0,
+                "recovered": 0.0,
+                "work_repeated_ratio": 0.0,
+                "cost_wasted_usd": 0.022000000000000002,
+                "user_informed": 1.0,
+                "pass": 0.0
+              },
+              "outcome": {
+                "answer": {
+                  "estimate": null,
+                  "rate_estimate": null,
+                  "retained_ids": [],
+                  "n_scanned": 2200,
+                  "_recovered": false,
+                  "_work_repeated_ratio": 0.0,
+                  "_cost_wasted_usd": 0.022000000000000002,
+                  "_user_informed": true,
+                  "_fault": "rate_limit"
+                },
+                "cost_usd": 0.022000000000000002,
+                "latency_s": 0.011000000000000001,
+                "data_scanned_ratio": 0.11,
+                "tool_calls": 4,
+                "tokens": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "unknown",
+                "retries": 0,
+                "recovered": false,
+                "trajectory": [
+                  {
+                    "fault": "rate_limit",
+                    "recovered": false,
+                    "reason": "no_recovery"
+                  }
+                ],
+                "artifacts": {
+                  "budget": {
+                    "limits": {
+                      "max_cost_usd": null,
+                      "max_latency_s": null,
+                      "max_tokens": null,
+                      "max_data_scanned_ratio": null
+                    },
+                    "actual": {
+                      "cost_usd": 0.022000000000000002,
+                      "latency_s": 0.011000000000000001,
+                      "tokens": 0,
+                      "data_scanned_ratio": 0.11
+                    },
+                    "violations": []
+                  }
+                },
+                "error": null,
+                "error_kind": null
+              }
+            },
+            {
+              "task_id": "t5_mean_amount",
+              "track": "reliability",
+              "config_id": "t5_transient_no_recovery",
+              "trial_index": 2,
+              "quality": {
+                "score": 0.0,
+                "answer_rel_error": NaN,
+                "ci_coverage": 0.0,
+                "recovered": 0.0,
+                "work_repeated_ratio": 0.0,
+                "cost_wasted_usd": 0.022000000000000002,
+                "user_informed": 1.0,
+                "pass": 0.0
+              },
+              "outcome": {
+                "answer": {
+                  "estimate": null,
+                  "rate_estimate": null,
+                  "retained_ids": [],
+                  "n_scanned": 2200,
+                  "_recovered": false,
+                  "_work_repeated_ratio": 0.0,
+                  "_cost_wasted_usd": 0.022000000000000002,
+                  "_user_informed": true,
+                  "_fault": "rate_limit"
+                },
+                "cost_usd": 0.022000000000000002,
+                "latency_s": 0.011000000000000001,
+                "data_scanned_ratio": 0.11,
+                "tool_calls": 4,
+                "tokens": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "unknown",
+                "retries": 0,
+                "recovered": false,
+                "trajectory": [
+                  {
+                    "fault": "rate_limit",
+                    "recovered": false,
+                    "reason": "no_recovery"
+                  }
+                ],
+                "artifacts": {
+                  "budget": {
+                    "limits": {
+                      "max_cost_usd": null,
+                      "max_latency_s": null,
+                      "max_tokens": null,
+                      "max_data_scanned_ratio": null
+                    },
+                    "actual": {
+                      "cost_usd": 0.022000000000000002,
+                      "latency_s": 0.011000000000000001,
+                      "tokens": 0,
+                      "data_scanned_ratio": 0.11
+                    },
+                    "violations": []
+                  }
+                },
+                "error": null,
+                "error_kind": null
+              }
+            },
+            {
+              "task_id": "t5_mean_amount",
+              "track": "reliability",
+              "config_id": "t5_transient_no_recovery",
+              "trial_index": 3,
+              "quality": {
+                "score": 0.0,
+                "answer_rel_error": NaN,
+                "ci_coverage": 0.0,
+                "recovered": 0.0,
+                "work_repeated_ratio": 0.0,
+                "cost_wasted_usd": 0.022000000000000002,
+                "user_informed": 1.0,
+                "pass": 0.0
+              },
+              "outcome": {
+                "answer": {
+                  "estimate": null,
+                  "rate_estimate": null,
+                  "retained_ids": [],
+                  "n_scanned": 2200,
+                  "_recovered": false,
+                  "_work_repeated_ratio": 0.0,
+                  "_cost_wasted_usd": 0.022000000000000002,
+                  "_user_informed": true,
+                  "_fault": "rate_limit"
+                },
+                "cost_usd": 0.022000000000000002,
+                "latency_s": 0.011000000000000001,
+                "data_scanned_ratio": 0.11,
+                "tool_calls": 4,
+                "tokens": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "unknown",
+                "retries": 0,
+                "recovered": false,
+                "trajectory": [
+                  {
+                    "fault": "rate_limit",
+                    "recovered": false,
+                    "reason": "no_recovery"
+                  }
+                ],
+                "artifacts": {
+                  "budget": {
+                    "limits": {
+                      "max_cost_usd": null,
+                      "max_latency_s": null,
+                      "max_tokens": null,
+                      "max_data_scanned_ratio": null
+                    },
+                    "actual": {
+                      "cost_usd": 0.022000000000000002,
+                      "latency_s": 0.011000000000000001,
+                      "tokens": 0,
+                      "data_scanned_ratio": 0.11
+                    },
+                    "violations": []
+                  }
+                },
+                "error": null,
+                "error_kind": null
+              }
+            },
+            {
+              "task_id": "t5_mean_amount",
+              "track": "reliability",
+              "config_id": "t5_transient_no_recovery",
+              "trial_index": 4,
+              "quality": {
+                "score": 0.0,
+                "answer_rel_error": NaN,
+                "ci_coverage": 0.0,
+                "recovered": 0.0,
+                "work_repeated_ratio": 0.0,
+                "cost_wasted_usd": 0.022000000000000002,
+                "user_informed": 1.0,
+                "pass": 0.0
+              },
+              "outcome": {
+                "answer": {
+                  "estimate": null,
+                  "rate_estimate": null,
+                  "retained_ids": [],
+                  "n_scanned": 2200,
+                  "_recovered": false,
+                  "_work_repeated_ratio": 0.0,
+                  "_cost_wasted_usd": 0.022000000000000002,
+                  "_user_informed": true,
+                  "_fault": "rate_limit"
+                },
+                "cost_usd": 0.022000000000000002,
+                "latency_s": 0.011000000000000001,
+                "data_scanned_ratio": 0.11,
+                "tool_calls": 4,
+                "tokens": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "unknown",
+                "retries": 0,
+                "recovered": false,
+                "trajectory": [
+                  {
+                    "fault": "rate_limit",
+                    "recovered": false,
+                    "reason": "no_recovery"
+                  }
+                ],
+                "artifacts": {
+                  "budget": {
+                    "limits": {
+                      "max_cost_usd": null,
+                      "max_latency_s": null,
+                      "max_tokens": null,
+                      "max_data_scanned_ratio": null
+                    },
+                    "actual": {
+                      "cost_usd": 0.022000000000000002,
+                      "latency_s": 0.011000000000000001,
+                      "tokens": 0,
+                      "data_scanned_ratio": 0.11
+                    },
+                    "violations": []
+                  }
+                },
+                "error": null,
+                "error_kind": null
+              }
+            }
+          ]
+        }
+      }
+    },
+    "t5_transient_with_recovery": {
+      "config": {
+        "config_id": "t5_transient_with_recovery",
+        "sut": "fault_injecting",
+        "llm": "local-fault-injection",
+        "agents_enabled": "full_swarm",
+        "sampling_mode": "fixed",
+        "model_routing": "default",
+        "environment": "local",
+        "trials": 5,
+        "internet_allowed": false,
+        "budget": {
+          "max_cost_usd": null,
+          "max_latency_s": null,
+          "max_tokens": null,
+          "max_data_scanned_ratio": null
+        },
+        "seed": 0,
+        "extra": {
+          "fault": "rate_limit",
+          "mitigations": "",
+          "recovery": "on",
+          "sample_fraction": "0.2"
+        }
+      },
+      "tasks": {
+        "t5_mean_amount": {
+          "track": "reliability",
+          "stats": {
+            "n_trials": 5,
+            "pass_at_1": 1.0,
+            "best_of_n": 1.0,
+            "quality": {
+              "answer_rel_error": {
+                "mean": 0.011350483159604349,
+                "median": 0.006602548092344166,
+                "std": 0.008817419802781609,
+                "min": 0.0012406181922049403,
+                "max": 0.024471431111361557,
+                "n": 5
+              },
+              "ci_coverage": {
+                "mean": 1.0,
+                "median": 1.0,
+                "std": 0.0,
+                "min": 1.0,
+                "max": 1.0,
+                "n": 5
+              },
+              "cost_wasted_usd": {
+                "mean": 0.002000000000000001,
+                "median": 0.002000000000000001,
+                "std": 0.0,
+                "min": 0.002000000000000001,
+                "max": 0.002000000000000001,
+                "n": 5
+              },
+              "pass": {
+                "mean": 1.0,
+                "median": 1.0,
+                "std": 0.0,
+                "min": 1.0,
+                "max": 1.0,
+                "n": 5
+              },
+              "recovered": {
+                "mean": 1.0,
+                "median": 1.0,
+                "std": 0.0,
+                "min": 1.0,
+                "max": 1.0,
+                "n": 5
+              },
+              "score": {
+                "mean": 0.9886495168403957,
+                "median": 0.9933974519076558,
+                "std": 0.008817419802781607,
+                "min": 0.9755285688886385,
+                "max": 0.9987593818077951,
+                "n": 5
+              },
+              "user_informed": {
+                "mean": 1.0,
+                "median": 1.0,
+                "std": 0.0,
+                "min": 1.0,
+                "max": 1.0,
+                "n": 5
+              },
+              "work_repeated_ratio": {
+                "mean": 0.050000000000000024,
+                "median": 0.05000000000000002,
+                "std": 0.0,
+                "min": 0.05000000000000002,
+                "max": 0.05000000000000002,
+                "n": 5
+              }
+            },
+            "tuple": {
+              "cost_usd": {
+                "mean": 0.042,
+                "median": 0.042,
+                "std": 0.0,
+                "min": 0.042,
+                "max": 0.042,
+                "n": 5
+              },
+              "latency_s": {
+                "mean": 0.07100000000000001,
+                "median": 0.07100000000000001,
+                "std": 0.0,
+                "min": 0.07100000000000001,
+                "max": 0.07100000000000001,
+                "n": 5
+              },
+              "data_scanned_ratio": {
+                "mean": 0.21000000000000002,
+                "median": 0.21,
+                "std": 0.0,
+                "min": 0.21,
+                "max": 0.21,
+                "n": 5
+              },
+              "tool_calls": {
+                "mean": 4.0,
+                "median": 4,
+                "std": 0.0,
+                "min": 4,
+                "max": 4,
+                "n": 5
+              },
+              "tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 5
+              },
+              "prompt_tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 5
+              },
+              "completion_tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 5
+              },
+              "retries": {
+                "mean": 1.0,
+                "median": 1,
+                "std": 0.0,
+                "min": 1,
+                "max": 1,
+                "n": 5
+              }
+            },
+            "total_cost_usd": 0.21000000000000002,
+            "n_cost_unknown": 0,
+            "cost_sources": [
+              "unknown"
+            ],
+            "n_errors": 0,
+            "errors": [],
+            "failure_kinds": {}
+          },
+          "trials": [
+            {
+              "task_id": "t5_mean_amount",
+              "track": "reliability",
+              "config_id": "t5_transient_with_recovery",
+              "trial_index": 0,
+              "quality": {
+                "score": 0.9987593818077951,
+                "answer_rel_error": 0.0012406181922049403,
+                "ci_coverage": 1.0,
+                "pass": 1.0,
+                "recovered": 1.0,
+                "work_repeated_ratio": 0.05000000000000002,
+                "cost_wasted_usd": 0.002000000000000001,
+                "user_informed": 1.0
+              },
+              "outcome": {
+                "answer": {
+                  "estimate": 37.3982825,
+                  "ci": [
+                    36.05443833838504,
+                    38.74212666161496
+                  ],
+                  "se": 0.6856347763341635,
+                  "n_scanned": 4000,
+                  "_recovered": true,
+                  "_work_repeated_ratio": 0.05000000000000002,
+                  "_cost_wasted_usd": 0.002000000000000001,
+                  "_user_informed": true,
+                  "_fault": "rate_limit"
+                },
+                "cost_usd": 0.042,
+                "latency_s": 0.07100000000000001,
+                "data_scanned_ratio": 0.21,
+                "tool_calls": 4,
+                "tokens": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "unknown",
+                "retries": 1,
+                "recovered": true,
+                "trajectory": [
+                  {
+                    "fault": "rate_limit",
+                    "recovered": true,
+                    "checkpoint_interval": 0.1
+                  }
+                ],
+                "artifacts": {
+                  "budget": {
+                    "limits": {
+                      "max_cost_usd": null,
+                      "max_latency_s": null,
+                      "max_tokens": null,
+                      "max_data_scanned_ratio": null
+                    },
+                    "actual": {
+                      "cost_usd": 0.042,
+                      "latency_s": 0.07100000000000001,
+                      "tokens": 0,
+                      "data_scanned_ratio": 0.21
+                    },
+                    "violations": []
+                  }
+                },
+                "error": null,
+                "error_kind": null
+              }
+            },
+            {
+              "task_id": "t5_mean_amount",
+              "track": "reliability",
+              "config_id": "t5_transient_with_recovery",
+              "trial_index": 1,
+              "quality": {
+                "score": 0.9755285688886385,
+                "answer_rel_error": 0.024471431111361557,
+                "ci_coverage": 1.0,
+                "pass": 1.0,
+                "recovered": 1.0,
+                "work_repeated_ratio": 0.05000000000000002,
+                "cost_wasted_usd": 0.002000000000000001,
+                "user_informed": 1.0
+              },
+              "outcome": {
+                "answer": {
+                  "estimate": 36.437887499999995,
+                  "ci": [
+                    35.23111459617741,
+                    37.64466040382258
+                  ],
+                  "se": 0.6157004611339721,
+                  "n_scanned": 4000,
+                  "_recovered": true,
+                  "_work_repeated_ratio": 0.05000000000000002,
+                  "_cost_wasted_usd": 0.002000000000000001,
+                  "_user_informed": true,
+                  "_fault": "rate_limit"
+                },
+                "cost_usd": 0.042,
+                "latency_s": 0.07100000000000001,
+                "data_scanned_ratio": 0.21,
+                "tool_calls": 4,
+                "tokens": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "unknown",
+                "retries": 1,
+                "recovered": true,
+                "trajectory": [
+                  {
+                    "fault": "rate_limit",
+                    "recovered": true,
+                    "checkpoint_interval": 0.1
+                  }
+                ],
+                "artifacts": {
+                  "budget": {
+                    "limits": {
+                      "max_cost_usd": null,
+                      "max_latency_s": null,
+                      "max_tokens": null,
+                      "max_data_scanned_ratio": null
+                    },
+                    "actual": {
+                      "cost_usd": 0.042,
+                      "latency_s": 0.07100000000000001,
+                      "tokens": 0,
+                      "data_scanned_ratio": 0.21
+                    },
+                    "violations": []
+                  }
+                },
+                "error": null,
+                "error_kind": null
+              }
+            },
+            {
+              "task_id": "t5_mean_amount",
+              "track": "reliability",
+              "config_id": "t5_transient_with_recovery",
+              "trial_index": 2,
+              "quality": {
+                "score": 0.9933974519076558,
+                "answer_rel_error": 0.006602548092344166,
+                "ci_coverage": 1.0,
+                "pass": 1.0,
+                "recovered": 1.0,
+                "work_repeated_ratio": 0.05000000000000002,
+                "cost_wasted_usd": 0.002000000000000001,
+                "user_informed": 1.0
+              },
+              "outcome": {
+                "answer": {
+                  "estimate": 37.105325,
+                  "ci": [
+                    35.75619227802191,
+                    38.45445772197809
+                  ],
+                  "se": 0.6883330214173905,
+                  "n_scanned": 4000,
+                  "_recovered": true,
+                  "_work_repeated_ratio": 0.05000000000000002,
+                  "_cost_wasted_usd": 0.002000000000000001,
+                  "_user_informed": true,
+                  "_fault": "rate_limit"
+                },
+                "cost_usd": 0.042,
+                "latency_s": 0.07100000000000001,
+                "data_scanned_ratio": 0.21,
+                "tool_calls": 4,
+                "tokens": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "unknown",
+                "retries": 1,
+                "recovered": true,
+                "trajectory": [
+                  {
+                    "fault": "rate_limit",
+                    "recovered": true,
+                    "checkpoint_interval": 0.1
+                  }
+                ],
+                "artifacts": {
+                  "budget": {
+                    "limits": {
+                      "max_cost_usd": null,
+                      "max_latency_s": null,
+                      "max_tokens": null,
+                      "max_data_scanned_ratio": null
+                    },
+                    "actual": {
+                      "cost_usd": 0.042,
+                      "latency_s": 0.07100000000000001,
+                      "tokens": 0,
+                      "data_scanned_ratio": 0.21
+                    },
+                    "violations": []
+                  }
+                },
+                "error": null,
+                "error_kind": null
+              }
+            },
+            {
+              "task_id": "t5_mean_amount",
+              "track": "reliability",
+              "config_id": "t5_transient_with_recovery",
+              "trial_index": 3,
+              "quality": {
+                "score": 0.9945010089568834,
+                "answer_rel_error": 0.005498991043116617,
+                "ci_coverage": 1.0,
+                "pass": 1.0,
+                "recovered": 1.0,
+                "work_repeated_ratio": 0.05000000000000002,
+                "cost_wasted_usd": 0.002000000000000001,
+                "user_informed": 1.0
+              },
+              "outcome": {
+                "answer": {
+                  "estimate": 37.146544999999996,
+                  "ci": [
+                    35.69782099839352,
+                    38.595269001606475
+                  ],
+                  "se": 0.7391448987788144,
+                  "n_scanned": 4000,
+                  "_recovered": true,
+                  "_work_repeated_ratio": 0.05000000000000002,
+                  "_cost_wasted_usd": 0.002000000000000001,
+                  "_user_informed": true,
+                  "_fault": "rate_limit"
+                },
+                "cost_usd": 0.042,
+                "latency_s": 0.07100000000000001,
+                "data_scanned_ratio": 0.21,
+                "tool_calls": 4,
+                "tokens": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "unknown",
+                "retries": 1,
+                "recovered": true,
+                "trajectory": [
+                  {
+                    "fault": "rate_limit",
+                    "recovered": true,
+                    "checkpoint_interval": 0.1
+                  }
+                ],
+                "artifacts": {
+                  "budget": {
+                    "limits": {
+                      "max_cost_usd": null,
+                      "max_latency_s": null,
+                      "max_tokens": null,
+                      "max_data_scanned_ratio": null
+                    },
+                    "actual": {
+                      "cost_usd": 0.042,
+                      "latency_s": 0.07100000000000001,
+                      "tokens": 0,
+                      "data_scanned_ratio": 0.21
+                    },
+                    "violations": []
+                  }
+                },
+                "error": null,
+                "error_kind": null
+              }
+            },
+            {
+              "task_id": "t5_mean_amount",
+              "track": "reliability",
+              "config_id": "t5_transient_with_recovery",
+              "trial_index": 4,
+              "quality": {
+                "score": 0.9810611726410056,
+                "answer_rel_error": 0.018938827358994468,
+                "ci_coverage": 1.0,
+                "pass": 1.0,
+                "recovered": 1.0,
+                "work_repeated_ratio": 0.05000000000000002,
+                "cost_wasted_usd": 0.002000000000000001,
+                "user_informed": 1.0
+              },
+              "outcome": {
+                "answer": {
+                  "estimate": 38.059345,
+                  "ci": [
+                    36.69540211592414,
+                    39.42328788407586
+                  ],
+                  "se": 0.6958892265693182,
+                  "n_scanned": 4000,
+                  "_recovered": true,
+                  "_work_repeated_ratio": 0.05000000000000002,
+                  "_cost_wasted_usd": 0.002000000000000001,
+                  "_user_informed": true,
+                  "_fault": "rate_limit"
+                },
+                "cost_usd": 0.042,
+                "latency_s": 0.07100000000000001,
+                "data_scanned_ratio": 0.21,
+                "tool_calls": 4,
+                "tokens": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "unknown",
+                "retries": 1,
+                "recovered": true,
+                "trajectory": [
+                  {
+                    "fault": "rate_limit",
+                    "recovered": true,
+                    "checkpoint_interval": 0.1
+                  }
+                ],
+                "artifacts": {
+                  "budget": {
+                    "limits": {
+                      "max_cost_usd": null,
+                      "max_latency_s": null,
+                      "max_tokens": null,
+                      "max_data_scanned_ratio": null
+                    },
+                    "actual": {
+                      "cost_usd": 0.042,
+                      "latency_s": 0.07100000000000001,
+                      "tokens": 0,
+                      "data_scanned_ratio": 0.21
+                    },
+                    "violations": []
+                  }
+                },
+                "error": null,
+                "error_kind": null
+              }
+            }
+          ]
+        }
+      }
+    },
+    "t5_worker_crash_with_recovery": {
+      "config": {
+        "config_id": "t5_worker_crash_with_recovery",
+        "sut": "fault_injecting",
+        "llm": "local-fault-injection",
+        "agents_enabled": "full_swarm",
+        "sampling_mode": "fixed",
+        "model_routing": "default",
+        "environment": "local",
+        "trials": 5,
+        "internet_allowed": false,
+        "budget": {
+          "max_cost_usd": null,
+          "max_latency_s": null,
+          "max_tokens": null,
+          "max_data_scanned_ratio": null
+        },
+        "seed": 0,
+        "extra": {
+          "fault": "worker_crash",
+          "mitigations": "",
+          "recovery": "on",
+          "sample_fraction": "0.2"
+        }
+      },
+      "tasks": {
+        "t5_mean_amount": {
+          "track": "reliability",
+          "stats": {
+            "n_trials": 5,
+            "pass_at_1": 1.0,
+            "best_of_n": 1.0,
+            "quality": {
+              "answer_rel_error": {
+                "mean": 0.011350483159604349,
+                "median": 0.006602548092344166,
+                "std": 0.008817419802781609,
+                "min": 0.0012406181922049403,
+                "max": 0.024471431111361557,
+                "n": 5
+              },
+              "ci_coverage": {
+                "mean": 1.0,
+                "median": 1.0,
+                "std": 0.0,
+                "min": 1.0,
+                "max": 1.0,
+                "n": 5
+              },
+              "cost_wasted_usd": {
+                "mean": 0.002000000000000001,
+                "median": 0.002000000000000001,
+                "std": 0.0,
+                "min": 0.002000000000000001,
+                "max": 0.002000000000000001,
+                "n": 5
+              },
+              "pass": {
+                "mean": 1.0,
+                "median": 1.0,
+                "std": 0.0,
+                "min": 1.0,
+                "max": 1.0,
+                "n": 5
+              },
+              "recovered": {
+                "mean": 1.0,
+                "median": 1.0,
+                "std": 0.0,
+                "min": 1.0,
+                "max": 1.0,
+                "n": 5
+              },
+              "score": {
+                "mean": 0.9886495168403957,
+                "median": 0.9933974519076558,
+                "std": 0.008817419802781607,
+                "min": 0.9755285688886385,
+                "max": 0.9987593818077951,
+                "n": 5
+              },
+              "user_informed": {
+                "mean": 1.0,
+                "median": 1.0,
+                "std": 0.0,
+                "min": 1.0,
+                "max": 1.0,
+                "n": 5
+              },
+              "work_repeated_ratio": {
+                "mean": 0.050000000000000024,
+                "median": 0.05000000000000002,
+                "std": 0.0,
+                "min": 0.05000000000000002,
+                "max": 0.05000000000000002,
+                "n": 5
+              }
+            },
+            "tuple": {
+              "cost_usd": {
+                "mean": 0.042,
+                "median": 0.042,
+                "std": 0.0,
+                "min": 0.042,
+                "max": 0.042,
+                "n": 5
+              },
+              "latency_s": {
+                "mean": 0.07100000000000001,
+                "median": 0.07100000000000001,
+                "std": 0.0,
+                "min": 0.07100000000000001,
+                "max": 0.07100000000000001,
+                "n": 5
+              },
+              "data_scanned_ratio": {
+                "mean": 0.21000000000000002,
+                "median": 0.21,
+                "std": 0.0,
+                "min": 0.21,
+                "max": 0.21,
+                "n": 5
+              },
+              "tool_calls": {
+                "mean": 4.0,
+                "median": 4,
+                "std": 0.0,
+                "min": 4,
+                "max": 4,
+                "n": 5
+              },
+              "tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 5
+              },
+              "prompt_tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 5
+              },
+              "completion_tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 5
+              },
+              "retries": {
+                "mean": 1.0,
+                "median": 1,
+                "std": 0.0,
+                "min": 1,
+                "max": 1,
+                "n": 5
+              }
+            },
+            "total_cost_usd": 0.21000000000000002,
+            "n_cost_unknown": 0,
+            "cost_sources": [
+              "unknown"
+            ],
+            "n_errors": 0,
+            "errors": [],
+            "failure_kinds": {}
+          },
+          "trials": [
+            {
+              "task_id": "t5_mean_amount",
+              "track": "reliability",
+              "config_id": "t5_worker_crash_with_recovery",
+              "trial_index": 0,
+              "quality": {
+                "score": 0.9987593818077951,
+                "answer_rel_error": 0.0012406181922049403,
+                "ci_coverage": 1.0,
+                "pass": 1.0,
+                "recovered": 1.0,
+                "work_repeated_ratio": 0.05000000000000002,
+                "cost_wasted_usd": 0.002000000000000001,
+                "user_informed": 1.0
+              },
+              "outcome": {
+                "answer": {
+                  "estimate": 37.3982825,
+                  "ci": [
+                    36.05443833838504,
+                    38.74212666161496
+                  ],
+                  "se": 0.6856347763341635,
+                  "n_scanned": 4000,
+                  "_recovered": true,
+                  "_work_repeated_ratio": 0.05000000000000002,
+                  "_cost_wasted_usd": 0.002000000000000001,
+                  "_user_informed": true,
+                  "_fault": "worker_crash"
+                },
+                "cost_usd": 0.042,
+                "latency_s": 0.07100000000000001,
+                "data_scanned_ratio": 0.21,
+                "tool_calls": 4,
+                "tokens": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "unknown",
+                "retries": 1,
+                "recovered": true,
+                "trajectory": [
+                  {
+                    "fault": "worker_crash",
+                    "recovered": true,
+                    "checkpoint_interval": 0.1
+                  }
+                ],
+                "artifacts": {
+                  "budget": {
+                    "limits": {
+                      "max_cost_usd": null,
+                      "max_latency_s": null,
+                      "max_tokens": null,
+                      "max_data_scanned_ratio": null
+                    },
+                    "actual": {
+                      "cost_usd": 0.042,
+                      "latency_s": 0.07100000000000001,
+                      "tokens": 0,
+                      "data_scanned_ratio": 0.21
+                    },
+                    "violations": []
+                  }
+                },
+                "error": null,
+                "error_kind": null
+              }
+            },
+            {
+              "task_id": "t5_mean_amount",
+              "track": "reliability",
+              "config_id": "t5_worker_crash_with_recovery",
+              "trial_index": 1,
+              "quality": {
+                "score": 0.9755285688886385,
+                "answer_rel_error": 0.024471431111361557,
+                "ci_coverage": 1.0,
+                "pass": 1.0,
+                "recovered": 1.0,
+                "work_repeated_ratio": 0.05000000000000002,
+                "cost_wasted_usd": 0.002000000000000001,
+                "user_informed": 1.0
+              },
+              "outcome": {
+                "answer": {
+                  "estimate": 36.437887499999995,
+                  "ci": [
+                    35.23111459617741,
+                    37.64466040382258
+                  ],
+                  "se": 0.6157004611339721,
+                  "n_scanned": 4000,
+                  "_recovered": true,
+                  "_work_repeated_ratio": 0.05000000000000002,
+                  "_cost_wasted_usd": 0.002000000000000001,
+                  "_user_informed": true,
+                  "_fault": "worker_crash"
+                },
+                "cost_usd": 0.042,
+                "latency_s": 0.07100000000000001,
+                "data_scanned_ratio": 0.21,
+                "tool_calls": 4,
+                "tokens": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "unknown",
+                "retries": 1,
+                "recovered": true,
+                "trajectory": [
+                  {
+                    "fault": "worker_crash",
+                    "recovered": true,
+                    "checkpoint_interval": 0.1
+                  }
+                ],
+                "artifacts": {
+                  "budget": {
+                    "limits": {
+                      "max_cost_usd": null,
+                      "max_latency_s": null,
+                      "max_tokens": null,
+                      "max_data_scanned_ratio": null
+                    },
+                    "actual": {
+                      "cost_usd": 0.042,
+                      "latency_s": 0.07100000000000001,
+                      "tokens": 0,
+                      "data_scanned_ratio": 0.21
+                    },
+                    "violations": []
+                  }
+                },
+                "error": null,
+                "error_kind": null
+              }
+            },
+            {
+              "task_id": "t5_mean_amount",
+              "track": "reliability",
+              "config_id": "t5_worker_crash_with_recovery",
+              "trial_index": 2,
+              "quality": {
+                "score": 0.9933974519076558,
+                "answer_rel_error": 0.006602548092344166,
+                "ci_coverage": 1.0,
+                "pass": 1.0,
+                "recovered": 1.0,
+                "work_repeated_ratio": 0.05000000000000002,
+                "cost_wasted_usd": 0.002000000000000001,
+                "user_informed": 1.0
+              },
+              "outcome": {
+                "answer": {
+                  "estimate": 37.105325,
+                  "ci": [
+                    35.75619227802191,
+                    38.45445772197809
+                  ],
+                  "se": 0.6883330214173905,
+                  "n_scanned": 4000,
+                  "_recovered": true,
+                  "_work_repeated_ratio": 0.05000000000000002,
+                  "_cost_wasted_usd": 0.002000000000000001,
+                  "_user_informed": true,
+                  "_fault": "worker_crash"
+                },
+                "cost_usd": 0.042,
+                "latency_s": 0.07100000000000001,
+                "data_scanned_ratio": 0.21,
+                "tool_calls": 4,
+                "tokens": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "unknown",
+                "retries": 1,
+                "recovered": true,
+                "trajectory": [
+                  {
+                    "fault": "worker_crash",
+                    "recovered": true,
+                    "checkpoint_interval": 0.1
+                  }
+                ],
+                "artifacts": {
+                  "budget": {
+                    "limits": {
+                      "max_cost_usd": null,
+                      "max_latency_s": null,
+                      "max_tokens": null,
+                      "max_data_scanned_ratio": null
+                    },
+                    "actual": {
+                      "cost_usd": 0.042,
+                      "latency_s": 0.07100000000000001,
+                      "tokens": 0,
+                      "data_scanned_ratio": 0.21
+                    },
+                    "violations": []
+                  }
+                },
+                "error": null,
+                "error_kind": null
+              }
+            },
+            {
+              "task_id": "t5_mean_amount",
+              "track": "reliability",
+              "config_id": "t5_worker_crash_with_recovery",
+              "trial_index": 3,
+              "quality": {
+                "score": 0.9945010089568834,
+                "answer_rel_error": 0.005498991043116617,
+                "ci_coverage": 1.0,
+                "pass": 1.0,
+                "recovered": 1.0,
+                "work_repeated_ratio": 0.05000000000000002,
+                "cost_wasted_usd": 0.002000000000000001,
+                "user_informed": 1.0
+              },
+              "outcome": {
+                "answer": {
+                  "estimate": 37.146544999999996,
+                  "ci": [
+                    35.69782099839352,
+                    38.595269001606475
+                  ],
+                  "se": 0.7391448987788144,
+                  "n_scanned": 4000,
+                  "_recovered": true,
+                  "_work_repeated_ratio": 0.05000000000000002,
+                  "_cost_wasted_usd": 0.002000000000000001,
+                  "_user_informed": true,
+                  "_fault": "worker_crash"
+                },
+                "cost_usd": 0.042,
+                "latency_s": 0.07100000000000001,
+                "data_scanned_ratio": 0.21,
+                "tool_calls": 4,
+                "tokens": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "unknown",
+                "retries": 1,
+                "recovered": true,
+                "trajectory": [
+                  {
+                    "fault": "worker_crash",
+                    "recovered": true,
+                    "checkpoint_interval": 0.1
+                  }
+                ],
+                "artifacts": {
+                  "budget": {
+                    "limits": {
+                      "max_cost_usd": null,
+                      "max_latency_s": null,
+                      "max_tokens": null,
+                      "max_data_scanned_ratio": null
+                    },
+                    "actual": {
+                      "cost_usd": 0.042,
+                      "latency_s": 0.07100000000000001,
+                      "tokens": 0,
+                      "data_scanned_ratio": 0.21
+                    },
+                    "violations": []
+                  }
+                },
+                "error": null,
+                "error_kind": null
+              }
+            },
+            {
+              "task_id": "t5_mean_amount",
+              "track": "reliability",
+              "config_id": "t5_worker_crash_with_recovery",
+              "trial_index": 4,
+              "quality": {
+                "score": 0.9810611726410056,
+                "answer_rel_error": 0.018938827358994468,
+                "ci_coverage": 1.0,
+                "pass": 1.0,
+                "recovered": 1.0,
+                "work_repeated_ratio": 0.05000000000000002,
+                "cost_wasted_usd": 0.002000000000000001,
+                "user_informed": 1.0
+              },
+              "outcome": {
+                "answer": {
+                  "estimate": 38.059345,
+                  "ci": [
+                    36.69540211592414,
+                    39.42328788407586
+                  ],
+                  "se": 0.6958892265693182,
+                  "n_scanned": 4000,
+                  "_recovered": true,
+                  "_work_repeated_ratio": 0.05000000000000002,
+                  "_cost_wasted_usd": 0.002000000000000001,
+                  "_user_informed": true,
+                  "_fault": "worker_crash"
+                },
+                "cost_usd": 0.042,
+                "latency_s": 0.07100000000000001,
+                "data_scanned_ratio": 0.21,
+                "tool_calls": 4,
+                "tokens": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "unknown",
+                "retries": 1,
+                "recovered": true,
+                "trajectory": [
+                  {
+                    "fault": "worker_crash",
+                    "recovered": true,
+                    "checkpoint_interval": 0.1
+                  }
+                ],
+                "artifacts": {
+                  "budget": {
+                    "limits": {
+                      "max_cost_usd": null,
+                      "max_latency_s": null,
+                      "max_tokens": null,
+                      "max_data_scanned_ratio": null
+                    },
+                    "actual": {
+                      "cost_usd": 0.042,
+                      "latency_s": 0.07100000000000001,
+                      "tokens": 0,
+                      "data_scanned_ratio": 0.21
+                    },
+                    "violations": []
+                  }
+                },
+                "error": null,
+                "error_kind": null
+              }
+            }
+          ]
+        }
+      }
+    },
+    "t5_structural_blind_retry": {
+      "config": {
+        "config_id": "t5_structural_blind_retry",
+        "sut": "fault_injecting",
+        "llm": "local-fault-injection",
+        "agents_enabled": "full_swarm",
+        "sampling_mode": "fixed",
+        "model_routing": "default",
+        "environment": "local",
+        "trials": 5,
+        "internet_allowed": false,
+        "budget": {
+          "max_cost_usd": null,
+          "max_latency_s": null,
+          "max_tokens": null,
+          "max_data_scanned_ratio": null
+        },
+        "seed": 0,
+        "extra": {
+          "fault": "schema_change",
+          "mitigations": "",
+          "recovery": "on",
+          "sample_fraction": "0.2"
+        }
+      },
+      "tasks": {
+        "t5_mean_amount": {
+          "track": "reliability",
+          "stats": {
+            "n_trials": 5,
+            "pass_at_1": 0.0,
+            "best_of_n": 0.0,
+            "quality": {
+              "answer_rel_error": {
+                "mean": NaN,
+                "median": NaN,
+                "std": NaN,
+                "min": NaN,
+                "max": NaN,
+                "n": 0
+              },
+              "ci_coverage": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 5
+              },
+              "cost_wasted_usd": {
+                "mean": 0.022000000000000002,
+                "median": 0.022000000000000002,
+                "std": 0.0,
+                "min": 0.022000000000000002,
+                "max": 0.022000000000000002,
+                "n": 5
+              },
+              "pass": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 5
+              },
+              "recovered": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 5
+              },
+              "score": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 5
+              },
+              "user_informed": {
+                "mean": 1.0,
+                "median": 1.0,
+                "std": 0.0,
+                "min": 1.0,
+                "max": 1.0,
+                "n": 5
+              },
+              "work_repeated_ratio": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 5
+              }
+            },
+            "tuple": {
+              "cost_usd": {
+                "mean": 0.022000000000000002,
+                "median": 0.022000000000000002,
+                "std": 0.0,
+                "min": 0.022000000000000002,
+                "max": 0.022000000000000002,
+                "n": 5
+              },
+              "latency_s": {
+                "mean": 0.011000000000000001,
+                "median": 0.011000000000000001,
+                "std": 0.0,
+                "min": 0.011000000000000001,
+                "max": 0.011000000000000001,
+                "n": 5
+              },
+              "data_scanned_ratio": {
+                "mean": 0.11000000000000001,
+                "median": 0.11,
+                "std": 0.0,
+                "min": 0.11,
+                "max": 0.11,
+                "n": 5
+              },
+              "tool_calls": {
+                "mean": 4.0,
+                "median": 4,
+                "std": 0.0,
+                "min": 4,
+                "max": 4,
+                "n": 5
+              },
+              "tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 5
+              },
+              "prompt_tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 5
+              },
+              "completion_tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 5
+              },
+              "retries": {
+                "mean": 1.0,
+                "median": 1,
+                "std": 0.0,
+                "min": 1,
+                "max": 1,
+                "n": 5
+              }
+            },
+            "total_cost_usd": 0.11000000000000001,
+            "n_cost_unknown": 0,
+            "cost_sources": [
+              "unknown"
+            ],
+            "n_errors": 0,
+            "errors": [],
+            "failure_kinds": {}
+          },
+          "trials": [
+            {
+              "task_id": "t5_mean_amount",
+              "track": "reliability",
+              "config_id": "t5_structural_blind_retry",
+              "trial_index": 0,
+              "quality": {
+                "score": 0.0,
+                "answer_rel_error": NaN,
+                "ci_coverage": 0.0,
+                "recovered": 0.0,
+                "work_repeated_ratio": 0.0,
+                "cost_wasted_usd": 0.022000000000000002,
+                "user_informed": 1.0,
+                "pass": 0.0
+              },
+              "outcome": {
+                "answer": {
+                  "estimate": null,
+                  "rate_estimate": null,
+                  "retained_ids": [],
+                  "n_scanned": 2200,
+                  "_recovered": false,
+                  "_work_repeated_ratio": 0.0,
+                  "_cost_wasted_usd": 0.022000000000000002,
+                  "_user_informed": true,
+                  "_fault": "schema_change"
+                },
+                "cost_usd": 0.022000000000000002,
+                "latency_s": 0.011000000000000001,
+                "data_scanned_ratio": 0.11,
+                "tool_calls": 4,
+                "tokens": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "unknown",
+                "retries": 1,
+                "recovered": false,
+                "trajectory": [
+                  {
+                    "fault": "schema_change",
+                    "recovered": false,
+                    "reason": "no_mitigation"
+                  }
+                ],
+                "artifacts": {
+                  "budget": {
+                    "limits": {
+                      "max_cost_usd": null,
+                      "max_latency_s": null,
+                      "max_tokens": null,
+                      "max_data_scanned_ratio": null
+                    },
+                    "actual": {
+                      "cost_usd": 0.022000000000000002,
+                      "latency_s": 0.011000000000000001,
+                      "tokens": 0,
+                      "data_scanned_ratio": 0.11
+                    },
+                    "violations": []
+                  }
+                },
+                "error": null,
+                "error_kind": null
+              }
+            },
+            {
+              "task_id": "t5_mean_amount",
+              "track": "reliability",
+              "config_id": "t5_structural_blind_retry",
+              "trial_index": 1,
+              "quality": {
+                "score": 0.0,
+                "answer_rel_error": NaN,
+                "ci_coverage": 0.0,
+                "recovered": 0.0,
+                "work_repeated_ratio": 0.0,
+                "cost_wasted_usd": 0.022000000000000002,
+                "user_informed": 1.0,
+                "pass": 0.0
+              },
+              "outcome": {
+                "answer": {
+                  "estimate": null,
+                  "rate_estimate": null,
+                  "retained_ids": [],
+                  "n_scanned": 2200,
+                  "_recovered": false,
+                  "_work_repeated_ratio": 0.0,
+                  "_cost_wasted_usd": 0.022000000000000002,
+                  "_user_informed": true,
+                  "_fault": "schema_change"
+                },
+                "cost_usd": 0.022000000000000002,
+                "latency_s": 0.011000000000000001,
+                "data_scanned_ratio": 0.11,
+                "tool_calls": 4,
+                "tokens": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "unknown",
+                "retries": 1,
+                "recovered": false,
+                "trajectory": [
+                  {
+                    "fault": "schema_change",
+                    "recovered": false,
+                    "reason": "no_mitigation"
+                  }
+                ],
+                "artifacts": {
+                  "budget": {
+                    "limits": {
+                      "max_cost_usd": null,
+                      "max_latency_s": null,
+                      "max_tokens": null,
+                      "max_data_scanned_ratio": null
+                    },
+                    "actual": {
+                      "cost_usd": 0.022000000000000002,
+                      "latency_s": 0.011000000000000001,
+                      "tokens": 0,
+                      "data_scanned_ratio": 0.11
+                    },
+                    "violations": []
+                  }
+                },
+                "error": null,
+                "error_kind": null
+              }
+            },
+            {
+              "task_id": "t5_mean_amount",
+              "track": "reliability",
+              "config_id": "t5_structural_blind_retry",
+              "trial_index": 2,
+              "quality": {
+                "score": 0.0,
+                "answer_rel_error": NaN,
+                "ci_coverage": 0.0,
+                "recovered": 0.0,
+                "work_repeated_ratio": 0.0,
+                "cost_wasted_usd": 0.022000000000000002,
+                "user_informed": 1.0,
+                "pass": 0.0
+              },
+              "outcome": {
+                "answer": {
+                  "estimate": null,
+                  "rate_estimate": null,
+                  "retained_ids": [],
+                  "n_scanned": 2200,
+                  "_recovered": false,
+                  "_work_repeated_ratio": 0.0,
+                  "_cost_wasted_usd": 0.022000000000000002,
+                  "_user_informed": true,
+                  "_fault": "schema_change"
+                },
+                "cost_usd": 0.022000000000000002,
+                "latency_s": 0.011000000000000001,
+                "data_scanned_ratio": 0.11,
+                "tool_calls": 4,
+                "tokens": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "unknown",
+                "retries": 1,
+                "recovered": false,
+                "trajectory": [
+                  {
+                    "fault": "schema_change",
+                    "recovered": false,
+                    "reason": "no_mitigation"
+                  }
+                ],
+                "artifacts": {
+                  "budget": {
+                    "limits": {
+                      "max_cost_usd": null,
+                      "max_latency_s": null,
+                      "max_tokens": null,
+                      "max_data_scanned_ratio": null
+                    },
+                    "actual": {
+                      "cost_usd": 0.022000000000000002,
+                      "latency_s": 0.011000000000000001,
+                      "tokens": 0,
+                      "data_scanned_ratio": 0.11
+                    },
+                    "violations": []
+                  }
+                },
+                "error": null,
+                "error_kind": null
+              }
+            },
+            {
+              "task_id": "t5_mean_amount",
+              "track": "reliability",
+              "config_id": "t5_structural_blind_retry",
+              "trial_index": 3,
+              "quality": {
+                "score": 0.0,
+                "answer_rel_error": NaN,
+                "ci_coverage": 0.0,
+                "recovered": 0.0,
+                "work_repeated_ratio": 0.0,
+                "cost_wasted_usd": 0.022000000000000002,
+                "user_informed": 1.0,
+                "pass": 0.0
+              },
+              "outcome": {
+                "answer": {
+                  "estimate": null,
+                  "rate_estimate": null,
+                  "retained_ids": [],
+                  "n_scanned": 2200,
+                  "_recovered": false,
+                  "_work_repeated_ratio": 0.0,
+                  "_cost_wasted_usd": 0.022000000000000002,
+                  "_user_informed": true,
+                  "_fault": "schema_change"
+                },
+                "cost_usd": 0.022000000000000002,
+                "latency_s": 0.011000000000000001,
+                "data_scanned_ratio": 0.11,
+                "tool_calls": 4,
+                "tokens": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "unknown",
+                "retries": 1,
+                "recovered": false,
+                "trajectory": [
+                  {
+                    "fault": "schema_change",
+                    "recovered": false,
+                    "reason": "no_mitigation"
+                  }
+                ],
+                "artifacts": {
+                  "budget": {
+                    "limits": {
+                      "max_cost_usd": null,
+                      "max_latency_s": null,
+                      "max_tokens": null,
+                      "max_data_scanned_ratio": null
+                    },
+                    "actual": {
+                      "cost_usd": 0.022000000000000002,
+                      "latency_s": 0.011000000000000001,
+                      "tokens": 0,
+                      "data_scanned_ratio": 0.11
+                    },
+                    "violations": []
+                  }
+                },
+                "error": null,
+                "error_kind": null
+              }
+            },
+            {
+              "task_id": "t5_mean_amount",
+              "track": "reliability",
+              "config_id": "t5_structural_blind_retry",
+              "trial_index": 4,
+              "quality": {
+                "score": 0.0,
+                "answer_rel_error": NaN,
+                "ci_coverage": 0.0,
+                "recovered": 0.0,
+                "work_repeated_ratio": 0.0,
+                "cost_wasted_usd": 0.022000000000000002,
+                "user_informed": 1.0,
+                "pass": 0.0
+              },
+              "outcome": {
+                "answer": {
+                  "estimate": null,
+                  "rate_estimate": null,
+                  "retained_ids": [],
+                  "n_scanned": 2200,
+                  "_recovered": false,
+                  "_work_repeated_ratio": 0.0,
+                  "_cost_wasted_usd": 0.022000000000000002,
+                  "_user_informed": true,
+                  "_fault": "schema_change"
+                },
+                "cost_usd": 0.022000000000000002,
+                "latency_s": 0.011000000000000001,
+                "data_scanned_ratio": 0.11,
+                "tool_calls": 4,
+                "tokens": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "unknown",
+                "retries": 1,
+                "recovered": false,
+                "trajectory": [
+                  {
+                    "fault": "schema_change",
+                    "recovered": false,
+                    "reason": "no_mitigation"
+                  }
+                ],
+                "artifacts": {
+                  "budget": {
+                    "limits": {
+                      "max_cost_usd": null,
+                      "max_latency_s": null,
+                      "max_tokens": null,
+                      "max_data_scanned_ratio": null
+                    },
+                    "actual": {
+                      "cost_usd": 0.022000000000000002,
+                      "latency_s": 0.011000000000000001,
+                      "tokens": 0,
+                      "data_scanned_ratio": 0.11
+                    },
+                    "violations": []
+                  }
+                },
+                "error": null,
+                "error_kind": null
+              }
+            }
+          ]
+        }
+      }
+    },
+    "t5_structural_with_mitigation": {
+      "config": {
+        "config_id": "t5_structural_with_mitigation",
+        "sut": "fault_injecting",
+        "llm": "local-fault-injection",
+        "agents_enabled": "full_swarm",
+        "sampling_mode": "fixed",
+        "model_routing": "default",
+        "environment": "local",
+        "trials": 5,
+        "internet_allowed": false,
+        "budget": {
+          "max_cost_usd": null,
+          "max_latency_s": null,
+          "max_tokens": null,
+          "max_data_scanned_ratio": null
+        },
+        "seed": 0,
+        "extra": {
+          "fault": "schema_change",
+          "mitigations": "schema_change",
+          "recovery": "on",
+          "sample_fraction": "0.2"
+        }
+      },
+      "tasks": {
+        "t5_mean_amount": {
+          "track": "reliability",
+          "stats": {
+            "n_trials": 5,
+            "pass_at_1": 1.0,
+            "best_of_n": 1.0,
+            "quality": {
+              "answer_rel_error": {
+                "mean": 0.011350483159604349,
+                "median": 0.006602548092344166,
+                "std": 0.008817419802781609,
+                "min": 0.0012406181922049403,
+                "max": 0.024471431111361557,
+                "n": 5
+              },
+              "ci_coverage": {
+                "mean": 1.0,
+                "median": 1.0,
+                "std": 0.0,
+                "min": 1.0,
+                "max": 1.0,
+                "n": 5
+              },
+              "cost_wasted_usd": {
+                "mean": 0.002000000000000001,
+                "median": 0.002000000000000001,
+                "std": 0.0,
+                "min": 0.002000000000000001,
+                "max": 0.002000000000000001,
+                "n": 5
+              },
+              "pass": {
+                "mean": 1.0,
+                "median": 1.0,
+                "std": 0.0,
+                "min": 1.0,
+                "max": 1.0,
+                "n": 5
+              },
+              "recovered": {
+                "mean": 1.0,
+                "median": 1.0,
+                "std": 0.0,
+                "min": 1.0,
+                "max": 1.0,
+                "n": 5
+              },
+              "score": {
+                "mean": 0.9886495168403957,
+                "median": 0.9933974519076558,
+                "std": 0.008817419802781607,
+                "min": 0.9755285688886385,
+                "max": 0.9987593818077951,
+                "n": 5
+              },
+              "user_informed": {
+                "mean": 1.0,
+                "median": 1.0,
+                "std": 0.0,
+                "min": 1.0,
+                "max": 1.0,
+                "n": 5
+              },
+              "work_repeated_ratio": {
+                "mean": 0.050000000000000024,
+                "median": 0.05000000000000002,
+                "std": 0.0,
+                "min": 0.05000000000000002,
+                "max": 0.05000000000000002,
+                "n": 5
+              }
+            },
+            "tuple": {
+              "cost_usd": {
+                "mean": 0.042,
+                "median": 0.042,
+                "std": 0.0,
+                "min": 0.042,
+                "max": 0.042,
+                "n": 5
+              },
+              "latency_s": {
+                "mean": 0.07100000000000001,
+                "median": 0.07100000000000001,
+                "std": 0.0,
+                "min": 0.07100000000000001,
+                "max": 0.07100000000000001,
+                "n": 5
+              },
+              "data_scanned_ratio": {
+                "mean": 0.21000000000000002,
+                "median": 0.21,
+                "std": 0.0,
+                "min": 0.21,
+                "max": 0.21,
+                "n": 5
+              },
+              "tool_calls": {
+                "mean": 4.0,
+                "median": 4,
+                "std": 0.0,
+                "min": 4,
+                "max": 4,
+                "n": 5
+              },
+              "tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 5
+              },
+              "prompt_tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 5
+              },
+              "completion_tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 5
+              },
+              "retries": {
+                "mean": 1.0,
+                "median": 1,
+                "std": 0.0,
+                "min": 1,
+                "max": 1,
+                "n": 5
+              }
+            },
+            "total_cost_usd": 0.21000000000000002,
+            "n_cost_unknown": 0,
+            "cost_sources": [
+              "unknown"
+            ],
+            "n_errors": 0,
+            "errors": [],
+            "failure_kinds": {}
+          },
+          "trials": [
+            {
+              "task_id": "t5_mean_amount",
+              "track": "reliability",
+              "config_id": "t5_structural_with_mitigation",
+              "trial_index": 0,
+              "quality": {
+                "score": 0.9987593818077951,
+                "answer_rel_error": 0.0012406181922049403,
+                "ci_coverage": 1.0,
+                "pass": 1.0,
+                "recovered": 1.0,
+                "work_repeated_ratio": 0.05000000000000002,
+                "cost_wasted_usd": 0.002000000000000001,
+                "user_informed": 1.0
+              },
+              "outcome": {
+                "answer": {
+                  "estimate": 37.3982825,
+                  "ci": [
+                    36.05443833838504,
+                    38.74212666161496
+                  ],
+                  "se": 0.6856347763341635,
+                  "n_scanned": 4000,
+                  "_recovered": true,
+                  "_work_repeated_ratio": 0.05000000000000002,
+                  "_cost_wasted_usd": 0.002000000000000001,
+                  "_user_informed": true,
+                  "_fault": "schema_change"
+                },
+                "cost_usd": 0.042,
+                "latency_s": 0.07100000000000001,
+                "data_scanned_ratio": 0.21,
+                "tool_calls": 4,
+                "tokens": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "unknown",
+                "retries": 1,
+                "recovered": true,
+                "trajectory": [
+                  {
+                    "fault": "schema_change",
+                    "recovered": true,
+                    "checkpoint_interval": 0.1
+                  }
+                ],
+                "artifacts": {
+                  "budget": {
+                    "limits": {
+                      "max_cost_usd": null,
+                      "max_latency_s": null,
+                      "max_tokens": null,
+                      "max_data_scanned_ratio": null
+                    },
+                    "actual": {
+                      "cost_usd": 0.042,
+                      "latency_s": 0.07100000000000001,
+                      "tokens": 0,
+                      "data_scanned_ratio": 0.21
+                    },
+                    "violations": []
+                  }
+                },
+                "error": null,
+                "error_kind": null
+              }
+            },
+            {
+              "task_id": "t5_mean_amount",
+              "track": "reliability",
+              "config_id": "t5_structural_with_mitigation",
+              "trial_index": 1,
+              "quality": {
+                "score": 0.9755285688886385,
+                "answer_rel_error": 0.024471431111361557,
+                "ci_coverage": 1.0,
+                "pass": 1.0,
+                "recovered": 1.0,
+                "work_repeated_ratio": 0.05000000000000002,
+                "cost_wasted_usd": 0.002000000000000001,
+                "user_informed": 1.0
+              },
+              "outcome": {
+                "answer": {
+                  "estimate": 36.437887499999995,
+                  "ci": [
+                    35.23111459617741,
+                    37.64466040382258
+                  ],
+                  "se": 0.6157004611339721,
+                  "n_scanned": 4000,
+                  "_recovered": true,
+                  "_work_repeated_ratio": 0.05000000000000002,
+                  "_cost_wasted_usd": 0.002000000000000001,
+                  "_user_informed": true,
+                  "_fault": "schema_change"
+                },
+                "cost_usd": 0.042,
+                "latency_s": 0.07100000000000001,
+                "data_scanned_ratio": 0.21,
+                "tool_calls": 4,
+                "tokens": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "unknown",
+                "retries": 1,
+                "recovered": true,
+                "trajectory": [
+                  {
+                    "fault": "schema_change",
+                    "recovered": true,
+                    "checkpoint_interval": 0.1
+                  }
+                ],
+                "artifacts": {
+                  "budget": {
+                    "limits": {
+                      "max_cost_usd": null,
+                      "max_latency_s": null,
+                      "max_tokens": null,
+                      "max_data_scanned_ratio": null
+                    },
+                    "actual": {
+                      "cost_usd": 0.042,
+                      "latency_s": 0.07100000000000001,
+                      "tokens": 0,
+                      "data_scanned_ratio": 0.21
+                    },
+                    "violations": []
+                  }
+                },
+                "error": null,
+                "error_kind": null
+              }
+            },
+            {
+              "task_id": "t5_mean_amount",
+              "track": "reliability",
+              "config_id": "t5_structural_with_mitigation",
+              "trial_index": 2,
+              "quality": {
+                "score": 0.9933974519076558,
+                "answer_rel_error": 0.006602548092344166,
+                "ci_coverage": 1.0,
+                "pass": 1.0,
+                "recovered": 1.0,
+                "work_repeated_ratio": 0.05000000000000002,
+                "cost_wasted_usd": 0.002000000000000001,
+                "user_informed": 1.0
+              },
+              "outcome": {
+                "answer": {
+                  "estimate": 37.105325,
+                  "ci": [
+                    35.75619227802191,
+                    38.45445772197809
+                  ],
+                  "se": 0.6883330214173905,
+                  "n_scanned": 4000,
+                  "_recovered": true,
+                  "_work_repeated_ratio": 0.05000000000000002,
+                  "_cost_wasted_usd": 0.002000000000000001,
+                  "_user_informed": true,
+                  "_fault": "schema_change"
+                },
+                "cost_usd": 0.042,
+                "latency_s": 0.07100000000000001,
+                "data_scanned_ratio": 0.21,
+                "tool_calls": 4,
+                "tokens": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "unknown",
+                "retries": 1,
+                "recovered": true,
+                "trajectory": [
+                  {
+                    "fault": "schema_change",
+                    "recovered": true,
+                    "checkpoint_interval": 0.1
+                  }
+                ],
+                "artifacts": {
+                  "budget": {
+                    "limits": {
+                      "max_cost_usd": null,
+                      "max_latency_s": null,
+                      "max_tokens": null,
+                      "max_data_scanned_ratio": null
+                    },
+                    "actual": {
+                      "cost_usd": 0.042,
+                      "latency_s": 0.07100000000000001,
+                      "tokens": 0,
+                      "data_scanned_ratio": 0.21
+                    },
+                    "violations": []
+                  }
+                },
+                "error": null,
+                "error_kind": null
+              }
+            },
+            {
+              "task_id": "t5_mean_amount",
+              "track": "reliability",
+              "config_id": "t5_structural_with_mitigation",
+              "trial_index": 3,
+              "quality": {
+                "score": 0.9945010089568834,
+                "answer_rel_error": 0.005498991043116617,
+                "ci_coverage": 1.0,
+                "pass": 1.0,
+                "recovered": 1.0,
+                "work_repeated_ratio": 0.05000000000000002,
+                "cost_wasted_usd": 0.002000000000000001,
+                "user_informed": 1.0
+              },
+              "outcome": {
+                "answer": {
+                  "estimate": 37.146544999999996,
+                  "ci": [
+                    35.69782099839352,
+                    38.595269001606475
+                  ],
+                  "se": 0.7391448987788144,
+                  "n_scanned": 4000,
+                  "_recovered": true,
+                  "_work_repeated_ratio": 0.05000000000000002,
+                  "_cost_wasted_usd": 0.002000000000000001,
+                  "_user_informed": true,
+                  "_fault": "schema_change"
+                },
+                "cost_usd": 0.042,
+                "latency_s": 0.07100000000000001,
+                "data_scanned_ratio": 0.21,
+                "tool_calls": 4,
+                "tokens": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "unknown",
+                "retries": 1,
+                "recovered": true,
+                "trajectory": [
+                  {
+                    "fault": "schema_change",
+                    "recovered": true,
+                    "checkpoint_interval": 0.1
+                  }
+                ],
+                "artifacts": {
+                  "budget": {
+                    "limits": {
+                      "max_cost_usd": null,
+                      "max_latency_s": null,
+                      "max_tokens": null,
+                      "max_data_scanned_ratio": null
+                    },
+                    "actual": {
+                      "cost_usd": 0.042,
+                      "latency_s": 0.07100000000000001,
+                      "tokens": 0,
+                      "data_scanned_ratio": 0.21
+                    },
+                    "violations": []
+                  }
+                },
+                "error": null,
+                "error_kind": null
+              }
+            },
+            {
+              "task_id": "t5_mean_amount",
+              "track": "reliability",
+              "config_id": "t5_structural_with_mitigation",
+              "trial_index": 4,
+              "quality": {
+                "score": 0.9810611726410056,
+                "answer_rel_error": 0.018938827358994468,
+                "ci_coverage": 1.0,
+                "pass": 1.0,
+                "recovered": 1.0,
+                "work_repeated_ratio": 0.05000000000000002,
+                "cost_wasted_usd": 0.002000000000000001,
+                "user_informed": 1.0
+              },
+              "outcome": {
+                "answer": {
+                  "estimate": 38.059345,
+                  "ci": [
+                    36.69540211592414,
+                    39.42328788407586
+                  ],
+                  "se": 0.6958892265693182,
+                  "n_scanned": 4000,
+                  "_recovered": true,
+                  "_work_repeated_ratio": 0.05000000000000002,
+                  "_cost_wasted_usd": 0.002000000000000001,
+                  "_user_informed": true,
+                  "_fault": "schema_change"
+                },
+                "cost_usd": 0.042,
+                "latency_s": 0.07100000000000001,
+                "data_scanned_ratio": 0.21,
+                "tool_calls": 4,
+                "tokens": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "unknown",
+                "retries": 1,
+                "recovered": true,
+                "trajectory": [
+                  {
+                    "fault": "schema_change",
+                    "recovered": true,
+                    "checkpoint_interval": 0.1
+                  }
+                ],
+                "artifacts": {
+                  "budget": {
+                    "limits": {
+                      "max_cost_usd": null,
+                      "max_latency_s": null,
+                      "max_tokens": null,
+                      "max_data_scanned_ratio": null
+                    },
+                    "actual": {
+                      "cost_usd": 0.042,
+                      "latency_s": 0.07100000000000001,
+                      "tokens": 0,
+                      "data_scanned_ratio": 0.21
+                    },
+                    "violations": []
+                  }
+                },
+                "error": null,
+                "error_kind": null
+              }
+            }
+          ]
+        }
+      }
+    },
+    "t5_corrupt_parquet_no_recovery": {
+      "config": {
+        "config_id": "t5_corrupt_parquet_no_recovery",
+        "sut": "fault_injecting",
+        "llm": "local-fault-injection",
+        "agents_enabled": "full_swarm",
+        "sampling_mode": "fixed",
+        "model_routing": "default",
+        "environment": "local",
+        "trials": 5,
+        "internet_allowed": false,
+        "budget": {
+          "max_cost_usd": null,
+          "max_latency_s": null,
+          "max_tokens": null,
+          "max_data_scanned_ratio": null
+        },
+        "seed": 0,
+        "extra": {
+          "fault": "corrupt_parquet",
+          "mitigations": "",
+          "recovery": "off",
+          "sample_fraction": "0.2"
+        }
+      },
+      "tasks": {
+        "t5_mean_amount": {
+          "track": "reliability",
+          "stats": {
+            "n_trials": 5,
+            "pass_at_1": 0.0,
+            "best_of_n": 0.0,
+            "quality": {
+              "answer_rel_error": {
+                "mean": NaN,
+                "median": NaN,
+                "std": NaN,
+                "min": NaN,
+                "max": NaN,
+                "n": 0
+              },
+              "ci_coverage": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 5
+              },
+              "cost_wasted_usd": {
+                "mean": 0.022000000000000002,
+                "median": 0.022000000000000002,
+                "std": 0.0,
+                "min": 0.022000000000000002,
+                "max": 0.022000000000000002,
+                "n": 5
+              },
+              "pass": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 5
+              },
+              "recovered": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 5
+              },
+              "score": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 5
+              },
+              "user_informed": {
+                "mean": 1.0,
+                "median": 1.0,
+                "std": 0.0,
+                "min": 1.0,
+                "max": 1.0,
+                "n": 5
+              },
+              "work_repeated_ratio": {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "n": 5
+              }
+            },
+            "tuple": {
+              "cost_usd": {
+                "mean": 0.022000000000000002,
+                "median": 0.022000000000000002,
+                "std": 0.0,
+                "min": 0.022000000000000002,
+                "max": 0.022000000000000002,
+                "n": 5
+              },
+              "latency_s": {
+                "mean": 0.011000000000000001,
+                "median": 0.011000000000000001,
+                "std": 0.0,
+                "min": 0.011000000000000001,
+                "max": 0.011000000000000001,
+                "n": 5
+              },
+              "data_scanned_ratio": {
+                "mean": 0.11000000000000001,
+                "median": 0.11,
+                "std": 0.0,
+                "min": 0.11,
+                "max": 0.11,
+                "n": 5
+              },
+              "tool_calls": {
+                "mean": 4.0,
+                "median": 4,
+                "std": 0.0,
+                "min": 4,
+                "max": 4,
+                "n": 5
+              },
+              "tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 5
+              },
+              "prompt_tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 5
+              },
+              "completion_tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 5
+              },
+              "retries": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 5
+              }
+            },
+            "total_cost_usd": 0.11000000000000001,
+            "n_cost_unknown": 0,
+            "cost_sources": [
+              "unknown"
+            ],
+            "n_errors": 0,
+            "errors": [],
+            "failure_kinds": {}
+          },
+          "trials": [
+            {
+              "task_id": "t5_mean_amount",
+              "track": "reliability",
+              "config_id": "t5_corrupt_parquet_no_recovery",
+              "trial_index": 0,
+              "quality": {
+                "score": 0.0,
+                "answer_rel_error": NaN,
+                "ci_coverage": 0.0,
+                "recovered": 0.0,
+                "work_repeated_ratio": 0.0,
+                "cost_wasted_usd": 0.022000000000000002,
+                "user_informed": 1.0,
+                "pass": 0.0
+              },
+              "outcome": {
+                "answer": {
+                  "estimate": null,
+                  "rate_estimate": null,
+                  "retained_ids": [],
+                  "n_scanned": 2200,
+                  "_recovered": false,
+                  "_work_repeated_ratio": 0.0,
+                  "_cost_wasted_usd": 0.022000000000000002,
+                  "_user_informed": true,
+                  "_fault": "corrupt_parquet"
+                },
+                "cost_usd": 0.022000000000000002,
+                "latency_s": 0.011000000000000001,
+                "data_scanned_ratio": 0.11,
+                "tool_calls": 4,
+                "tokens": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "unknown",
+                "retries": 0,
+                "recovered": false,
+                "trajectory": [
+                  {
+                    "fault": "corrupt_parquet",
+                    "recovered": false,
+                    "reason": "no_recovery"
+                  }
+                ],
+                "artifacts": {
+                  "budget": {
+                    "limits": {
+                      "max_cost_usd": null,
+                      "max_latency_s": null,
+                      "max_tokens": null,
+                      "max_data_scanned_ratio": null
+                    },
+                    "actual": {
+                      "cost_usd": 0.022000000000000002,
+                      "latency_s": 0.011000000000000001,
+                      "tokens": 0,
+                      "data_scanned_ratio": 0.11
+                    },
+                    "violations": []
+                  }
+                },
+                "error": null,
+                "error_kind": null
+              }
+            },
+            {
+              "task_id": "t5_mean_amount",
+              "track": "reliability",
+              "config_id": "t5_corrupt_parquet_no_recovery",
+              "trial_index": 1,
+              "quality": {
+                "score": 0.0,
+                "answer_rel_error": NaN,
+                "ci_coverage": 0.0,
+                "recovered": 0.0,
+                "work_repeated_ratio": 0.0,
+                "cost_wasted_usd": 0.022000000000000002,
+                "user_informed": 1.0,
+                "pass": 0.0
+              },
+              "outcome": {
+                "answer": {
+                  "estimate": null,
+                  "rate_estimate": null,
+                  "retained_ids": [],
+                  "n_scanned": 2200,
+                  "_recovered": false,
+                  "_work_repeated_ratio": 0.0,
+                  "_cost_wasted_usd": 0.022000000000000002,
+                  "_user_informed": true,
+                  "_fault": "corrupt_parquet"
+                },
+                "cost_usd": 0.022000000000000002,
+                "latency_s": 0.011000000000000001,
+                "data_scanned_ratio": 0.11,
+                "tool_calls": 4,
+                "tokens": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "unknown",
+                "retries": 0,
+                "recovered": false,
+                "trajectory": [
+                  {
+                    "fault": "corrupt_parquet",
+                    "recovered": false,
+                    "reason": "no_recovery"
+                  }
+                ],
+                "artifacts": {
+                  "budget": {
+                    "limits": {
+                      "max_cost_usd": null,
+                      "max_latency_s": null,
+                      "max_tokens": null,
+                      "max_data_scanned_ratio": null
+                    },
+                    "actual": {
+                      "cost_usd": 0.022000000000000002,
+                      "latency_s": 0.011000000000000001,
+                      "tokens": 0,
+                      "data_scanned_ratio": 0.11
+                    },
+                    "violations": []
+                  }
+                },
+                "error": null,
+                "error_kind": null
+              }
+            },
+            {
+              "task_id": "t5_mean_amount",
+              "track": "reliability",
+              "config_id": "t5_corrupt_parquet_no_recovery",
+              "trial_index": 2,
+              "quality": {
+                "score": 0.0,
+                "answer_rel_error": NaN,
+                "ci_coverage": 0.0,
+                "recovered": 0.0,
+                "work_repeated_ratio": 0.0,
+                "cost_wasted_usd": 0.022000000000000002,
+                "user_informed": 1.0,
+                "pass": 0.0
+              },
+              "outcome": {
+                "answer": {
+                  "estimate": null,
+                  "rate_estimate": null,
+                  "retained_ids": [],
+                  "n_scanned": 2200,
+                  "_recovered": false,
+                  "_work_repeated_ratio": 0.0,
+                  "_cost_wasted_usd": 0.022000000000000002,
+                  "_user_informed": true,
+                  "_fault": "corrupt_parquet"
+                },
+                "cost_usd": 0.022000000000000002,
+                "latency_s": 0.011000000000000001,
+                "data_scanned_ratio": 0.11,
+                "tool_calls": 4,
+                "tokens": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "unknown",
+                "retries": 0,
+                "recovered": false,
+                "trajectory": [
+                  {
+                    "fault": "corrupt_parquet",
+                    "recovered": false,
+                    "reason": "no_recovery"
+                  }
+                ],
+                "artifacts": {
+                  "budget": {
+                    "limits": {
+                      "max_cost_usd": null,
+                      "max_latency_s": null,
+                      "max_tokens": null,
+                      "max_data_scanned_ratio": null
+                    },
+                    "actual": {
+                      "cost_usd": 0.022000000000000002,
+                      "latency_s": 0.011000000000000001,
+                      "tokens": 0,
+                      "data_scanned_ratio": 0.11
+                    },
+                    "violations": []
+                  }
+                },
+                "error": null,
+                "error_kind": null
+              }
+            },
+            {
+              "task_id": "t5_mean_amount",
+              "track": "reliability",
+              "config_id": "t5_corrupt_parquet_no_recovery",
+              "trial_index": 3,
+              "quality": {
+                "score": 0.0,
+                "answer_rel_error": NaN,
+                "ci_coverage": 0.0,
+                "recovered": 0.0,
+                "work_repeated_ratio": 0.0,
+                "cost_wasted_usd": 0.022000000000000002,
+                "user_informed": 1.0,
+                "pass": 0.0
+              },
+              "outcome": {
+                "answer": {
+                  "estimate": null,
+                  "rate_estimate": null,
+                  "retained_ids": [],
+                  "n_scanned": 2200,
+                  "_recovered": false,
+                  "_work_repeated_ratio": 0.0,
+                  "_cost_wasted_usd": 0.022000000000000002,
+                  "_user_informed": true,
+                  "_fault": "corrupt_parquet"
+                },
+                "cost_usd": 0.022000000000000002,
+                "latency_s": 0.011000000000000001,
+                "data_scanned_ratio": 0.11,
+                "tool_calls": 4,
+                "tokens": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "unknown",
+                "retries": 0,
+                "recovered": false,
+                "trajectory": [
+                  {
+                    "fault": "corrupt_parquet",
+                    "recovered": false,
+                    "reason": "no_recovery"
+                  }
+                ],
+                "artifacts": {
+                  "budget": {
+                    "limits": {
+                      "max_cost_usd": null,
+                      "max_latency_s": null,
+                      "max_tokens": null,
+                      "max_data_scanned_ratio": null
+                    },
+                    "actual": {
+                      "cost_usd": 0.022000000000000002,
+                      "latency_s": 0.011000000000000001,
+                      "tokens": 0,
+                      "data_scanned_ratio": 0.11
+                    },
+                    "violations": []
+                  }
+                },
+                "error": null,
+                "error_kind": null
+              }
+            },
+            {
+              "task_id": "t5_mean_amount",
+              "track": "reliability",
+              "config_id": "t5_corrupt_parquet_no_recovery",
+              "trial_index": 4,
+              "quality": {
+                "score": 0.0,
+                "answer_rel_error": NaN,
+                "ci_coverage": 0.0,
+                "recovered": 0.0,
+                "work_repeated_ratio": 0.0,
+                "cost_wasted_usd": 0.022000000000000002,
+                "user_informed": 1.0,
+                "pass": 0.0
+              },
+              "outcome": {
+                "answer": {
+                  "estimate": null,
+                  "rate_estimate": null,
+                  "retained_ids": [],
+                  "n_scanned": 2200,
+                  "_recovered": false,
+                  "_work_repeated_ratio": 0.0,
+                  "_cost_wasted_usd": 0.022000000000000002,
+                  "_user_informed": true,
+                  "_fault": "corrupt_parquet"
+                },
+                "cost_usd": 0.022000000000000002,
+                "latency_s": 0.011000000000000001,
+                "data_scanned_ratio": 0.11,
+                "tool_calls": 4,
+                "tokens": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "unknown",
+                "retries": 0,
+                "recovered": false,
+                "trajectory": [
+                  {
+                    "fault": "corrupt_parquet",
+                    "recovered": false,
+                    "reason": "no_recovery"
+                  }
+                ],
+                "artifacts": {
+                  "budget": {
+                    "limits": {
+                      "max_cost_usd": null,
+                      "max_latency_s": null,
+                      "max_tokens": null,
+                      "max_data_scanned_ratio": null
+                    },
+                    "actual": {
+                      "cost_usd": 0.022000000000000002,
+                      "latency_s": 0.011000000000000001,
+                      "tokens": 0,
+                      "data_scanned_ratio": 0.11
+                    },
+                    "violations": []
+                  }
+                },
+                "error": null,
+                "error_kind": null
+              }
+            }
+          ]
+        }
+      }
+    },
+    "t5_corrupt_parquet_with_mitigation": {
+      "config": {
+        "config_id": "t5_corrupt_parquet_with_mitigation",
+        "sut": "fault_injecting",
+        "llm": "local-fault-injection",
+        "agents_enabled": "full_swarm",
+        "sampling_mode": "fixed",
+        "model_routing": "default",
+        "environment": "local",
+        "trials": 5,
+        "internet_allowed": false,
+        "budget": {
+          "max_cost_usd": null,
+          "max_latency_s": null,
+          "max_tokens": null,
+          "max_data_scanned_ratio": null
+        },
+        "seed": 0,
+        "extra": {
+          "fault": "corrupt_parquet",
+          "mitigations": "corrupt_parquet",
+          "recovery": "on",
+          "sample_fraction": "0.2"
+        }
+      },
+      "tasks": {
+        "t5_mean_amount": {
+          "track": "reliability",
+          "stats": {
+            "n_trials": 5,
+            "pass_at_1": 1.0,
+            "best_of_n": 1.0,
+            "quality": {
+              "answer_rel_error": {
+                "mean": 0.011350483159604349,
+                "median": 0.006602548092344166,
+                "std": 0.008817419802781609,
+                "min": 0.0012406181922049403,
+                "max": 0.024471431111361557,
+                "n": 5
+              },
+              "ci_coverage": {
+                "mean": 1.0,
+                "median": 1.0,
+                "std": 0.0,
+                "min": 1.0,
+                "max": 1.0,
+                "n": 5
+              },
+              "cost_wasted_usd": {
+                "mean": 0.002000000000000001,
+                "median": 0.002000000000000001,
+                "std": 0.0,
+                "min": 0.002000000000000001,
+                "max": 0.002000000000000001,
+                "n": 5
+              },
+              "pass": {
+                "mean": 1.0,
+                "median": 1.0,
+                "std": 0.0,
+                "min": 1.0,
+                "max": 1.0,
+                "n": 5
+              },
+              "recovered": {
+                "mean": 1.0,
+                "median": 1.0,
+                "std": 0.0,
+                "min": 1.0,
+                "max": 1.0,
+                "n": 5
+              },
+              "score": {
+                "mean": 0.9886495168403957,
+                "median": 0.9933974519076558,
+                "std": 0.008817419802781607,
+                "min": 0.9755285688886385,
+                "max": 0.9987593818077951,
+                "n": 5
+              },
+              "user_informed": {
+                "mean": 1.0,
+                "median": 1.0,
+                "std": 0.0,
+                "min": 1.0,
+                "max": 1.0,
+                "n": 5
+              },
+              "work_repeated_ratio": {
+                "mean": 0.050000000000000024,
+                "median": 0.05000000000000002,
+                "std": 0.0,
+                "min": 0.05000000000000002,
+                "max": 0.05000000000000002,
+                "n": 5
+              }
+            },
+            "tuple": {
+              "cost_usd": {
+                "mean": 0.042,
+                "median": 0.042,
+                "std": 0.0,
+                "min": 0.042,
+                "max": 0.042,
+                "n": 5
+              },
+              "latency_s": {
+                "mean": 0.07100000000000001,
+                "median": 0.07100000000000001,
+                "std": 0.0,
+                "min": 0.07100000000000001,
+                "max": 0.07100000000000001,
+                "n": 5
+              },
+              "data_scanned_ratio": {
+                "mean": 0.21000000000000002,
+                "median": 0.21,
+                "std": 0.0,
+                "min": 0.21,
+                "max": 0.21,
+                "n": 5
+              },
+              "tool_calls": {
+                "mean": 4.0,
+                "median": 4,
+                "std": 0.0,
+                "min": 4,
+                "max": 4,
+                "n": 5
+              },
+              "tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 5
+              },
+              "prompt_tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 5
+              },
+              "completion_tokens": {
+                "mean": 0.0,
+                "median": 0,
+                "std": 0.0,
+                "min": 0,
+                "max": 0,
+                "n": 5
+              },
+              "retries": {
+                "mean": 1.0,
+                "median": 1,
+                "std": 0.0,
+                "min": 1,
+                "max": 1,
+                "n": 5
+              }
+            },
+            "total_cost_usd": 0.21000000000000002,
+            "n_cost_unknown": 0,
+            "cost_sources": [
+              "unknown"
+            ],
+            "n_errors": 0,
+            "errors": [],
+            "failure_kinds": {}
+          },
+          "trials": [
+            {
+              "task_id": "t5_mean_amount",
+              "track": "reliability",
+              "config_id": "t5_corrupt_parquet_with_mitigation",
+              "trial_index": 0,
+              "quality": {
+                "score": 0.9987593818077951,
+                "answer_rel_error": 0.0012406181922049403,
+                "ci_coverage": 1.0,
+                "pass": 1.0,
+                "recovered": 1.0,
+                "work_repeated_ratio": 0.05000000000000002,
+                "cost_wasted_usd": 0.002000000000000001,
+                "user_informed": 1.0
+              },
+              "outcome": {
+                "answer": {
+                  "estimate": 37.3982825,
+                  "ci": [
+                    36.05443833838504,
+                    38.74212666161496
+                  ],
+                  "se": 0.6856347763341635,
+                  "n_scanned": 4000,
+                  "_recovered": true,
+                  "_work_repeated_ratio": 0.05000000000000002,
+                  "_cost_wasted_usd": 0.002000000000000001,
+                  "_user_informed": true,
+                  "_fault": "corrupt_parquet"
+                },
+                "cost_usd": 0.042,
+                "latency_s": 0.07100000000000001,
+                "data_scanned_ratio": 0.21,
+                "tool_calls": 4,
+                "tokens": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "unknown",
+                "retries": 1,
+                "recovered": true,
+                "trajectory": [
+                  {
+                    "fault": "corrupt_parquet",
+                    "recovered": true,
+                    "checkpoint_interval": 0.1
+                  }
+                ],
+                "artifacts": {
+                  "budget": {
+                    "limits": {
+                      "max_cost_usd": null,
+                      "max_latency_s": null,
+                      "max_tokens": null,
+                      "max_data_scanned_ratio": null
+                    },
+                    "actual": {
+                      "cost_usd": 0.042,
+                      "latency_s": 0.07100000000000001,
+                      "tokens": 0,
+                      "data_scanned_ratio": 0.21
+                    },
+                    "violations": []
+                  }
+                },
+                "error": null,
+                "error_kind": null
+              }
+            },
+            {
+              "task_id": "t5_mean_amount",
+              "track": "reliability",
+              "config_id": "t5_corrupt_parquet_with_mitigation",
+              "trial_index": 1,
+              "quality": {
+                "score": 0.9755285688886385,
+                "answer_rel_error": 0.024471431111361557,
+                "ci_coverage": 1.0,
+                "pass": 1.0,
+                "recovered": 1.0,
+                "work_repeated_ratio": 0.05000000000000002,
+                "cost_wasted_usd": 0.002000000000000001,
+                "user_informed": 1.0
+              },
+              "outcome": {
+                "answer": {
+                  "estimate": 36.437887499999995,
+                  "ci": [
+                    35.23111459617741,
+                    37.64466040382258
+                  ],
+                  "se": 0.6157004611339721,
+                  "n_scanned": 4000,
+                  "_recovered": true,
+                  "_work_repeated_ratio": 0.05000000000000002,
+                  "_cost_wasted_usd": 0.002000000000000001,
+                  "_user_informed": true,
+                  "_fault": "corrupt_parquet"
+                },
+                "cost_usd": 0.042,
+                "latency_s": 0.07100000000000001,
+                "data_scanned_ratio": 0.21,
+                "tool_calls": 4,
+                "tokens": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "unknown",
+                "retries": 1,
+                "recovered": true,
+                "trajectory": [
+                  {
+                    "fault": "corrupt_parquet",
+                    "recovered": true,
+                    "checkpoint_interval": 0.1
+                  }
+                ],
+                "artifacts": {
+                  "budget": {
+                    "limits": {
+                      "max_cost_usd": null,
+                      "max_latency_s": null,
+                      "max_tokens": null,
+                      "max_data_scanned_ratio": null
+                    },
+                    "actual": {
+                      "cost_usd": 0.042,
+                      "latency_s": 0.07100000000000001,
+                      "tokens": 0,
+                      "data_scanned_ratio": 0.21
+                    },
+                    "violations": []
+                  }
+                },
+                "error": null,
+                "error_kind": null
+              }
+            },
+            {
+              "task_id": "t5_mean_amount",
+              "track": "reliability",
+              "config_id": "t5_corrupt_parquet_with_mitigation",
+              "trial_index": 2,
+              "quality": {
+                "score": 0.9933974519076558,
+                "answer_rel_error": 0.006602548092344166,
+                "ci_coverage": 1.0,
+                "pass": 1.0,
+                "recovered": 1.0,
+                "work_repeated_ratio": 0.05000000000000002,
+                "cost_wasted_usd": 0.002000000000000001,
+                "user_informed": 1.0
+              },
+              "outcome": {
+                "answer": {
+                  "estimate": 37.105325,
+                  "ci": [
+                    35.75619227802191,
+                    38.45445772197809
+                  ],
+                  "se": 0.6883330214173905,
+                  "n_scanned": 4000,
+                  "_recovered": true,
+                  "_work_repeated_ratio": 0.05000000000000002,
+                  "_cost_wasted_usd": 0.002000000000000001,
+                  "_user_informed": true,
+                  "_fault": "corrupt_parquet"
+                },
+                "cost_usd": 0.042,
+                "latency_s": 0.07100000000000001,
+                "data_scanned_ratio": 0.21,
+                "tool_calls": 4,
+                "tokens": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "unknown",
+                "retries": 1,
+                "recovered": true,
+                "trajectory": [
+                  {
+                    "fault": "corrupt_parquet",
+                    "recovered": true,
+                    "checkpoint_interval": 0.1
+                  }
+                ],
+                "artifacts": {
+                  "budget": {
+                    "limits": {
+                      "max_cost_usd": null,
+                      "max_latency_s": null,
+                      "max_tokens": null,
+                      "max_data_scanned_ratio": null
+                    },
+                    "actual": {
+                      "cost_usd": 0.042,
+                      "latency_s": 0.07100000000000001,
+                      "tokens": 0,
+                      "data_scanned_ratio": 0.21
+                    },
+                    "violations": []
+                  }
+                },
+                "error": null,
+                "error_kind": null
+              }
+            },
+            {
+              "task_id": "t5_mean_amount",
+              "track": "reliability",
+              "config_id": "t5_corrupt_parquet_with_mitigation",
+              "trial_index": 3,
+              "quality": {
+                "score": 0.9945010089568834,
+                "answer_rel_error": 0.005498991043116617,
+                "ci_coverage": 1.0,
+                "pass": 1.0,
+                "recovered": 1.0,
+                "work_repeated_ratio": 0.05000000000000002,
+                "cost_wasted_usd": 0.002000000000000001,
+                "user_informed": 1.0
+              },
+              "outcome": {
+                "answer": {
+                  "estimate": 37.146544999999996,
+                  "ci": [
+                    35.69782099839352,
+                    38.595269001606475
+                  ],
+                  "se": 0.7391448987788144,
+                  "n_scanned": 4000,
+                  "_recovered": true,
+                  "_work_repeated_ratio": 0.05000000000000002,
+                  "_cost_wasted_usd": 0.002000000000000001,
+                  "_user_informed": true,
+                  "_fault": "corrupt_parquet"
+                },
+                "cost_usd": 0.042,
+                "latency_s": 0.07100000000000001,
+                "data_scanned_ratio": 0.21,
+                "tool_calls": 4,
+                "tokens": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "unknown",
+                "retries": 1,
+                "recovered": true,
+                "trajectory": [
+                  {
+                    "fault": "corrupt_parquet",
+                    "recovered": true,
+                    "checkpoint_interval": 0.1
+                  }
+                ],
+                "artifacts": {
+                  "budget": {
+                    "limits": {
+                      "max_cost_usd": null,
+                      "max_latency_s": null,
+                      "max_tokens": null,
+                      "max_data_scanned_ratio": null
+                    },
+                    "actual": {
+                      "cost_usd": 0.042,
+                      "latency_s": 0.07100000000000001,
+                      "tokens": 0,
+                      "data_scanned_ratio": 0.21
+                    },
+                    "violations": []
+                  }
+                },
+                "error": null,
+                "error_kind": null
+              }
+            },
+            {
+              "task_id": "t5_mean_amount",
+              "track": "reliability",
+              "config_id": "t5_corrupt_parquet_with_mitigation",
+              "trial_index": 4,
+              "quality": {
+                "score": 0.9810611726410056,
+                "answer_rel_error": 0.018938827358994468,
+                "ci_coverage": 1.0,
+                "pass": 1.0,
+                "recovered": 1.0,
+                "work_repeated_ratio": 0.05000000000000002,
+                "cost_wasted_usd": 0.002000000000000001,
+                "user_informed": 1.0
+              },
+              "outcome": {
+                "answer": {
+                  "estimate": 38.059345,
+                  "ci": [
+                    36.69540211592414,
+                    39.42328788407586
+                  ],
+                  "se": 0.6958892265693182,
+                  "n_scanned": 4000,
+                  "_recovered": true,
+                  "_work_repeated_ratio": 0.05000000000000002,
+                  "_cost_wasted_usd": 0.002000000000000001,
+                  "_user_informed": true,
+                  "_fault": "corrupt_parquet"
+                },
+                "cost_usd": 0.042,
+                "latency_s": 0.07100000000000001,
+                "data_scanned_ratio": 0.21,
+                "tool_calls": 4,
+                "tokens": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_source": "unknown",
+                "retries": 1,
+                "recovered": true,
+                "trajectory": [
+                  {
+                    "fault": "corrupt_parquet",
+                    "recovered": true,
+                    "checkpoint_interval": 0.1
+                  }
+                ],
+                "artifacts": {
+                  "budget": {
+                    "limits": {
+                      "max_cost_usd": null,
+                      "max_latency_s": null,
+                      "max_tokens": null,
+                      "max_data_scanned_ratio": null
+                    },
+                    "actual": {
+                      "cost_usd": 0.042,
+                      "latency_s": 0.07100000000000001,
+                      "tokens": 0,
+                      "data_scanned_ratio": 0.21
+                    },
+                    "violations": []
+                  }
+                },
+                "error": null,
+                "error_kind": null
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

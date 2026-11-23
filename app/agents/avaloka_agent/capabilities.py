@@ -6,9 +6,10 @@ of something the code itself describes as optional — the comment at the call
 site reads *"it narrates the real pipeline, never routes"*, so swarm here is a
 narration affordance, not an execution path.
 
-That distinction is what makes this separable. Under the edition boundary swarm
-is a **commercial** capability and conversational analysis is **core**, so the
-open-source build has to run without it. Rather than fork the agent, the import
+That distinction is what makes this separable. Swarm ships in every edition
+(``app.core.editions``: OPEN, with a per-edition fan-out limit), but a build
+may still be cut without this module, and conversational analysis is **core**,
+so the agent has to run without it. Rather than fork the agent, the import
 becomes a lookup that degrades to a no-op.
 
 The contract is deliberately narrow — two functions with total behaviour when

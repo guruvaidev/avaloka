@@ -1,0 +1,13 @@
+{
+  "question": "How much of sales do ad spend and the sales target account for?",
+  "recipe": "regress",
+  "params": {
+    "outcome": "sales",
+    "measures": [
+      "ad_spend",
+      "sales_target"
+    ]
+  },
+  "confidence": 1.0,
+  "source": "fixture"
+}

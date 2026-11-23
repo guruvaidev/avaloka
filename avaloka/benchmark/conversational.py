@@ -14,10 +14,13 @@ data-engineering and data-science families.
 of hand-written replies. Scoring those measures whether the evaluators still
 discriminate: whether the written-to-pass bracket passes, the sycophant bracket
 fails, and the keyword-stuffed junk string scores at the floor. It does **not**
-measure Avaloka's conversational ability; nothing in a hermetic run calls
-Avaloka or any model. Measuring the product needs ``live=True`` and a reachable
-provider, and the task's ``source_scheme`` records which subject produced every
-score so the two claims cannot be confused in the scorecard.
+measure Avaloka's conversational ability. That is the separate
+``conversational_product`` family: the same probes driven through Avaloka's
+compiled agent graph by :mod:`avaloka.benchmark.conversational_product`, from a
+recorded cassette by default (``product:replay``) or a live model with
+``live=True`` (``product:live:<model>``). Every task's ``source_scheme`` records
+which subject produced its score so the claims cannot be confused in the
+scorecard.
 
 **Rules this module obeys.**
 
@@ -46,6 +49,7 @@ zero".
 
 from __future__ import annotations
 
+import dataclasses
 import importlib
 import importlib.util
 import json
@@ -59,10 +63,9 @@ from typing import Any, Callable, Mapping, Optional, Sequence
 from avaloka.benchmark.spec import CheckResult, TaskResult
 
 __all__ = [
-    "PRODUCT_GAP_REASON",
-    "PRODUCT_RESPONDER_ATTR",
-    "PRODUCT_RESPONDER_MODULE",
-    "ProductPathUnavailable",
+    "GAP_TASK",
+    "PRODUCT_FAMILY",
+    "PRODUCT_MODULE",
     "FAMILY",
     "JUNK_SCORE_FLOOR",
     "DIMENSION_FLOOR",
@@ -78,12 +81,16 @@ __all__ = [
 #: these runs under one heading.
 #: The family is named for what it grades, not for the subject area it is
 #: about. It scores the probe *scorers* -- and, with ``--live``, a raw model --
-#: and it does not measure Avaloka's conversational behaviour at all, because
-#: no path on this branch drives the probes through Avaloka's agent graph. A
+#: and not Avaloka's conversational behaviour, which is PRODUCT_FAMILY. A
 #: family called "conversational" sitting at 1.00 reads as a product score, and
 #: that is precisely how a 0.80 from an out-of-tree harness came to be quoted
 #: as one. The name is the first line of defence against the next such quote.
 FAMILY = "conversational_scorers"
+
+#: The family the product's own replies are graded under. A separate family so
+#: Scorecard.by_family() never averages the scorers' 1.00 into the product's
+#: number, or the other way round.
+PRODUCT_FAMILY = "conversational_product"
 
 #: Dotted name of the probe suite, when it happens to be importable.
 PROBE_MODULE = "tests.conversational.probes"
@@ -131,8 +138,11 @@ DIMENSION_FLOOR = 1.0
 
 #: Local models to try, in preference order: the owner's named first choice,
 #: then Gemma from smallest upward. The server's own tag list decides which of
-#: these exists; nothing here is assumed present.
-LOCAL_MODEL_PREFERENCE = ("qwen2.5:3b-instruct", "gemma3:270m", "gemma3:1b",
+#: these exists; nothing here is assumed present. The first entry is the
+#: product's default local model (app.core.inference.DEFAULT_LOCAL_MODEL); this
+#: package may not import app.*, so tests/test_local_model_licence.py keeps the
+#: two equal.
+LOCAL_MODEL_PREFERENCE = ("qwen3:4b-instruct-2507-q4_K_M", "gemma3:270m", "gemma3:1b",
                           "gemma3:4b", "gemma4:e4b")
 
 #: Hosted fallback, used only when no local model answers.
@@ -159,36 +169,13 @@ LIVE_SYSTEM_PROMPT = (
 # Locating the probe suite
 # --------------------------------------------------------------------------- #
 
-#: Where a responder that drives **Avaloka itself** would live.
-#:
-#: Nothing imports this module today and it does not exist; that absence is the
-#: gap, and ``_product_responder`` reports it. It is written as a lookup rather
-#: than a hardcoded ``False`` so the check grades the world instead of grading a
-#: constant: the day someone adds this module with a ``product_responder``
-#: factory, the check passes without anyone editing the check. A gap assertion
-#: that has to be remembered and deleted by hand is a gap assertion that goes
-#: stale and then lies.
-PRODUCT_RESPONDER_MODULE = "avaloka.benchmark.conversational_product"
-PRODUCT_RESPONDER_ATTR = "product_responder"
+#: The module that drives the probes through Avaloka's compiled agent graph.
+PRODUCT_MODULE = "avaloka.benchmark.conversational_product"
 
-#: Why the gap exists, in one place, for the scorecard to carry. This is the
-#: same device as ``DEFERRED_FORMATS`` in ``datasets_formats``: a limitation
-#: belongs in code where review sees it, not in prose that nobody re-reads.
-PRODUCT_GAP_REASON = (
-    "no path on this branch drives the conversational probes through Avaloka's "
-    "own agent graph. The hermetic numbers grade the probe scorers (a fixed "
-    "dictionary of replies), and --live grades a raw model over HTTP; neither "
-    "touches app.agents, the firefly swarm, the intent classifier or a "
-    "MissionContext. So no number this family produces is a measurement of the "
-    f"product. Closing it means adding {PRODUCT_RESPONDER_MODULE} with a "
-    f"'{PRODUCT_RESPONDER_ATTR}()' factory returning a responder that drives "
-    "Avaloka and returns the user-visible reply; this check then passes on its "
-    "own."
-)
-
-
-class ProductPathUnavailable(RuntimeError):
-    """No responder exists that drives Avaloka itself."""
+#: The check that the product was measured. Kept under its historical name so
+#: the scorecard line that read FAIL while nothing drove the graph is the same
+#: line that now reads PASS.
+GAP_TASK = "conv_avaloka_behaviour_is_unmeasured"
 
 
 class ProbeSuiteUnavailable(RuntimeError):
@@ -455,7 +442,7 @@ def _subject_label(*, live: bool, model: Optional[str], subject: str) -> str:
     return f"live:{model}" if live else f"ref:{subject}"
 
 
-def _skip(task: str, kind: str, error: str) -> TaskResult:
+def _skip(task: str, kind: str, error: str, family: str = FAMILY) -> TaskResult:
     """A SKIP, in the shape the rest of the benchmark already recognises.
 
     No checks and an ``error`` containing "unavailable": ``__main__`` prints it
@@ -463,7 +450,7 @@ def _skip(task: str, kind: str, error: str) -> TaskResult:
     it is for any check-less result, but the error is what distinguishes "not
     measured" from "measured zero" — and the two must not look the same.
     """
-    return TaskResult(task=task, family=FAMILY, kind=kind, source_scheme="—",
+    return TaskResult(task=task, family=family, kind=kind, source_scheme="—",
                       checks=[], error=error)
 
 
@@ -658,56 +645,203 @@ def _resolve_live(model: Optional[str]) -> tuple[Responder, str]:
 # The family
 # --------------------------------------------------------------------------- #
 
-def _product_responder() -> Responder:
-    """A responder that drives Avaloka, or raise :class:`ProductPathUnavailable`."""
-    try:
-        module = importlib.import_module(PRODUCT_RESPONDER_MODULE)
-    except ImportError as exc:
-        raise ProductPathUnavailable(
-            f"{PRODUCT_RESPONDER_MODULE} does not exist ({exc}). "
-            + PRODUCT_GAP_REASON) from exc
-    factory = getattr(module, PRODUCT_RESPONDER_ATTR, None)
-    if factory is None:
-        raise ProductPathUnavailable(
-            f"{PRODUCT_RESPONDER_MODULE} exists but has no "
-            f"'{PRODUCT_RESPONDER_ATTR}'. " + PRODUCT_GAP_REASON)
-    return factory()
+def _run_product(suite: ProbeSuite, *, live: bool, model: Optional[str]) -> tuple[Any, str]:
+    """``(run, why)``: what the product module measured, or why there is nothing.
 
-
-def _product_gap_result(subject_label: str) -> TaskResult:
-    """A standing, self-clearing failure while the product is unmeasured.
-
-    Deliberately a red check rather than a note. Every other number this family
-    emits is honest about its own subject only if the reader knows what the
-    subject is, and a reader skimming ``conversational_scorers 1.00`` does not.
-    So the family reports a gap alongside its score, the same way the format
-    coverage check reports a declared format with no task.
-
-    It grades a lookup, not a constant, so it clears itself when the path is
-    built -- and the detail names exactly what building it means.
+    The module is looked up rather than imported at the top so a checkout
+    without it -- or with a stub of it -- is graded on what it measures, not
+    on whether a name resolves.
     """
     try:
-        _product_responder()
-    except ProductPathUnavailable as exc:
-        return TaskResult(
-            task="conv_avaloka_behaviour_is_unmeasured", family=FAMILY,
-            kind="gap", source_scheme=subject_label,
-            checks=[CheckResult(
-                "avaloka_conversational_behaviour_is_measured", False,
-                str(exc), weight=2.0)])
+        module = importlib.import_module(PRODUCT_MODULE)
+    except ImportError as exc:
+        return None, f"{PRODUCT_MODULE} does not exist ({exc})"
+    runner = getattr(module, "run_product", None)
+    if runner is None:
+        return None, (f"{PRODUCT_MODULE} exists but has no run_product(), so nothing "
+                      f"drives the probes through the graph")
+    probe_ids = [p.id for p in getattr(suite.module, "PROBES")]
+    mode = getattr(module, "LIVE", "live") if live else getattr(module, "REPLAY", "replay")
+    try:
+        return runner(suite.module.__file__, probe_ids, mode=mode, model=model), ""
+    except Exception as exc:                          # noqa: BLE001 - graded, not raised
+        return None, f"{PRODUCT_MODULE}.run_product raised {type(exc).__name__}: {exc}"
+
+
+def _record_of(run: Any, probe_id: str) -> Any:
+    records = getattr(run, "records", None) or {}
+    return records.get(probe_id) if isinstance(records, Mapping) else None
+
+
+#: The checks that say a probe was measured rather than how it did. They can
+#: fail the task and cannot raise its score: with them weighted, a product that
+#: passed no probe at all read 0.75, for having been asked properly.
+_PLUMBING = {"weight": 0.0, "category": "guard"}
+
+
+def _product_tasks(suite: ProbeSuite, run: Any, why: str, *, live: bool) -> list[TaskResult]:
+    """One task per dimension, grading the reply the graph produced.
+
+    A probe with no record -- the run crashed, timed out or never reached it --
+    is graded on an empty reply and fails its graph check: it was not
+    measured, and that is a failure, not a skip. Only an application that
+    cannot be imported here (the benchmark-only CI step) is a SKIP.
+    """
+    module = suite.module
+    by_dimension: Mapping[Any, Sequence[Any]] = getattr(module, "BY_DIMENSION")
+    run_probe = getattr(module, "run_probe")
+    unavailable = getattr(run, "unavailable", None)
+    if unavailable:
+        return [_skip(f"conv_product_{d.value}", "probe", unavailable, PRODUCT_FAMILY)
+                for d in by_dimension]
+    label = getattr(run, "label", None) or "product:—"
+    replay = getattr(run, "mode", "") == "replay"
+    run_error = why or getattr(run, "error", None)
+
+    results: list[TaskResult] = []
+    for dimension, probes in by_dimension.items():
+        checks: list[CheckResult] = []
+        graded = []
+        for probe in probes:
+            record = _record_of(run, probe.id)
+            reply = getattr(record, "reply", "") or ""
+            result = run_probe(probe, lambda _p, _reply=reply: _reply)
+            latency = float(getattr(record, "latency_s", 0.0) or 0.0)
+            budget = getattr(probe, "latency_budget_s", None)
+            result = dataclasses.replace(
+                result, latency_s=latency,
+                within_budget=None if budget is None else latency <= budget)
+            graded.append(result)
+            path = getattr(record, "path", "<no record>") if record else "<no record>"
+            checks.append(CheckResult(
+                probe.id, result.passed,
+                f"dimension={result.dimension.value}; {_fmt_metrics(result.metrics)}; "
+                f"intent={getattr(record, 'intent', None)}; path={path}; "
+                f"latency={latency:.2f}s; reply={_excerpt(reply)!r}"))
+            exchange = Exchange(probe_id=probe.id,
+                                question=getattr(record, "sent_question", "") or "",
+                                reply=reply,
+                                expected_question=probe.turns[-1].text if probe.turns else "")
+            checks.append(CheckResult(
+                f"{probe.id}::question_sent", exchange.question_was_sent,
+                f"sent {len(exchange.question)} chars: {exchange.question!r}; "
+                f"probe declares: {exchange.expected_question!r}", **_PLUMBING))
+            through = bool(record is not None and getattr(record, "through_graph", False))
+            checks.append(CheckResult(
+                f"{probe.id}::through_graph", through,
+                f"path={path}" + (f"; error={record.error}" if record is not None
+                                  and getattr(record, "error", None) else "")
+                + (f"; run error={run_error}" if record is None and run_error else ""),
+                **_PLUMBING))
+            if replay:
+                misses = list(getattr(record, "misses", None) or []) if record else []
+                checks.append(CheckResult(
+                    f"{probe.id}::recorded", record is not None and not misses,
+                    f"{getattr(record, 'calls', 0) if record else 0} model calls answered "
+                    f"from the cassette; "
+                    + ("no recording for: " + "; ".join(
+                        f"{m.get('agent')} {str(m.get('key'))[:16]} ({m.get('excerpt', '')[:60]!r})"
+                        for m in misses) if misses else "no request went unanswered"),
+                    **_PLUMBING))
+            elif live and result.within_budget is not None:
+                checks.append(CheckResult(
+                    f"{probe.id}::within_latency_budget", bool(result.within_budget),
+                    f"answered in {latency:.2f}s through the graph; probe budget {budget}s",
+                    **_PLUMBING))
+        checks.append(_dimension_summary(dimension.value, graded))
+        results.append(TaskResult(
+            task=f"conv_product_{dimension.value}", family=PRODUCT_FAMILY, kind="probe",
+            source_scheme=label, checks=checks,
+            duration_s=sum(r.latency_s for r in graded)))
+    return results
+
+
+def _measurement_gaps(suite: ProbeSuite, run: Any, why: str) -> list[str]:
+    """Every reason the product run does not count as a measurement."""
+    if run is None:
+        return [why or "no product run"]
+    gaps: list[str] = []
+    if why:
+        gaps.append(why)
+    if getattr(run, "error", None):
+        gaps.append(f"the run failed: {run.error}")
+    if not getattr(run, "results_written", False):
+        gaps.append("the run recorded no results")
+    probes = tuple(getattr(suite.module, "PROBES"))
+    missing = [p.id for p in probes if _record_of(run, p.id) is None]
+    if missing:
+        gaps.append(f"{len(missing)}/{len(probes)} probes have no record: {', '.join(missing)}")
+    for probe in probes:
+        record = _record_of(run, probe.id)
+        if record is None:
+            continue
+        expected = probe.turns[-1].text if probe.turns else ""
+        sent = getattr(record, "sent_question", "") or ""
+        if not (sent.strip() and sent == expected):
+            gaps.append(f"{probe.id}: the probe's question was not the one sent ({sent!r})")
+        if not getattr(record, "through_graph", False):
+            gaps.append(f"{probe.id}: did not run through the graph to its end "
+                        f"(path={getattr(record, 'path', '?')}; "
+                        f"error={getattr(record, 'error', None)})")
+        if getattr(record, "misses", None):
+            gaps.append(f"{probe.id}: {len(record.misses)} model requests had no recording")
+    if not missing and not getattr(run, "calls", 0):
+        gaps.append("no model call was made in any probe, so no reply came from the model "
+                    "behind the graph")
+    if getattr(run, "mode", "") == "replay":
+        if not getattr(run, "routing_replaced", False):
+            gaps.append("the model router was not replaced, so the replay was not one")
+        external = list(getattr(run, "external_egress", None) or [])
+        if external:
+            gaps.append(f"the hermetic replay tried to reach the network: {external[:3]}")
+    return gaps
+
+
+def _product_gap_result(suite: Optional[ProbeSuite], run: Any, why: str) -> TaskResult:
+    """Passes only when every probe was measured through the compiled graph.
+
+    It used to pass the moment a ``product_responder`` factory *returned*,
+    which a lazy factory does in an environment where the product cannot run
+    at all: a pass on the existence of a name. It now reads the run itself --
+    a record for every probe, the probe's own question sent, the graph walked
+    from ``drivers_route`` through ``avaloka_agent`` to ``verify_claims``, at
+    least one model reply behind it, no request without a recording, and the
+    results written back. An application that cannot be imported here is
+    "unavailable": the task is skipped with the product tasks, not failed.
+    """
+    if suite is None:
+        return _skip(GAP_TASK, "gap", f"unavailable: {why}")
+    unavailable = getattr(run, "unavailable", None)
+    if unavailable:
+        return _skip(GAP_TASK, "gap", unavailable)
+    label = getattr(run, "label", None) or "—"
+    gaps = _measurement_gaps(suite, run, why)
+    if gaps:
+        detail = "not measured: " + " | ".join(gaps[:8])
+        if len(gaps) > 8:
+            detail += f" | …and {len(gaps) - 8} more"
+    else:
+        n = len(getattr(run, "records", {}) or {})
+        detail = (f"{n} probes ran through the compiled agent graph ({label}), "
+                  f"{run.calls} model calls, every question sent, results recorded; "
+                  f"graded under {PRODUCT_FAMILY}")
     return TaskResult(
-        task="conv_avaloka_behaviour_is_unmeasured", family=FAMILY,
-        kind="gap", source_scheme=subject_label,
-        checks=[CheckResult(
-            "avaloka_conversational_behaviour_is_measured", True,
-            f"{PRODUCT_RESPONDER_MODULE}.{PRODUCT_RESPONDER_ATTR}() is available, "
-            "so the probes can be driven through Avaloka itself. Delete "
-            "PRODUCT_GAP_REASON and wire this responder into "
-            "conversational_results as a graded subject.", weight=2.0)])
+        task=GAP_TASK, family=FAMILY, kind="gap", source_scheme=label,
+        checks=[CheckResult("avaloka_conversational_behaviour_is_measured", not gaps,
+                            detail, weight=2.0)])
 
 
-def conversational_results(*, live: bool = False,
-                           model: Optional[str] = None) -> list[TaskResult]:
+def _product_family(suite: ProbeSuite, *, live: bool, model: Optional[str],
+                    product: bool) -> list[TaskResult]:
+    """The product tasks and the measurement check, from one product run."""
+    if not product:
+        return [_skip(GAP_TASK, "gap", "unavailable: the product subject was not requested")]
+    run, why = _run_product(suite, live=live, model=model)
+    return [*_product_tasks(suite, run, why, live=live), _product_gap_result(suite, run, why)]
+
+
+def conversational_results(*, live: bool = False, model: Optional[str] = None,
+                           product: bool = True) -> list[TaskResult]:
     """Run the conversational probes and return them as scored benchmark tasks.
 
     One :class:`TaskResult` per dimension plus one for the negative control.
@@ -718,16 +852,23 @@ def conversational_results(*, live: bool = False,
     the structure the suite was built around. The control is its own task
     because it grades the evaluators, not the subject.
 
-    With ``live=False`` (the default) the subject is the ``brilliant`` reference
-    responder and nothing leaves the process. With ``live=True`` a local Ollama
-    model is tried first, then Groq; if neither answers the family SKIPs rather
-    than quietly scoring a reference responder and labelling it live.
+    With ``live=False`` (the default) the scorer subject is the ``brilliant``
+    reference responder and nothing leaves the process. With ``live=True`` a
+    local Ollama model is tried first, then Groq; if neither answers the family
+    SKIPs rather than quietly scoring a reference responder and labelling it
+    live.
+
+    With ``product=True`` (the default) the same probes are also driven
+    through Avaloka's compiled agent graph -- replayed from the cassette, or on
+    the live model -- and graded as the ``conversational_product`` family,
+    followed by the check that they were. Where ``app`` cannot be imported
+    those tasks SKIP.
     """
     try:
         suite = load_probe_suite()
     except ProbeSuiteUnavailable as exc:
         return [_skip("conv_suite", "probe", str(exc)),
-                _product_gap_result("—")]
+                _product_gap_result(None, None, f"probe suite: {exc}")]
 
     module = suite.module
     by_dimension: Mapping[Any, Sequence[Any]] = getattr(module, "BY_DIMENSION")
@@ -744,14 +885,14 @@ def conversational_results(*, live: bool = False,
             # regression hide behind an unreachable provider.
             return [_skip("conv_live", "probe", f"live provider unavailable: {exc}"),
                     _control_result(suite),
-                    _product_gap_result("—")]
+                    *_product_family(suite, live=live, model=model, product=product)]
         label = _subject_label(live=True, model=resolved, subject=subject)
     else:
         try:
             responder = _reference_responder(suite, subject)
         except ProbeSuiteUnavailable as exc:
             return [_skip("conv_suite", "probe", str(exc)),
-                    _product_gap_result("—")]
+                    _product_gap_result(None, None, f"probe suite: {exc}")]
         label = _subject_label(live=False, model=None, subject=subject)
 
     results: list[TaskResult] = []
@@ -764,7 +905,7 @@ def conversational_results(*, live: bool = False,
                     _skip(f"conv_{dimension.value}", "probe",
                           f"live provider unavailable mid-run: {exc}"),
                     _control_result(suite),
-                    _product_gap_result(label)]
+                    *_product_family(suite, live=live, model=model, product=product)]
         checks = _probe_checks(probe_results, recorder.exchanges, live=live)
         checks.append(_dimension_summary(dimension.value, probe_results))
         results.append(TaskResult(
@@ -773,5 +914,5 @@ def conversational_results(*, live: bool = False,
             duration_s=sum(r.latency_s for r in probe_results)))
 
     results.append(_control_result(suite))
-    results.append(_product_gap_result(label))
+    results.extend(_product_family(suite, live=live, model=model, product=product))
     return results

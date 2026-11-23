@@ -51,13 +51,25 @@ ALLOWED_APP_IMPORTS = {
 }
 
 
+# The second sanctioned crossing, one file wide: the conversational product
+# benchmark exists to drive the chat graph, so it imports it -- inside its
+# child-process entry point only, never at module scope (pinned below), so the
+# CLI wheel, which ships without app/, still imports it. Granting these names to
+# the whole package would let any CLI module reach the graph.
+ALLOWED_APP_IMPORTS_BY_FILE = {
+    "avaloka/benchmark/conversational_product.py": {"app.core", "app.api", "app.api.workflow"},
+}
+
+
 def test_cli_does_not_import_the_chat_agent_pipeline():
     offenders: list[str] = []
     for path in _python_files(CLI_PKG):
+        allowed_here = ALLOWED_APP_IMPORTS_BY_FILE.get(
+            path.relative_to(REPO_ROOT).as_posix(), set())
         for mod in _imported_modules(path):
             if not mod.startswith("app."):
                 continue
-            if mod in ALLOWED_APP_IMPORTS:
+            if mod in ALLOWED_APP_IMPORTS or mod in allowed_here:
                 continue
             offenders.append(f"{path.relative_to(REPO_ROOT)} imports {mod}")
     assert not offenders, (
@@ -65,6 +77,19 @@ def test_cli_does_not_import_the_chat_agent_pipeline():
         "been independent; if this is intended, update this test and say so in "
         "the change.\n" + "\n".join(offenders)
     )
+
+
+def test_the_product_benchmark_imports_app_only_inside_functions():
+    """The exemption above holds only while no app import runs at import time."""
+    for rel in ALLOWED_APP_IMPORTS_BY_FILE:
+        tree = ast.parse((REPO_ROOT / rel).read_text(encoding="utf-8"))
+        top_level = set()
+        for node in tree.body:
+            if isinstance(node, ast.Import):
+                top_level.update(a.name for a in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                top_level.add(node.module)
+        assert not {m for m in top_level if m == "app" or m.startswith("app.")}, rel
 
 
 def test_cli_never_imports_the_coder_or_validator():

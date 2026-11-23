@@ -1,0 +1,27 @@
+Bundled outcome assets: sources, versions and licences
+=========================================================
+
+Rebuilt by scripts/build_outcome_assets.py from the pinned sources below;
+SHA256SUMS records the result. Nothing here is fetched at run time.
+
+echarts.min.js
+  Apache ECharts 5.6.0, npm tarball https://registry.npmjs.org/echarts/-/echarts-5.6.0.tgz
+  tarball sha256 e1b82487dd7f8d9f0438eec1f1433051148e0095ac7a15d4db890afda45cf610
+  Licence: Apache License 2.0 (licenses/echarts-LICENSE.txt, NOTICE in
+  licenses/echarts-NOTICE.txt; the d3 portions are BSD-3-Clause,
+  licenses/echarts-LICENSE-d3.txt). Copied unmodified.
+
+world_110m.json, iso3166.csv
+  Natural Earth v5.1.2, 1:110m admin-0 countries (geometry) and
+  1:10m admin-0 countries (code table), github.com/nvkelso/natural-earth-vector.
+  Licence: public domain (naturalearthdata.com/about/terms-of-use).
+  Processing: properties cut to iso_a2/iso_a3/name (the *_EH codes, so
+  France and Norway keep theirs); features without an ISO code dropped;
+  Douglas-Peucker at 0.08 degrees; coordinates rounded to 2 dp.
+
+us_states_20m.json, us_states.csv
+  US Census Bureau cartographic boundary file cb_2023_us_state_20m
+  (50 states, DC and Puerto Rico). Licence: US Government work, public domain.
+  Processing: properties cut to usps/fips/name; Alaska scaled 0.35 and
+  Alaska and Hawaii moved below the lower 48 as insets; Douglas-Peucker at
+  0.03 degrees; coordinates rounded to 2 dp.

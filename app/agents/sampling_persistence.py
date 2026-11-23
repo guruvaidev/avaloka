@@ -71,13 +71,20 @@ CREATE TABLE IF NOT EXISTS dataset_profiles (
     exact_rows          BIGINT,
     file_size_mb        DOUBLE PRECISION,
     sample_pct          DOUBLE PRECISION,
-    quick_elapsed_s     DOUBLE PRECISION,
-    full_elapsed_s      DOUBLE PRECISION,
+    phase_a_elapsed_s   DOUBLE PRECISION,
+    phase_b_elapsed_s   DOUBLE PRECISION,
     column_count        INT,
     completeness_pct    DOUBLE PRECISION,
     profiling_result    JSONB,
     error               TEXT
 );
+
+-- The deployed schema (supabase-migrations/0-schema.sql) names the elapsed
+-- columns phase_a/phase_b. Tables created from an older copy of this block
+-- had quick_elapsed_s/full_elapsed_s instead; add the real names so the
+-- upsert below is not rejected as naming unknown columns.
+ALTER TABLE dataset_profiles ADD COLUMN IF NOT EXISTS phase_a_elapsed_s DOUBLE PRECISION;
+ALTER TABLE dataset_profiles ADD COLUMN IF NOT EXISTS phase_b_elapsed_s DOUBLE PRECISION;
 
 CREATE INDEX IF NOT EXISTS idx_dataset_profiles_dataset_id ON dataset_profiles (dataset_id);
 CREATE INDEX IF NOT EXISTS idx_dataset_profiles_updated_at ON dataset_profiles (updated_at DESC);
@@ -164,6 +171,35 @@ def warn_on_supabase_credential_mismatch() -> None:
         logger.error("[supabase] %s", problem)
 
 
+class SupabaseNotConfigured(RuntimeError):
+    """Supabase is simply not set up (a self-hosted install without it).
+
+    Distinct from a failing Supabase so callers can stay quiet about the first
+    and loud about the second: a laptop quickstart has no Supabase at all, and
+    a WARNING on every request buried everything else in the log.
+    """
+
+
+_unconfigured_noted = False
+
+
+def log_supabase_skip(log: logging.Logger, what: str, exc: BaseException) -> None:
+    """Log a skipped Supabase call: WARNING when it failed, quiet when it is not configured.
+
+    "Not configured" is said once per process at INFO, then only at DEBUG.
+    """
+    global _unconfigured_noted
+    if isinstance(exc, SupabaseNotConfigured):
+        if not _unconfigured_noted:
+            _unconfigured_noted = True
+            log.info("[supabase] not configured; Supabase persistence is off for this "
+                     "process (%s). Further skips are logged at DEBUG.", exc)
+        else:
+            log.debug("%s: %s", what, exc)
+        return
+    log.warning("%s: %s", what, exc)
+
+
 _CLIENT_CACHE: Dict[Tuple[str, str], Any] = {}
 _CLIENT_LOCK = threading.Lock()
 
@@ -182,7 +218,7 @@ def get_supabase_client():
     if not (url and key):
         missing = ", ".join(n for n, v in (
             ("SUPABASE_URL", url), ("SUPABASE_SERVICE_ROLE_KEY", key)) if not v)
-        raise RuntimeError(
+        raise SupabaseNotConfigured(
             f"Supabase env vars not set ({missing}). "
             "Set them in your .env file or environment."
         )
@@ -252,7 +288,7 @@ def upsert_profile(
     try:
         client = get_supabase_client()
     except RuntimeError as e:
-        logger.warning(f"[persistence] Skipping upsert_profile: {e}")
+        log_supabase_skip(logger, "[persistence] Skipping upsert_profile", e)
         return None
 
     now = datetime.now(timezone.utc).isoformat()
@@ -269,8 +305,8 @@ def upsert_profile(
     if exact_rows is not None:       row["exact_rows"]        = exact_rows
     if file_size_mb is not None:     row["file_size_mb"]      = file_size_mb
     if sample_pct is not None:       row["sample_pct"]        = sample_pct
-    if phase_a_elapsed_s is not None: row["quick_elapsed_s"]  = phase_a_elapsed_s
-    if phase_b_elapsed_s is not None: row["full_elapsed_s"]   = phase_b_elapsed_s
+    if phase_a_elapsed_s is not None: row["phase_a_elapsed_s"] = phase_a_elapsed_s
+    if phase_b_elapsed_s is not None: row["phase_b_elapsed_s"] = phase_b_elapsed_s
     if column_count is not None:     row["column_count"]      = column_count
     if completeness_pct is not None: row["completeness_pct"]  = completeness_pct
     if profiling_result is not None: row["profiling_result"]  = _safe_json(profiling_result)
@@ -309,7 +345,7 @@ def upsert_sample(
     try:
         client = get_supabase_client()
     except RuntimeError as e:
-        logger.warning(f"[persistence] Skipping upsert_sample: {e}")
+        log_supabase_skip(logger, "[persistence] Skipping upsert_sample", e)
         return None
 
     cols = columns or (list(rows[0].keys()) if rows else [])
@@ -349,7 +385,7 @@ def load_sample(dataset_id: str, phase: str = "full") -> Optional[List[Dict]]:
     try:
         client = get_supabase_client()
     except RuntimeError as e:
-        logger.warning(f"[persistence] Skipping load_sample: {e}")
+        log_supabase_skip(logger, "[persistence] Skipping load_sample", e)
         return None
 
     def _fetch(p: str) -> Optional[List[Dict]]:
@@ -380,7 +416,7 @@ def load_portfolio(dataset_id: str) -> Optional[Dict[str, List[Dict]]]:
     try:
         client = get_supabase_client()
     except RuntimeError as e:
-        logger.warning(f"[persistence] Skipping load_portfolio: {e}")
+        log_supabase_skip(logger, "[persistence] Skipping load_portfolio", e)
         return None
 
     try:
@@ -413,7 +449,7 @@ def load_profile(dataset_id: str) -> Optional[Dict[str, Any]]:
     try:
         client = get_supabase_client()
     except RuntimeError as e:
-        logger.warning(f"[persistence] Skipping load_profile: {e}")
+        log_supabase_skip(logger, "[persistence] Skipping load_profile", e)
         return None
 
     try:

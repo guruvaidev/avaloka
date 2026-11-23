@@ -1,9 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
+import { displayNameOf, fetchDisplayProfiles, indexDisplayProfiles } from "@/lib/display-profiles";
 import { requireCurrentProfileId, getCurrentProfileId } from "@/lib/current-profile";
 import { notify } from "@/lib/notifications";
 import { getCurrentOrgId } from "@/lib/current-org";
-import { getCachedAuthUser } from "@/lib/auth-user";
+import { getCachedAuthUser, getCachedAuthUserId } from "@/lib/auth-user";
+import { useEffect, useState } from "react";
 
 async function notifySelf(title: string, body?: string) {
   const pid = await getCurrentProfileId();
@@ -50,24 +52,20 @@ async function enrichOwners(rows: Analysis[], ownerIds: (string | null)[]): Prom
   const ids = Array.from(new Set(ownerIds.filter(Boolean) as string[]));
   if (ids.length === 0) return rows;
 
-  const { data } = await supabase
-    .from("profiles")
-    .select("id,full_name,avatar_url")
-    .in("id", ids);
+  // Owners of shared analyses may be in other organisations: display fields only.
+  const data = await fetchDisplayProfiles(supabase, ids);
 
-  const byId = new Map<string, { name: string | null; avatar: string | null }>();
-  for (const p of data ?? []) {
-    byId.set(p.id, { name: p.full_name?.trim() || null, avatar: p.avatar_url ?? null });
-  }
+  const byId = indexDisplayProfiles(data);
 
   return rows.map((r, i) => {
     const owner = ownerIds[i] ? byId.get(ownerIds[i] as string) : undefined;
-    if (!owner?.name && !owner?.avatar) return r;
+    const name = displayNameOf(owner);
+    if (!name && !owner?.avatar_url) return r;
     return {
       ...r,
-      created_by_name: owner.name ?? r.created_by_name,
-      created_by_initials: owner.name ? initialsOf(owner.name) ?? null : r.created_by_initials,
-      created_by_avatar: owner.avatar,
+      created_by_name: name || r.created_by_name,
+      created_by_initials: name ? initialsOf(name) ?? null : r.created_by_initials,
+      created_by_avatar: owner?.avatar_url ?? null,
     };
   });
 }
@@ -127,6 +125,7 @@ function mergeAnalysisRows(a: any[], b: any[]): any[] {
 export function useAnalyses(projectId: string | null) {
   return useQuery({
     queryKey: analysesKey(projectId),
+    refetchInterval: 15_000,
     enabled: !!projectId,
     queryFn: async (): Promise<Analysis[]> => {
       if (!projectId) return [];
@@ -145,21 +144,76 @@ export function useAnalyses(projectId: string | null) {
   });
 }
 
+/** Cache key for the sidebar Analysis list; scoped per signed-in auth user. */
+export function standaloneAnalysesKey(authUserId: string | null) {
+  return ["analyses", "standalone", authUserId ?? "anonymous"] as const;
+}
+
+/** Tracks the signed-in auth user id so per-user caches never leak across accounts. */
+function useAuthUserId(): string | null {
+  const [id, setId] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void getCachedAuthUserId().then((v) => alive && setId(v));
+    const { data } = supabase.auth.onAuthStateChange((_e, session) => setId(session?.user?.id ?? null));
+    return () => {
+      alive = false;
+      data.subscription.unsubscribe();
+    };
+  }, []);
+  return id;
+}
+
+/** Enterprise keeps its existing owner-only standalone Analysis list. */
+export async function fetchOwnedStandaloneAnalyses(
+  client: typeof supabase,
+  profileId: string | null,
+): Promise<any[]> {
+  if (!profileId) return [];
+  const { data, error } = await client
+    .from("analyses")
+    .select(analysisSelect)
+    .eq("owner_id", profileId)
+    .is("project_id", null)
+    .is("parent_analysis_id", null)
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return ((data ?? []) as any[]).filter((r) => r.owner_id === profileId);
+}
+
+/** Include standalone analyses shared with the caller, including team grants.
+ * The authenticated client's row policies enforce the recipient's access.
+ * Analyses within projects continue to appear under their project.
+ */
+export async function fetchVisibleStandaloneAnalyses(
+  client: typeof supabase,
+  profileId: string | null,
+): Promise<any[]> {
+  if (!profileId) return [];
+  const { data: tier, error: planError } = await client.rpc("current_plan_tier");
+  if (planError) throw planError;
+  if (tier === "enterprise") return fetchOwnedStandaloneAnalyses(client, profileId);
+
+  const { data, error } = await client
+    .from("analyses")
+    .select(analysisSelect)
+    .is("project_id", null)
+    .is("parent_analysis_id", null)
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return data ?? [];
+}
+
 export function useStandaloneAnalyses() {
+  const authUserId = useAuthUserId();
   return useQuery({
-    queryKey: ["analyses", "standalone"] as const,
+    queryKey: standaloneAnalysesKey(authUserId),
+    refetchInterval: 15_000,
+    enabled: !!authUserId,
     queryFn: async (): Promise<Analysis[]> => {
-      const { data, error } = await supabase
-        .from("analyses")
-        .select(analysisSelect)
-        .is("project_id", null)
-        .is("parent_analysis_id", null)
-        .order("created_at", { ascending: false });
-
-      if (error) throw error;
-      const list = mergeAnalysisRows(data ?? [], await orgMemberAnalysisRows(null));
+      const profileId = await getCurrentProfileId();
+      const list = await fetchVisibleStandaloneAnalyses(supabase, profileId);
       return enrichOwners(list.map(normalizeAnalysis), list.map((r: { owner_id: string | null }) => r.owner_id));
-
     },
   });
 }
@@ -239,7 +293,7 @@ export function useAnalysisMutations(projectId: string | null) {
 
   const moveToProject = useMutation({
     mutationFn: async ({ id, project_id }: { id: string; project_id: string | null }) => {
-      const { error } = await supabase.from("analyses").update({ project_id }).eq("id", id);
+      const { error } = await supabase.from("analyses").update({ project_id }).eq("id", id).select("id").single();
       if (error) throw error;
       await notifySelf(project_id ? "Analysis moved to project" : "Analysis moved out of project");
     },

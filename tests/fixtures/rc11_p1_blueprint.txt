@@ -1,0 +1,63 @@
+**Pseudocode steps**
+
+1. Load the full `patients` table into a DataFrame `df`.
+2. Define the target series `y = df['stroke']`.
+3. Identify predictor columns:  
+   `predictors = ['gender','age','hypertension','heart_disease','ever_married','work_type','Residence_type','avg_glucose_level','bmi','smoking_status']`.
+4. For each predictor column:  
+   - If the column dtype is numeric (`age`, `avg_glucose_level`, `bmi`), replace missing values with the column median.  
+   - If the column dtype is categorical (`gender`, `ever_married`, `work_type`, `Residence_type`, `smoking_status`), replace missing values with the column mode.
+5. Encode all categorical predictor columns using one‑hot encoding (`pd.get_dummies`) with `drop_first=True` to avoid perfect multicollinearity.  
+   Store the resulting numeric matrix as `X_cat`.
+6. Concatenate the cleaned numeric predictor columns (`age`, `avg_glucose_level`, `bmi`, `hypertension`, `heart_disease`) with `X_cat` to form the final feature matrix `X`.
+7. Fit a classification model on `X` and `y`.  
+   Example: train a **LogisticRegression** (solver='lbfgs', max_iter=1000) or a **RandomForestClassifier** (n_estimators=200, random_state=42).  
+   Keep the fitted model object `model`.
+8. Extract predictor importance:  
+   - If using LogisticRegression, take the absolute value of `model.coef_[0]`.  
+   - If using RandomForestClassifier, take `model.feature_importances_`.  
+   Align the importance values with the corresponding column names from `X`.
+9. Build a new DataFrame `importance_df` with two columns:  
+   - `feature` – the original predictor name (for one‑hot columns, map back to the base categorical column, e.g., “work_type_Private”).  
+   - `importance` – the numeric importance score from step 8.
+10. Sort `importance_df` in descending order of `importance` and, if desired, keep the top N rows (e.g., N = 10) to highlight the strongest predictors.
+
+---
+
+```json
+{
+  "result_kind": "aggregate",
+  "source_columns": [
+    "stroke",
+    "gender",
+    "age",
+    "hypertension",
+    "heart_disease",
+    "ever_married",
+    "work_type",
+    "Residence_type",
+    "avg_glucose_level",
+    "bmi",
+    "smoking_status"
+  ],
+  "result_columns": [
+    {
+      "name": "feature",
+      "role": "key",
+      "dtype": "string"
+    },
+    {
+      "name": "importance",
+      "role": "metric",
+      "dtype": "numeric",
+      "min": 0
+    }
+  ],
+  "row_relation": {
+    "type": "exactly",
+    "n": 11
+  },
+  "unique_key": ["feature"],
+  "not_null": ["feature", "importance"]
+}
+```

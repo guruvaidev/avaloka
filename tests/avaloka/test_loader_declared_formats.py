@@ -38,7 +38,7 @@ def test_every_declared_format_reads_its_table_back(name, tmp_path):
         f"the file has {truth.columns}")
     assert handle.frame.shape[0] == truth.n_rows, (
         f"{ext}: read {handle.frame.shape[0]} rows, the file has {truth.n_rows}")
-    assert handle.fmt == {"tsv": "csv"}.get(ext, ext), (
+    assert handle.fmt == {"tsv": "csv", "ndjson": "jsonl"}.get(ext, ext), (
         f"{ext}: reported format {handle.fmt!r}")
 
 

@@ -13,7 +13,7 @@ import importlib
 
 import pytest
 
-from app.core.inference import tool_choice_for_provider
+from app.core.inference import forced_tool_choice_for_provider, tool_choice_for_provider
 
 CASES = [
     ("groq", "required"),        # works there, and dispatch relies on it
@@ -56,3 +56,37 @@ def test_agents_bind_tool_choice_from_the_helper(module):
     mod = importlib.import_module(module)
     assert isinstance(getattr(mod, "TOOL_CHOICE", None), str)
     assert mod.TOOL_CHOICE in {'required', 'auto', 'any'}
+
+
+FORCED_CASES = [
+    ("groq", "required"),        # accepted and enforced
+    ("openai", "required"),
+    ("local", "required"),       # accepted by Ollama, not enforced (gemma4:e4b answered in prose)
+    ("vertex", "any"),
+    ("openrouter", None),        # rejects "required": finish_reason="error"
+    ("bedrock", None),           # not measured: never a guess
+    ("", None),
+]
+
+
+@pytest.mark.parametrize("provider,expected", FORCED_CASES)
+def test_forced_tool_choice_for_provider(provider, expected):
+    """What the no-tool-call retry may insist with, per provider."""
+    assert forced_tool_choice_for_provider(provider) == expected
+
+
+def test_openrouter_is_never_forced():
+    """The one provider measured to reject forcing gets None, so the retry
+    keeps the portable "auto" and relies on the instruction instead."""
+    assert forced_tool_choice_for_provider("openrouter") is None
+    assert tool_choice_for_provider("openrouter") == "auto"
+
+
+def test_mta_binds_the_forced_choice_from_the_helper():
+    import importlib
+
+    mod = importlib.import_module("app.agents.mta_v2.agent")
+    assert mod.FORCED_TOOL_CHOICE in {"required", "auto", "any"}
+    assert mod.FORCED_TOOL_CHOICE == (
+        forced_tool_choice_for_provider(mod.MTA_PROVIDER, type(mod.llm).__name__) or mod.TOOL_CHOICE
+    )

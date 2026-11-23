@@ -1,9 +1,11 @@
-# Core Agent Framework Dependencies
-langchain>=0.3.27,<0.4
-langchain-groq>=0.3.8,<0.4
-langgraph>=0.6.7,<0.7
-langgraph-cli>=0.4.2,<0.5 ; python_version < "3.11"
-langgraph-cli[inmem]>=0.4.2,<0.5 ; python_version >= "3.11"
+# No LangChain or LangGraph. This image is the MTA inference service (server.py,
+# inference.py, mlflow_manager.py, gcp/, loader/), built from this directory
+# alone, and none of it imports langchain*, langgraph* or the LangGraph CLI. The
+# lines that used to be here were copied from the root requirements.txt and
+# installed a whole agent stack for nothing -- 13 langchain/langgraph advisories,
+# and langgraph-api 0.5.x, whose `cryptography<45` cap held this image at
+# cryptography 44.0.3 with four high advisories.
+# tests/test_inference_service_image_deps.py keeps both halves true.
 
 # Data Processing and Analysis
 pandas>=2.0.0,<3
@@ -25,7 +27,6 @@ python-multipart~=0.0.20
 httpx>=0.27
 pydantic>=2.7
 starlette>=0.37
-langchain-core>=0.3.79,<0.4  
 redis>=5.0.4 
 
 google-cloud-container>=1.0.0
@@ -43,7 +44,7 @@ deltalake>=0.17.2        # used by Delta connector (DeltaTable)
 pyiceberg>=0.5.1         # used by Iceberg connector
 
 # --- UI / app ---
-pyarrow==16.1.0
+pyarrow==23.0.1
 kaggle
 
 
@@ -52,7 +53,7 @@ python-dotenv>=1.0.0
 pyyaml>=6.0
 
 # Testing Framework
-pytest>=8.4.1
+pytest==9.1.1
 pytest-cov>=4.1.0
 
 # Utilities
@@ -64,11 +65,13 @@ tabulate>=0.9.0
 torch>=2.0.0
 torchvision>=0.15.0
 scikit-learn>=1.3.0
-mlflow==3.14.0
-ray[ml]==2.49.2
-getdaft>=0.5.0,<0.6
+mlflow==3.17.2
+ray[ml]==2.56.0
 onnx>=1.15.0
-onnxruntime>=1.16.0
+# 1.31.0 is the build whose 1DS telemetry opt-out (ORT_DISABLE_TELEMETRY, set in
+# this image's ENV) is tested; it ships wheels for Python >= 3.11 only.
+onnxruntime==1.31.0; python_version >= "3.11"
+onnxruntime>=1.16.0; python_version < "3.11"
 onnxscript
 
 # Advanced ML Libraries
@@ -85,16 +88,24 @@ psycopg2-binary>=2.9.0
 google-auth>=2.23.0
 
 
-celery==5.5.3
-celery-redbeat==2.3.3
+celery==5.6.3
+celery-redbeat==2.4.2
 azure-storage-blob
 supabase>=2.0.0
 
-cryptography>=42.0.0
+# 50.0.0 fixes GHSA-g6cj-pr64-35w5; 49.0.0 GHSA-jwv3-5hgf-82ww and
+# GHSA-m2h6-j472-rp4c; 48.0.1 GHSA-537c-gmf6-5ccf; 46.0.5 GHSA-r6ph-v2qm-q3c2.
+# Possible only since nothing here caps it any more (mlflow 3.17.2 allows it).
+cryptography>=50.0.0
+# Held where the removed stack held them (langgraph-api: protobuf<7; langchain-core:
+# packaging<26). Dropping that stack should not also move google-cloud-*/mlflow onto
+# protobuf 7 or the image onto packaging 26; lifting either is its own change.
+protobuf>=6.32.1,<7
+packaging>=23.2,<26
 
 
 # GCS streaming (register-existing-storage fast path)
-gcsfs==2025.9.0
+gcsfs==2026.6.0
 
 #data transfer
 sentence_transformers>=3.2.1
@@ -108,10 +119,18 @@ sqlalchemy
 # JWT authentication  
 PyJWT>=2.8.0
 
-#data transfer agent
-langchain_anthropic>=0.3.21,<0.4
-# urllib3 / chardet must be compatible with requests
-urllib3>=1.21.1,<2.0
+# urllib3 2.x. The old `<2.0` cap said requests needed it; it no longer does:
+# requests 2.34 asks for urllib3<3, and the pinned botocore 1.41.5 for <3 (!=2.2.0)
+# on Python >= 3.10, the only interpreters this project supports.
+# 1.26.20 carried six high advisories with no 1.x fix (GHSA-2xpw, -38jv, -8988,
+# -gm62, -qccp, -vxq7) and, through the cap, held dvc's dulwich below its fixes.
+# Nothing in app/ or avaloka/ imports urllib3 directly; it is used via requests,
+# botocore, kubernetes, docker and kaggle.
+urllib3==2.8.0
+# Transitive, via dvc / scmrepo / dvc-studio-client, which all accept 1.x. Left
+# to the resolver it still lands on 0.24.1 (seven high advisories, e.g.
+# GHSA-9277-mp7x-85jf); 1.2.9 is the smallest release that clears them all.
+dulwich==1.2.9
 chardet>=3.0.2,<5
 psutil>=5.9.0              # for memory stats in test scripts
-s3fs==2025.9.0
+s3fs==2026.6.0

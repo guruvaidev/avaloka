@@ -5,34 +5,34 @@ It handles dataset uploads, conversational threads (where the actual
 plan → code → execute → train flow happens), task/asset retrieval, database
 chat, and model management.
 
-- **App object:** `app.api.server:app` (`app/api/server.py:1129`, FastAPI title
+- **App object:** `app.api.server:app` (`app/api/server.py:1430`, FastAPI title
   `Avaloka UI API`)
 - **Default port:** `9000` (the container `CMD` is
-  `uvicorn app.api.server:app --host 0.0.0.0 --port 9000` —
+  `uvicorn app.api.server:app --host 0.0.0.0 --port 9000 --loop asyncio` —
   `deploy/docker/Dockerfile.api:104`)
 - **Interactive docs:** `GET /docs` (Swagger UI), `GET /openapi.json` — the app
   does not override `docs_url`, so both are served
 - **Auth:** Bearer JWT. The `sub` claim is the user id. Two verification paths,
-  chosen by the token's own `alg` header (`app/api/server.py:1066`).
+  chosen by the token's own `alg` header (`app/api/server.py:1337`).
 
 ```bash
-uvicorn app.api.server:app --host 0.0.0.0 --port 9000 --reload
+uvicorn app.api.server:app --host 0.0.0.0 --port 9000 --loop asyncio --reload
 ```
 
 ## Authentication
 
 Every non-public route expects an `Authorization: Bearer <jwt>` header.
-`_resolve_user_id` (`app/api/server.py:1054`) picks the verification path from
+`_resolve_user_id` (`app/api/server.py:1325`) picks the verification path from
 the token's `alg` header:
 
 | `alg` | Verified against | Configured by |
 | --- | --- | --- |
-| `ES256` / `RS256` | the Supabase JWKS at `{SUPABASE_URL}/auth/v1/.well-known/jwks.json` | `SUPABASE_URL` (`app/api/server.py:324`) |
-| `HS256` (anything else) | the shared secret, symmetric | `SUPABASE_JWT_SECRET` (`app/api/server.py:322`) |
+| `ES256` / `RS256` | the Supabase JWKS at `{SUPABASE_URL}/auth/v1/.well-known/jwks.json` | `SUPABASE_URL` (`app/api/server.py:353`) |
+| `HS256` (anything else) | the shared secret, symmetric | `SUPABASE_JWT_SECRET` (`app/api/server.py:351`) |
 
 > **The secret's env var is `SUPABASE_JWT_SECRET`, not `JWT_SECRET`.** The
 > module-level Python name is `JWT_SECRET`, which is where the wrong name in
-> earlier revisions of this page came from. `app/api/server.py:322` reads
+> earlier revisions of this page came from. `app/api/server.py:351` reads
 > `os.getenv("SUPABASE_JWT_SECRET", "")` and labels it "used only for legacy
 > HS256 tokens".
 
@@ -40,14 +40,16 @@ An empty `SUPABASE_JWT_SECRET` **fails closed twice over**, because an empty
 HS256 key would verify any token an attacker signs with the empty string:
 
 - The server **refuses to start**. `_validate_auth_config()` raises at startup
-  (`app/api/server.py:336`). `AVALOKA_ALLOW_INSECURE_AUTH=1` is the explicit
-  opt-out (`app/api/server.py:333`) — it starts the server with authentication
+  (`app/api/server.py:374`). `AVALOKA_ALLOW_INSECURE_AUTH=1` is the explicit
+  opt-out (`app/api/server.py:362`) — it starts the server with authentication
   *disabled*, meaning every request is rejected as unauthenticated, not allowed.
+  The name says "allow"; the behaviour is "start without". For local work,
+  set a throwaway `SUPABASE_JWT_SECRET` and sign a token with it instead.
 - Even then, `_resolve_user_id` returns `None` without attempting verification
-  (`app/api/server.py:1059`).
+  (`app/api/server.py:1325`).
 
 An `ES256`/`RS256` token with `SUPABASE_URL` unset is also rejected — there is
-no JWKS client to resolve the key with (`app/api/server.py:1068`).
+no JWKS client to resolve the key with (`app/api/server.py:1339`).
 
 The user id is `payload["sub"]`, falling back to `payload["email"]` when `sub`
 is absent (`app/api/server.py:1093`). Prefer `sub` and make it a UUID: it is
@@ -262,7 +264,15 @@ that your JWT and `SUPABASE_JWT_SECRET` agree.
   it.
 - **LangGraph dev server** — `langgraph.json` maps the `avaloka` graph to
   `app/api/langgraph_app.py:graph`; `langgraph dev` serves it on the LangGraph
-  CLI's default `http://127.0.0.1:2024`.
+  CLI's default `http://127.0.0.1:2024`. It is **internal**: the API is its
+  only caller (as a thread registry), no chart routes to it, a NetworkPolicy
+  admits only the API pods, and every call except `GET /ok` needs
+  `Authorization: Bearer $LANGGRAPH_SERVICE_TOKEN` or gets `401`
+  (`app/api/langgraph_service_auth.py`, wired in by `langgraph.json`
+  `http.app`). The token is generated like the other generated secrets.
+  The CLI is not in `requirements.txt`: install
+  `requirements-langgraph-server.txt` to run it locally. In the chart it runs
+  from the `avaloka-langgraph` image.
 - **MCP servers** — two unrelated sets. `app/mcp_server/customer_dbs.py` and
   `app/mcp_server/multi_tenant_mcp_server.py` are the customer-database
   registry; `app/interfaces/mcp/server.py` is the mission-planning tool server

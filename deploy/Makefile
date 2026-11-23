@@ -63,7 +63,7 @@ api-tag:
 # Pull the images matching this checkout. Falls back to building only those
 # that are genuinely absent, which is the case this exists to make rare.
 images-pull:
-	@set -e; 	for img in api ray ui functions; do 	  tag=$$($(PY_BIN) $(ROOT)/scripts/image_tag.py $$img --source); 	  ref="$(REGISTRY)/avaloka-$$img:$$tag"; 	  if docker manifest inspect "$$ref" >/dev/null 2>&1; then 	    echo "pull  $$ref"; docker pull -q "$$ref"; 	    if [ "$(PROVIDER)" = "local" ]; then kind load docker-image "$$ref" --name avaloka || true; fi; 	  else 	    echo "MISS  $$ref  (not published; run 'make images' to build it)"; 	  fi; 	done
+	@set -e; 	for img in api langgraph ray ui functions; do 	  tag=$$($(PY_BIN) $(ROOT)/scripts/image_tag.py $$img --source); 	  ref="$(REGISTRY)/avaloka-$$img:$$tag"; 	  if docker manifest inspect "$$ref" >/dev/null 2>&1; then 	    echo "pull  $$ref"; docker pull -q "$$ref"; 	    if [ "$(PROVIDER)" = "local" ]; then kind load docker-image "$$ref" --name avaloka || true; fi; 	  else 	    echo "MISS  $$ref  (not published; run 'make images' to build it)"; 	  fi; 	done
 
 # What would a deployment have to rebuild?
 images-status:

@@ -1,3 +1,4 @@
+import { parseReplySegments, type ReplySegment } from "@/lib/reply-segments";
 import { supabase } from "@/integrations/supabase/external-client";
 import { BACKEND_API_BASE } from "@/lib/api/backend-config";
 import type { RenderedPoint } from "@/lib/chart-points";
@@ -22,11 +23,15 @@ export type ExplainRequest = {
   charts: ExplainChart[];
 };
 
-export type ExplainResponse = { answer: string; focus_chart_ids: string[] };
+/** `answer_segments`: the model's answer as commentary, the server's fallback lines plain (c-strict). */
+export type ExplainResponse = { answer: string; focus_chart_ids: string[]; answer_segments?: ReplySegment[] | null };
 
 export const EXPLAIN_MESSAGES = {
   401: "Your session expired. Please refresh the page and sign in again.",
   404: "I couldn't find this analysis. Try reopening it from your analyses list.",
+  /** No analysis id at all: the page was never saved as an analysis (quickstart's
+   *  local mode keeps none), so there is no list to reopen it from. */
+  unsaved: "Chart explanations need a saved analysis, and this page isn't one, so I can't explain these charts here.",
   422: "I couldn't read that question. Try asking it a different way.",
   network: "I'm having trouble reaching the server. Please try again in a moment.",
 } as const;
@@ -75,6 +80,8 @@ export async function explainInsights(aid: string, body: ExplainRequest, signal:
     return {
       answer: String(json.answer ?? "").trim() || "I don't have an answer for that yet.",
       focus_chart_ids: Array.isArray(json.focus_chart_ids) ? json.focus_chart_ids.map(String) : [],
+      // Segments only travel with the answer they describe.
+      answer_segments: String(json.answer ?? "").trim() ? parseReplySegments(json.answer_segments) : null,
     };
   } catch (err) {
     if (err instanceof ExplainError) throw err;

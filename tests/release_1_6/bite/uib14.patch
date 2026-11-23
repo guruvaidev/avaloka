@@ -1,0 +1,13 @@
+diff --git a/app/api/server.py b/app/api/server.py
+index c61b6d4a..d569f3d2 100644
+--- a/app/api/server.py
++++ b/app/api/server.py
+@@ -2954,7 +2954,7 @@ async def register_existing(
+         logger.warning("Failed to build visualization_config (register-existing): %s", viz_out)
+         visualization_config, visualization_status = {}, "error"
+     else:
+-        visualization_config = viz_out or {}
++        visualization_config = {}
+         visualization_status = visualization_config.get("visualization_status", "ready")
+ 
+     _profile_meta[dsid] = {

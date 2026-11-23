@@ -1,0 +1,13 @@
+diff --git a/app/agents/mta_v2/inference_service_manager.py b/app/agents/mta_v2/inference_service_manager.py
+index 2a4c2e36..a0b7b84c 100644
+--- a/app/agents/mta_v2/inference_service_manager.py
++++ b/app/agents/mta_v2/inference_service_manager.py
+@@ -70,7 +70,7 @@ class InferenceServiceManager:
+                 f"{RAY_CLUSTER_NAME!r} cluster. To run the legacy path anyway (for "
+                 "recovering an existing deployment), set AVALOKA_ALLOW_LEGACY_GATEWAY=1."
+             )
+-        return INFERENCE_BACKEND
++        return "gateway" if ALLOW_LEGACY_GATEWAY or INFERENCE_BACKEND == "rayserve" else INFERENCE_BACKEND
+ 
+     def _scaler(self) -> RayServiceScaler:
+         """Scaler for the shared inference service. Never creates a cluster."""

@@ -7,13 +7,21 @@ metadata:
     app.kubernetes.io/managed-by: {{ .Release.Service }}
     avaloka.io/router: "true"
   annotations:
-    {{- toYaml .Values.ingress.annotations | nindent 4 }}
+    # upload.maxBodySize is the one place the edge body cap is set (D5).
+    nginx.ingress.kubernetes.io/proxy-body-size: {{ required "upload.maxBodySize must be set (a finite nginx size, e.g. 1024m)" .Values.upload.maxBodySize | quote }}
+    {{- with (omit (.Values.ingress.annotations | default dict) "nginx.ingress.kubernetes.io/proxy-body-size") }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
 spec:
   ingressClassName: {{ .Values.ingress.className }}
   {{- with .Values.ingress.tls }}
   tls:
     {{- toYaml . | nindent 4 }}
   {{- end }}
+  # The frontend and the API only. The LangGraph server is internal: the API in
+  # the same pod is its only caller, so it has no host here (and no Service
+  # below). ingress.hosts.langgraph, if an old values file still sets it, is
+  # ignored; NOTES.txt says so.
   rules:
     - host: {{ .Values.ingress.hosts.frontend }}
       http:
@@ -35,14 +43,4 @@ spec:
                 name: avaloka-api-active
                 port:
                   number: {{ .Values.service.api.port }}
-    - host: {{ .Values.ingress.hosts.langgraph }}
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: avaloka-langgraph-active
-                port:
-                  number: {{ .Values.service.langgraph.port }}
 {{- end }}

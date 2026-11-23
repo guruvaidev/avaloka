@@ -35,6 +35,8 @@ environment:
   PUBLISH_BRANCH  public branch to publish to       (default main)
   PUBLISH_BASE    published branch to compare with and build on
                                                     (default $PUBLISH_BRANCH)
+  OSS_OUT_DIR     also copy the generated tree here once every check passes
+                  (must not exist yet)              (default: not kept)
 USAGE
 }
 
@@ -129,23 +131,150 @@ while read -r f; do
   cp "oss/overlay/$f" "$work/$f"; echo "   + $f"
 done < <(list_of overlay)
 
-# Splice the public quickstart in place of develop's.
-python3 - "$work" <<'PY'
+# Splices: part of a file replaced, the rest left to follow develop-1.6. Each
+# entry names a file and exactly one anchor:
+#   section: "## X"   the heading line starting with it, up to the next "## "
+#   line:    "..."    one line, matched exactly
+#   match:   '...'    one line, matched by a regular expression (fullmatch)
+#   before:  "..."    insert ahead of one line, matched exactly
+# and the replacement as `with:` (one line) or `from:` (a file). An anchor
+# that matches no line, or more than one, fails the generation: a silent
+# no-op here republishes the internal text.
+python3 - "$work" "$manifest" <<'PY'
 import sys, pathlib, re
-work = pathlib.Path(sys.argv[1])
-repl = pathlib.Path("oss/overlay/README.quickstart.md").read_text().rstrip("\n").split("\n")
-p = work / "README.md"; lines = p.read_text().split("\n")
-s = next(i for i, l in enumerate(lines) if l.startswith("## Quickstart"))
-e = next(i for i, l in enumerate(lines[s+1:], s+1) if l.startswith("## "))
-p.write_text("\n".join(lines[:s] + repl + [""] + lines[e:]))
-print(f"== splice ==\n   ~ README.md ## Quickstart ({e-s} lines -> {len(repl)})")
+work, mtext = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]).read_text()
+
+def scalar(raw):
+    raw = raw.strip()
+    if raw[:1] == "'":
+        return raw[1:raw.rindex("'")].replace("''", "'")
+    if raw[:1] == '"':
+        return re.sub(r'\\(.)', r'\1', raw[1:raw.rindex('"')])
+    return re.split(r"\s+#", raw, maxsplit=1)[0].strip()
+
+print("== splice ==")
+blk = re.search(r"^splice:\n((?:(?![a-z_]+:).*\n)*)", mtext, re.M)
+entries, cur = [], None
+for line in (blk.group(1).split("\n") if blk else []):
+    m = re.match(r"^  - file: *(.*)$", line)
+    if m:
+        cur = {"file": scalar(m.group(1))}
+        entries.append(cur)
+        continue
+    m = re.match(r"^    ([a-z_]+): *(.*)$", line)
+    if m and cur is not None:
+        cur[m.group(1)] = scalar(m.group(2))
+bad = 0
+for e in entries:
+    anchors = [k for k in ("section", "line", "match", "before") if k in e]
+    label = f'{e["file"]} {anchors[0]}: {e[anchors[0]]}' if anchors else e["file"]
+    if len(anchors) != 1 or ("with" in e) == ("from" in e):
+        print(f"   FAIL {label} -- needs one anchor and one of with:/from:"); bad += 1; continue
+    kind = anchors[0]
+    repl = (pathlib.Path(e["from"]).read_text().rstrip("\n").split("\n")
+            if "from" in e else [e["with"]])
+    p = work / e["file"]
+    if not p.is_file():
+        print(f"   FAIL {label} -- not in the generated tree"); bad += 1; continue
+    lines = p.read_text().split("\n")
+    want = e[kind]
+    if kind == "section":
+        hits = [i for i, l in enumerate(lines) if l.startswith(want)]
+    elif kind == "match":
+        hits = [i for i, l in enumerate(lines) if re.fullmatch(want, l)]
+    else:
+        hits = [i for i, l in enumerate(lines) if l == want]
+    if len(hits) != 1:
+        print(f"   FAIL {label} -- anchor matches {len(hits)} lines, expected 1"); bad += 1; continue
+    s = hits[0]
+    if kind == "section":
+        end = next((i for i, l in enumerate(lines[s+1:], s+1) if l.startswith("## ")), len(lines))
+        lines[s:end] = repl + [""]
+        note = f"{end-s} lines -> {len(repl)}"
+    elif kind == "before":
+        lines[s:s] = repl + [""]
+        note = f"+{len(repl) + 1} lines"
+    else:
+        lines[s:s+1] = repl
+        note = f"1 line -> {len(repl)}"
+    p.write_text("\n".join(lines))
+    print(f"   ~ {label} ({note})")
+if bad:
+    sys.exit(f"   {bad} splice(s) failed -- refusing to write")
 PY
+
+# Public text: literal replacements read from a table the public tree does not
+# carry (`replace_table:` in the manifest), for text whose old form must not
+# be published -- internal change numbers, commit ids -- and so cannot appear
+# in this published manifest either. One row per replacement:
+#   file<TAB>old<TAB>new[<TAB>count]
+# `old` must occur exactly `count` times (default 1), or the run fails. A count
+# of `0|N` also allows the text to be absent, for text a pending change on the
+# source branch adds or removes; such rows are listed when absent. Files
+# are read and written byte-for-byte apart from the replacement, so a CRLF
+# file stays CRLF.
+python3 - "$work" "$manifest" <<'REP'
+import sys, pathlib, re
+work, mtext = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]).read_text()
+m = re.search(r"^replace_table: *(.+)$", mtext, re.M)
+if not m:
+    sys.exit(0)
+table = pathlib.Path(m.group(1).split(" #")[0].strip().strip('"').strip("'"))
+print(f"== public text ({table}) ==")
+if not table.is_file():
+    sys.exit(f"   FAIL {table} is named by replace_table but is not in this checkout -- refusing to write")
+bad, done, absent = 0, {}, []
+for n, row in enumerate(table.read_text().split("\n"), 1):
+    if not row.strip() or row.startswith("#"):
+        continue
+    cols = row.split("\t")
+    if len(cols) not in (3, 4):
+        print(f"   FAIL row {n}: expected file, old, new[, count]"); bad += 1; continue
+    fname, old, new = cols[:3]
+    # count is N (exactly N), or 0|N (absent, or exactly N) for text that one
+    # pending change on the source branch adds or removes. The invariants that
+    # follow still check the output, so an absent row cannot let text through.
+    spec = cols[3] if len(cols) == 4 else "1"
+    optional = spec.startswith("0|")
+    want = int(spec[2:] if optional else spec)
+    p = work / fname
+    if not p.is_file():
+        print(f"   FAIL row {n}: {fname} is not in the generated tree"); bad += 1; continue
+    with open(p, newline="") as fh:
+        text = fh.read()
+    got = text.count(old)
+    if optional and got == 0:
+        absent.append(n); continue
+    if got != want:
+        print(f"   FAIL row {n}: {fname} -- text occurs {got} times, expected {spec}"); bad += 1; continue
+    with open(p, "w", newline="") as fh:
+        fh.write(text.replace(old, new))
+    done[fname] = done.get(fname, 0) + want
+for fname, k in sorted(done.items()):
+    print(f"   ~ {fname} ({k} replacement{'s' if k != 1 else ''})")
+if absent:
+    print(f"   . {len(absent)} optional row(s) not present: {', '.join(map(str, absent))}")
+if bad:
+    sys.exit(f"   {bad} replacement(s) failed -- refusing to write")
+REP
 
 # Invariants. A violation here is the bug this whole mechanism exists to stop.
 python3 - "$work" "$manifest" <<'INV'
 import sys, pathlib, re
 work, manifest = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]).read_text()
 print("== invariants ==")
+
+# A needle is a YAML scalar. Stripping the quotes without unescaping left
+# `"__version__ = \"0.3.0\""` searching for a backslash that no file carries,
+# so that invariant passed whatever avaloka/version.py said.
+def scalar(raw):
+    raw = raw.strip()
+    if raw[:1] == "'":
+        return raw[1:raw.rindex("'")].replace("''", "'")
+    if raw[:1] == '"':
+        return re.sub(r'\\(.)', r'\1', raw[1:raw.rindex('"')])
+    return re.split(r"\s+#", raw, maxsplit=1)[0].strip()
+
 bad = 0
 for mode in ("present", "absent"):
     blk = re.search(rf"^assert_{mode}:\n((?:(?![a-z_]+:).*\n)*)", manifest, re.M)
@@ -156,7 +285,7 @@ for mode in ("present", "absent"):
         if re.match(r"^  \S", line):
             fname = line.strip().rstrip(":")
         elif line.strip().startswith("- ") and fname:
-            needle = line.strip()[2:].strip().strip('"')
+            needle = scalar(line.strip()[2:])
             n = (work / fname).read_text().count(needle)
             ok = (n > 0) if mode == "present" else (n == 0)
             print(f"   {'ok  ' if ok else 'FAIL'} {fname} {mode}: {needle}"
@@ -165,6 +294,40 @@ for mode in ("present", "absent"):
 if bad:
     sys.exit(f"   {bad} invariant(s) failed -- refusing to write")
 INV
+
+# Invariants whose needles must not be published themselves (owner ruling
+# 2026-11-02). The manifest names only the published file and a withheld record;
+# the needles live in a marked block of that record, read from the same source
+# ref as the tree. A missing record or block FAILS generation rather than skipping
+# the check, and a failure names the needle by its number, never its text.
+python3 - "$work" "$manifest" "$REMOTE/$SRC_BRANCH" <<'WINV'
+import subprocess, sys, pathlib, re
+work, manifest, src = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]).read_text(), sys.argv[3]
+blk = re.search(r"^assert_absent_from_withheld:\n((?:(?![a-z_]+:).*\n)*)", manifest, re.M)
+if blk:
+    print("== withheld-needle invariants ==")
+    entries = re.findall(r"^  - file: *(\S+)\n    needles_from: *(\S+)", blk.group(1), re.M)
+    if not entries:
+        sys.exit("   FAIL assert_absent_from_withheld lists no entries -- refusing to write")
+    bad = 0
+    for fname, record in entries:
+        shown = subprocess.run(["git", "show", f"{src}:{record}"], capture_output=True, text=True)
+        if shown.returncode != 0:
+            sys.exit(f"   FAIL {record} is missing from {src}; cannot check {fname} -- refusing to write")
+        m = re.search(r"<!-- oss-assert-absent " + re.escape(fname) + r"\n(.*?)\nend-oss-assert-absent -->",
+                      shown.stdout, re.S)
+        needles = [n.strip() for n in (m.group(1).splitlines() if m else []) if n.strip()]
+        if not needles:
+            sys.exit(f"   FAIL {record} has no oss-assert-absent block for {fname} -- refusing to write")
+        text = (work / fname).read_text()
+        for i, needle in enumerate(needles, 1):
+            n = text.count(needle)
+            print(f"   {'ok  ' if n == 0 else 'FAIL'} {fname} absent: excluded provider #{i} (from {record})"
+                  + ("" if n == 0 else f"  (found {n})"))
+            bad += n > 0
+    if bad:
+        sys.exit(f"   {bad} withheld-needle invariant(s) failed -- refusing to write")
+WINV
 
 python3 - "$work" "$manifest" <<'PINV'
 import sys, pathlib, re
@@ -191,6 +354,54 @@ if blk:
 if bad:
     sys.exit(f"   {bad} path invariant(s) failed -- refusing to write")
 PINV
+
+# Pattern invariants: a regular expression that must match nowhere in the
+# files a glob selects. `unless_after` names text that, immediately before a
+# match, makes it legitimate (e.g. "GitHub " before a public issue number).
+python3 - "$work" "$manifest" <<'PAT'
+import sys, pathlib, re
+work, mtext = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]).read_text()
+blk = re.search(r"^assert_no_match:\n((?:(?![a-z_]+:).*\n)*)", mtext, re.M)
+if not blk:
+    sys.exit(0)
+def scalar(raw):
+    raw = raw.strip()
+    if raw[:1] == "'":
+        return raw[1:raw.rindex("'")].replace("''", "'")
+    if raw[:1] == '"':
+        return re.sub(r'\\(.)', r'\1', raw[1:raw.rindex('"')])
+    return re.split(r"\s+#", raw, maxsplit=1)[0].strip()
+entries, cur = [], None
+for line in blk.group(1).split("\n"):
+    m = re.match(r"^  - glob: *(.*)$", line)
+    if m:
+        cur = {"glob": scalar(m.group(1))}; entries.append(cur); continue
+    m = re.match(r"^    ([a-z_]+): *(.*)$", line)
+    if m and cur is not None:
+        cur[m.group(1)] = scalar(m.group(2))
+bad = 0
+for e in entries:
+    rx = re.compile(e["pattern"])
+    unless = e.get("unless_after", "")
+    hits = []
+    for p in sorted(work.glob(e["glob"])):
+        if not p.is_file():
+            continue
+        try:
+            text = p.read_text()
+        except (UnicodeDecodeError, OSError):
+            continue
+        for n, l in enumerate(text.split("\n"), 1):
+            for m in rx.finditer(l):
+                if unless and l[:m.start()].endswith(unless):
+                    continue
+                hits.append(f"{p.relative_to(work)}:{n}")
+    print(f"   {'FAIL' if hits else 'ok  '} no match for {e['pattern']} in {e['glob']}"
+          + (f"  ({len(hits)}: {', '.join(hits[:5])}{'...' if len(hits) > 5 else ''})" if hits else ""))
+    bad += bool(hits)
+if bad:
+    sys.exit(f"   {bad} pattern invariant(s) failed -- refusing to write")
+PAT
 
 python3 - "$work" "$manifest" <<'SEC'
 import sys, pathlib, re
@@ -238,6 +449,69 @@ if hits:
         print(f"     {h}")
     sys.exit(f"   {len(hits)} possible secret(s) -- refusing to write")
 SEC
+
+# Internal names: words that must not appear in ANY published text file, case
+# insensitively -- the internal repository's host and workspace. The manifest
+# writes the patterns as regexes with a character class, so the manifest (which
+# is itself published) never contains the words it forbids. `allow` phrases are
+# exact, case-sensitive and removed before matching, each with its reason.
+python3 - "$work" "$manifest" <<'WORDS'
+import sys, pathlib, re
+work, mtext = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]).read_text()
+print("== internal names ==")
+blk = re.search(r"^assert_no_words:\n((?:(?![a-z_]+:).*\n)*)", mtext, re.M)
+if not blk:
+    print("   NOT CHECKED -- this manifest declares no assert_no_words section")
+    sys.exit(0)
+body, sub, pats, allow = blk.group(1), None, [], []
+for line in body.split("\n"):
+    s = re.match(r"^  ([a-z_]+):\s*$", line)
+    if s:
+        sub = s.group(1); continue
+    m = re.match(r'^    - *(?:phrase: *)?"([^"]+)"', line)
+    if m:
+        (pats if sub == "patterns" else allow if sub == "allow" else []).append(m.group(1))
+if not pats:
+    sys.exit("   FAIL assert_no_words declares no patterns -- the check would pass vacuously")
+rx = [re.compile(p, re.I) for p in pats]
+hits, scanned = [], 0
+for f in sorted(work.rglob("*")):
+    if not f.is_file() or ".git" in f.parts:
+        continue
+    try:
+        txt = f.read_text(errors="strict")
+    except (UnicodeDecodeError, OSError):
+        continue
+    scanned += 1
+    masked = txt
+    for a in allow:
+        masked = masked.replace(a, "")
+    for r in rx:
+        for m in r.finditer(masked):
+            line = masked.count("\n", 0, m.start()) + 1
+            hits.append((r.pattern, f"{f.relative_to(work)}:{line}"))
+for r in rx:
+    n = [h for p, h in hits if p == r.pattern]
+    print(f"   {'FAIL' if n else 'ok  '} no file matches /{r.pattern}/i" + (f"  ({len(n)})" if n else ""))
+print(f"   scanned {scanned} text files, {len(allow)} allowed phrase(s)")
+if hits:
+    for _, h in hits[:20]:
+        print(f"     {h}")
+    sys.exit(f"   {len(hits)} internal name(s) in the public tree -- refusing to write")
+WORDS
+# Keep a copy of the generated tree, to read it or run its own tests against
+# exactly what would be published. Only reached once every check has passed.
+if [ -n "${OSS_OUT_DIR:-}" ]; then
+  [ -e "$OSS_OUT_DIR" ] && { echo "OSS_OUT_DIR $OSS_OUT_DIR already exists; refusing to overwrite" >&2; exit 1; }
+  mkdir -p "$(dirname "$OSS_OUT_DIR")"
+  cp -a "$work" "$OSS_OUT_DIR"
+  echo "== kept generated tree at $OSS_OUT_DIR =="
+fi
+
+
+# No publicly routable IPv4 literal (a cluster dashboard, a load balancer) in
+# the generated tree; manifest assert_no_addresses, oss/address_scan.py.
+python3 oss/address_scan.py "$work" "$manifest" || { echo "   routable IPv4 address(es) in the public tree -- refusing to write" >&2; exit 1; }
 
 
 # ---------------------------------------------------------------------------

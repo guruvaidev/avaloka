@@ -144,8 +144,12 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: ["python", "-c", "import signal,sys,time; signal.signal(signal.SIGTERM, lambda *_: sys.exit(0)); time.sleep(10**9)"]
+          # Scheduled runs are exec'd into this pod and inherit its env. It reads
+          # no ConfigMap, so the third-party usage beacons are switched off here.
+          env:
+            {{- include "avaloka.thirdPartyOptoutEnv" . | nindent 12 }}
           resources:
-            {{- toYaml .Values.celery.executor.resources | nindent 12 }}
+            {{- toYaml (.Values.celery.executor).resources | nindent 12 }}
           readinessProbe:
             exec:
               command: ["python", "-c", "import os; os.kill(1, 0)"]

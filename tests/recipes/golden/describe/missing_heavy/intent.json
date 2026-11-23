@@ -1,0 +1,9 @@
+{
+  "question": "What is the typical amount?",
+  "recipe": "describe",
+  "params": {
+    "measure": "amount"
+  },
+  "confidence": 1.0,
+  "source": "fixture"
+}

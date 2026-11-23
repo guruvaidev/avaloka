@@ -17,9 +17,9 @@ High-level flow
       - Configures all env-vars the server reads (MLflow, GCP, Ray back-ref).
       - Exposes port 8080.
       - Adds a /health liveness + readiness probe.
-6.  Expose the Deployment via a LoadBalancer Service.
+6.  Expose the Deployment via a ClusterIP Service (in-cluster only).
 7.  Wait until the Deployment is fully available and the Service has an
-    external IP, then return the public endpoint.
+    availability, then return the in-cluster endpoint.
 
 Cleanup helper
 --------------
@@ -145,7 +145,7 @@ def run_inference_service(
     Returns
     -------
     str
-        The public HTTP endpoint, e.g. ``"http://34.56.78.90:8080"``.
+        The public HTTP endpoint, e.g. ``"http://203.0.113.10:8080"``.
     """
     logger.info(
         "Ensuring GKE cluster '%s' exists in %s/%s …",
@@ -181,17 +181,16 @@ def run_inference_service(
         pull_secret_name=pull_secret_name,
     )
 
-    logger.info("Creating LoadBalancer Service '%s' …", service_name)
+    logger.info("Creating ClusterIP Service '%s' …", service_name)
     _create_service(api_client, service_name, deployment_name, namespace, port)
 
     logger.info("Waiting for Deployment to become available …")
     _wait_for_deployment(api_client, deployment_name, namespace, deploy_timeout_s)
 
-    logger.info("Waiting for external IP on Service '%s' …", service_name)
-    external_ip = _wait_for_external_ip(api_client, service_name, namespace, deploy_timeout_s)
-
-    endpoint = f"http://{external_ip}:{port}"
-    logger.info("Inference service is live at %s", endpoint)
+    # In-cluster only: the API proxies predictions with its owner check. No
+    # public IP is created or waited for (the old LoadBalancer path).
+    endpoint = f"http://{service_name}.{namespace}.svc.cluster.local:{port}"
+    logger.info("Inference service is reachable in-cluster at %s", endpoint)
     return endpoint
 
 
@@ -503,7 +502,7 @@ def _create_service(
     service = k8s_client.V1Service(
         metadata=k8s_client.V1ObjectMeta(name=service_name, namespace=namespace),
         spec=k8s_client.V1ServiceSpec(
-            type="LoadBalancer",
+            type="ClusterIP",
             selector={"app": deployment_name},
             ports=[
                 k8s_client.V1ServicePort(
@@ -525,7 +524,7 @@ def _create_service(
     except k8s_client.ApiException as exc:
         if exc.status == 404:
             core_v1.create_namespaced_service(namespace=namespace, body=service)
-            logger.info("LoadBalancer Service '%s' created.", service_name)
+            logger.info("ClusterIP Service '%s' created.", service_name)
         else:
             raise
 
@@ -570,37 +569,4 @@ def _wait_for_deployment(
     raise TimeoutError(
         f"Deployment '{deployment_name}' in namespace '{namespace}' did not "
         f"become available within {timeout_s} seconds."
-    )
-
-
-def _wait_for_external_ip(
-    api_client: k8s_client.ApiClient,
-    service_name: str,
-    namespace: str,
-    timeout_s: int,
-) -> str:
-    """Block until the LoadBalancer Service has an external IP and return it."""
-    core_v1  = k8s_client.CoreV1Api(api_client)
-    deadline = time.time() + timeout_s
-
-    while time.time() < deadline:
-        try:
-            svc = core_v1.read_namespaced_service(name=service_name, namespace=namespace)
-            ingresses = (svc.status.load_balancer.ingress or []) if svc.status.load_balancer else []
-
-            for ingress in ingresses:
-                ip = ingress.ip or ingress.hostname
-                if ip:
-                    logger.info("Service '%s' external IP: %s", service_name, ip)
-                    return ip
-
-        except k8s_client.ApiException as exc:
-            logger.warning("Error polling service '%s': %s", service_name, exc)
-
-        logger.debug("Service '%s' — waiting for external IP …", service_name)
-        time.sleep(15)
-
-    raise TimeoutError(
-        f"Service '{service_name}' in namespace '{namespace}' did not receive "
-        f"an external IP within {timeout_s} seconds."
     )

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from typing import Callable
 
+from avaloka.mission.economics import MANUAL_EFFORT_CAVEAT
 from avaloka.mission.ledger import Ledger
 
 # Each firefly is a focused clone of Avaloka. The clone name is how she refers to
@@ -22,7 +23,9 @@ CLONE = {
     "data_scout": ("Ava-Scout", "reads the schema, the distributions and the cracks"),
     "sampling_specialist": ("Ava-Sampler", "carves out a sample that still tells the truth"),
     "data_engineer": ("Ava-Engineer", "cleans and writes the pipeline so it's reproducible"),
+    "feature_engineer": ("Ava-Feature", "turns raw fields into reviewed, reusable analytical signals"),
     "analysis_planner": ("Ava-Planner", "decides the task, the split and what's worth computing"),
+    "workload_optimizer": ("Ava-Optimizer", "uses physical statistics to find the least-work data path"),
     "model_scientist": ("Ava-Scientist", "trains the contenders and picks the one to trust"),
     "validator": ("Ava-Skeptic", "tries to break the result before anyone else can"),
     "finops": ("Ava-FinOps", "weighs every extra dollar of compute against the quality it buys"),
@@ -45,6 +48,7 @@ class SwarmNarrator:
         self._emit = emit
         self._voice = voice  # optional Avaloka persona for LLM rephrasing
         self._dispatched = 0
+        self._announced = 0
 
     def _line(self, text: str) -> str:
         if self._voice is not None:
@@ -52,12 +56,22 @@ class SwarmNarrator:
         return f"[bold magenta]Avaloka[/bold magenta]  {text}"
 
     def announce(self, n: int) -> None:
+        self._announced = n
         self._emit(self._line(
             f"Cloning myself into {n} focused copies — each takes the part she's best at."))
 
     def dispatch(self, firefly: str) -> None:
         name, focus = clone_of(firefly)
         self._dispatched += 1
+        # The planner can call for a specialist (statistician, experimenter,
+        # conformal calibrator) while the mission is already running, so the
+        # count announced up front may be short. Say so when it happens: a
+        # train run announced 10 copies and then reported 11 back.
+        if self._announced and self._dispatched > self._announced:
+            self._announced = self._dispatched
+            self._emit(self._line(
+                f"The plan calls for one more specialist, so I'm sending {name} too — "
+                f"{self._announced} copies in all."))
         self._emit(f"  [magenta]✦[/magenta] [bold]{name}[/bold] sets off — she {focus}.")
 
     def report(self, firefly: str, output: str) -> None:
@@ -68,8 +82,8 @@ class SwarmNarrator:
         minutes = ledger.manual_minutes
         self._emit(self._line(
             f"All {self._dispatched} copies are back. I'm merging what they found into one "
-            f"answer — together they did work that would have taken a human team about "
-            f"{minutes / 60:.1f} hours."))
+            f"answer. Their steps are rated at about {minutes / 60:.1f} hours of manual work "
+            f"({MANUAL_EFFORT_CAVEAT})."))
 
 
 def make_progress(narrator: SwarmNarrator) -> Callable[[str, str], None]:

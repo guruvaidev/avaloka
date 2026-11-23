@@ -1,10 +1,12 @@
-# Merged image for the SHARED `ray-gke-cluster` Ray cluster (dashboard 34.132.134.104:8265).
+# Merged image for the SHARED Ray cluster (the one RAY_DASHBOARD_URL points at).
 #
 # That cluster serves ML training workloads AND — via RAY_DASHBOARD_URL — the DTA
 # data-transfer jobs. Its base image (train-docker-image) has no daft/connectorx, so
 # every transfer paid a ~13-minute per-job pip install of ten libraries. Layering the
-# DTA libraries on top lets DTA run with DTA_RAY_USE_IMAGE_ENV=1 (no per-job install)
-# while every training dependency stays exactly as it was.
+# DTA libraries on top gives that cluster what DTA jobs import while every training
+# dependency stays exactly as it was. (Jobs still pip-install their pinned
+# runtime_env; skipping that when the image already has the packages is not
+# implemented.)
 #
 # Only the libraries the base image LACKS are installed here. pandas, sqlalchemy,
 # boto3, google-cloud-storage, cryptography and pyOpenSSL are already present and
@@ -22,6 +24,24 @@
 # Publish under a NEW tag — never overwrite test-v0.0.0, other workloads pin it.
 ARG BASE_IMAGE=gcr.io/.../train-docker-image:test-v0.0.0
 FROM ${BASE_IMAGE}
+# Third-party usage beacons, and botocore's instance-metadata credential probe,
+# off by default (app/core/thirdparty_optout.py says what each one silences:
+# daft -> scarf.sh, onnxruntime -> events.data.microsoft.com, chroma, mlflow,
+# HF hub, dvc, Ray usage stats, streamlit, langgraph-cli and its PyPI version check; 169.254.169.254). A deployment opts
+# back in by setting the variable itself, e.g. AWS_EC2_METADATA_DISABLED=false
+# to use the VM's instance credentials.
+ENV DO_NOT_TRACK=true \
+    SCARF_NO_ANALYTICS=true \
+    ORT_DISABLE_TELEMETRY=1 \
+    ANONYMIZED_TELEMETRY=False \
+    MLFLOW_DISABLE_TELEMETRY=true \
+    HF_HUB_DISABLE_TELEMETRY=1 \
+    DVC_NO_ANALYTICS=1 \
+    RAY_USAGE_STATS_ENABLED=0 \
+    STREAMLIT_BROWSER_GATHER_USAGE_STATS=false \
+    LANGGRAPH_CLI_NO_ANALYTICS=1 \
+    LANGGRAPH_NO_VERSION_CHECK=true \
+    AWS_EC2_METADATA_DISABLED=true
 
 # NOTE: `daft`, not `getdaft` — the old name is frozen on PyPI at 0.5.0 (no GCS
 # overwrite deletes; flotilla needs a newer ray). A rebuild with `getdaft` would

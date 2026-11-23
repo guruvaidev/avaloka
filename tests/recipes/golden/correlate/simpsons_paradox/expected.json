@@ -1,0 +1,62 @@
+{
+  "recipe": "correlate",
+  "version_major": 1,
+  "verdict": "qualified",
+  "reason": null,
+  "figures": [
+    {
+      "id": "/n",
+      "value": 450.0,
+      "decimals": 0,
+      "unit": "count"
+    },
+    {
+      "id": "/simpson/r_overall",
+      "value": 0.95,
+      "decimals": 2,
+      "unit": "ratio"
+    },
+    {
+      "id": "/simpson/r_within_min",
+      "value": -0.83,
+      "decimals": 2,
+      "unit": "ratio"
+    },
+    {
+      "id": "/simpson/r_within_max",
+      "value": -0.8,
+      "decimals": 2,
+      "unit": "ratio"
+    },
+    {
+      "id": "/simpson/groups",
+      "value": 3.0,
+      "decimals": 0,
+      "unit": "count"
+    },
+    {
+      "id": "/strongest/pearson_r",
+      "value": 0.95,
+      "decimals": 2,
+      "unit": "ratio"
+    },
+    {
+      "id": "/rows/duplicates",
+      "value": 0.0,
+      "decimals": 0,
+      "unit": "count"
+    }
+  ],
+  "caveats": [
+    "associational"
+  ],
+  "must_not_say": [
+    "cause",
+    "causes",
+    "drives",
+    "because",
+    "effect of",
+    "leads to"
+  ],
+  "note": "scipy.stats.pearsonr of spend against revenue over all rows (positive) and inside each of the three segments (each negative, 150 rows); min and max of the within-segment r."
+}

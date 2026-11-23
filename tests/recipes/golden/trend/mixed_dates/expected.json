@@ -1,0 +1,15 @@
+{
+  "recipe": "trend",
+  "version_major": 1,
+  "verdict": "ask",
+  "reason": null,
+  "figures": [],
+  "caveats": [],
+  "must_not_say": [
+    "causes",
+    "drives",
+    "because",
+    "proves"
+  ],
+  "ask_parameter": "time"
+}

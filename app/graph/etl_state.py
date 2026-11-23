@@ -5,6 +5,111 @@ from langchain_core.messages import BaseMessage
 import pandas as pd
 
 from app.agents.mta_v2.schema import TrainingPlan, TrainingResult
+from app.trace.recorder import merge_agent_trace
+
+import logging
+import re
+
+_logger = logging.getLogger(__name__)
+
+
+class DTARegistryEntry(TypedDict, total=False):
+    """One connection in ``dta_database_registry``: a handle and display fields, never a secret.
+
+    ``conn_id`` names the sealed store the credentials live in -- the onboarding
+    customer id for a database (opened through ``db_credential_handles``), the
+    cloud_datasets row id for a bucket. The data transfer agent resolves it
+    after the user confirms the transfer; nothing here can open a database.
+    """
+    db_type: str
+    conn_id: str
+    _source: str
+    host: str
+    port: int
+    database: str
+    user: str
+    table: str
+    source_table: str
+    schema_name: str
+    sslmode: str
+    name: str
+    bucket_name: str
+    file_path: str
+    region: str
+    gcp_project: str
+    customer_name: str
+    environment: str
+    status: str
+
+
+DTA_REGISTRY_FIELDS = frozenset(DTARegistryEntry.__annotations__)
+# Anything shaped like a credential. The allowlist above already drops these;
+# the names are kept so a field added to the allowlist by mistake still cannot
+# carry one, and so the static test has one list to check writers against.
+DTA_SECRET_FIELD_HINTS = ("password", "passwd", "pwd", "secret", "key", "token",
+                          "conn_str", "connection_string", "credential", "sas", "private")
+_DSN_WITH_PASSWORD = re.compile(r"[a-z][a-z0-9+.-]*://[^\s/:@]+:[^\s@/]+@", re.IGNORECASE)
+
+
+# The credential fields the DTA builders read, named outright (1.6's list); the
+# hints above already catch every one of them.
+DTA_SECRET_FIELDS = frozenset({
+    "password", "access_key", "secret_key", "session_token", "gcp_service_account_json",
+    "service_account_json", "az_access_key", "az_sas_token", "az_client_secret",
+    "azure_connection_string", "connection_string", "account_key", "sas_token", "sas",
+})
+
+
+def _is_secret_field(name: Any) -> bool:
+    n = str(name).lower()
+    return n in DTA_SECRET_FIELDS or any(h in n for h in DTA_SECRET_FIELD_HINTS)
+
+
+def scrub_registry_entry(entry: Any) -> Dict[str, Any]:
+    """``entry`` reduced to :class:`DTARegistryEntry`: handle and display fields only.
+
+    Unknown and secret-named fields are dropped (their names are logged, never
+    their values), and a value that embeds ``user:password@`` is dropped too.
+    """
+    if not isinstance(entry, dict):
+        return {}
+    out: Dict[str, Any] = {}
+    dropped = []
+    for k, v in entry.items():
+        if k not in DTA_REGISTRY_FIELDS or _is_secret_field(k):
+            dropped.append(k)
+            continue
+        if isinstance(v, str) and _DSN_WITH_PASSWORD.search(v):
+            dropped.append(k)
+            continue
+        if v is not None:
+            out[k] = v
+    if dropped:
+        _logger.warning("dta_database_registry: dropped non-display field(s) %s", sorted(dropped))
+    return out
+
+
+def scrub_dta_registry(current: Any, update: Any) -> Dict[str, Dict[str, Any]]:
+    """Reducer for ``dta_database_registry``: the update replaces the registry, scrubbed.
+
+    Defence in depth -- the planner writes no secret here -- and the same
+    function is applied when the registry is read, for a checkpoint written by
+    a process older than this rule.
+    """
+    if not isinstance(update, dict):
+        return {}
+    return {str(alias): scrub_registry_entry(e) for alias, e in update.items()}
+
+
+# dta_database_registry entries are handles: a UI database connection (_source
+# "ui", opened by customer id), a cloud_datasets row (_source "cloud_ui", opened
+# by row id) and a connection typed into chat (_source "chat", registered in the
+# same stores). The store is read again after the transfer is confirmed, so no
+# credential belongs in the registry, and with it every checkpoint. An entry
+# with no _source is a chat registration from a checkpoint written before chat
+# connections were sealed; it is scrubbed the same way.
+DTA_HANDLE_SOURCES = frozenset({"ui", "cloud_ui", "chat"})
+
 
 def filter_messages(x: list, y: list):
     if not x:
@@ -12,8 +117,13 @@ def filter_messages(x: list, y: list):
     if not y:
         return x
     filtered_y = [m for m in y if m not in x]
-    if not filtered_y and x[-1] != y[-1]:
-        filtered_y.append(y[-1])
+    # The update's last message is this turn's and always lands last, even when
+    # an earlier message has the same content: "list connections" asked a
+    # second time was dropped as a duplicate of the first, while the history's
+    # display copies of earlier replies (marked as commentary, so unequal) were
+    # appended -- and the planner then answered the previous "yes" again.
+    if x[-1] != y[-1] and (not filtered_y or filtered_y[-1] is not y[-1]):
+        filtered_y = [m for m in filtered_y if m is not y[-1]] + [y[-1]]
     return x + filtered_y
 
 # State type
@@ -47,6 +157,9 @@ class ETLState(TypedDict):
     # UI as a ChatGPT-style "thinking" panel. Must be declared here or
     # LangGraph drops the key from node returns.
     reasoning_trace: Optional[str]
+    # Set by the planner when a fallback model tier answered instead of the
+    # configured one: {configured_model, answered_model, provider, reason, note}.
+    answered_by: Optional[Dict[str, Any]]
 
     # Top-level conversational router. These channels must be declared or
     # LangGraph silently drops the node's routing/context updates.
@@ -58,9 +171,26 @@ class ETLState(TypedDict):
     delegate_to_planner: Optional[bool]
     avaloka_handoff_message: Optional[str]
     avaloka_recommendation: Optional[dict]
+    # A correction to the method, as code read it from the user's words: the
+    # original and corrected approaches, the subject, the alternative
+    # (app/agents/avaloka_agent/correction.py). The re-plan's reasoning is said
+    # from these facts.
+    correction: Optional[dict]
     avaloka_swarm: Optional[list[dict]]
     avaloka_swarm_message: Optional[str]
+    avaloka_expertise: Optional[Dict[str, Any]]              # inferred novice/practitioner/expert communication level
+    avaloka_conversation_policy: Optional[Dict[str, Any]]    # progressive-disclosure and option limits
+    conversation_guidance: Optional[str]                     # prompt directive propagated to delegated agents
+    # The classifier's own stated reason and confidence for avaloka_intent,
+    # shown in the agent trace as why the turn was routed the way it was.
+    avaloka_intent_reasoning: Optional[str]
+    avaloka_intent_confidence: Optional[float]
     default_infra_platform: Optional[str]
+
+    # The agent trace for the current turn (app/trace). Written only by the
+    # recorder's node wrappers; the reducer starts a fresh list each turn.
+    agent_trace: Annotated[List[dict], merge_agent_trace]
+    trace_turn_id: Optional[str]
 
     active_mcp_servers: List[str]
     # Tenant-scoped MCP auth token; the MCP maps key->customer, so schema
@@ -72,6 +202,7 @@ class ETLState(TypedDict):
     deploy_on_k8s: bool
     uploaded_csv_preview: List[List[str]]
     uploaded_csv_columns: List[str]
+    complex_structure: Optional[Dict[str, Any]]
 
     # Code generation fields
     generated_code: Optional[str]
@@ -79,6 +210,12 @@ class ETLState(TypedDict):
     coder_contract: Optional[dict]
     contract_error: Optional[bool]
     contract_violations: Optional[list]
+    # Stated postconditions logged but not enforced, and where an exact row
+    # count came from (blueprint_contract.exact_count_decision).
+    contract_advisories: Optional[list]
+    contract_row_count: Optional[dict]
+    # Each declared min/max bound and its source (blueprint_contract.bound_decision).
+    contract_bounds: Optional[list]
     coder_raw_response: Optional[str]
     logical_review_feedback: Optional[str]
     logical_review_decided_by: Optional[str]
@@ -121,6 +258,12 @@ class ETLState(TypedDict):
     # Scheduler fields
     task_list: list[str]
     task_schedule: Optional[dict]
+    # The background-job ledger row this turn's long work writes to
+    # (app/core/job_ledger.py): set by the API when a turn is classified long,
+    # read by the producers inside the graph and carried into the Celery state
+    # so a worker finishes the same row.
+    ledger_job_id: Optional[str]
+    ledger_job_kind: Optional[str]
     task_info: Optional[dict]
     task_operation: Optional[dict]
     task_run_statistics: Optional[dict]
@@ -133,6 +276,7 @@ class ETLState(TypedDict):
     training_plan: Optional[TrainingPlan]       # v1.2
     training_result: Optional[TrainingResult]   # v1.2
     training_task: Optional[dict]           # Task definition for model training
+    ml_job_id: Optional[str]                # ml_jobs row for the in-flight training request
     model_artifacts: Optional[dict]         # Paths to trained models (native + ONNX)
     mlflow_run_id: Optional[str]            # MLflow experiment run ID
     training_metrics: Optional[dict]        # Training and validation metrics
@@ -162,7 +306,30 @@ class ETLState(TypedDict):
     evaluation_beats_baseline: Optional[bool]
     verification_report: Optional[dict]
     verification_safe_to_present: Optional[bool]
+    # "What predicts X" (app/agents/drivers_route.py): the rows the web chat
+    # handed the graph's first node, and whether that node answered the turn.
+    drivers_inputs: Optional[dict]
+    drivers_answered: Optional[bool]
     agent_errors: Optional[list[dict]]
+    # The replan loop after a failed local run (app/agents/replan.py). All
+    # code-written, plain JSON, reset every turn (replan.fresh_state).
+    replan_attempts: Optional[list[dict]]
+    replan_transforms: Optional[list[dict]]
+    replan_input_overrides: Optional[dict]
+    replan_feedback: Optional[str]
+    replan_final: Optional[str]
+    replan_stopped: Optional[dict]
+    replan_question: Optional[dict]
+    replan_started_at: Optional[float]
+    replan_llm_calls: Optional[int]
+    # The answer to the measured-column question (app/agents/replan_choice.py),
+    # set by the planner's resume step; replan_resume sends the failed code
+    # straight back to execution on that turn.
+    replan_measured_choice: Optional[dict]
+    replan_resume: Optional[bool]
+    # False on a run no one can answer (scheduled); code fixes off there.
+    replan_interactive: Optional[bool]
+    replan_code_fix: Optional[bool]
 
         # Execution mode configuration
     execution_mode: Optional[str]           # "local", "k8s-ray" - determines execution strategy
@@ -176,8 +343,10 @@ class ETLState(TypedDict):
     user_plan: Optional[str]
     plan_upgrade_required: Optional[str]
 
-    # Planner-side data transfer state (chat-registered DBs, last transfer)
-    dta_database_registry: Optional[dict]
+    # Planner-side data transfer state (chat-registered DBs, last transfer).
+    # The registry holds handles and display fields only (DTARegistryEntry);
+    # the reducer strips anything else from every write.
+    dta_database_registry: Annotated[dict[str, DTARegistryEntry], scrub_dta_registry]
     dta_injection_script: Optional[str]
     dta_last_transfer: Optional[dict]
     is_dta_request: Optional[bool]
@@ -188,6 +357,19 @@ class ETLState(TypedDict):
     # The table the user analyzed (parsed from their query), used as the implicit
     # source table instead of the connection's auto-detected first table.
     active_db_source_table: Optional[str]
+    # The active database's api_key, sealed under DB_ENCRYPTION_KEY (the DB
+    # session's api_key_enc). The planner opens it in process to call the
+    # onboarding API as the customer; it is never plaintext in state.
+    active_db_credential_handle: Optional[dict]
+    # The same, for every database the calling user connected:
+    # ``{customer_id: sealed api_key_enc}``, built by the server from the
+    # caller's own connect sessions only, so a transfer can name a destination
+    # or a second source. Ciphertext; opened in process, never logged or traced.
+    db_credential_handles: Optional[Dict[str, dict]]
+    # Catalogue and statistics of the active database (tables, typed columns,
+    # indexes, partitions, row counts -- no row values), size-capped, as the
+    # planner prompt received it. Recorded so the trace shows what was planned on.
+    source_metadata: Optional[dict]
 
     # ── Multi-dataset ─────────────────────────
     multi_dataset_state: list[dict]
@@ -247,6 +429,7 @@ class ETLState(TypedDict):
     ray_timeout_s: Optional[int]
     ray_secret_name: Optional[str]
     ray_execution_profile: Optional[str]
+    ray_fallback_reason: Optional[str]     # why a turn meant for Ray ran locally (labelled in the reply)
 
     # Dataset identifier for execution nodes
     dataset_id: Optional[str]

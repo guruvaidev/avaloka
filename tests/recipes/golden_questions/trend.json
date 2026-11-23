@@ -1,0 +1,304 @@
+[
+ {
+  "question": "How has revenue trended monthly since 2023?",
+  "columns": {
+   "order_date": "time",
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "units": "measure",
+   "customer_id": "id",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "trend",
+   "params": {
+    "measure": "revenue",
+    "time": "order_date",
+    "grain": "month"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Show me mrr over time",
+  "columns": {
+   "signup_date": "time",
+   "user_id": "id",
+   "plan": "dimension",
+   "mrr": "measure",
+   "churned": "measure",
+   "sessions": "measure",
+   "country": "dimension"
+  },
+  "expected": {
+   "recipe": "trend",
+   "params": {
+    "measure": "mrr",
+    "time": "signup_date"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Weekly latency trend",
+  "columns": {
+   "ts": "time",
+   "latency_ms": "measure",
+   "errors": "measure",
+   "service": "dimension",
+   "host": "high_card_dimension"
+  },
+  "expected": {
+   "recipe": "trend",
+   "params": {
+    "measure": "latency_ms",
+    "time": "ts",
+    "grain": "week"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Is revenue growing?",
+  "columns": {
+   "order_date": "time",
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "units": "measure",
+   "customer_id": "id",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "trend",
+   "params": {
+    "measure": "revenue",
+    "time": "order_date"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "sales by month",
+  "columns": {
+   "order_date": "time",
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "units": "measure",
+   "customer_id": "id",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "trend",
+   "params": {
+    "measure": "revenue",
+    "time": "order_date",
+    "grain": "month"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "How have errors moved over the past year?",
+  "columns": {
+   "ts": "time",
+   "latency_ms": "measure",
+   "errors": "measure",
+   "service": "dimension",
+   "host": "high_card_dimension"
+  },
+  "expected": {
+   "recipe": "trend",
+   "params": {
+    "measure": "errors",
+    "time": "ts"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Plot the quarterly trajectory of units",
+  "columns": {
+   "order_date": "time",
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "units": "measure",
+   "customer_id": "id",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "trend",
+   "params": {
+    "measure": "units",
+    "time": "order_date",
+    "grain": "quarter"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Daily sessions, is there seasonality?",
+  "columns": {
+   "signup_date": "time",
+   "user_id": "id",
+   "plan": "dimension",
+   "mrr": "measure",
+   "churned": "measure",
+   "sessions": "measure",
+   "country": "dimension"
+  },
+  "expected": {
+   "recipe": "trend",
+   "params": {
+    "measure": "sessions",
+    "time": "signup_date",
+    "grain": "day"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "revenue trend by order_date",
+  "columns": {
+   "order_date": "time",
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "units": "measure",
+   "customer_id": "id",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "trend",
+   "params": {
+    "measure": "revenue",
+    "time": "order_date"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "How volatile has revenue been over time?",
+  "columns": {
+   "order_date": "time",
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "units": "measure",
+   "customer_id": "id",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "trend",
+   "params": {
+    "measure": "revenue",
+    "time": "order_date"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Hows cost trending",
+  "columns": {
+   "order_date": "time",
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "units": "measure",
+   "customer_id": "id",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "trend",
+   "params": {
+    "measure": "cost",
+    "time": "order_date"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Time series of churned per week",
+  "columns": {
+   "signup_date": "time",
+   "user_id": "id",
+   "plan": "dimension",
+   "mrr": "measure",
+   "churned": "measure",
+   "sessions": "measure",
+   "country": "dimension"
+  },
+  "expected": {
+   "recipe": "trend",
+   "params": {
+    "measure": "churned",
+    "time": "signup_date",
+    "grain": "week"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Give me the trend and the breakdown of revenue",
+  "columns": {
+   "order_date": "time",
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "units": "measure",
+   "customer_id": "id",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "trend",
+   "params": {
+    "measure": "revenue",
+    "time": "order_date"
+   },
+   "flags": [
+    "ambiguous"
+   ]
+  }
+ },
+ {
+  "question": "Revenue trend",
+  "columns": {
+   "order_date": "time",
+   "ship_date": "time",
+   "revenue": "measure",
+   "region": "dimension"
+  },
+  "expected": {
+   "recipe": "trend",
+   "params": {
+    "measure": "revenue"
+   },
+   "flags": []
+  }
+ },
+ {
+  "question": "Show the revenue trend; then which region is biggest",
+  "columns": {
+   "order_date": "time",
+   "region": "dimension",
+   "revenue": "measure",
+   "cost": "measure",
+   "units": "measure",
+   "customer_id": "id",
+   "product": "dimension"
+  },
+  "expected": {
+   "recipe": "trend",
+   "params": {
+    "measure": "revenue",
+    "time": "order_date"
+   },
+   "flags": [
+    "multi_question"
+   ]
+  }
+ }
+]

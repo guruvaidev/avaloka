@@ -55,13 +55,13 @@ def _mk(**over):
 # --------------------------------------------------------------------------
 # provider resolution
 # --------------------------------------------------------------------------
+# MP-01: re-pinned 2026-11-01 — owner decision: default is openai/gpt-oss-120b via OpenRouter (was groq from 2026-10-31)
+# (renamed from test_default_provider_is_groq_when_nothing_is_configured).
 def test_default_provider_is_openrouter_when_nothing_is_configured(monkeypatch):
-    """OpenRouter is the default: one key fronts many providers, Groq included.
+    """OpenRouter is the default, the same provider the Helm chart ships.
 
-    Renamed rather than deleted -- the old name asserted Groq, and a test whose
-    name states the opposite of its assertion is worse than no test. Groq is
-    still fully supported via INFERENCE_PROVIDER=groq, and is still chosen
-    automatically when it is the only key present (see
+    Groq is still fully supported via INFERENCE_PROVIDER=groq, and is still
+    chosen automatically when it is the only key present (see
     test_implicit_default_prefers_a_usable_key).
     """
     monkeypatch.delenv("INFERENCE_PROVIDER", raising=False)
@@ -88,10 +88,10 @@ def test_provider_precedence_agent_over_role_over_global(monkeypatch):
         ("gcp", "vertex"),
         ("vertexai", "vertex"),
         ("azure-openai", "azure"),
-        # Unset means the implicit default. That is OpenRouter now, and with no
-        # OPENROUTER_API_KEY and no Groq key in the environment it stays
-        # OpenRouter so the missing credential reports itself. The key-aware
-        # fallback to Groq is covered by test_implicit_default_prefers_a_usable_key.
+        # Unset means the implicit default: OpenRouter, and with no key in the
+        # environment it stays OpenRouter so the missing credential reports itself.
+        # The key-aware fallback is covered by test_implicit_default_prefers_a_usable_key.
+        # MP-01: re-pinned 2026-11-01 — owner decision: default is openai/gpt-oss-120b via OpenRouter (was groq from 2026-10-31).
         ("", "openrouter"),
     ],
 )
@@ -137,7 +137,9 @@ def test_local_returns_chatopenai_at_incluster_default(monkeypatch):
     monkeypatch.setenv("INFERENCE_PROVIDER", "local")
     llm = _mk()
     assert type(llm).__name__ == "ChatOpenAI"
-    assert llm.model_name == "qwen2.5:3b-instruct"
+    from app.core.inference import DEFAULT_LOCAL_MODEL
+
+    assert llm.model_name == DEFAULT_LOCAL_MODEL == "qwen3:4b-instruct-2507-q4_K_M"
     assert str(llm.openai_api_base) == "http://avaloka-local-llm:11434/v1"
 
 
@@ -155,9 +157,10 @@ def test_openrouter_requires_key(monkeypatch):
     assert _mk() is None  # no OPENROUTER_API_KEY
     monkeypatch.setenv("OPENROUTER_API_KEY", "or_key")
     llm = _mk()
-    assert type(llm).__name__ == "ChatOpenAI"
-    assert str(llm.openai_api_base) == "https://openrouter.ai/api/v1"
-    assert llm.model_name == "openai/gpt-oss-120b"
+    primary = getattr(llm, "runnable", llm)   # the OpenRouter tier wraps it (2026-11-01)
+    assert type(primary).__name__ == "ChatOpenAI"
+    assert str(primary.openai_api_base) == "https://openrouter.ai/api/v1"
+    assert primary.model_name == "openai/gpt-oss-120b"
 
 
 # --------------------------------------------------------------------------
@@ -230,7 +233,7 @@ def test_build_agent_llm_honors_role_provider(monkeypatch):
     monkeypatch.setenv("INFERENCE_PROVIDER_CODING", "local")
     llm = build_agent_llm(agent="DTA_CODER", api_key="k", role="coding")
     assert type(llm).__name__ == "ChatOpenAI"
-    # A planning-role agent stays on the default groq backend.
+    # A planning-role agent with only a Groq key resolves to Groq (key-aware default).
     planning = build_agent_llm(agent="MTA", api_key="k", role="planning")
     assert type(planning).__name__ == "ChatGroq"
 
@@ -247,11 +250,12 @@ def test_implicit_default_prefers_a_usable_key(monkeypatch):
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.delenv("INFERENCE_OPENROUTER_API_KEY", raising=False)
 
+    # MP-01: re-pinned 2026-11-01 — owner decision: default is openai/gpt-oss-120b via OpenRouter (was groq from 2026-10-31).
     monkeypatch.setenv("GROQ_API_KEY", "gsk_test")
-    assert resolve_provider(role="planning", agent="X") == "groq"
+    assert resolve_provider(role="planning", agent="X") == "groq"         # only key present
 
     monkeypatch.setenv("OPENROUTER_API_KEY", "or_test")
-    assert resolve_provider(role="planning", agent="X") == "openrouter"
+    assert resolve_provider(role="planning", agent="X") == "openrouter"   # default wins when usable
 
     # An explicit choice wins even when its key is absent, so the missing
     # credential is reported rather than silently swapped.
@@ -261,14 +265,17 @@ def test_implicit_default_prefers_a_usable_key(monkeypatch):
 
 
 def test_openrouter_primary_is_not_wrapped_in_an_openrouter_fallback(monkeypatch):
-    """The backup provider is OpenRouter, so an OpenRouter primary gets none.
+    """An OpenRouter primary never gets the same-model OpenRouter backup.
 
-    Wrapping it would retry a 429 against the provider that produced it, and
-    would change the returned type to RunnableWithFallbacks.
+    That would retry a 429 against the provider that produced it. Since
+    2026-11-01 it carries the next TIER instead (GPT-6 Luna); with the tier
+    switched off it is the bare client.
     """
     monkeypatch.setenv("INFERENCE_PROVIDER", "openrouter")
     monkeypatch.setenv("OPENROUTER_API_KEY", "or_key")
     llm = _mk()
-    assert type(llm).__name__ == "ChatOpenAI", (
-        "an OpenRouter primary must not be wrapped in an OpenRouter fallback"
+    assert [b.model for b in llm.fallbacks] == ["openai/gpt-6-luna"], (
+        "an OpenRouter primary must not be wrapped in an OpenRouter fallback of itself"
     )
+    monkeypatch.setenv("AVALOKA_OPENROUTER_FALLBACK_MODEL", "none")
+    assert type(_mk()).__name__ == "ChatOpenAI"

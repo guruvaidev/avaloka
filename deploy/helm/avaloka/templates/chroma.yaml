@@ -38,6 +38,10 @@ spec:
         - name: chroma
           image: {{ .Values.chroma.image | quote }}
           imagePullPolicy: {{ .Values.chroma.pullPolicy }}
+          env:
+            # chroma's product telemetry, off (app/core/thirdparty_optout.py).
+            - name: ANONYMIZED_TELEMETRY
+              value: "False"
           ports:
             - name: http
               containerPort: {{ .Values.chroma.port }}

@@ -182,13 +182,18 @@ AGENTS = _enum(
     "coder", "validator_syntax", "validator_static", "execute_code",
     "validator_contract", "validator_logical",
     # the main graph
-    "memory_injection", "avaloka_agent", "plan_etl", "summarize_etl",
+    "drivers_route", "memory_injection", "avaloka_agent", "plan_etl", "summarize_etl",
     "generate_planner_graph", "code_etl", "execute_actions", "provision_infra",
     "schedule_task", "execute_on_ray", "execute_locally", "execute_on_k8s",
     "visualize", "narrate_result", "verify_claims", "train_models", "profile_data",
+    "replan",
     # CLI fireflies
     "analysis_planner", "data_engineer", "data_scout", "finops", "ml_engineer",
     "model_scientist", "reporter", "sampling_specialist", "validator",
+    # added by the DAB analytical specialists (#255) and the workload
+    # optimizer (#260); agent identifiers only, no data or column names
+    "conformal_calibrator", "experimenter", "feature_engineer", "statistician",
+    "workload_optimizer",
 )
 
 #: Kinds of column, as the profiler classifies them, and "other". The keys of
@@ -265,6 +270,112 @@ DATASET_FIELDS = {
     **SESSION_FIELDS,
 }
 
+#: One per coordinated mission (a swarm of clones over one dataset), after
+#: it finishes. The clone steps themselves arrive as `agent.*` pairs. This is
+#: the fan-out and its outcome, nothing of what was fanned out: no goal, no
+#: source, no column, no clone output, no mission id and no clone name. Each
+#: of those is refused by name below or has no field it could fit.
+SWARM_FIELDS = {
+    "event_id": _ID,
+    "clones_requested": _int(1, 10_000),
+    "clones_granted": _int(1, 10_000),
+    "parallel": _int(1, 10_000),
+    "limited": _BOOL,
+    "edition": EDITIONS,
+    "kind": _enum("analyze", "train"),
+    "outcome": _OUTCOMES,
+    "verdict": _enum("pass", "warn", "fail"),
+    "duration_ms": _int(0, MAX_T_MS),
+    "row_count_bucket": _PROCESS_ROW_BUCKETS,
+    **SESSION_FIELDS,
+}
+
+#: The buckets and histograms an understanding record is made of. Every key
+#: of every histogram is a vocabulary member: a histogram keyed by column kind
+#: or by null-rate band cannot carry a column name, where a per-column list
+#: would. The producer is avaloka/understanding_trace.py, whose vocabularies
+#: tests/test_understanding_trace.py holds equal to these.
+_ROLES = _enum("understanding", "sampling", "feature_engineering", "planning", "coding",
+               "modeling", "execution", "verification", "finops", "deployment", "reporting", "other")
+_NULL_RATE_BUCKETS = frozenset({"0", "0-1%", "1-10%", "10-50%", "50%+"})
+_CARDINALITY_BUCKETS = frozenset({"1", "2", "3-10", "11-100", "101-1000", "1000+"})
+_SIZE_BUCKETS = _enum("<1MB", "1-10MB", "10-100MB", "100MB-1GB", "1GB+")
+_FRACTION_BUCKETS = _enum("full", "50-100%", "10-50%", "1-10%", "<1%")
+_SAMPLING_STRATEGIES = frozenset({"none", "random", "stratified", "other"})
+_OP_KINDS = frozenset({"drop_constant_columns", "drop_duplicate_rows", "strip_whitespace",
+                       "flag_high_missingness", "load", "filter", "derive", "cast", "aggregate",
+                       "join", "concat", "sort", "sample", "write", "clean", "other"})
+_VERDICTS = _enum("pass", "warn", "fail")
+
+#: What the data looked like to an agent, and what it ran: shared by the
+#: per-step and the per-mission understanding records.
+_UNDERSTANDING_SHAPE = {
+    "row_count_bucket": _PROCESS_ROW_BUCKETS,
+    "column_count_bucket": _PROCESS_COLUMN_BUCKETS,
+    "column_type_counts": Spec("counts", values=COLUMN_KINDS, lo=0, hi=MAX_COLUMNS_COUNTED),
+    "null_rate_counts": Spec("counts", values=_NULL_RATE_BUCKETS, lo=0, hi=MAX_COLUMNS_COUNTED),
+    "cardinality_counts": Spec("counts", values=_CARDINALITY_BUCKETS, lo=0, hi=MAX_COLUMNS_COUNTED),
+    "file_format": _FILE_FORMATS,
+    "size_bucket": _SIZE_BUCKETS,
+    "quality_score": _int(0, 100),
+    "checks_run": _int(0, MAX_COLUMNS_COUNTED),
+    "checks_passed": _int(0, MAX_COLUMNS_COUNTED),
+    "checks_warned": _int(0, MAX_COLUMNS_COUNTED),
+    "checks_failed": _int(0, MAX_COLUMNS_COUNTED),
+    "retry_count": _int(0, 100),
+    "verdict": _VERDICTS,
+    "llm_provider": LLM_PROVIDERS,
+    "llm_model": LLM_MODELS,
+    "model_calls": _int(0, MAX_COLUMNS_COUNTED),
+    "tokens_in": _int(0, 1_000_000_000),
+    "tokens_out": _int(0, 1_000_000_000),
+    "duration_ms": _int(0, MAX_T_MS),
+    "outcome": _OUTCOMES,
+}
+
+#: One per completed agent step: what the agent concluded about the data
+#: (shape as buckets and histograms), whether it sampled, which kinds of
+#: operation it chose and how many, which checks it ran and how they came out,
+#: and the model calls behind it. No conclusion text, no reason, no column, no
+#: formula, no check detail, no clone id, no step id: each is refused by name
+#: below or has no field it could fit.
+UNDERSTANDING_FIELDS = {
+    "event_id": _ID,
+    "agent": AGENTS,
+    "role": _ROLES,
+    "error_class": _CLASS,
+    "clone_index": _int(0, 10_000),
+    "step_no": _int(0, 10_000),
+    "sampled": _BOOL,
+    "sampling_strategy": _enum(*_SAMPLING_STRATEGIES),
+    "sample_fraction_bucket": _FRACTION_BUCKETS,
+    "operation_count": _int(0, MAX_COLUMNS_COUNTED),
+    "op_counts": Spec("counts", values=_OP_KINDS, lo=0, hi=MAX_COLUMNS_COUNTED),
+    **_UNDERSTANDING_SHAPE,
+    **SESSION_FIELDS,
+}
+
+#: One per coordinated mission: the fan-out, how many steps each clone ran
+#: (as a range, not per clone), which roles ran, the fleet's data shape, how
+#: many clones sampled and how, the verification totals and how the merge
+#: went. No clone name, no selected clone, no verdict per clone.
+SWARM_UNDERSTANDING_FIELDS = {
+    "event_id": _ID,
+    "clones": _int(1, 10_000),
+    "parallel": _int(1, 10_000),
+    "steps_total": _int(0, MAX_COLUMNS_COUNTED),
+    "steps_per_clone_min": _int(0, MAX_COLUMNS_COUNTED),
+    "steps_per_clone_max": _int(0, MAX_COLUMNS_COUNTED),
+    "role_counts": Spec("counts", values=_ROLES.values, lo=0, hi=MAX_COLUMNS_COUNTED),
+    "sampled_clones": _int(0, 10_000),
+    "sampling_strategy_counts": Spec("counts", values=_SAMPLING_STRATEGIES, lo=0, hi=10_000),
+    "merge_agreement": _enum("unanimous", "split"),
+    "model_selected": _BOOL,
+    "candidates": _int(0, 10_000),
+    **_UNDERSTANDING_SHAPE,
+    **SESSION_FIELDS,
+}
+
 #: event type -> {field: Spec}. A record is checked against its own type's
 #: fields: `agent` on an `install` record is as much a sign of a confused
 #: client as a key nobody has heard of.
@@ -273,6 +384,9 @@ PROCESS_FIELDS_BY_TYPE = {
     "agent.started": AGENT_FIELDS,
     "agent.completed": AGENT_FIELDS,
     "dataset": DATASET_FIELDS,
+    "swarm.completed": SWARM_FIELDS,
+    "agent.understanding": UNDERSTANDING_FIELDS,
+    "swarm.understanding": SWARM_UNDERSTANDING_FIELDS,
 }
 
 # ----------------------------------------------------------- product analytics
@@ -287,7 +401,7 @@ PROCESS_FIELDS_BY_TYPE = {
 # question, a column name or a file name to travel. A route is a *template*
 # ("/reports/$reportId"), never a concrete path.
 
-#: Keeps these records apart from the four process types above.
+#: Keeps these records apart from the five process types above.
 ANALYTICS_PREFIX = "analytics."
 
 _ROUTES = _enum(

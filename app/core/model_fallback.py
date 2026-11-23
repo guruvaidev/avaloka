@@ -34,6 +34,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from langchain_core.runnables.base import Runnable
 
+from app.core.inference import DEFAULT_LOCAL_MODEL
+
 logger = logging.getLogger(__name__)
 
 OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
@@ -215,9 +217,15 @@ def build_backup_chat_model(model: str, *, temperature: float = 0.0):
         logger.warning("[models] langchain-openai is not installed; "
                        "OpenRouter backup unavailable")
         return None
+    # Pinned like every OpenRouter client (docs/privacy-and-egress.md). Imported
+    # here because inference imports this module lazily as well.
+    from app.core.inference import openrouter_extra_body
+
+    extra = openrouter_extra_body("", model)
     return ChatOpenAI(
         model=model, temperature=temperature,
         api_key=key, base_url=OPENROUTER_BASE_URL,
+        **({"extra_body": extra} if extra else {}),
     )
 
 
@@ -288,6 +296,33 @@ def failover_exception_types() -> Tuple[type, ...]:
     return tuple(types)
 
 
+#: openai-SDK exceptions that mean "ask the next tier", for an OpenRouter primary.
+#: 404 is what OpenRouter returned, measured 2026-11-02, when no provider on a
+#: pinned allowlist serves the model ("No allowed providers are available for the
+#: selected model"), and also means a model withdrawn. 503 is what it documents for
+#: "no available model provider that meets your routing requirements"
+#: (https://openrouter.ai/docs/api-reference/errors). 429 is a rate limit;
+#: connection errors a transport failure. 400/401/403/422 are absent for the same
+#: reason as above.
+_OPENAI_FAILOVER_EXCEPTION_NAMES: Tuple[str, ...] = (
+    "RateLimitError", "InternalServerError", "NotFoundError", "APIConnectionError",
+)
+
+
+def openrouter_failover_exception_types() -> Tuple[type, ...]:
+    """Exception classes that move an OpenRouter primary to its fallback tier."""
+    types: List[type] = [OSError]
+    try:
+        import openai
+    except ImportError:  # pragma: no cover - langchain-openai depends on it
+        return tuple(types)
+    for name in _OPENAI_FAILOVER_EXCEPTION_NAMES:
+        candidate = getattr(openai, name, None)
+        if isinstance(candidate, type) and issubclass(candidate, BaseException):
+            types.append(candidate)
+    return tuple(types)
+
+
 def normalise_tools_for_openrouter(tools: Any) -> Any:
     """Move each tool's ``description`` inside its ``function`` object.
 
@@ -328,9 +363,20 @@ class _OpenRouterCompat(Runnable):
     Groq payload. This adapter is the seam where they become an OpenRouter one.
     """
 
-    def __init__(self, inner: Any, model: str) -> None:
+    #: Read by callers that invoke a backup directly (the MTA's no-tool-call
+    #: retry) to pick the tool_choice this backup accepts.
+    provider = "openrouter"
+
+    def __init__(self, inner: Any, model: str, *, primary_model: Optional[str] = None,
+                 primary_provider: str = "groq", provider: str = "openrouter") -> None:
         self.inner = inner
         self.model = model
+        #: The model this tier stands in for, and its provider. When set, an answer
+        #: from this tier is stamped with which model answered and why (owner ruling
+        #: 2026-11-02: a fallback is never silent; app/core/model_tiers.py).
+        self.primary_model = primary_model
+        self.primary_provider = primary_provider
+        self.provider = provider
 
     def _adapt(self, kwargs: Dict[str, Any]) -> Dict[str, Any]:
         drop = set(_GROQ_ONLY_INVOKE_KWARGS)
@@ -361,29 +407,64 @@ class _OpenRouterCompat(Runnable):
             )
         if "tools" in adapted:
             adapted["tools"] = normalise_tools_for_openrouter(adapted["tools"])
+        if adapted.get("tool_choice") in ("required", "any"):
+            # The primary's forcing value, chosen for the PRIMARY's provider.
+            # This adapter only ever wraps an OpenRouter backup (attach_fallback
+            # builds no other), and the decision is read from the provider
+            # tables rather than restated here: OpenRouter has no accepted
+            # forcing value (forced_tool_choice_for_provider -> None; "required"
+            # gets finish_reason="error" and no tool call), so it is sent the
+            # portable choice for its provider instead. The caller's kwargs are
+            # copied above, so the primary -- Groq, Ollama -- keeps its value.
+            # A named-function dict is left alone: it is not measured here.
+            from app.core.inference import (forced_tool_choice_for_provider,
+                                            tool_choice_for_provider)
+
+            if forced_tool_choice_for_provider(self.provider) is None:
+                adapted["tool_choice"] = tool_choice_for_provider(self.provider)
         return adapted
 
     def _failed(self, exc: BaseException) -> BackupFailed:
-        logger.error("[models] OpenRouter backup %s failed too (%s: %s); "
+        from app.core import model_tiers
+
+        failure = model_tiers.classify(exc, model=self.model, provider=self.provider)
+        if failure is not None and failure is not exc:
+            model_tiers.record(failure)
+        logger.error("[models] %s backup %s failed too (%s: %s); "
                      "surfacing the primary provider's error instead",
-                     self.model, type(exc).__name__, exc)
-        return BackupFailed(f"OpenRouter backup {self.model} failed: {exc}")
+                     self.provider, self.model, type(exc).__name__, exc)
+        return BackupFailed(f"{self.provider} backup {self.model} failed: {exc}")
+
+    def _answered(self, result: Any) -> Any:
+        if not self.primary_model:
+            return result
+        from app.core import model_tiers
+
+        return model_tiers.stamp(result, configured_model=self.primary_model,
+                                 answered_model=self.model, provider=self.provider,
+                                 primary_provider=self.primary_provider)
 
     def invoke(self, input: Any, config: Any = None, **kwargs: Any) -> Any:
         logger.warning("[models] primary provider failed; answering from "
                        "OpenRouter backup %s", self.model)
         try:
-            return self.inner.invoke(input, config, **self._adapt(kwargs))
+            result = self.inner.invoke(input, config, **self._adapt(kwargs))
         except BaseException as exc:
             raise self._failed(exc) from exc
+        return self._answered(result)
 
     async def ainvoke(self, input: Any, config: Any = None, **kwargs: Any) -> Any:
         logger.warning("[models] primary provider failed; answering from "
                        "OpenRouter backup %s (async)", self.model)
         try:
-            return await self.inner.ainvoke(input, config, **self._adapt(kwargs))
+            result = await self.inner.ainvoke(input, config, **self._adapt(kwargs))
         except BaseException as exc:
             raise self._failed(exc) from exc
+        return self._answered(result)
+
+
+#: The adapter for any fallback tier, not only OpenRouter (the Groq last tier too).
+_TierCompat = _OpenRouterCompat
 
 
 def attach_fallback(primary: Any, model: str, *, temperature: float = 0.0,
@@ -416,12 +497,46 @@ def attach_fallback(primary: Any, model: str, *, temperature: float = 0.0,
         logger.warning("[models] %s backup could not be constructed; "
                        "running without one", label)
         return primary
+    try:
+        # The backup's calls are recorded on the agent trace like the primary's,
+        # so a failover shows as a failed call followed by the one that answered.
+        from app.trace.recorder import instrument
+
+        backup = instrument(backup, agent=label.lower(), provider="openrouter",
+                            model=plan.backup_model)
+    except Exception:  # noqa: BLE001
+        pass
     logger.info("[models] %s: OpenRouter backup armed (%s -> %s)",
                 label, plan.primary_model, plan.backup_model)
-    return primary.with_fallbacks(
-        [_OpenRouterCompat(backup, plan.backup_model)],
-        exceptions_to_handle=failover_exception_types(),
+    from app.core import model_tiers
+
+    return model_tiers.chain(
+        primary,
+        [_OpenRouterCompat(backup, plan.backup_model, primary_model=plan.primary_model,
+                           primary_provider="groq")],
+        failover_exception_types(),
     )
+
+
+def fallback_models(llm: Any) -> List[Any]:
+    """The backups armed behind *llm*, in policy order, or [] when there are none.
+
+    For callers that get a *reply* they cannot use rather than an exception:
+    ``with_fallbacks`` only fails over on the exception types it was given, so
+    a 200 with no tool call never reaches the backup on its own. Honours the
+    kill switch at call time as well as at construction, so
+    ``AVALOKA_DISABLE_MODEL_FALLBACK=1`` set after the model was built still
+    keeps the backup out of the conversation.
+    """
+    if llm is None or not backup_enabled():
+        return []
+    try:
+        from langchain_core.runnables import RunnableWithFallbacks
+    except Exception:  # noqa: BLE001
+        return []
+    if not isinstance(llm, RunnableWithFallbacks):
+        return []
+    return list(getattr(llm, "fallbacks", None) or [])
 
 
 def describe_backup() -> Dict[str, object]:
@@ -450,8 +565,9 @@ def describe_backup() -> Dict[str, object]:
 # is exactly the kind of thing that gets debugged for an afternoon.
 #
 # Model ids verified against the live OpenRouter catalogue on 2026-08-22
-# (google/gemma-4-31b-it, google/gemma-4-26b-a4b-it, qwen/qwen3.8-27b,
-# google/gemma-3-4b-it). The ids your vLLM/Ollama actually serves may differ —
+# (google/gemma-4-31b-it, google/gemma-4-26b-a4b-it, qwen/qwen3.8-27b). The
+# laptop default is the product's default local model instead (see below). The
+# ids your vLLM/Ollama actually serves may differ —
 # every default below is env-overridable, and the serving manifest decides
 # what exists.
 
@@ -464,8 +580,13 @@ LOCAL_MODEL_CLUSTER = os.getenv("AVALOKA_LOCAL_MODEL_CLUSTER", "google/gemma-4-3
 LOCAL_MODEL_CLUSTER_ALT = os.getenv("AVALOKA_LOCAL_MODEL_CLUSTER_ALT", "qwen/qwen3.8-27b")
 
 #: Laptop-profile local model: small enough to serve on CPU/metal without
-#: making the fallback slower than the outage it papers over.
-LOCAL_MODEL_LAPTOP = os.getenv("AVALOKA_LOCAL_MODEL_LAPTOP", "google/gemma-3-4b-it")
+#: making the fallback slower than the outage it papers over. It is the
+#: product's default local model (Qwen3-4B-Instruct-2507, Apache-2.0), which is
+#: what deploy/inference/ollama-cpu.yaml serves. It was google/gemma-3-4b-it,
+#: whose weights are under the Gemma Terms of Use rather than a permissive
+#: licence; tests/test_local_model_licence.py now holds these defaults to the
+#: same licence allowlist as every other shipped local model.
+LOCAL_MODEL_LAPTOP = os.getenv("AVALOKA_LOCAL_MODEL_LAPTOP", DEFAULT_LOCAL_MODEL)
 
 
 def deployment_profile() -> str:

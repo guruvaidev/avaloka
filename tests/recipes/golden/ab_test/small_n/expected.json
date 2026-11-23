@@ -1,0 +1,15 @@
+{
+  "recipe": "ab_test",
+  "version_major": 1,
+  "verdict": "refuse",
+  "reason": "insufficient_rows",
+  "figures": [],
+  "caveats": [],
+  "must_not_say": [
+    "causes",
+    "proves",
+    "guarantees",
+    "will"
+  ],
+  "note": "18 rows per arm is below the 30-row floor: refuse insufficient_rows; nothing is reported."
+}

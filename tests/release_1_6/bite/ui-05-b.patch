@@ -1,0 +1,12 @@
+diff --git a/ui/src/lib/uploaded-datasets.ts b/ui/src/lib/uploaded-datasets.ts
+--- a/ui/src/lib/uploaded-datasets.ts
++++ b/ui/src/lib/uploaded-datasets.ts
+@@ -115,7 +115,7 @@ export function groupUploadedDatasets(datasets: UploadedDataset[]): UploadedData
+     );
+     const first = sorted[0];
+     const isMulti = sorted.length > 1;
+-    const realName = first.name && first.name !== first.dataset_id ? first.name : null;
++    const realName = first.name || null;
+     const firstLabel = realName || first.alias || first.filename || "Untitled dataset";
+ 
+     const title = isMulti ? `${firstLabel} + ${sorted.length - 1} more` : firstLabel;

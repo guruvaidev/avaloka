@@ -1,0 +1,1090 @@
+{
+  "comment": "Shared by tests/avaloka/outcomes/test_spec.py and ui/tests/unit/outcome-runtime.test.ts. Python and outcome-runtime.js must both give `expected` (or fail with `error`) for every case.",
+  "format": [
+    {
+      "name": "count zero",
+      "figure": {
+        "value": 0,
+        "unit": "count",
+        "decimals": 0
+      },
+      "expected": "0"
+    },
+    {
+      "name": "count small",
+      "figure": {
+        "value": 7,
+        "unit": "count",
+        "decimals": 0
+      },
+      "expected": "7"
+    },
+    {
+      "name": "count 999",
+      "figure": {
+        "value": 999,
+        "unit": "count",
+        "decimals": 0
+      },
+      "expected": "999"
+    },
+    {
+      "name": "count grouped",
+      "figure": {
+        "value": 1234,
+        "unit": "count",
+        "decimals": 0
+      },
+      "expected": "1,234"
+    },
+    {
+      "name": "count 9,999 no suffix",
+      "figure": {
+        "value": 9999,
+        "unit": "count",
+        "decimals": 0
+      },
+      "expected": "9,999"
+    },
+    {
+      "name": "count 9,999.5 rounds into K",
+      "figure": {
+        "value": 9999.5,
+        "unit": "count",
+        "decimals": 0
+      },
+      "expected": "10K"
+    },
+    {
+      "name": "count 12,345 to K",
+      "figure": {
+        "value": 12345,
+        "unit": "count",
+        "decimals": 0
+      },
+      "expected": "12.3K"
+    },
+    {
+      "name": "K tie odd rounds up",
+      "figure": {
+        "value": 12350,
+        "unit": "count",
+        "decimals": 0
+      },
+      "expected": "12.4K"
+    },
+    {
+      "name": "K tie even stays (half-even)",
+      "figure": {
+        "value": 12450,
+        "unit": "count",
+        "decimals": 0
+      },
+      "expected": "12.4K"
+    },
+    {
+      "name": "K that rounds to 1,000 becomes M",
+      "figure": {
+        "value": 999960,
+        "unit": "count",
+        "decimals": 0
+      },
+      "expected": "1M"
+    },
+    {
+      "name": "M",
+      "figure": {
+        "value": 1234567,
+        "unit": "count",
+        "decimals": 0
+      },
+      "expected": "1.2M"
+    },
+    {
+      "name": "M tie even stays",
+      "figure": {
+        "value": 1250000,
+        "unit": "count",
+        "decimals": 0
+      },
+      "expected": "1.2M"
+    },
+    {
+      "name": "M tie odd rounds up",
+      "figure": {
+        "value": 1350000,
+        "unit": "count",
+        "decimals": 0
+      },
+      "expected": "1.4M"
+    },
+    {
+      "name": "B",
+      "figure": {
+        "value": 2500000000.0,
+        "unit": "count",
+        "decimals": 0
+      },
+      "expected": "2.5B"
+    },
+    {
+      "name": "T",
+      "figure": {
+        "value": 1000000000000.0,
+        "unit": "count",
+        "decimals": 0
+      },
+      "expected": "1T"
+    },
+    {
+      "name": "T is the top suffix",
+      "figure": {
+        "value": 4560000000000000.0,
+        "unit": "count",
+        "decimals": 0
+      },
+      "expected": "4,560T"
+    },
+    {
+      "name": "1e21 prints with an exponent in both languages",
+      "figure": {
+        "value": 1e+21,
+        "unit": "count",
+        "decimals": 0
+      },
+      "expected": "1,000,000,000T"
+    },
+    {
+      "name": "negative K",
+      "figure": {
+        "value": -12345,
+        "unit": "count",
+        "decimals": 0
+      },
+      "expected": "-12.3K"
+    },
+    {
+      "name": "half-even 0.5 to 0",
+      "figure": {
+        "value": 0.5,
+        "unit": "count",
+        "decimals": 0
+      },
+      "expected": "0"
+    },
+    {
+      "name": "half-even 1.5 to 2",
+      "figure": {
+        "value": 1.5,
+        "unit": "count",
+        "decimals": 0
+      },
+      "expected": "2"
+    },
+    {
+      "name": "half-even 2.5 to 2",
+      "figure": {
+        "value": 2.5,
+        "unit": "count",
+        "decimals": 0
+      },
+      "expected": "2"
+    },
+    {
+      "name": "negative that rounds to zero is unsigned",
+      "figure": {
+        "value": -0.4,
+        "unit": "count",
+        "decimals": 0
+      },
+      "expected": "0"
+    },
+    {
+      "name": "negative zero is unsigned",
+      "figure": {
+        "value": -0.0,
+        "unit": "count",
+        "decimals": 0
+      },
+      "expected": "0"
+    },
+    {
+      "name": "two decimals grouped",
+      "figure": {
+        "value": 1234.5678,
+        "unit": "count",
+        "decimals": 2
+      },
+      "expected": "1,234.57"
+    },
+    {
+      "name": "four decimals below the suffix",
+      "figure": {
+        "value": 1234.56789,
+        "unit": "count",
+        "decimals": 4
+      },
+      "expected": "1,234.5679"
+    },
+    {
+      "name": "0.125 half-even down",
+      "figure": {
+        "value": 0.125,
+        "unit": "unitless",
+        "decimals": 2
+      },
+      "expected": "0.12"
+    },
+    {
+      "name": "0.375 half-even up",
+      "figure": {
+        "value": 0.375,
+        "unit": "unitless",
+        "decimals": 2
+      },
+      "expected": "0.38"
+    },
+    {
+      "name": "2.675 is a decimal tie, not binary",
+      "figure": {
+        "value": 2.675,
+        "unit": "unitless",
+        "decimals": 2
+      },
+      "expected": "2.68"
+    },
+    {
+      "name": "1.005 tie to even",
+      "figure": {
+        "value": 1.005,
+        "unit": "unitless",
+        "decimals": 2
+      },
+      "expected": "1.00"
+    },
+    {
+      "name": "float noise 0.1+0.2",
+      "figure": {
+        "value": 0.30000000000000004,
+        "unit": "unitless",
+        "decimals": 4
+      },
+      "expected": "0.3000"
+    },
+    {
+      "name": "1e-05 vs 0.00001 parse",
+      "figure": {
+        "value": 1e-05,
+        "unit": "unitless",
+        "decimals": 4
+      },
+      "expected": "0.0000"
+    },
+    {
+      "name": "5e-05 tie to zero",
+      "figure": {
+        "value": 5e-05,
+        "unit": "unitless",
+        "decimals": 4
+      },
+      "expected": "0.0000"
+    },
+    {
+      "name": "1.5e-04 tie up",
+      "figure": {
+        "value": 0.00015,
+        "unit": "unitless",
+        "decimals": 4
+      },
+      "expected": "0.0002"
+    },
+    {
+      "name": "unitless K",
+      "figure": {
+        "value": 12345.678,
+        "unit": "unitless",
+        "decimals": 2
+      },
+      "expected": "12.3K"
+    },
+    {
+      "name": "currency USD symbol",
+      "figure": {
+        "value": 1.9,
+        "unit": "currency",
+        "decimals": 1,
+        "currency": "USD"
+      },
+      "expected": "$1.9"
+    },
+    {
+      "name": "currency negative before the symbol",
+      "figure": {
+        "value": -1.94,
+        "unit": "currency",
+        "decimals": 1,
+        "currency": "USD"
+      },
+      "expected": "-$1.9"
+    },
+    {
+      "name": "currency EUR M",
+      "figure": {
+        "value": 1234567,
+        "unit": "currency",
+        "decimals": 0,
+        "currency": "EUR"
+      },
+      "expected": "€1.2M"
+    },
+    {
+      "name": "currency GBP two decimals",
+      "figure": {
+        "value": 0.5,
+        "unit": "currency",
+        "decimals": 2,
+        "currency": "GBP"
+      },
+      "expected": "£0.50"
+    },
+    {
+      "name": "currency JPY K",
+      "figure": {
+        "value": 15000,
+        "unit": "currency",
+        "decimals": 0,
+        "currency": "JPY"
+      },
+      "expected": "¥15K"
+    },
+    {
+      "name": "currency INR M",
+      "figure": {
+        "value": 2500000,
+        "unit": "currency",
+        "decimals": 0,
+        "currency": "INR"
+      },
+      "expected": "₹2.5M"
+    },
+    {
+      "name": "currency code without symbol",
+      "figure": {
+        "value": 12.5,
+        "unit": "currency",
+        "decimals": 1,
+        "currency": "CHF"
+      },
+      "expected": "CHF 12.5"
+    },
+    {
+      "name": "currency code negative",
+      "figure": {
+        "value": -2500,
+        "unit": "currency",
+        "decimals": 0,
+        "currency": "CAD"
+      },
+      "expected": "-CAD 2,500"
+    },
+    {
+      "name": "currency not stated is a plain number",
+      "figure": {
+        "value": 1234,
+        "unit": "currency",
+        "decimals": 0
+      },
+      "expected": "1,234"
+    },
+    {
+      "name": "currency signed",
+      "figure": {
+        "value": 1.9,
+        "unit": "currency",
+        "decimals": 1,
+        "currency": "USD"
+      },
+      "signed": true,
+      "expected": "+$1.9"
+    },
+    {
+      "name": "currency zero signed stays unsigned",
+      "figure": {
+        "value": 0,
+        "unit": "currency",
+        "decimals": 2,
+        "currency": "USD"
+      },
+      "signed": true,
+      "expected": "$0.00"
+    },
+    {
+      "name": "percent",
+      "figure": {
+        "value": 8.4,
+        "unit": "percent",
+        "decimals": 1
+      },
+      "expected": "8.4%"
+    },
+    {
+      "name": "percent float that is an integer",
+      "figure": {
+        "value": 81.0,
+        "unit": "percent",
+        "decimals": 0
+      },
+      "expected": "81%"
+    },
+    {
+      "name": "percent 0.05 tie to 0.0",
+      "figure": {
+        "value": 0.05,
+        "unit": "percent",
+        "decimals": 1
+      },
+      "expected": "0.0%"
+    },
+    {
+      "name": "percent 0.15 tie up",
+      "figure": {
+        "value": 0.15,
+        "unit": "percent",
+        "decimals": 1
+      },
+      "expected": "0.2%"
+    },
+    {
+      "name": "percent 0.25 tie down",
+      "figure": {
+        "value": 0.25,
+        "unit": "percent",
+        "decimals": 1
+      },
+      "expected": "0.2%"
+    },
+    {
+      "name": "percent never takes a suffix",
+      "figure": {
+        "value": 12345.6,
+        "unit": "percent",
+        "decimals": 1
+      },
+      "expected": "12,345.6%"
+    },
+    {
+      "name": "percent negative",
+      "figure": {
+        "value": -3.25,
+        "unit": "percent",
+        "decimals": 1
+      },
+      "expected": "-3.2%"
+    },
+    {
+      "name": "percent signed",
+      "figure": {
+        "value": 8.4,
+        "unit": "percent",
+        "decimals": 1
+      },
+      "signed": true,
+      "expected": "+8.4%"
+    },
+    {
+      "name": "percent zero signed",
+      "figure": {
+        "value": 0,
+        "unit": "percent",
+        "decimals": 1
+      },
+      "signed": true,
+      "expected": "0.0%"
+    },
+    {
+      "name": "percent ignores a currency code",
+      "figure": {
+        "value": 8.4,
+        "unit": "percent",
+        "decimals": 1,
+        "currency": "USD"
+      },
+      "expected": "8.4%"
+    },
+    {
+      "name": "pp",
+      "figure": {
+        "value": 0.9,
+        "unit": "pp",
+        "decimals": 1
+      },
+      "expected": "0.9 pp"
+    },
+    {
+      "name": "pp signed",
+      "figure": {
+        "value": 0.9,
+        "unit": "pp",
+        "decimals": 1
+      },
+      "signed": true,
+      "expected": "+0.9 pp"
+    },
+    {
+      "name": "pp negative tie rounds to even 1.0",
+      "figure": {
+        "value": -0.95,
+        "unit": "pp",
+        "decimals": 1
+      },
+      "expected": "-1.0 pp"
+    },
+    {
+      "name": "ratio",
+      "figure": {
+        "value": 3.25,
+        "unit": "ratio",
+        "decimals": 2
+      },
+      "expected": "3.25"
+    },
+    {
+      "name": "ratio tie odd up",
+      "figure": {
+        "value": 3.255,
+        "unit": "ratio",
+        "decimals": 2
+      },
+      "expected": "3.26"
+    },
+    {
+      "name": "ratio never takes a suffix",
+      "figure": {
+        "value": 12345.5,
+        "unit": "ratio",
+        "decimals": 1
+      },
+      "expected": "12,345.5"
+    },
+    {
+      "name": "days plural",
+      "figure": {
+        "value": 28,
+        "unit": "days",
+        "decimals": 0
+      },
+      "expected": "28 days"
+    },
+    {
+      "name": "days singular",
+      "figure": {
+        "value": 1,
+        "unit": "days",
+        "decimals": 0
+      },
+      "expected": "1 day"
+    },
+    {
+      "name": "days 1.0 is plural",
+      "figure": {
+        "value": 1,
+        "unit": "days",
+        "decimals": 1
+      },
+      "expected": "1.0 days"
+    },
+    {
+      "name": "days rounds to one",
+      "figure": {
+        "value": 0.6,
+        "unit": "days",
+        "decimals": 0
+      },
+      "expected": "1 day"
+    },
+    {
+      "name": "days negative one",
+      "figure": {
+        "value": -1,
+        "unit": "days",
+        "decimals": 0
+      },
+      "expected": "-1 day"
+    },
+    {
+      "name": "days 1.5 rounds to 2",
+      "figure": {
+        "value": 1.5,
+        "unit": "days",
+        "decimals": 0
+      },
+      "expected": "2 days"
+    },
+    {
+      "name": "error unknown unit",
+      "figure": {
+        "value": 1,
+        "unit": "furlong",
+        "decimals": 0
+      },
+      "error": "unit"
+    },
+    {
+      "name": "error decimals above four",
+      "figure": {
+        "value": 1,
+        "unit": "count",
+        "decimals": 5
+      },
+      "error": "decimals"
+    },
+    {
+      "name": "error decimals negative",
+      "figure": {
+        "value": 1,
+        "unit": "count",
+        "decimals": -1
+      },
+      "error": "decimals"
+    },
+    {
+      "name": "error decimals fractional",
+      "figure": {
+        "value": 1,
+        "unit": "count",
+        "decimals": 1.5
+      },
+      "error": "decimals"
+    },
+    {
+      "name": "error lower-case currency",
+      "figure": {
+        "value": 1,
+        "unit": "currency",
+        "decimals": 0,
+        "currency": "usd"
+      },
+      "error": "currency"
+    },
+    {
+      "name": "error value is a string",
+      "figure": {
+        "value": "12",
+        "unit": "count",
+        "decimals": 0
+      },
+      "error": "value"
+    },
+    {
+      "name": "error value is a boolean",
+      "figure": {
+        "value": true,
+        "unit": "count",
+        "decimals": 0
+      },
+      "error": "value"
+    },
+    {
+      "name": "error value is null",
+      "figure": {
+        "value": null,
+        "unit": "count",
+        "decimals": 0
+      },
+      "error": "value"
+    },
+    {
+      "name": "999,949 stays K",
+      "figure": {
+        "value": 999949,
+        "unit": "count",
+        "decimals": 0
+      },
+      "expected": "999.9K"
+    },
+    {
+      "name": "999,950 is 1M, never 1,000.0K",
+      "figure": {
+        "value": 999950,
+        "unit": "count",
+        "decimals": 0
+      },
+      "expected": "1M"
+    },
+    {
+      "name": "999,949,999 stays M",
+      "figure": {
+        "value": 999949999,
+        "unit": "count",
+        "decimals": 0
+      },
+      "expected": "999.9M"
+    },
+    {
+      "name": "999,950,000 is 1B",
+      "figure": {
+        "value": 999950000,
+        "unit": "count",
+        "decimals": 0
+      },
+      "expected": "1B"
+    },
+    {
+      "name": "999,950,000,000 is 1T",
+      "figure": {
+        "value": 999950000000,
+        "unit": "count",
+        "decimals": 0
+      },
+      "expected": "1T"
+    },
+    {
+      "name": "negative 999,950 is -1M",
+      "figure": {
+        "value": -999950,
+        "unit": "count",
+        "decimals": 0
+      },
+      "expected": "-1M"
+    },
+    {
+      "name": "negative currency at the M boundary",
+      "figure": {
+        "value": -999950,
+        "unit": "currency",
+        "decimals": 0,
+        "currency": "USD"
+      },
+      "expected": "-$1M"
+    },
+    {
+      "name": "currency at the B boundary",
+      "figure": {
+        "value": 999950000,
+        "unit": "currency",
+        "decimals": 0,
+        "currency": "EUR"
+      },
+      "expected": "€1B"
+    },
+    {
+      "name": "real magnitude: $1.9M",
+      "figure": {
+        "value": 1900000,
+        "unit": "currency",
+        "decimals": 0,
+        "currency": "USD"
+      },
+      "expected": "$1.9M"
+    },
+    {
+      "name": "real magnitude: $700K",
+      "figure": {
+        "value": 700000,
+        "unit": "currency",
+        "decimals": 0,
+        "currency": "USD"
+      },
+      "expected": "$700K"
+    },
+    {
+      "name": "real magnitude: $2.6M",
+      "figure": {
+        "value": 2600000,
+        "unit": "currency",
+        "decimals": 0,
+        "currency": "USD"
+      },
+      "expected": "$2.6M"
+    },
+    {
+      "name": "1.9 is $1.9, not $1.9M",
+      "figure": {
+        "value": 1.9,
+        "unit": "currency",
+        "decimals": 1,
+        "currency": "USD"
+      },
+      "expected": "$1.9"
+    },
+    {
+      "name": "compact true: K from 1,000",
+      "figure": {
+        "value": 1234,
+        "unit": "count",
+        "decimals": 0,
+        "compact": true
+      },
+      "expected": "1.2K"
+    },
+    {
+      "name": "compact true: 999 has no suffix",
+      "figure": {
+        "value": 999,
+        "unit": "count",
+        "decimals": 0,
+        "compact": true
+      },
+      "expected": "999"
+    },
+    {
+      "name": "compact true: 999.95 keeps its decimals",
+      "figure": {
+        "value": 999.95,
+        "unit": "count",
+        "decimals": 2,
+        "compact": true
+      },
+      "expected": "999.95"
+    },
+    {
+      "name": "compact true: 999.95 at 1 dp rounds into K",
+      "figure": {
+        "value": 999.95,
+        "unit": "count",
+        "decimals": 1,
+        "compact": true
+      },
+      "expected": "1K"
+    },
+    {
+      "name": "compact true: negative currency",
+      "figure": {
+        "value": -1500,
+        "unit": "currency",
+        "decimals": 0,
+        "currency": "USD",
+        "compact": true
+      },
+      "expected": "-$1.5K"
+    },
+    {
+      "name": "compact true: 999,950 is 1M",
+      "figure": {
+        "value": 999950,
+        "unit": "unitless",
+        "decimals": 0,
+        "compact": true
+      },
+      "expected": "1M"
+    },
+    {
+      "name": "compact false: full digits",
+      "figure": {
+        "value": 1234567,
+        "unit": "count",
+        "decimals": 0,
+        "compact": false
+      },
+      "expected": "1,234,567"
+    },
+    {
+      "name": "compact false: currency in full",
+      "figure": {
+        "value": 1900000,
+        "unit": "currency",
+        "decimals": 0,
+        "currency": "USD",
+        "compact": false
+      },
+      "expected": "$1,900,000"
+    },
+    {
+      "name": "compact false: decimals kept",
+      "figure": {
+        "value": 12345.678,
+        "unit": "unitless",
+        "decimals": 2,
+        "compact": false
+      },
+      "expected": "12,345.68"
+    },
+    {
+      "name": "compact false: negative",
+      "figure": {
+        "value": -999950,
+        "unit": "currency",
+        "decimals": 0,
+        "currency": "GBP",
+        "compact": false
+      },
+      "expected": "-£999,950"
+    },
+    {
+      "name": "compact is ignored by percent",
+      "figure": {
+        "value": 12345.6,
+        "unit": "percent",
+        "decimals": 1,
+        "compact": true
+      },
+      "expected": "12,345.6%"
+    },
+    {
+      "name": "compact is ignored by days",
+      "figure": {
+        "value": 12000,
+        "unit": "days",
+        "decimals": 0,
+        "compact": true
+      },
+      "expected": "12,000 days"
+    },
+    {
+      "name": "error compact is not a boolean",
+      "figure": {
+        "value": 1234,
+        "unit": "count",
+        "decimals": 0,
+        "compact": "yes"
+      },
+      "error": "compact"
+    }
+  ],
+  "round": [
+    {
+      "value": 0.0462,
+      "decimals": 1,
+      "shift": 2,
+      "expected": "4.6"
+    },
+    {
+      "value": 4.6,
+      "decimals": 1,
+      "shift": 0,
+      "expected": "4.6"
+    },
+    {
+      "value": 4.7,
+      "decimals": 1,
+      "shift": 0,
+      "expected": "4.7"
+    },
+    {
+      "value": 0.084,
+      "decimals": 1,
+      "shift": 2,
+      "expected": "8.4"
+    },
+    {
+      "value": 0.047,
+      "decimals": 1,
+      "shift": 2,
+      "expected": "4.7"
+    },
+    {
+      "value": -0.0049,
+      "decimals": 2,
+      "shift": 0,
+      "expected": "0.00"
+    },
+    {
+      "value": 2.5,
+      "decimals": 0,
+      "shift": 0,
+      "expected": "2"
+    },
+    {
+      "value": 3.5,
+      "decimals": 0,
+      "shift": 0,
+      "expected": "4"
+    },
+    {
+      "value": -2.5,
+      "decimals": 0,
+      "shift": 0,
+      "expected": "-2"
+    },
+    {
+      "value": 1e-07,
+      "decimals": 4,
+      "shift": 2,
+      "expected": "0.0000"
+    },
+    {
+      "value": 0.30000000000000004,
+      "decimals": 2,
+      "shift": 0,
+      "expected": "0.30"
+    },
+    {
+      "value": 123.456,
+      "decimals": 0,
+      "shift": -2,
+      "expected": "1"
+    }
+  ],
+  "substitute": {
+    "figures": [
+      {
+        "id": "f1",
+        "value": 4.7,
+        "unit": "percent",
+        "decimals": 1,
+        "evidence_ref": "/a"
+      },
+      {
+        "id": "f2",
+        "value": 0.9,
+        "unit": "pp",
+        "decimals": 1,
+        "evidence_ref": "/b"
+      },
+      {
+        "id": "f3",
+        "value": 1850000,
+        "unit": "currency",
+        "currency": "USD",
+        "decimals": 0,
+        "evidence_ref": "/c"
+      },
+      {
+        "id": "f4",
+        "value": 1900000,
+        "unit": "currency",
+        "currency": "USD",
+        "decimals": 0,
+        "compact": false,
+        "evidence_ref": "/d"
+      }
+    ],
+    "cases": [
+      {
+        "name": "two placeholders",
+        "text": "30+ day delinquency is {f1}, up {f2} on the prior quarter.",
+        "expected": "30+ day delinquency is 4.7%, up 0.9 pp on the prior quarter."
+      },
+      {
+        "name": "currency with suffix",
+        "text": "Exposure is {f3}.",
+        "expected": "Exposure is $1.8M."
+      },
+      {
+        "name": "a compact:false figure renders in full",
+        "text": "Price added {f4}.",
+        "expected": "Price added $1,900,000."
+      },
+      {
+        "name": "four digits is not a placeholder",
+        "text": "{f1234} stays as written",
+        "expected": "{f1234} stays as written"
+      },
+      {
+        "name": "spaces are not a placeholder",
+        "text": "{ f1 } and {F1} stay",
+        "expected": "{ f1 } and {F1} stay"
+      },
+      {
+        "name": "repeated",
+        "text": "{f1}/{f1}",
+        "expected": "4.7%/4.7%"
+      },
+      {
+        "name": "unresolved",
+        "text": "Missing {f9}.",
+        "error": "unresolved_figure"
+      }
+    ]
+  }
+}

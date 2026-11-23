@@ -1,9 +1,19 @@
 # deploy/helm/ray/rayservice.yaml
 # KubeRay RayService = Ray Serve app => "inference as a service over k8s".
-# Applied by app/infra/ray_manager.deploy_ray_serve(). The Serve app is defined in
-# app/serve/inference.py (baked into the avaloka-ray image at import path below).
+#
+# OPT-IN since 2026-11 (INFERENCE_BACKEND=rayserve): the default inference
+# backend is the model-server Deployment in the avaloka chart
+# (templates/model-server.yaml), which costs nothing when idle. A RayService
+# keeps a Ray head pod running whether or not a model is loaded, so it is
+# applied by app/infra/cluster_bootstrap.py only when that backend is selected
+# -- for GPU-heavy or very-high-QPS installs. The Serve app is defined in
+# app/serve/inference.py (baked into the avaloka-ray image at import path below)
+# and multiplexes many models per replica (header serve_multiplexed_model_id).
 #
 # Reach it: kubectl port-forward svc/avaloka-inference-serve-svc 8000:8000
+# Its dashboard and Ray client need the Ray auth token (avaloka-ray-auth); the
+# Serve HTTP port does not use Ray's token -- the chart's NetworkPolicy admits
+# only the app's pods to it.
 #   GET  http://localhost:8000/        -> readiness
 #   POST http://localhost:8000/  {"features": {...}, "model_uri": "runs:/..."}
 #        -> prediction from the selected MLflow ONNX artifact
@@ -28,9 +38,37 @@ spec:
             MODEL_URI: ""
         deployments:
           - name: InferenceService
-            num_replicas: 1
+            # Serve-native autoscaling; min 0 so an idle app holds no replica
+            # (the head still runs: that is why this backend is opt-in).
+            autoscaling_config:
+              min_replicas: 0
+              initial_replicas: 1
+              max_replicas: 4
+              target_ongoing_requests: 4
+              upscale_delay_s: 10
+              downscale_delay_s: 7200
+            max_ongoing_requests: 8
   rayClusterConfig:
-    rayVersion: "2.49.2"
+    rayVersion: "2.56.0"
+    # The Ray autoscaler adds/removes worker pods as Serve asks for replicas.
+    enableInTreeAutoscaling: true
+    autoscalerOptions:
+      resources:
+        requests: { cpu: "150m", memory: "256Mi" }
+        limits: { cpu: "300m", memory: "512Mi" }
+      # The autoscaler sidecar talks to GCS, so it needs the token too (same
+      # block as deploy/helm/ray/raycluster.yaml; not optional: no token, no start).
+      env:
+        - name: RAY_AUTH_MODE
+          value: token
+        - name: RAY_AUTH_TOKEN
+          valueFrom:
+            secretKeyRef: { name: avaloka-ray-auth, key: auth_token }
+    # Ray token auth; the KubeRay operator (1.6+) reads Serve status with the
+    # same Secret. See deploy/helm/ray/raycluster.yaml.
+    authOptions:
+      mode: token
+      secretName: avaloka-ray-auth
     headGroupSpec:
       rayStartParams:
         dashboard-host: "0.0.0.0"
@@ -45,12 +83,31 @@ spec:
                 - configMapRef:
                     name: avaloka-config
                     optional: true
-                - secretRef:
-                    name: avaloka-secrets
-                    optional: true
+              # Named keys only, never the whole avaloka-secrets: the Serve app
+              # loads model artifacts from the object store and needs nothing else.
               env:
                 - name: RAY_DASHBOARD_SUBPROCESS_MODULE_WAIT_READY_TIMEOUT
                   value: "180"
+                - name: AWS_ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef: { name: avaloka-secrets, key: AWS_ACCESS_KEY_ID, optional: true }
+                - name: AWS_SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef: { name: avaloka-secrets, key: AWS_SECRET_ACCESS_KEY, optional: true }
+                # Ray token authentication (see raycluster.yaml). Not optional: a pod
+                # without the token does not start rather than start open.
+                - name: RAY_AUTH_MODE
+                  value: token
+                - name: RAY_AUTH_TOKEN
+                  valueFrom:
+                    secretKeyRef: { name: avaloka-ray-auth, key: auth_token }
+                # MLflow basic-auth: the Serve app loads models from the tracking server.
+                - name: MLFLOW_TRACKING_USERNAME
+                  valueFrom:
+                    secretKeyRef: { name: avaloka-secrets, key: MLFLOW_TRACKING_USERNAME, optional: true }
+                - name: MLFLOW_TRACKING_PASSWORD
+                  valueFrom:
+                    secretKeyRef: { name: avaloka-secrets, key: MLFLOW_TRACKING_PASSWORD, optional: true }
               ports:
                 - { containerPort: 6379, name: gcs }
                 - { containerPort: 8265, name: dashboard }
@@ -61,8 +118,8 @@ spec:
                 limits: { cpu: "1", memory: "6Gi" }
     workerGroupSpecs:
       - groupName: serve-workers
-        replicas: 1
-        minReplicas: 1
+        replicas: 0
+        minReplicas: 0     # idle Serve replicas scale to zero; pods follow
         maxReplicas: 3
         rayStartParams: {}
         template:
@@ -76,9 +133,27 @@ spec:
                   - configMapRef:
                       name: avaloka-config
                       optional: true
-                  - secretRef:
-                      name: avaloka-secrets
-                      optional: true
+                env:
+                  - name: AWS_ACCESS_KEY_ID
+                    valueFrom:
+                      secretKeyRef: { name: avaloka-secrets, key: AWS_ACCESS_KEY_ID, optional: true }
+                  - name: AWS_SECRET_ACCESS_KEY
+                    valueFrom:
+                      secretKeyRef: { name: avaloka-secrets, key: AWS_SECRET_ACCESS_KEY, optional: true }
+                  # Ray token authentication (see raycluster.yaml). Not optional: a pod
+                  # without the token does not start rather than start open.
+                  - name: RAY_AUTH_MODE
+                    value: token
+                  - name: RAY_AUTH_TOKEN
+                    valueFrom:
+                      secretKeyRef: { name: avaloka-ray-auth, key: auth_token }
+                  # MLflow basic-auth: the Serve app loads models from the tracking server.
+                  - name: MLFLOW_TRACKING_USERNAME
+                    valueFrom:
+                      secretKeyRef: { name: avaloka-secrets, key: MLFLOW_TRACKING_USERNAME, optional: true }
+                  - name: MLFLOW_TRACKING_PASSWORD
+                    valueFrom:
+                      secretKeyRef: { name: avaloka-secrets, key: MLFLOW_TRACKING_PASSWORD, optional: true }
                 resources:
                   requests: { cpu: "300m", memory: "1Gi" }
                   limits: { cpu: "2", memory: "3Gi" }

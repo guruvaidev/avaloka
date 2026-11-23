@@ -1,0 +1,17 @@
+diff --git a/app/agents/data_transfer_agent/data_transfer_agent.py b/app/agents/data_transfer_agent/data_transfer_agent.py
+index cc6f3fd0..a6b72d8a 100644
+--- a/app/agents/data_transfer_agent/data_transfer_agent.py
++++ b/app/agents/data_transfer_agent/data_transfer_agent.py
+@@ -1577,6 +1577,12 @@ def data_transfer_pipeline(
+     injection_script: Optional[str] = None
+     warnings_list: List[str] = []
+ 
++    _readable = {"csv", "json", "parquet", "sql"} | _DB_TYPES
++    if str(source_type or "").lower() not in _readable:
++        return {"error_message": (
++            f"{source_type} is not a source format the transfer agent can read. "
++            "It reads CSV, JSON and Parquet files, and MySQL or PostgreSQL tables.")}, None
++
+     # Reject unsupported source combinations before spending any schema/sample/
+     # LLM work. The generated reader can't read a cloud JSON source, so without
+     # this it would fail only at injection-script assembly — after the full

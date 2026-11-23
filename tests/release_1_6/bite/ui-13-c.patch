@@ -1,0 +1,12 @@
+diff --git a/ui/src/integrations/supabase/config.ts b/ui/src/integrations/supabase/config.ts
+--- a/ui/src/integrations/supabase/config.ts
++++ b/ui/src/integrations/supabase/config.ts
+@@ -4,7 +4,7 @@
+ 
+ import { runtimeEnv } from "@/lib/runtime-env";
+ 
+-const LOCAL_SUPABASE_URL = "http://localhost:30091";
++const LOCAL_SUPABASE_URL = "https://hosted-project.example.org";
+ const LOCAL_SUPABASE_ANON_KEY =
+   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlLWRlbW8iLCJpYXQiOjE2NDE3NjkyMDAsImV4cCI6MTc5OTUzNTYwMH0.F_rDxRTPE8OU83L_CNgEGXfmirMXmMMugT29Cvc8ygQ";
+ 

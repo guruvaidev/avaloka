@@ -29,6 +29,16 @@
 #                       Not normally needed: see "Wheels, not builds" below.
 #   --doctor         run the environment check and exit
 #
+# PyTorch, CPU or CUDA
+# --------------------
+# On Linux with no NVIDIA GPU (no nvidia-smi, no /proc/driver/nvidia), torch
+# and torchvision are installed from PyTorch's CPU index first. The default
+# PyPI wheel for Linux bundles CUDA: about 3.3 GB of nvidia-* wheels and 0.8 GB
+# of triton that a CPU-only machine can never use. macOS and Windows wheels on
+# PyPI carry no CUDA, so nothing changes there. Override with
+#   AVALOKA_TORCH_INDEX=URL   install torch from this index instead
+#   AVALOKA_TORCH_INDEX=      (set but empty) use the default PyPI wheel
+#
 # Wheels, not builds
 # ------------------
 # Dependencies install with --prefer-binary, which is the difference between a
@@ -51,6 +61,16 @@ USE_VENV=1
 CHECK_ONLY=0
 MIN_PY_MINOR=11
 
+# The index torch should come from, or nothing for PyPI's default wheel.
+torch_index_url() {
+  if [[ -n "${AVALOKA_TORCH_INDEX+set}" ]]; then printf '%s' "$AVALOKA_TORCH_INDEX"; return 0; fi
+  [[ "$(uname -s)" == "Linux" ]] || return 0
+  if command -v nvidia-smi >/dev/null 2>&1 || [[ -e /proc/driver/nvidia/version ]]; then
+    return 0
+  fi
+  printf '%s' "https://download.pytorch.org/whl/cpu"
+}
+
 RED=$'\033[31m'; GREEN=$'\033[32m'; YELLOW=$'\033[33m'; BOLD=$'\033[1m'; OFF=$'\033[0m'
 say()  { printf '%s\n' "$*"; }
 ok()   { printf '%s✓%s %s\n' "$GREEN" "$OFF" "$*"; }
@@ -65,7 +85,10 @@ while [[ $# -gt 0 ]]; do
     --index-url)   INDEX_URL="${2:?--index-url needs a URL}"; shift 2 ;;
     --no-venv)     USE_VENV=0; shift ;;
     --check)       CHECK_ONLY=1; shift ;;
-    -h|--help)     sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --doctor)      DOCTOR_ONLY=1; shift ;;
+    --with-build-tools) WITH_BUILD_TOOLS=1; shift ;;
+    # The whole header, up to the first line that is not a comment.
+    -h|--help)     awk 'NR>1 && !/^#/{exit} NR>1' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *)             die "unknown option: $1 (try --help)" ;;
   esac
 done
@@ -161,6 +184,18 @@ say ""
 say "${BOLD}Installing open-source dependencies${OFF}"
 "$VENV_PY" -m pip install --quiet --upgrade pip setuptools wheel \
   || die "could not upgrade pip"
+TORCH_INDEX="$(torch_index_url)"
+if [[ -n "$TORCH_INDEX" && -f requirements.txt ]] && grep -qE '^torch([<>=!~ ]|$)' requirements.txt; then
+  # Installed first, so the requirements below find torch already satisfied
+  # and do not pull the CUDA build. Same floors as requirements.txt.
+  TORCH_SPECS=$(grep -E '^(torch|torchvision)([<>=!~ ]|$)' requirements.txt | sed 's/[[:space:]]*#.*//')
+  # shellcheck disable=SC2086
+  if "$VENV_PY" -m pip install --quiet --prefer-binary --index-url "$TORCH_INDEX" $TORCH_SPECS; then
+    ok "installed CPU-only torch from $TORCH_INDEX (no NVIDIA GPU found; AVALOKA_TORCH_INDEX= overrides)"
+  else
+    warn "could not install torch from $TORCH_INDEX; falling back to the default PyPI wheel"
+  fi
+fi
 if [[ -f requirements.txt ]]; then
   # --prefer-binary is load-bearing. See "Wheels, not builds" at the top.
   if "$VENV_PY" -m pip install --quiet --prefer-binary -r requirements.txt; then
@@ -227,6 +262,19 @@ if [[ "$EDITION" != "oss" ]]; then
   printf '%s\n' "$LICENSE_KEY" > "$LICENSE_FILE"
   chmod 600 "$LICENSE_FILE"
   ok "licence stored at $LICENSE_FILE (mode 600)"
+fi
+
+# --------------------------------------------------------------------------- #
+# Generated secrets (DB_ENCRYPTION_KEY, MCP_SERVICE_TOKEN, AVALOKA_PII_KEY)
+# --------------------------------------------------------------------------- #
+# Generated when unset, empty or a published value, and saved to .env (mode
+# 600) so every service and every later start uses the same ones. Values are
+# never printed. See docs/INSTALL.md, Configuration. (scripts/quickstart.sh
+# does the same for .env.quickstart.)
+if [[ "$CHECK_ONLY" -eq 0 ]]; then
+  say ""
+  ( cd "$REPO_ROOT" && "$VENV_PY" -m app.core.provisioning --env-file "${AVALOKA_ENV_FILE:-$REPO_ROOT/.env}" ) \
+    || die "could not generate the secrets into ${AVALOKA_ENV_FILE:-$REPO_ROOT/.env}"
 fi
 
 # --------------------------------------------------------------------------- #

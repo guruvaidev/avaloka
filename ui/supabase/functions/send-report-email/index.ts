@@ -1,8 +1,10 @@
 // Sends a report's contents by email as a password-protected PDF attachment.
 // Delivery uses SMTP (SMTP_HOST/SMTP_PORT/SMTP_USERNAME/SMTP_PASSWORD, EMAIL_FROM).
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
-import { PDFDocument, StandardFonts, rgb } from "https://esm.sh/@cantoo/pdf-lib@2.7.4";
+import { PDFDocument, StandardFonts, degrees, rgb } from "https://esm.sh/@cantoo/pdf-lib@2.7.4";
 import { sendMail } from "../_shared/raw-smtp.ts";
+import { drawChartPlan, planChart, type Prim } from "../_shared/chart-render.ts";
+import { fetchImageSafely } from "../_shared/ssrf.ts";
 
 const sendViaSmtp = sendMail;
 
@@ -154,24 +156,6 @@ function buildChartJsConfig(chart: JsonRecord, fallbackRows: unknown[] | null): 
   };
 }
 
-async function renderChartPng(config: Record<string, unknown>): Promise<Uint8Array | null> {
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 5000);
-    const res = await fetch("https://quickchart.io/chart", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chart: config, width: 700, height: 380, format: "png", backgroundColor: "white" }),
-      signal: controller.signal,
-    });
-    clearTimeout(timer);
-    if (!res.ok) return null;
-    return new Uint8Array(await res.arrayBuffer());
-  } catch {
-    return null;
-  }
-}
-
 function safeText(s: string): string {
   const cleaned = s
     .replace(/[\u2018\u2019]/g, "'")
@@ -184,6 +168,12 @@ function safeText(s: string): string {
     out += code >= 32 && code <= 255 ? ch : "?";
   }
   return out;
+}
+
+// Chart labels come from customer data, and StandardFonts is WinAnsi-only, so
+// every string that reaches drawText goes through safeText first.
+function sanitizePrims(prims: Prim[]): Prim[] {
+  return prims.map((p) => (p.kind === "text" ? { ...p, text: safeText(p.text) } : p));
 }
 
 type ReportWidget = {
@@ -243,23 +233,6 @@ type PdfComment = {
   attachments: string[];
 };
 
-async function fetchLogoBytes(url: string): Promise<{ bytes: Uint8Array; kind: "png" | "jpg" } | null> {
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 6000);
-    const res = await fetch(url, { signal: controller.signal });
-    clearTimeout(timer);
-    if (!res.ok) return null;
-    const ct = (res.headers.get("content-type") ?? "").toLowerCase();
-    const buf = new Uint8Array(await res.arrayBuffer());
-    const kind: "png" | "jpg" =
-      ct.includes("png") || url.toLowerCase().endsWith(".png") ? "png" : "jpg";
-    return { bytes: buf, kind };
-  } catch {
-    return null;
-  }
-}
-
 async function buildEncryptedPdf(
   title: string,
   senderName: string,
@@ -279,45 +252,56 @@ async function buildEncryptedPdf(
   const PAGE_W = 595.28, PAGE_H = 841.89, MARGIN = 48;
   const CONTENT_W = PAGE_W - MARGIN * 2;
 
-  const WATERMARK_URL =
-    "https://avaloka-flow.lovable.app/__l5e/assets-v1/1d8a02eb-7ed9-40a5-a86b-a57148ce3410/avaloka-watermark.png";
+  // Text width for the chart renderer, measured with the font that will draw it.
+  const measure = (text: string, size: number, bold: boolean) =>
+    (bold ? fontBold : font).widthOfTextAtSize(safeText(text), size);
 
-  // Preload watermark image once. Fall back to null on failure -> watermark skipped.
-  let watermarkImg: any = null;
-  try {
-    const fetched = await fetchLogoBytes(WATERMARK_URL);
-    if (fetched) {
-      watermarkImg = fetched.kind === "png"
-        ? await pdfDoc.embedPng(fetched.bytes)
-        : await pdfDoc.embedJpg(fetched.bytes);
-    }
-  } catch { /* ignore */ }
-
-  // Preload org logo (for the header) once as well.
+  // Org logo. The URL comes from organizations.logo_url, which an org owner or a
+  // global admin can set to anything, so it goes through the SSRF guard: https
+  // only, no IP literals, resolved address must be global unicast, redirects
+  // re-checked per hop, size capped, PNG/JPEG confirmed by magic bytes. A
+  // refusal yields no bytes at all, so there is nothing to embed by mistake.
   let orgLogoImg: any = null;
   if (orgLogoUrl) {
-    try {
-      const fetched = await fetchLogoBytes(orgLogoUrl);
-      if (fetched) {
+    const fetched = await fetchImageSafely(orgLogoUrl);
+    if (fetched.ok) {
+      try {
         orgLogoImg = fetched.kind === "png"
           ? await pdfDoc.embedPng(fetched.bytes)
           : await pdfDoc.embedJpg(fetched.bytes);
+      } catch (e) {
+        console.log("[send-report-email] org logo did not decode", String(e));
+        orgLogoImg = null;
       }
-    } catch { /* ignore */ }
+    } else {
+      console.log("[send-report-email] org logo refused", { reason: fetched.reason });
+    }
   }
 
+  // Watermark, drawn locally. This used to fetch a PNG from
+  // https://avaloka-flow.lovable.app on every single report email: an
+  // undeclared host, and a hard dependency on a Lovable-hosted asset that no
+  // air-gapped or self-hosted install can reach.
+  const watermarkText = safeText((orgName || "Avaloka").toUpperCase()).slice(0, 24);
+  // Shrink a long org name so the diagonal still fits on the page.
+  const WATERMARK_SPAN = 760;
+  const watermarkSize = Math.min(
+    56,
+    (WATERMARK_SPAN / Math.max(1, fontBold.widthOfTextAtSize(watermarkText, 56))) * 56,
+  );
   const drawWatermark = (p: any) => {
-    if (!watermarkImg) return;
-    const size = 340;
-    const scale = Math.min(size / watermarkImg.width, size / watermarkImg.height);
-    const w = watermarkImg.width * scale;
-    const h = watermarkImg.height * scale;
-    p.drawImage(watermarkImg, {
-      x: (PAGE_W - w) / 2,
-      y: (PAGE_H - h) / 2,
-      width: w,
-      height: h,
-      opacity: 0.08,
+    const size = watermarkSize;
+    const width = fontBold.widthOfTextAtSize(watermarkText, size);
+    const half = width / 2;
+    const rad = Math.PI / 4;
+    p.drawText(watermarkText, {
+      x: PAGE_W / 2 - half * Math.cos(rad),
+      y: PAGE_H / 2 - half * Math.sin(rad),
+      size,
+      font: fontBold,
+      color: rgb(0.06, 0.09, 0.16),
+      opacity: 0.06,
+      rotate: degrees(45),
     });
   };
 
@@ -434,15 +418,14 @@ async function buildEncryptedPdf(
 
   const fallbackRows = arrayValue(analysisSamples);
 
-  // Chart rendering is remote I/O. Run it concurrently so a report with many
-  // widgets does not spend up to eight seconds per chart and hit the function
-  // execution limit before SMTP delivery begins.
-  const chartImages = await Promise.all(
-    widgets.map(async (widget) => {
-      if (!widget.chart) return null;
-      const config = buildChartJsConfig(widget.chart, fallbackRows);
-      return config ? await renderChartPng(config) : null;
-    }),
+  // Charts are drawn locally, as vector graphics, with the pdf-lib this function
+  // already embeds. They used to be rendered by POSTing the chart config — real
+  // data values plus column and series labels — to https://quickchart.io, an
+  // undeclared third-party sub-processor. Being local, this is also no longer
+  // remote I/O, so the per-chart timeout that used to threaten the function's
+  // execution limit is gone.
+  const chartConfigs = widgets.map((widget) =>
+    widget.chart ? buildChartJsConfig(widget.chart, fallbackRows) : null
   );
 
   for (let idx = 0; idx < widgets.length; idx++) {
@@ -452,16 +435,19 @@ async function buildEncryptedPdf(
     drawText(`Insight ${idx + 1} of ${widgets.length}`, { size: 9, bold: true, color: [0.4, 0.45, 0.55], gap: 6 });
     drawText(w.title || "Chart", { size: 13, bold: true, gap: 10 });
 
-    const png = chartImages[idx];
-    if (png) {
-      try {
-        const img = await pdfDoc.embedPng(png);
-        const scale = Math.min(1, CONTENT_W / img.width);
-        const cw = img.width * scale, ch = img.height * scale;
-        ensureSpace(ch + 20);
-        page.drawImage(img, { x: MARGIN, y: y - ch, width: cw, height: ch });
-        y -= ch + 20;
-      } catch { /* ignore */ }
+    const config = chartConfigs[idx];
+    if (config) {
+      const CHART_H = 230;
+      ensureSpace(CHART_H + 20);
+      const prims = planChart(
+        config,
+        { x: MARGIN, y: y - CHART_H, width: CONTENT_W, height: CHART_H },
+        measure,
+      );
+      if (prims.length) {
+        drawChartPlan(page, sanitizePrims(prims), { font, fontBold, rgb });
+        y -= CHART_H + 20;
+      }
     }
 
     if (w.insights.length) {

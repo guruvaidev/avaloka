@@ -33,6 +33,8 @@ import {
   extractMentionedProfileIds,
 } from "@/components/dashboard/MentionTextInput";
 import { cx } from "@/lib/utils/cx";
+import { useResourceAccess } from "@/lib/use-resource-access";
+import { COMMENTS_NEED_PRO, usePlanFeatures } from "@/lib/use-plan-features";
 
 type CardProps = {
   analysisId: string | null;
@@ -122,6 +124,9 @@ function PendingAttachments({ files, onRemove }: { files: File[]; onRemove: (ind
 /** Full-width insight comment thread + composer. */
 export function InsightCommentCard({ analysisId, reportId = null, refreshKey = 0, hideThread = false }: CardProps & { hideThread?: boolean }) {
   const useReport = !!reportId;
+  const { canComment: planCanComment } = usePlanFeatures();
+  const analysisAccess = useResourceAccess("analysis", useReport ? null : analysisId);
+  const canComment = planCanComment && (useReport || analysisAccess.canComment);
   const [message, setMessage] = useState("");
   const [sending, setSending] = useState(false);
   const [comments, setComments] = useState<AnalysisInsightComment[]>([]);
@@ -193,7 +198,7 @@ export function InsightCommentCard({ analysisId, reportId = null, refreshKey = 0
 
   const handleSend = async () => {
     const text = message.trim();
-    if ((!text && pendingFiles.length === 0) || sending) return;
+    if (!canComment || (!text && pendingFiles.length === 0) || sending) return;
     if (useReport ? !reportId : !analysisId) {
       toast.error("Save this first to add comments.");
       return;
@@ -220,7 +225,7 @@ export function InsightCommentCard({ analysisId, reportId = null, refreshKey = 0
   const handleReply = async (parentId: string) => {
     const text = replyDraft.trim();
     const activeId = useReport ? reportId : analysisId;
-    if ((!text && replyPendingFiles.length === 0) || replySending || !activeId) return;
+    if (!canComment || (!text && replyPendingFiles.length === 0) || replySending || !activeId) return;
     setReplySending(true);
     try {
       const attachments = await uploadPending(replyPendingFiles);
@@ -260,17 +265,19 @@ export function InsightCommentCard({ analysisId, reportId = null, refreshKey = 0
                 text={c.text}
                 attachments={c.attachments}
                 footer={
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setReplyingToId((id) => (id === c.id ? null : c.id));
-                      setReplyDraft("");
-                      setReplyPendingFiles([]);
-                    }}
-                    className="mt-1 text-xs text-tertiary hover:text-secondary"
-                  >
-                    {replyingToId === c.id ? "Cancel" : "Reply"}
-                  </button>
+                  canComment ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setReplyingToId((id) => (id === c.id ? null : c.id));
+                        setReplyDraft("");
+                        setReplyPendingFiles([]);
+                      }}
+                      className="mt-1 text-xs text-tertiary hover:text-secondary"
+                    >
+                      {replyingToId === c.id ? "Cancel" : "Reply"}
+                    </button>
+                  ) : undefined
                 }
               />
 
@@ -287,7 +294,7 @@ export function InsightCommentCard({ analysisId, reportId = null, refreshKey = 0
                 />
               ))}
 
-              {replyingToId === c.id && (
+              {canComment && replyingToId === c.id && (
                 <form
                   onSubmit={(e) => {
                     e.preventDefault();
@@ -334,6 +341,11 @@ export function InsightCommentCard({ analysisId, reportId = null, refreshKey = 0
         </div>
       ) : null}
 
+      {!canComment ? (
+        <p className={cx("px-4 py-3 text-sm text-tertiary", !hideThread && comments.length > 0 && "border-t border-secondary")}>
+          {planCanComment ? "Comment or Edit access is required to add comments." : COMMENTS_NEED_PRO}
+        </p>
+      ) : (
       <div className={cx("p-4", !hideThread && comments.length > 0 && "border-t border-secondary")}>
         <div className="w-full rounded-lg border border-secondary bg-primary">
           <input
@@ -391,6 +403,7 @@ export function InsightCommentCard({ analysisId, reportId = null, refreshKey = 0
           </div>
         </div>
       </div>
+      )}
     </div>
   );
 }

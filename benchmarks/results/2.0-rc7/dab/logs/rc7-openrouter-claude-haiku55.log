@@ -1,0 +1,141 @@
+
+Estimated spend (before running):
+
+| Config | Model | Calls | $ low | $ high | price source |
+| --- | --- | --- | --- | --- | --- |
+| dab_avaloka_native | `openrouter/anthropic/claude-haiku-5.5` | 54 | $0.0000 | $0.0000 | unpriced |
+
+**Total: $0.0000 – $0.0000 over 54 calls.**
+
+The high figure assumes every answer uses its full `max_tokens` allowance, so it is a ceiling the provider cannot exceed for these configs — not a forecast.
+
+> ⚠️  UNPRICED, and therefore **excluded from both totals**: `dab_avaloka_native`. No catalog quote exists for these models, so their real spend is unknown — it is not zero.
+
+Running suite 'dab': 54 tasks x 1 configs
+config dab_avaloka_native (sut=avaloka_dab, sampling=entire_dataset, llm=openrouter/anthropic/claude-haiku-5.5) over 54 tasks x 1 trials
+  [dab_avaloka_native] dab:agnews:1 trial 1/1 ok q=0.000 $0.0062 36.56s
+  [dab_avaloka_native] dab:agnews:2 trial 1/1 ok q=0.000 $0.0177 85.17s
+  [dab_avaloka_native] dab:agnews:3 trial 1/1 ok q=0.000 $0.1615 94.30s
+  [dab_avaloka_native] dab:agnews:4 trial 1/1 ok q=1.000 $0.0936 70.87s
+  [dab_avaloka_native] dab:bookreview:1 trial 1/1 ok q=1.000 $0.0279 39.92s
+  [dab_avaloka_native] dab:bookreview:2 trial 1/1 ok q=0.000 $0.0096 33.96s
+  [dab_avaloka_native] dab:bookreview:3 trial 1/1 ok q=1.000 $0.0099 33.91s
+  [dab_avaloka_native] dab:crmarenapro:1 trial 1/1 ok q=1.000 $0.0061 27.42s
+  [dab_avaloka_native] dab:crmarenapro:2 trial 1/1 ok q=0.000 $0.0342 53.88s
+  [dab_avaloka_native] dab:crmarenapro:3 trial 1/1 ERR q=0.000 $0.0029 20.41s
+  [dab_avaloka_native] dab:crmarenapro:4 trial 1/1 ok q=1.000 $0.0102 43.83s
+  [dab_avaloka_native] dab:crmarenapro:5 trial 1/1 ok q=1.000 $0.0087 34.49s
+  [dab_avaloka_native] dab:crmarenapro:6 trial 1/1 ok q=1.000 $0.0294 34.17s
+  [dab_avaloka_native] dab:crmarenapro:7 trial 1/1 ok q=1.000 $0.0746 65.84s
+  [dab_avaloka_native] dab:crmarenapro:8 trial 1/1 ok q=1.000 $0.0289 56.29s
+  [dab_avaloka_native] dab:crmarenapro:9 trial 1/1 ERR q=0.000 $0.0147 40.99s
+  [dab_avaloka_native] dab:crmarenapro:10 trial 1/1 ok q=1.000 $0.0433 50.39s
+  [dab_avaloka_native] dab:crmarenapro:11 trial 1/1 ok q=1.000 $0.0085 32.76s
+  [dab_avaloka_native] dab:crmarenapro:12 trial 1/1 ok q=0.000 $0.0062 31.82s
+  [dab_avaloka_native] dab:crmarenapro:13 trial 1/1 ok q=1.000 $0.0230 42.48s
+  [dab_avaloka_native] dab:DEPS_DEV_V1:1 trial 1/1 ERR q=0.000 $0.0658 90.21s
+  [dab_avaloka_native] dab:DEPS_DEV_V1:2 trial 1/1 ERR q=0.000 $0.2103 154.85s
+  [dab_avaloka_native] dab:GITHUB_REPOS:1 trial 1/1 ok q=0.000 $0.0095 62.77s
+  [dab_avaloka_native] dab:GITHUB_REPOS:2 trial 1/1 ok q=1.000 $0.0130 48.91s
+  [dab_avaloka_native] dab:GITHUB_REPOS:3 trial 1/1 ok q=1.000 $0.0627 52.72s
+  [dab_avaloka_native] dab:GITHUB_REPOS:4 trial 1/1 ok q=1.000 $0.0191 35.45s
+  [dab_avaloka_native] dab:googlelocal:1 trial 1/1 ok q=1.000 $0.0042 28.70s
+  [dab_avaloka_native] dab:googlelocal:2 trial 1/1 ok q=0.000 $0.0031 24.35s
+  [dab_avaloka_native] dab:googlelocal:3 trial 1/1 ok q=0.000 $0.0112 44.53s
+  [dab_avaloka_native] dab:googlelocal:4 trial 1/1 ok q=1.000 $0.0027 22.42s
+  [dab_avaloka_native] dab:music_brainz_20k:1 trial 1/1 ok q=0.000 $0.0026 23.60s
+  [dab_avaloka_native] dab:music_brainz_20k:2 trial 1/1 ok q=1.000 $0.0027 23.97s
+  [dab_avaloka_native] dab:music_brainz_20k:3 trial 1/1 ok q=0.000 $0.0541 46.81s
+  [dab_avaloka_native] dab:PANCANCER_ATLAS:1 trial 1/1 ok q=0.000 $0.0909 69.79s
+  [dab_avaloka_native] dab:PANCANCER_ATLAS:2 trial 1/1 ok q=1.000 $0.0671 56.22s
+  [dab_avaloka_native] dab:PANCANCER_ATLAS:3 trial 1/1 ok q=1.000 $0.0560 72.43s
+  [dab_avaloka_native] dab:PATENTS:1 trial 1/1 ok q=0.000 $0.0928 111.76s
+  [dab_avaloka_native] dab:PATENTS:2 trial 1/1 ok q=0.000 $0.1064 90.31s
+  [dab_avaloka_native] dab:PATENTS:3 trial 1/1 ERR q=0.000 $0.0330 51.48s
+  [dab_avaloka_native] dab:stockindex:1 trial 1/1 ok q=1.000 $0.0060 31.14s
+  [dab_avaloka_native] dab:stockindex:2 trial 1/1 ok q=1.000 $0.0282 35.66s
+  [dab_avaloka_native] dab:stockindex:3 trial 1/1 ok q=1.000 $0.0397 68.73s
+  [dab_avaloka_native] dab:stockmarket:1 trial 1/1 ok q=1.000 $0.0025 22.17s
+  [dab_avaloka_native] dab:stockmarket:2 trial 1/1 ERR q=0.000 $0.1030 193.06s
+  [dab_avaloka_native] dab:stockmarket:3 trial 1/1 ok q=1.000 $0.0162 46.67s
+  [dab_avaloka_native] dab:stockmarket:4 trial 1/1 ok q=0.000 $0.0583 101.31s
+  [dab_avaloka_native] dab:stockmarket:5 trial 1/1 ok q=1.000 $0.0585 119.19s
+  [dab_avaloka_native] dab:yelp:1 trial 1/1 ok q=1.000 $0.0374 46.30s
+  [dab_avaloka_native] dab:yelp:2 trial 1/1 ok q=1.000 $0.0219 58.72s
+  [dab_avaloka_native] dab:yelp:3 trial 1/1 ok q=0.000 $0.0281 46.00s
+  [dab_avaloka_native] dab:yelp:4 trial 1/1 ok q=0.000 $0.0162 57.29s
+  [dab_avaloka_native] dab:yelp:5 trial 1/1 ok q=0.000 $0.0056 32.76s
+  [dab_avaloka_native] dab:yelp:6 trial 1/1 ok q=1.000 $0.0147 38.17s
+  [dab_avaloka_native] dab:yelp:7 trial 1/1 ok q=0.000 $0.0210 73.67s
+
+Observed spend: $1.9816 over 54 calls
+
+# Scorecard — suite `dab` (harness 0.2.0)
+
+- Observed spend: **$1.9816** over 54 calls · ceiling $3.00
+
+## Config `dab_avaloka_native`
+
+- sut: `avaloka_dab` · llm: `openrouter/anthropic/claude-haiku-5.5` · sampling: `entire_dataset` · env: `dab-local` · agents: `full_swarm` · trials: 1 · internet: False
+
+| Task | Pass@1 | Best-of-N | Quality (mean) | Cost $ (mean) | Latency s (mean) | Data scanned (mean) | Errors | Price src |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| dab:agnews:1 | 0.00 | 0.00 | 0 | 0.006195 | 36.56 | — | — | `operator_rate` |
+| dab:agnews:2 | 0.00 | 0.00 | 0 | 0.01766 | 85.17 | — | — | `operator_rate` |
+| dab:agnews:3 | 0.00 | 0.00 | 0 | 0.1615 | 94.3 | — | — | `operator_rate` |
+| dab:agnews:4 | 1.00 | 1.00 | 1 | 0.09361 | 70.87 | — | — | `operator_rate` |
+| dab:bookreview:1 | 1.00 | 1.00 | 1 | 0.0279 | 39.92 | — | — | `operator_rate` |
+| dab:bookreview:2 | 0.00 | 0.00 | 0 | 0.009617 | 33.96 | — | — | `operator_rate` |
+| dab:bookreview:3 | 1.00 | 1.00 | 1 | 0.009851 | 33.91 | — | — | `operator_rate` |
+| dab:crmarenapro:1 | 1.00 | 1.00 | 1 | 0.006066 | 27.42 | — | — | `operator_rate` |
+| dab:crmarenapro:2 | 0.00 | 0.00 | 0 | 0.03418 | 53.88 | — | — | `operator_rate` |
+| **dab:crmarenapro:3** ⚠️ | 0.00 | 0.00 | 0 | 0.002905 | 20.41 | — | **1/1 ALL** (answer_error:1) | `operator_rate` |
+| dab:crmarenapro:4 | 1.00 | 1.00 | 1 | 0.01023 | 43.83 | — | — | `operator_rate` |
+| dab:crmarenapro:5 | 1.00 | 1.00 | 1 | 0.008685 | 34.49 | — | — | `operator_rate` |
+| dab:crmarenapro:6 | 1.00 | 1.00 | 1 | 0.02944 | 34.17 | — | — | `operator_rate` |
+| dab:crmarenapro:7 | 1.00 | 1.00 | 1 | 0.07461 | 65.84 | — | — | `operator_rate` |
+| dab:crmarenapro:8 | 1.00 | 1.00 | 1 | 0.02894 | 56.29 | — | — | `operator_rate` |
+| **dab:crmarenapro:9** ⚠️ | 0.00 | 0.00 | 0 | 0.01469 | 40.99 | — | **1/1 ALL** (answer_error:1) | `operator_rate` |
+| dab:crmarenapro:10 | 1.00 | 1.00 | 1 | 0.04332 | 50.39 | — | — | `operator_rate` |
+| dab:crmarenapro:11 | 1.00 | 1.00 | 1 | 0.00851 | 32.76 | — | — | `operator_rate` |
+| dab:crmarenapro:12 | 0.00 | 0.00 | 0 | 0.006185 | 31.82 | — | — | `operator_rate` |
+| dab:crmarenapro:13 | 1.00 | 1.00 | 1 | 0.02296 | 42.48 | — | — | `operator_rate` |
+| **dab:DEPS_DEV_V1:1** ⚠️ | 0.00 | 0.00 | 0 | 0.06583 | 90.21 | — | **1/1 ALL** (answer_error:1) | `operator_rate` |
+| **dab:DEPS_DEV_V1:2** ⚠️ | 0.00 | 0.00 | 0 | 0.2103 | 154.9 | — | **1/1 ALL** (budget_exceeded:1) | `operator_rate` |
+| dab:GITHUB_REPOS:1 | 0.00 | 0.00 | 0 | 0.009479 | 62.77 | — | — | `operator_rate` |
+| dab:GITHUB_REPOS:2 | 1.00 | 1.00 | 1 | 0.01297 | 48.91 | — | — | `operator_rate` |
+| dab:GITHUB_REPOS:3 | 1.00 | 1.00 | 1 | 0.06266 | 52.72 | — | — | `operator_rate` |
+| dab:GITHUB_REPOS:4 | 1.00 | 1.00 | 1 | 0.01911 | 35.45 | — | — | `operator_rate` |
+| dab:googlelocal:1 | 1.00 | 1.00 | 1 | 0.004219 | 28.7 | — | — | `operator_rate` |
+| dab:googlelocal:2 | 0.00 | 0.00 | 0 | 0.003122 | 24.35 | — | — | `operator_rate` |
+| dab:googlelocal:3 | 0.00 | 0.00 | 0 | 0.01122 | 44.53 | — | — | `operator_rate` |
+| dab:googlelocal:4 | 1.00 | 1.00 | 1 | 0.002706 | 22.42 | — | — | `operator_rate` |
+| dab:music_brainz_20k:1 | 0.00 | 0.00 | 0 | 0.002639 | 23.6 | — | — | `operator_rate` |
+| dab:music_brainz_20k:2 | 1.00 | 1.00 | 1 | 0.002694 | 23.97 | — | — | `operator_rate` |
+| dab:music_brainz_20k:3 | 0.00 | 0.00 | 0 | 0.0541 | 46.81 | — | — | `operator_rate` |
+| dab:PANCANCER_ATLAS:1 | 0.00 | 0.00 | 0 | 0.09092 | 69.79 | — | — | `operator_rate` |
+| dab:PANCANCER_ATLAS:2 | 1.00 | 1.00 | 1 | 0.06713 | 56.22 | — | — | `operator_rate` |
+| dab:PANCANCER_ATLAS:3 | 1.00 | 1.00 | 1 | 0.05602 | 72.43 | — | — | `operator_rate` |
+| dab:PATENTS:1 | 0.00 | 0.00 | 0 | 0.09278 | 111.8 | — | — | `operator_rate` |
+| dab:PATENTS:2 | 0.00 | 0.00 | 0 | 0.1064 | 90.31 | — | — | `operator_rate` |
+| **dab:PATENTS:3** ⚠️ | 0.00 | 0.00 | 0 | 0.03295 | 51.48 | — | **1/1 ALL** (answer_error:1) | `operator_rate` |
+| dab:stockindex:1 | 1.00 | 1.00 | 1 | 0.006032 | 31.14 | — | — | `operator_rate` |
+| dab:stockindex:2 | 1.00 | 1.00 | 1 | 0.02816 | 35.66 | — | — | `operator_rate` |
+| dab:stockindex:3 | 1.00 | 1.00 | 1 | 0.03971 | 68.73 | — | — | `operator_rate` |
+| dab:stockmarket:1 | 1.00 | 1.00 | 1 | 0.002543 | 22.17 | — | — | `operator_rate` |
+| **dab:stockmarket:2** ⚠️ | 0.00 | 0.00 | 0 | 0.103 | 193.1 | — | **1/1 ALL** (tool_error:1) | `operator_rate` |
+| dab:stockmarket:3 | 1.00 | 1.00 | 1 | 0.01622 | 46.67 | — | — | `operator_rate` |
+| dab:stockmarket:4 | 0.00 | 0.00 | 0 | 0.0583 | 101.3 | — | — | `operator_rate` |
+| dab:stockmarket:5 | 1.00 | 1.00 | 1 | 0.05852 | 119.2 | — | — | `operator_rate` |
+| dab:yelp:1 | 1.00 | 1.00 | 1 | 0.03736 | 46.3 | — | — | `operator_rate` |
+| dab:yelp:2 | 1.00 | 1.00 | 1 | 0.02189 | 58.72 | — | — | `operator_rate` |
+| dab:yelp:3 | 0.00 | 0.00 | 0 | 0.0281 | 46 | — | — | `operator_rate` |
+| dab:yelp:4 | 0.00 | 0.00 | 0 | 0.01619 | 57.29 | — | — | `operator_rate` |
+| dab:yelp:5 | 0.00 | 0.00 | 0 | 0.005608 | 32.76 | — | — | `operator_rate` |
+| dab:yelp:6 | 1.00 | 1.00 | 1 | 0.01465 | 38.17 | — | — | `operator_rate` |
+| dab:yelp:7 | 0.00 | 0.00 | 0 | 0.02102 | 73.67 | — | — | `operator_rate` |
+
+> ⚠️  Rows marked **ALL** scored 0.00 because every trial errored — the model was never successfully measured. Do not read those as quality results.
+
+
+Wrote /private/tmp/claude-505/-Users-leelakrishna-code-ki-avaloka-dev/cc4e58a8-1d48-4f91-9aa8-77b6adbc9631/scratchpad/dab7/results/rc7-openrouter-claude-haiku55/dab.json, /private/tmp/claude-505/-Users-leelakrishna-code-ki-avaloka-dev/cc4e58a8-1d48-4f91-9aa8-77b6adbc9631/scratchpad/dab7/results/rc7-openrouter-claude-haiku55/dab.md, and /private/tmp/claude-505/-Users-leelakrishna-code-ki-avaloka-dev/cc4e58a8-1d48-4f91-9aa8-77b6adbc9631/scratchpad/dab7/results/rc7-openrouter-claude-haiku55/dab.trials.jsonl

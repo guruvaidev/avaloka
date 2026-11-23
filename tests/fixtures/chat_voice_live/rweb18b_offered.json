@@ -1,0 +1,361 @@
+{
+ "_about": "Minimum fields of the graph state at verify time (rweb18b verify dumps; agent_trace keeps turn_id, node and written; the code itself is elided) and the cards shown (states/rweb18b).",
+ "runc_nullxlsx_ask": {
+  "source": "rweb18b/dump/verify_20261028T040428_338_1.json + states/rweb18b/rw7c/nullxlsx/ask.json",
+  "question": "What is the average Glucose, and how many Glucose values are missing?",
+  "shown": [
+   "I read “What is the average Glucose, and how many Glucose values are missing” as something to pin down before I run anything, so I offered options, about `Glucose`.",
+   "I ran this on both sheets '2022' and '2023' (60 + 60 rows) combined (Portfolio Samples), so these numbers are theirs together, not one sheet's; sheet 'notes' (5 rows) not used.",
+   "I wrote the code for it and had my validators read it before it ran.",
+   "The code ran and came back with 1 row.",
+   "I checked 1 claim in my answer against the numbers.",
+   "That's my answer to “What is the average Glucose, and how many Glucose values are missing”. From here I could compare by `Outcome`, trend it over `visit_date` or train a model on `Outcome`. Or I can send my team of clones at it in parallel."
+  ],
+  "final": {
+   "avaloka_intent": "clarification",
+   "avaloka_intent_reasoning": "no keyword matched",
+   "trace_turn_id": "26f6a36e2215454a",
+   "agent_trace": [
+    {
+     "turn_id": "26f6a36e2215454a",
+     "node": "drivers_route",
+     "written": []
+    },
+    {
+     "turn_id": "26f6a36e2215454a",
+     "node": "route_after_drivers",
+     "written": []
+    },
+    {
+     "turn_id": "26f6a36e2215454a",
+     "node": "memory_injection",
+     "written": [
+      "memory_hints",
+      "milvus_context_id",
+      "session_logic_signature"
+     ]
+    },
+    {
+     "turn_id": "26f6a36e2215454a",
+     "node": "avaloka_agent",
+     "written": [
+      "avaloka_conversation_policy",
+      "avaloka_expertise",
+      "avaloka_handoff_message",
+      "avaloka_intent",
+      "avaloka_intent_confidence",
+      "avaloka_intent_reasoning",
+      "avaloka_mode",
+      "discovery_result",
+      "redis_context"
+     ]
+    },
+    {
+     "turn_id": "26f6a36e2215454a",
+     "node": "route_avaloka",
+     "written": []
+    },
+    {
+     "turn_id": "26f6a36e2215454a",
+     "node": "plan_etl",
+     "written": [
+      "plan",
+      "ready_to_summarize",
+      "reasoning_trace"
+     ]
+    },
+    {
+     "turn_id": "26f6a36e2215454a",
+     "node": "route_planner_output",
+     "written": []
+    },
+    {
+     "turn_id": "26f6a36e2215454a",
+     "node": "summarize_etl",
+     "written": [
+      "messages"
+     ]
+    },
+    {
+     "turn_id": "26f6a36e2215454a",
+     "node": "route_after_summary",
+     "written": []
+    },
+    {
+     "turn_id": "26f6a36e2215454a",
+     "node": "generate_planner_graph",
+     "written": [
+      "planner_graph_path",
+      "planner_graph_status"
+     ]
+    },
+    {
+     "turn_id": "26f6a36e2215454a",
+     "node": "route_after_graph",
+     "written": []
+    },
+    {
+     "turn_id": "26f6a36e2215454a",
+     "node": "code_etl",
+     "written": [
+      "coder_contract",
+      "coder_definition",
+      "coder_raw_response",
+      "execution_output_data",
+      "execution_output_preview",
+      "execution_stderr",
+      "execution_stdout",
+      "generated_code"
+     ]
+    },
+    {
+     "turn_id": "26f6a36e2215454a",
+     "node": "coder",
+     "written": [
+      "code_validation_feedback",
+      "coder_blocked_reason",
+      "coder_contract",
+      "coder_pseudocode",
+      "generated_code",
+      "llm_raw_response",
+      "messages",
+      "primary_llm_response",
+      "retry_count"
+     ]
+    },
+    {
+     "turn_id": "26f6a36e2215454a",
+     "node": "validator_syntax",
+     "written": [
+      "syntax_error"
+     ]
+    },
+    {
+     "turn_id": "26f6a36e2215454a",
+     "node": "validator_static",
+     "written": [
+      "generated_code",
+      "static_semantic_error"
+     ]
+    },
+    {
+     "turn_id": "26f6a36e2215454a",
+     "node": "execute_code",
+     "written": [
+      "execution_error",
+      "execution_output_data",
+      "execution_stderr",
+      "execution_stdout"
+     ]
+    },
+    {
+     "turn_id": "26f6a36e2215454a",
+     "node": "validator_contract",
+     "written": []
+    },
+    {
+     "turn_id": "26f6a36e2215454a",
+     "node": "validator_logical",
+     "written": [
+      "code_validation_feedback",
+      "logical_semantic_error"
+     ]
+    },
+    {
+     "turn_id": "26f6a36e2215454a",
+     "node": "check_validation_status",
+     "written": []
+    },
+    {
+     "turn_id": "26f6a36e2215454a",
+     "node": "coder",
+     "written": [
+      "code_validation_feedback",
+      "coder_pseudocode",
+      "generated_code",
+      "llm_raw_response",
+      "messages",
+      "retry_count"
+     ]
+    },
+    {
+     "turn_id": "26f6a36e2215454a",
+     "node": "validator_syntax",
+     "written": []
+    },
+    {
+     "turn_id": "26f6a36e2215454a",
+     "node": "validator_static",
+     "written": [
+      "generated_code"
+     ]
+    },
+    {
+     "turn_id": "26f6a36e2215454a",
+     "node": "execute_code",
+     "written": [
+      "execution_error",
+      "execution_output_data",
+      "execution_output_preview",
+      "execution_stdout"
+     ]
+    },
+    {
+     "turn_id": "26f6a36e2215454a",
+     "node": "validator_contract",
+     "written": [
+      "contract_advisories",
+      "contract_bounds",
+      "contract_error",
+      "contract_row_count",
+      "contract_violations"
+     ]
+    },
+    {
+     "turn_id": "26f6a36e2215454a",
+     "node": "validator_logical",
+     "written": [
+      "code_validation_feedback",
+      "logical_review_decided_by",
+      "logical_review_judged_correct",
+      "logical_review_judged_fabricated",
+      "logical_review_overruled",
+      "logical_review_recheck_confirmed",
+      "logical_review_recheck_ran",
+      "logical_semantic_error"
+     ]
+    },
+    {
+     "turn_id": "26f6a36e2215454a",
+     "node": "check_validation_status",
+     "written": []
+    },
+    {
+     "turn_id": "26f6a36e2215454a",
+     "node": "route_after_code",
+     "written": []
+    },
+    {
+     "turn_id": "26f6a36e2215454a",
+     "node": "execute_locally",
+     "written": [
+      "execution_result",
+      "execution_stdout",
+      "fresh_output_produced",
+      "messages",
+      "output_file_data",
+      "output_json"
+     ]
+    },
+    {
+     "turn_id": "26f6a36e2215454a",
+     "node": "route_after_execution",
+     "written": []
+    },
+    {
+     "turn_id": "26f6a36e2215454a",
+     "node": "visualize",
+     "written": [
+      "visualization_config",
+      "visualization_status"
+     ]
+    },
+    {
+     "turn_id": "26f6a36e2215454a",
+     "node": "narrate_result",
+     "written": [
+      "messages"
+     ]
+    }
+   ],
+   "planner_definition": {},
+   "coder_definition": {
+    "code": "<this turn's code, elided>"
+   },
+   "execution_result": {
+    "status": "success",
+    "output_row_count": 1
+   },
+   "output_json": [
+    {
+     "average_glucose": 111.44827586206895,
+     "missing_glucose_count": 4
+    }
+   ],
+   "pending_suggestions": null,
+   "pending_clarification": null,
+   "verification_report": {
+    "safe_to_present": true,
+    "claims_checked": 1,
+    "n_problems": 0,
+    "analysis": "answered"
+   }
+  }
+ },
+ "runa_related_ask_tables": {
+  "source": "rweb18b/dump/verify_20261028T034348_551_1.json + states/rweb18b/rw7a/related/ask_tables.json",
+  "question": "What tables do I have and how do they relate?",
+  "shown": [
+   "I read “What tables do I have and how do they relate” as something to pin down before I run anything, so I offered options."
+  ],
+  "final": {
+   "avaloka_intent": "clarification",
+   "avaloka_intent_reasoning": "no keyword matched",
+   "trace_turn_id": "4f1dd46b99d84a55",
+   "agent_trace": [
+    {
+     "turn_id": "4f1dd46b99d84a55",
+     "node": "drivers_route",
+     "written": []
+    },
+    {
+     "turn_id": "4f1dd46b99d84a55",
+     "node": "route_after_drivers",
+     "written": []
+    },
+    {
+     "turn_id": "4f1dd46b99d84a55",
+     "node": "memory_injection",
+     "written": [
+      "milvus_context_id"
+     ]
+    },
+    {
+     "turn_id": "4f1dd46b99d84a55",
+     "node": "avaloka_agent",
+     "written": [
+      "avaloka_conversation_policy",
+      "avaloka_expertise",
+      "avaloka_mode",
+      "discovery_result",
+      "redis_context"
+     ]
+    },
+    {
+     "turn_id": "4f1dd46b99d84a55",
+     "node": "route_avaloka",
+     "written": []
+    },
+    {
+     "turn_id": "4f1dd46b99d84a55",
+     "node": "plan_etl",
+     "written": [
+      "messages",
+      "reasoning_trace"
+     ]
+    }
+   ],
+   "planner_definition": {},
+   "coder_definition": {},
+   "execution_result": {},
+   "output_json": null,
+   "pending_suggestions": null,
+   "pending_clarification": null,
+   "verification_report": {
+    "safe_to_present": true,
+    "claims_checked": 0,
+    "n_problems": 0
+   }
+  }
+ }
+}

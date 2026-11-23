@@ -1,0 +1,13 @@
+diff --git a/ui/src/lib/use-plan-features.ts b/ui/src/lib/use-plan-features.ts
+index 3741f805..c0db10cf 100644
+--- a/ui/src/lib/use-plan-features.ts
++++ b/ui/src/lib/use-plan-features.ts
+@@ -37,7 +37,7 @@ export function usePlanFeatures() {
+     /** Creating or managing roles, branches, divisions and users. */
+     canManageOrgEntities: isEnterprise,
+     /** Share panel access (email results + public link): every plan. */
+-    canShare: true,
++    canShare: false,
+     /** Inviting collaborators onto a resource; the invitee may be on any plan. */
+     canInviteCollaborators: isProfessionalOrHigher,
+     /** All configuration sections; Professional gets Models and Teams. */

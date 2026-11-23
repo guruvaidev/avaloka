@@ -1,0 +1,13 @@
+diff --git a/app/core/celery_app.py b/app/core/celery_app.py
+index 5223219f..6ca86168 100644
+--- a/app/core/celery_app.py
++++ b/app/core/celery_app.py
+@@ -237,7 +237,7 @@ def _record_run_start(schedule_id: str, execution_id: str, state: dict) -> None:
+         existing = (client.table(_SCHEDULED_RUNS_TABLE)
+                     .select("run_id", count="exact")
+                     .eq("schedule_id", schedule_id).execute())
+-        run_number = (getattr(existing, "count", None) or 0) + 1
++        run_number = 1
+         client.table(_SCHEDULED_RUNS_TABLE).upsert({
+             "run_id":      execution_id,
+             "schedule_id": schedule_id,

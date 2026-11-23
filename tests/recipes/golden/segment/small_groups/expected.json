@@ -1,0 +1,50 @@
+{
+  "recipe": "segment",
+  "version_major": 1,
+  "verdict": "qualified",
+  "reason": null,
+  "figures": [
+    {
+      "id": "/groups/count",
+      "value": 5.0,
+      "decimals": 0,
+      "unit": "count"
+    },
+    {
+      "id": "/groups/largest_share",
+      "value": 43.1,
+      "decimals": 1,
+      "unit": "percent"
+    },
+    {
+      "id": "/groups/herfindahl",
+      "value": 0.309,
+      "decimals": 3,
+      "unit": "unitless"
+    },
+    {
+      "id": "/groups/smallest_n",
+      "value": 9.0,
+      "decimals": 0,
+      "unit": "count"
+    },
+    {
+      "id": "/rows/duplicates",
+      "value": 0.0,
+      "decimals": 0,
+      "unit": "count"
+    }
+  ],
+  "caveats": [
+    "small_n"
+  ],
+  "must_not_say": [
+    "cause",
+    "causes",
+    "drives",
+    "because",
+    "effect of",
+    "leads to"
+  ],
+  "note": "pandas groupby on channel as clean_topn; the smallest group holds fewer than 30 rows, so small_n."
+}

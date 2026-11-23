@@ -49,11 +49,13 @@ function chartFromWidget(widget: DashboardWidget): Record<string, unknown> | nul
 export function DashboardMiniChart({
   widget,
   samples,
-  height = 160,
+  height = 170,
+  compact = true,
 }: {
   widget: DashboardWidget;
   samples?: Record<string, unknown>[] | null;
   height?: number;
+  compact?: boolean;
 }) {
   const slide = useMemo(() => {
     const chart = chartFromWidget(widget);
@@ -68,8 +70,8 @@ export function DashboardMiniChart({
   }
 
   return (
-    <div className="min-h-0 flex-1">
-      <DynamicChart slide={slide} height={height} compact chartKey={widget.graphKey} />
+    <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
+      <DynamicChart slide={slide} height={height} compact={compact} chartKey={widget.graphKey} />
     </div>
   );
 }

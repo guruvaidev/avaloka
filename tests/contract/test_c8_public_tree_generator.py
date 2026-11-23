@@ -79,6 +79,10 @@ exclude:
     reason: Not part of the public tree.
 overlay:
   - DCO
+splice:
+  - file: README.md
+    section: "## Quickstart"
+    from: oss/overlay/README.quickstart.md
 assert_present:
   README.md:
     - "public quickstart"
@@ -124,6 +128,8 @@ def source_repo(tmp_path: Path):
     _write(src, ".gitignore", "*.csv\n")
     _write(src, "sample.csv", "a,b\n1,2\n")
     _write(src, "scripts/generate-oss.sh", _script_text())
+    # The address invariant the script runs (oss/manifest.yaml assert_no_addresses).
+    _write(src, "oss/address_scan.py", (REPO_ROOT / "oss" / "address_scan.py").read_text())
     _git(src, env, "add", "-A")
     _git(src, env, "add", "-f", "sample.csv")
     _git(src, env, "commit", "-q", "-m", "source")
@@ -307,3 +313,293 @@ def test_c8_10_dry_run_matches_what_publish_would_build(source_repo, tmp_path: P
     assert listed == real
     # And without PUBLISH_CONFIRM nothing reached the published repository.
     assert _git(pub, env, "rev-parse", "main").strip() == base
+
+
+# ---------------------------------------------------------------------------
+# The manifest declares every top-level path the public tree carries
+# ---------------------------------------------------------------------------
+#
+# Exclusion alone is a one-sided guard: a directory that lands on the source
+# branch and is not named under ``exclude`` ships on the next generation, and
+# nothing says whether that was decided or overlooked. ``top_level`` is the
+# other side. The entries of the tracked tree that survive the exclusions must
+# equal it exactly, so a new top-level path has to be either listed (published
+# on purpose) or excluded (withheld on purpose) before it can go anywhere.
+
+MANIFEST = REPO_ROOT / "oss" / "manifest.yaml"
+
+
+def _tracked_paths() -> list:
+    """``git ls-files`` of this checkout: what ``git archive`` would publish."""
+    _require("git")
+    run = subprocess.run(["git", "ls-files", "-z"], cwd=REPO_ROOT, capture_output=True, text=True)
+    if run.returncode != 0:
+        message = f"git ls-files failed in {REPO_ROOT}; cannot enumerate the tracked tree"
+        if os.environ.get("CI", "").strip().lower() not in ("", "0", "false"):
+            pytest.fail(message + f". CI is set, so this is a failure rather than a skip.\n{run.stderr}")
+        pytest.skip(message)
+    return [p for p in run.stdout.split("\0") if p]
+
+
+def _survives(rel: str, excludes: list) -> bool:
+    """Whether the generator leaves ``rel`` in the tree, by the manifest's rules.
+
+    The same semantics as the ``== excluding ==`` step of the script: a ``path``
+    ending in ``/`` withholds the directory, otherwise the one file; an entry
+    with ``keep_globs`` keeps the files whose basename matches one of them.
+    """
+    import fnmatch
+
+    for entry in excludes:
+        path = str(entry["path"]).strip().strip('"')
+        if path.endswith("/"):
+            if not rel.startswith(path):
+                continue
+        elif rel != path and not rel.startswith(path + "/"):
+            continue
+        keep = entry.get("keep_globs") or []
+        if keep and any(fnmatch.fnmatch(rel.rsplit("/", 1)[-1], g) for g in keep):
+            continue
+        return False
+    return True
+
+
+def test_c8_11_manifest_declares_every_published_top_level_path() -> None:
+    """``top_level`` equals the top-level entries that survive ``exclude``, exactly.
+
+    Both directions matter. An entry in the tree but not in the list is a new
+    path nobody decided about; an entry in the list but not in the tree is a
+    stale declaration, which is how a list like this stops being read.
+    """
+    import yaml
+
+    manifest = yaml.safe_load(MANIFEST.read_text(encoding="utf-8"))
+    declared = manifest.get("top_level")
+    assert declared, "oss/manifest.yaml has no top_level section"
+    assert len(declared) == len(set(declared)), f"top_level lists an entry twice: {declared}"
+    assert declared == sorted(declared), "top_level is kept sorted so a diff reads as one line per change"
+    excludes = manifest.get("exclude") or []
+    wholly_excluded = {str(e["path"]).strip('"').rstrip("/") for e in excludes if "/" not in str(e["path"]).strip('"').rstrip("/")}
+    assert not set(declared) & wholly_excluded, (
+        f"listed as published and withheld at once: {sorted(set(declared) & wholly_excluded)}")
+
+    survivors = {rel.split("/", 1)[0] for rel in _tracked_paths() if _survives(rel, excludes)}
+    undeclared = sorted(survivors - set(declared))
+    stale = sorted(set(declared) - survivors)
+    assert not undeclared, (
+        f"top-level path(s) would reach the public tree without a decision: {undeclared}. "
+        "Add each to top_level in oss/manifest.yaml to publish it, or to exclude to withhold it.")
+    assert not stale, (
+        f"top_level in oss/manifest.yaml lists path(s) that are no longer tracked: {stale}")
+# Splices and invariants: the public tree can differ from the source line by
+# line, and every such difference is checked rather than assumed
+# ---------------------------------------------------------------------------
+
+_VERSIONED_MANIFEST = _MANIFEST.replace("""assert_present:
+  README.md:
+    - "public quickstart"
+""", """  - file: pyproject.toml
+    match: 'version = "[^"]*"'
+    with: 'version = "1.0.0"'
+  - file: CHANGES.md
+    before: "## [Unreleased]"
+    from: oss/overlay/CHANGES.release.md
+  - file: CHANGES.md
+    line: "Internal note about 1.6.0."
+    with: "Public note."
+assert_present:
+  README.md:
+    - "public quickstart"
+  pyproject.toml:
+    - 'version = "1.0.0"'
+  CHANGES.md:
+    - "## [1.0.0]"
+assert_absent:
+  pyproject.toml:
+    - "version = \\"1.6.0\\""
+  CHANGES.md:
+    - "1.6.0"
+""")
+
+
+def _commit_source(src: Path, env: Dict[str, str], manifest: str) -> None:
+    _write(src, "oss/manifest.yaml", manifest)
+    _write(src, "oss/overlay/CHANGES.release.md", "## [1.0.0]\n\nFirst public release.\n")
+    _write(src, "pyproject.toml", '[project]\nname = "demo"\nversion = "1.6.0"\n')
+    _write(src, "CHANGES.md", "# Changes\n\n## [Unreleased]\n\nInternal note about 1.6.0.\n")
+    _git(src, env, "add", "-A")
+    _git(src, env, "commit", "-q", "-m", "versioned source")
+    _git(src, env, "update-ref", "refs/remotes/origin/develop-1.6", "HEAD")
+
+
+def test_c8_11_splices_set_the_public_version(source_repo, tmp_path: Path) -> None:
+    """line, match and before splices apply, and quoted needles are unescaped.
+
+    The absent needle is written with escaped quotes. Before the scalar was
+    unescaped it searched for a backslash no file carries, so it could not fail.
+    """
+    src, env = source_repo
+    _commit_source(src, env, _VERSIONED_MANIFEST)
+    out_dir = tmp_path / "kept"
+    run = _run_generator(src, {**env, "OSS_OUT_DIR": str(out_dir)})
+    assert run.returncode == 0, f"{run.stdout}\n{run.stderr}"
+    assert 'ok   pyproject.toml absent: version = "1.6.0"' in run.stdout, run.stdout
+    assert (out_dir / "pyproject.toml").read_text() == '[project]\nname = "demo"\nversion = "1.0.0"\n'
+    changes = (out_dir / "CHANGES.md").read_text()
+    assert "First public release.\n\n## [Unreleased]" in changes, changes
+    assert "1.6.0" not in changes and "Public note." in changes
+
+
+def test_c8_12_a_splice_that_misses_fails_the_generation(source_repo, tmp_path: Path) -> None:
+    """An anchor that matches no line refuses, rather than publishing the source text."""
+    src, env = source_repo
+    _commit_source(src, env, _VERSIONED_MANIFEST.replace(
+        'line: "Internal note about 1.6.0."', 'line: "A line that is not there."'))
+    out_dir = tmp_path / "kept"
+    run = _run_generator(src, {**env, "OSS_OUT_DIR": str(out_dir)})
+    assert run.returncode != 0, run.stdout
+    assert "FAIL CHANGES.md line: A line that is not there. -- anchor matches 0 lines" in run.stdout
+    assert "1 splice(s) failed -- refusing to write" in run.stderr
+    assert not out_dir.exists(), "a refused tree was kept"
+
+
+def test_c8_13_removing_the_version_splice_trips_the_invariant(source_repo) -> None:
+    """The version invariants bite: drop the splice and generation is refused."""
+    src, env = source_repo
+    _commit_source(src, env, _VERSIONED_MANIFEST.replace("""  - file: pyproject.toml
+    match: 'version = "[^"]*"'
+    with: 'version = "1.0.0"'
+""", ""))
+    run = _run_generator(src, env)
+    assert run.returncode != 0, run.stdout
+    assert 'FAIL pyproject.toml present: version = "1.0.0"  (found 0)' in run.stdout
+    assert 'FAIL pyproject.toml absent: version = "1.6.0"  (found 1)' in run.stdout
+    assert "2 invariant(s) failed -- refusing to write" in run.stderr
+
+
+# ---------------------------------------------------------------------------
+# Public text: a withheld replacement table, and pattern invariants
+# ---------------------------------------------------------------------------
+
+_TEXT_MANIFEST = _MANIFEST.replace("""assert_present:""", """replace_table: oss/internal/public-text.tsv
+assert_present:""") + """assert_no_match:
+  - glob: "**/*.md"
+    pattern: '(?<![\\\\w&#/])#[1-9][0-9]{2,3}(?!\\\\w)'
+    unless_after: "GitHub "
+"""
+
+
+def _commit_text_source(src: Path, env: Dict[str, str], table: str, notes: str) -> None:
+    _write(src, "oss/manifest.yaml", _TEXT_MANIFEST)
+    _write(src, "oss/internal/public-text.tsv", table)
+    _write(src, "NOTES.md", notes)
+    (src / "report.csv").write_bytes(b"id,note\r\n1,fixed by #663\r\n")
+    _git(src, env, "add", "-A")
+    _git(src, env, "add", "-f", "report.csv")   # *.csv is ignored, as in the real tree
+    _git(src, env, "commit", "-q", "-m", "text source")
+    _git(src, env, "update-ref", "refs/remotes/origin/develop-1.6", "HEAD")
+
+
+def test_c8_14_replacement_table_applies_and_keeps_line_endings(source_repo, tmp_path: Path) -> None:
+    """Rows apply exactly, a CRLF file stays CRLF, and a GitHub reference is allowed."""
+    src, env = source_repo
+    table = ("# comment\n"
+             "NOTES.md\tFixed in #687.\tFixed in 1.0.0.\n"
+             "report.csv\tfixed by #663\tfixed\n")
+    _commit_text_source(src, env, table, "# Notes\n\nFixed in #687. See GitHub #482.\n")
+    out_dir = tmp_path / "kept"
+    run = _run_generator(src, {**env, "OSS_OUT_DIR": str(out_dir)})
+    assert run.returncode == 0, f"{run.stdout}\n{run.stderr}"
+    assert (out_dir / "NOTES.md").read_text() == "# Notes\n\nFixed in 1.0.0. See GitHub #482.\n"
+    assert (out_dir / "report.csv").read_bytes() == b"id,note\r\n1,fixed\r\n"
+    assert "ok   no match for" in run.stdout, run.stdout
+
+
+def test_c8_15_a_row_that_misses_fails_the_generation(source_repo, tmp_path: Path) -> None:
+    """A row whose text is not there refuses, rather than publishing the old text."""
+    src, env = source_repo
+    _commit_text_source(src, env, "NOTES.md\tFixed in #999.\tFixed.\n", "# Notes\n\nFixed in #687.\n")
+    run = _run_generator(src, {**env, "OSS_OUT_DIR": str(tmp_path / "kept")})
+    assert run.returncode != 0, run.stdout
+    assert "FAIL row 1: NOTES.md -- text occurs 0 times, expected 1" in run.stdout
+    assert not (tmp_path / "kept").exists()
+
+
+def test_c8_16_an_internal_change_number_trips_the_pattern_invariant(source_repo) -> None:
+    """A three-digit change number left in Markdown fails; the GitHub form does not."""
+    src, env = source_repo
+    _commit_text_source(src, env, "# no rows\n", "# Notes\n\nFixed in #687. See GitHub #482.\n")
+    run = _run_generator(src, env)
+    assert run.returncode != 0, run.stdout
+    assert "FAIL no match for" in run.stdout and "(1: NOTES.md:3)" in run.stdout, run.stdout
+    assert "1 pattern invariant(s) failed -- refusing to write" in run.stderr
+
+
+def test_c8_17_an_optional_row_may_be_absent_but_not_miscounted(source_repo, tmp_path: Path) -> None:
+    """0|N: absent passes and is listed; present at any other count still refuses."""
+    src, env = source_repo
+    table = ("NOTES.md\tFixed in #687.\tFixed in 1.0.0.\n"
+             "NOTES.md\tPending text #701.\tPending text.\t0|1\n")
+    _commit_text_source(src, env, table, "# Notes\n\nFixed in #687.\n")
+    run = _run_generator(src, {**env, "OSS_OUT_DIR": str(tmp_path / "absent")})
+    assert run.returncode == 0, f"{run.stdout}\n{run.stderr}"
+    assert ". 1 optional row(s) not present: 2" in run.stdout, run.stdout
+
+    _commit_text_source(src, env, table, "# Notes\n\nFixed in #687.\nPending text #701.\nPending text #701.\n")
+    run = _run_generator(src, {**env, "OSS_OUT_DIR": str(tmp_path / "twice")})
+    assert run.returncode != 0, run.stdout
+    assert "FAIL row 2: NOTES.md -- text occurs 2 times, expected 0|1" in run.stdout, run.stdout
+
+
+# ---------------------------------------------------------------------------
+# Internal records are withheld AND guarded
+# ---------------------------------------------------------------------------
+#
+# docs/ is published broadly and only named subtrees are withheld, so an
+# exclude entry on its own is one edit from silently republishing what it
+# hides. The manifest pairs each with an assert_no_paths guard, which makes
+# the generator refuse to write rather than ship the path. This test holds
+# both halves of that pairing for the records that have been published by
+# accident before, or whose branches arrived with the pairing already made.
+#
+# Frozen deliberately: a new internal record is a visible edit here with a
+# reason, not something that quietly joins (or quietly leaves) the set.
+
+#: (path as the exclude entry spells it, where the record actually lives)
+WITHHELD_INTERNAL_RECORDS = (
+    # The defect register. It shipped from tests/plan_execution/ until it moved
+    # here (DEF-016 says why it cannot be published as it stands).
+    ("docs/defects/", "docs/defects/findings.json"),
+    ("docs/design/DOMAIN-UNDERSTANDING-1.6-1.8.md", "docs/design/DOMAIN-UNDERSTANDING-1.6-1.8.md"),
+    ("docs/operations/PLATFORM-ADMIN-DESIGN.md", "docs/operations/PLATFORM-ADMIN-DESIGN.md"),
+    ("docs/design/1.7-INSTANT-ANALYSIS.md", "docs/design/1.7-INSTANT-ANALYSIS.md"),
+)
+
+
+def _manifest() -> dict:
+    import yaml
+
+    return yaml.safe_load((REPO_ROOT / "oss" / "manifest.yaml").read_text("utf-8"))
+
+
+@pytest.mark.parametrize("entry,record", WITHHELD_INTERNAL_RECORDS, ids=[e for e, _ in WITHHELD_INTERNAL_RECORDS])
+def test_c8_18_an_internal_record_is_excluded_and_guarded(entry: str, record: str) -> None:
+    """The record exists, the manifest excludes its path, and assert_no_paths guards it."""
+    assert (REPO_ROOT / record).is_file(), (
+        f"{record} is absent; if it moved, update WITHHELD_INTERNAL_RECORDS and the "
+        "manifest together -- an exclude on a path that no longer exists protects nothing")
+    manifest = _manifest()
+    excluded = {e["path"] for e in manifest["exclude"] if isinstance(e, dict) and "path" in e}
+    assert entry in excluded, (
+        f"oss/manifest.yaml no longer excludes {entry}; the next generation publishes {record}")
+    guard = entry.rstrip("/") + "/**/*" if entry.endswith("/") else entry
+    assert guard in set(manifest["assert_no_paths"]), (
+        f"oss/manifest.yaml excludes {entry} but assert_no_paths has no {guard!r}, so a "
+        "dropped or mistyped exclude would ship it without the generator refusing")
+
+
+def test_c8_19_the_defect_register_is_not_under_a_published_tree() -> None:
+    """The old location stays empty: tests/ is published, docs/defects/ is not."""
+    assert not (REPO_ROOT / "tests" / "plan_execution" / "findings.json").exists(), (
+        "the defect register is back under tests/plan_execution/, which the public tree "
+        "carries; it belongs in docs/defects/ (withheld)")

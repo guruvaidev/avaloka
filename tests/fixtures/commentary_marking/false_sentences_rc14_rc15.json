@@ -1,0 +1,393 @@
+{
+ "_source": "RECONSTRUCTED 2026-10-26 from ~/avaloka-work/golden/false_sentences_rc14_rc15.md (the lead's quotes from their reports; the original plan/sentences_labelled.json and the rweb14/15 graded lists were lost to a macOS /tmp cleanup). 'quoted' holds the fragments quoted verbatim; where the lead quoted only part of a sentence ('...'), or described it (recipes D, rc14), the rest of the sentence is written here to make it whole. Every sentence was model-written and shown unmarked as fact on rc14 or rc15. 'surface' card means it was shown on an upload card (C2's surface); here each is put in a chat narrative, where C1 must mark it.",
+ "narratives": [
+  {
+   "id": "rc14-A",
+   "question": "Summarise these datasets.",
+   "narrative": "Tip amounts are frequently zero when the fare is paid by credit card. Airport_fee always zero across the trips. Extra and improvement_surcharge constant across rows. Instructions vary widely and the vast majority are unique. Patients who currently smoke show a markedly higher stroke occurrence compared with never‑smokers.",
+   "sentences": [
+    {
+     "id": "14A1",
+     "run": "rc14",
+     "surface": "card",
+     "quoted": [
+      "Tip amounts are frequently zero when",
+      "credit card"
+     ]
+    },
+    {
+     "id": "14A2",
+     "run": "rc14",
+     "surface": "card",
+     "quoted": [
+      "Airport_fee always zero"
+     ]
+    },
+    {
+     "id": "14A3",
+     "run": "rc14",
+     "surface": "card",
+     "quoted": [
+      "Extra and improvement_surcharge constant across rows"
+     ]
+    },
+    {
+     "id": "14A4",
+     "run": "rc14",
+     "surface": "card",
+     "quoted": [
+      "Instructions",
+      "vast majority are unique"
+     ]
+    },
+    {
+     "id": "14A5",
+     "run": "rc14",
+     "surface": "card",
+     "quoted": [
+      "currently smoke",
+      "markedly higher stroke occurrence compared with never‑smokers"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "rc14-B",
+   "question": "Which item sold the most?",
+   "narrative": "The item with the highest sales is WHITE HANGING HEART T-LIGHT HOLDER at $9,570.72. Highest revenue: $9,570.72 Second highest: $8,793.20 (PAPER CHAIN KIT)",
+   "sentences": [
+    {
+     "id": "14B1",
+     "run": "rc14",
+     "surface": "chat",
+     "quoted": [
+      "item with the highest sales is WHITE HANGING HEART",
+      "$9,570.72"
+     ]
+    },
+    {
+     "id": "14B2",
+     "run": "rc14",
+     "surface": "chat",
+     "quoted": [
+      "Highest revenue: $9,570.72"
+     ]
+    },
+    {
+     "id": "14B3",
+     "run": "rc14",
+     "surface": "chat",
+     "quoted": [
+      "Second highest: $8,793.20 (PAPER CHAIN KIT)"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "rc14-C",
+   "question": "How does the average order amount differ by customer segment?",
+   "narrative": "Enterprise customers spend the most on average, with $545.08 per order, followed by SMBs at $182.27, while consumer orders average only $59.77.",
+   "sentences": [
+    {
+     "id": "14C1",
+     "run": "rc14",
+     "surface": "chat",
+     "quoted": [
+      "Enterprise customers spend the most on average, with $545.08 per order, followed by SMBs at $182.27, while consumer orders average only $59.77."
+     ]
+    }
+   ]
+  },
+  {
+   "id": "rc14-D",
+   "question": "What kinds of recipes are there?",
+   "narrative": "Other recipes dominate the collection at 67.6% of all rows. Kuchen is the leader among the named recipe types. Sauce comes second among the named types. The leading type appears five times as often as the next one. Sushi is the smallest category in the data.",
+   "sentences": [
+    {
+     "id": "14D1",
+     "run": "rc14",
+     "surface": "chat",
+     "quoted": [
+      "Other recipes dominate",
+      "67.6%"
+     ]
+    },
+    {
+     "id": "14D2",
+     "run": "rc14",
+     "surface": "chat",
+     "quoted": [
+      "the leader"
+     ]
+    },
+    {
+     "id": "14D3",
+     "run": "rc14",
+     "surface": "chat",
+     "quoted": [
+      "Sauce",
+      "second"
+     ]
+    },
+    {
+     "id": "14D4",
+     "run": "rc14",
+     "surface": "chat",
+     "quoted": [
+      "five times"
+     ]
+    },
+    {
+     "id": "14D5",
+     "run": "rc14",
+     "surface": "chat",
+     "quoted": [
+      "Sushi",
+      "smallest"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "rc14-E",
+   "question": "What drives readmission?",
+   "narrative": "Higher glucose levels increase the likelihood of readmission. The (130.0, 174.0] bin shows the largest recovery share (≈71%).",
+   "sentences": [
+    {
+     "id": "14E1",
+     "run": "rc14",
+     "surface": "chat",
+     "quoted": [
+      "Higher glucose levels increase the likelihood of readmission."
+     ]
+    },
+    {
+     "id": "14E2",
+     "run": "rc14",
+     "surface": "chat",
+     "quoted": [
+      "(130.0, 174.0] bin shows the largest recovery share (≈71%)"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "rc15-run1",
+   "question": "Tell me about this data.",
+   "narrative": "A few instruction texts dominate the dataset while most are seen only once. Enterprise orders average $545.08 per order, SMBs at $182.27 and consumers at $59.77. Outcome is driven mainly by glucose levels, with readmitted patients showing higher values. The month pattern points the same way, confirming that higher glucose correlates with readmission. A handful of recipe URLs account for the bulk of the records. Daily sales volume shows a steady increase across the recorded days.",
+   "sentences": [
+    {
+     "id": "15a1",
+     "run": "rc15-1",
+     "surface": "card",
+     "quoted": [
+      "A few instruction texts dominate the dataset while most are seen only once"
+     ]
+    },
+    {
+     "id": "15a2",
+     "run": "rc15-1",
+     "surface": "chat",
+     "quoted": [
+      "$545.08 per order",
+      "SMBs at $182.27",
+      "consumers at $59.77"
+     ]
+    },
+    {
+     "id": "15a3",
+     "run": "rc15-1",
+     "surface": "chat",
+     "quoted": [
+      "Outcome is driven mainly by glucose levels"
+     ]
+    },
+    {
+     "id": "15a4",
+     "run": "rc15-1",
+     "surface": "chat",
+     "quoted": [
+      "confirming that higher glucose correlates with readmission."
+     ]
+    },
+    {
+     "id": "15a5",
+     "run": "rc15-1",
+     "surface": "card",
+     "quoted": [
+      "A handful of recipe URLs account for the bulk of the records"
+     ]
+    },
+    {
+     "id": "15a6",
+     "run": "rc15-1",
+     "surface": "card",
+     "quoted": [
+      "Daily sales volume shows a steady increase across the recorded days"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "rc15-reruns-recipes",
+   "question": "What are the most common recipe types?",
+   "narrative": "The most common recipe types are the generic 'E' category, followed by 'Pfannkuchen', 'Se', 'Gef', and 'K'.\n- Top five: E (602), Pfannkuchen (552), Se (520), Gef (497) and K (480)\n- Next tier: Tomaten (455) and Llte (438)\n- Lower tier: Auflauf (402), B (398), and H (388)\n\nOverall picture: a long tail of types, with 'E' dominating. A few recipes make up the bulk of rows. Here a handful of recipe titles dominate the listing. Overall, most recipes have their own unique steps.",
+   "sentences": [
+    {
+     "id": "15r01",
+     "run": "rc15-bc",
+     "surface": "chat",
+     "quoted": [
+      "most common recipe types are the generic 'E' category, followed by 'Pfannkuchen', 'Se', 'Gef', and 'K'"
+     ]
+    },
+    {
+     "id": "15r02",
+     "run": "rc15-bc",
+     "surface": "chat",
+     "quoted": [
+      "Top five: E (602), Pfannkuchen (552)"
+     ]
+    },
+    {
+     "id": "15r03",
+     "run": "rc15-bc",
+     "surface": "chat",
+     "quoted": [
+      "Next tier: Tomaten (455) and Llte (438)"
+     ]
+    },
+    {
+     "id": "15r04",
+     "run": "rc15-bc",
+     "surface": "chat",
+     "quoted": [
+      "Lower tier: Auflauf (402), B (398), and H (388)"
+     ]
+    },
+    {
+     "id": "15r05",
+     "run": "rc15-bc",
+     "surface": "chat",
+     "quoted": [
+      "Overall picture",
+      "'E' dominating"
+     ]
+    },
+    {
+     "id": "15r15",
+     "run": "rc15-bc",
+     "surface": "card",
+     "quoted": [
+      "bulk of rows"
+     ]
+    },
+    {
+     "id": "15r16",
+     "run": "rc15-bc",
+     "surface": "card",
+     "quoted": [
+      "a handful of recipe titles dominate"
+     ]
+    },
+    {
+     "id": "15r17",
+     "run": "rc15-bc",
+     "surface": "card",
+     "quoted": [
+      "most recipes have their own unique steps"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "rc15-reruns-other",
+   "question": "What stands out?",
+   "narrative": "Enterprise customers average $545.08 per order, well above the other segments. Readmitted patients (4) have a higher average glucose and a longer average stay (10.5 months). No other variable differentiates the outcomes. Both groups share the same mode year (2022) and identical glucose-outcome correlation. The month-to-outcome correlation is also identical (–0.501). No other country appears in the data. Higher unit prices are associated with lower quantities. A small handful of products account for a disproportionate share of sales. Hand warmers are among the most frequent products. No other work type is listed, so this is the only rate available.",
+   "sentences": [
+    {
+     "id": "15r06",
+     "run": "rc15-bc",
+     "surface": "chat",
+     "quoted": [
+      "$545.08"
+     ]
+    },
+    {
+     "id": "15r07",
+     "run": "rc15-bc",
+     "surface": "chat",
+     "quoted": [
+      "Readmitted patients (4)",
+      "longer average stay (10.5 months)"
+     ]
+    },
+    {
+     "id": "15r08",
+     "run": "rc15-bc",
+     "surface": "chat",
+     "quoted": [
+      "No other variable differentiates the outcomes"
+     ]
+    },
+    {
+     "id": "15r09",
+     "run": "rc15-bc",
+     "surface": "chat",
+     "quoted": [
+      "same mode year (2022) and identical glucose-outcome correlation"
+     ]
+    },
+    {
+     "id": "15r10",
+     "run": "rc15-bc",
+     "surface": "chat",
+     "quoted": [
+      "month-to-outcome correlation is also identical (–0.501)"
+     ]
+    },
+    {
+     "id": "15r11",
+     "run": "rc15-bc",
+     "surface": "chat",
+     "quoted": [
+      "No other country appears in the data"
+     ]
+    },
+    {
+     "id": "15r12",
+     "run": "rc15-bc",
+     "surface": "chat",
+     "quoted": [
+      "Higher unit prices are associated with lower quantities"
+     ]
+    },
+    {
+     "id": "15r13",
+     "run": "rc15-bc",
+     "surface": "chat",
+     "quoted": [
+      "A small handful of products account for a disproportionate share"
+     ]
+    },
+    {
+     "id": "15r14",
+     "run": "rc15-bc",
+     "surface": "chat",
+     "quoted": [
+      "Hand warmers",
+      "most frequent products"
+     ]
+    },
+    {
+     "id": "15r18",
+     "run": "rc15-bc",
+     "surface": "chat",
+     "quoted": [
+      "No other work type is listed, so this is the only rate available"
+     ]
+    }
+   ]
+  }
+ ]
+}

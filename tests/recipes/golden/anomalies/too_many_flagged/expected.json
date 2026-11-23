@@ -1,0 +1,50 @@
+{
+  "recipe": "anomalies",
+  "version_major": 1,
+  "verdict": "qualified",
+  "reason": null,
+  "figures": [
+    {
+      "id": "/n",
+      "value": 300.0,
+      "decimals": 0,
+      "unit": "count"
+    },
+    {
+      "id": "/flagged/count",
+      "value": 43.0,
+      "decimals": 0,
+      "unit": "count"
+    },
+    {
+      "id": "/flagged/share",
+      "value": 14.3,
+      "decimals": 1,
+      "unit": "percent"
+    },
+    {
+      "id": "/iqr/count",
+      "value": 44.0,
+      "decimals": 0,
+      "unit": "count"
+    },
+    {
+      "id": "/rows/duplicates",
+      "value": 0.0,
+      "decimals": 0,
+      "unit": "count"
+    }
+  ],
+  "caveats": [
+    "data_quality"
+  ],
+  "must_not_say": [
+    "cause",
+    "causes",
+    "drives",
+    "because",
+    "effect of",
+    "leads to"
+  ],
+  "note": "numpy: modified z on the raw values (no time column); the heavy-tailed draw flags more than a tenth of the points."
+}

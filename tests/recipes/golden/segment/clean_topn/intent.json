@@ -1,0 +1,10 @@
+{
+  "question": "Which product lines matter most for revenue?",
+  "recipe": "segment",
+  "params": {
+    "measure": "revenue",
+    "dimension": "product_line"
+  },
+  "confidence": 1.0,
+  "source": "fixture"
+}

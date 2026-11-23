@@ -16,8 +16,8 @@ name: images
 on:
   push:
     # develop-1.6 builds too, so a deployment from it pulls an image that
-    # already exists instead of building one.
-    branches: [main, develop-1.6]
+    # already exists instead of building one. develop-1.7 is the 2.0 line.
+    branches: [main, develop-1.6, develop-1.7]
     tags: ["v*"]
     # Only when something that actually goes into an image changes. A docs-only
     # commit should not spend twenty minutes rebuilding four images.
@@ -27,9 +27,13 @@ on:
       - "file_handler/**"
       - "ui/**"
       - "requirements.txt"
+      - "requirements-langgraph-server.txt"
       - "pyproject.toml"
       - "deploy/docker/**"
       - ".github/workflows/images.yml"
+      # The release number is an image tag (see "Release version" below), so a
+      # version bump must rebuild even when nothing else changed.
+      - "VERSION"
   workflow_dispatch:
     inputs:
       force:
@@ -58,6 +62,13 @@ jobs:
           - name: avaloka-api
             key: api
             dockerfile: deploy/docker/Dockerfile.api
+          # The chart's langgraph pod (`langgraph dev`). Same Dockerfile as the
+          # API, plus langgraph-cli[inmem] -- kept out of avaloka-api because its
+          # langgraph-api 0.5.x caps cryptography <45 (requirements-langgraph-server.txt).
+          - name: avaloka-langgraph
+            key: langgraph
+            dockerfile: deploy/docker/Dockerfile.api
+            build_args: REQUIREMENTS=requirements-langgraph-server.txt
           - name: avaloka-ray
             key: ray
             dockerfile: deploy/docker/Dockerfile.ray
@@ -73,7 +84,7 @@ jobs:
             dockerfile: deploy/docker/Dockerfile.functions
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Skip if the Dockerfile is not in this tree
         id: exists
@@ -96,6 +107,30 @@ jobs:
           echo "deps=$(python scripts/image_tag.py ${{ matrix.key }})" >> "$GITHUB_OUTPUT"
           echo "src=$(python scripts/image_tag.py ${{ matrix.key }} --source)" >> "$GITHUB_OUTPUT"
 
+      # The release number, read from the branch being built -- not from the
+      # branch name. develop-1.6 carries VERSION=1.6.0 and so publishes :1.6.0
+      # and :1.6; the 2.0 line carries VERSION=2.0.0 and publishes :2.0.0 and
+      # :2.0. There is no branch-to-version table to keep in step: the file
+      # that `avaloka --version` and GET /version already read decides, and a
+      # bump moves every surface at once (tests/contract/test_c3 holds them
+      # together). The `v*` tag path below still exists for a tagged release.
+      #
+      # Fails loudly on a malformed VERSION rather than publishing a tag such
+      # as ":" or ":2.0.0-dirty": a bad tag on a public registry is worse
+      # than a red build.
+      - name: Release version
+        id: version
+        if: steps.exists.outputs.found == 'true'
+        run: |
+          version="$(tr -d '[:space:]' < VERSION)"
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::VERSION is '$version', not MAJOR.MINOR.PATCH; refusing to publish a version tag"
+            exit 1
+          fi
+          echo "full=$version" >> "$GITHUB_OUTPUT"
+          echo "minor=${version%.*}" >> "$GITHUB_OUTPUT"
+          echo "::notice::this build is Avaloka $version (tags :$version and :${version%.*})"
+
       - name: Already published?
         id: published
         if: steps.exists.outputs.found == 'true'
@@ -105,6 +140,12 @@ jobs:
           if [[ "${{ inputs.force }}" == "true" ]]; then
             echo "skip=false" >> "$GITHUB_OUTPUT"
             echo "::notice::force requested; rebuilding $image:$tag"
+          elif [[ "${{ github.ref_type }}" == "tag" ]]; then
+            # A release tag points at a commit main has normally built already,
+            # so its content tag exists. Skipping would publish no :<version>
+            # tag at all: the semver tags are only applied by the build below.
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::release tag ${{ github.ref_name }}; building to apply its version tags"
           elif docker manifest inspect "$image:$tag" >/dev/null 2>&1; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "::notice::$image:$tag already exists — nothing in this image changed"
@@ -112,13 +153,13 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-qemu-action@v4
         if: steps.exists.outputs.found == 'true' && steps.published.outputs.skip != 'true'
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
         if: steps.exists.outputs.found == 'true' && steps.published.outputs.skip != 'true'
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         if: steps.exists.outputs.found == 'true' && steps.published.outputs.skip != 'true'
         with:
           registry: ${{ env.REGISTRY }}
@@ -128,7 +169,7 @@ jobs:
       - name: Tags and labels
         id: meta
         if: steps.exists.outputs.found == 'true' && steps.published.outputs.skip != 'true'
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.name }}
           tags: |
@@ -137,16 +178,19 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=sha,format=short
             type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ steps.version.outputs.full }}
+            type=raw,value=${{ steps.version.outputs.minor }}
             type=raw,value=${{ steps.tags.outputs.src }}
             type=raw,value=${{ steps.tags.outputs.deps }}
 
       - name: Build and push
         id: push
         if: steps.exists.outputs.found == 'true' && steps.published.outputs.skip != 'true'
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ${{ matrix.context || '.' }}
           file: ${{ matrix.dockerfile }}
+          build-args: ${{ matrix.build_args || '' }}
           # arm64 matters: Apple Silicon is most of the likely audience, and a
           # single-arch image fails there in a way that reads as a broken chart
           # rather than a missing architecture.
@@ -170,7 +214,7 @@ jobs:
 
       - name: Attest the build
         if: steps.exists.outputs.found == 'true' && steps.published.outputs.skip != 'true'
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-name: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.name }}
           subject-digest: ${{ steps.push.outputs.digest }}

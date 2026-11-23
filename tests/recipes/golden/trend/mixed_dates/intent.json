@@ -1,0 +1,10 @@
+{
+  "question": "How has revenue moved over time?",
+  "recipe": "trend",
+  "params": {
+    "measure": "revenue",
+    "time": "date"
+  },
+  "confidence": 1.0,
+  "source": "fixture"
+}

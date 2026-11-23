@@ -11,6 +11,9 @@
       "allow_credentials": true
     }
   },
+  "http": {
+    "app": "./app/api/langgraph_service_auth.py:app"
+  },
   "env": ".env",
   "image_distro": "wolfi"
 }

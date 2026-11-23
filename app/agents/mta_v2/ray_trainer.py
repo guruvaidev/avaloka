@@ -48,6 +48,19 @@ RAY_DOCKER_ENTRYPOINT = "python /app/ray_job.py"
 _GCP_SA_JSON_PATH = os.getenv("GCP_SERVICE_ACCOUNT_JSON_PATH", "~/Templates/gcp-bucket-cred.json")
 
 
+def legacy_cluster_allowed() -> bool:
+    """Per-job RayCluster provisioning is opt-in (owner ruling R2)."""
+    return os.getenv("AVALOKA_ALLOW_LEGACY_RAY_CLUSTER", "").strip().lower() in {"1", "true", "yes"}
+
+
+def submission_mode() -> str:
+    """``kuberay`` (default): a RayJob CR on the shared cluster, submit-only, polled by
+    the worker's countdown chain. ``direct``: the Ray dashboard job API at
+    MTA_RAY_DASHBOARD_URL, waiting in-process (the pre-2026-11 behaviour)."""
+    mode = os.getenv("MTA_RAY_SUBMISSION_MODE", "kuberay").strip().lower()
+    return mode if mode in {"kuberay", "direct"} else "kuberay"
+
+
 class RayTrainer:
     """
     Orchestrates a Ray training run for a DynamicMLP model.
@@ -99,6 +112,15 @@ class RayTrainer:
         """Build the runtime environment shared by both Ray deployment modes."""
         ray_cfg = training_plan.get("ray_config") or {}
         hyper_cfg = training_plan.get("hyperparameter_config") or {}
+        from app.agents.mta_v2.estimators import normalise_algorithm
+        if normalise_algorithm(training_plan.get("algorithm")) != "mlp":
+            # The Ray job trains only the MLP. A tree or linear plan now carries
+            # that family's values (learning rate 0.1, say), which must not
+            # reach an MLP; it trains with the MLP's defaults, as it did when
+            # such a plan still carried the MLP template.
+            logger.warning("Ray training runs the MLP only; ignoring %s hyperparameters.",
+                           training_plan.get("algorithm"))
+            hyper_cfg = {}
         data_cfg = training_plan.get("data_config") or {}
         pii_columns = data_cfg.get("pii_key_required_columns") or []
         if pii_columns and not (os.getenv(PII_KEY_ENV) or "").strip():
@@ -146,6 +168,7 @@ class RayTrainer:
             "EARLY_STOPPING_PATIENCE": str(hyper_cfg.get("early_stopping_patience", 5)),
             "EARLY_STOPPING_MIN_DELTA": str(hyper_cfg.get("early_stopping_min_delta", 1e-4)),
             "USE_GPU": str(ray_cfg.get("use_gpu", False)),
+            "CV_FOLDS": str((training_plan.get("cross_validation") or {}).get("k", 5)),
             "HIDDEN_LAYER_SIZES": ",".join(
                 map(str, hyper_cfg.get("hidden_layer_sizes", [128, 64]))
             ),
@@ -291,6 +314,44 @@ class RayTrainer:
     # Public API
     # ------------------------------------------------------------------
 
+    def _submit_rayjob(self, training_plan: TrainingPlan) -> TrainingResult:
+        """Submit a RayJob CR against the shared cluster and return at once.
+
+        The result is ``status="submitted"`` with the job name; nothing here
+        waits. app/infra/training_tasks.poll_training_job follows the CR and
+        turns its outcome into the TrainingResult the chat and the panel see.
+        """
+        from app.infra import ray_reaper, ray_training_job
+
+        ray_cfg = training_plan.get("ray_config") or {}
+        namespace = os.getenv("MTA_RAY_NAMESPACE", "default").strip() or "default"
+        self.namespace = namespace
+        base = {
+            "task_id": self.task_id, "user_id": self.user_id, "session_id": self.session_id,
+            "model_type": training_plan.get("model_type", "classification"),
+            "model_name": training_plan.get("model_name", "unknown_model"),
+            "model_description": training_plan.get("model_description", ""),
+            "model_version": training_plan.get("model_version", "v1.0"),
+            "ray_namespace": namespace, "dashboard_url": None,
+        }
+        try:
+            job_env = self._build_job_env(training_plan)
+            ray_reaper.ensure_shared_cluster(namespace=namespace, wait=True)
+            name = ray_training_job.job_name(self.task_id)
+            manifest = ray_training_job.training_rayjob_manifest(
+                name, entrypoint=self._training_entrypoint(), env=job_env, namespace=namespace,
+                use_gpu=bool(ray_cfg.get("use_gpu", False)),
+            )
+            ray_training_job.submit(manifest)
+            logger.info("Submitted training RayJob %s/%s on the shared cluster.", namespace, name)
+            notify_ray_job_submitted({"job_id": name, "status": "SUBMITTED", "dashboard_url": None, "namespace": namespace})
+            return TrainingResult(status="submitted", ray_job_id=name, ray_job_name=name,
+                                  ray_job_status="SUBMITTED", **base)  # type: ignore[typeddict-item]
+        except Exception as e:
+            logger.error("Training submission failed: %s", e, exc_info=True)
+            failure = build_training_failure(e, namespace=namespace)
+            return TrainingResult(status="error", error=failure["technical_details"], failure=failure, **base)  # type: ignore[typeddict-item]
+
     def train(self, training_plan: TrainingPlan) -> TrainingResult | None:
         """
         Execute a training run on a shared Kubernetes Ray cluster or GKE.
@@ -317,6 +378,9 @@ class RayTrainer:
         """
         ray_cfg = training_plan.get("ray_config") or {}
 
+        if submission_mode() == "kuberay":
+            return self._submit_rayjob(training_plan)
+
         api_client = None
         dashboard_url = None
         job_id = None
@@ -337,7 +401,18 @@ class RayTrainer:
                     self.namespace,
                 )
             else:
-                # Legacy path: provision a dedicated RayCluster in GKE.
+                # Legacy path: provision a dedicated RayCluster per job. Off by
+                # default: it costs a cluster per training and, until 2026-11,
+                # exposed its head through a public LoadBalancer. The shared
+                # autoscaling cluster (MTA_RAY_DASHBOARD_URL, in-cluster) is the
+                # supported path; AVALOKA_ALLOW_LEGACY_RAY_CLUSTER=1 re-enables
+                # this one with ClusterIP access only.
+                if not legacy_cluster_allowed():
+                    raise RuntimeError(
+                        "No shared Ray cluster is configured (MTA_RAY_DASHBOARD_URL is unset) and "
+                        "per-job Ray clusters are disabled. Deploy the shared RayCluster "
+                        "(deploy/helm/ray/raycluster.yaml) or set AVALOKA_ALLOW_LEGACY_RAY_CLUSTER=1."
+                    )
                 owns_cluster = True
                 gcp_sa_json = self._read_gcp_sa_json()
                 api_client = get_k8s_api(

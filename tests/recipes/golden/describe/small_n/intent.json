@@ -1,0 +1,9 @@
+{
+  "question": "What is the typical score?",
+  "recipe": "describe",
+  "params": {
+    "measure": "score"
+  },
+  "confidence": 1.0,
+  "source": "fixture"
+}

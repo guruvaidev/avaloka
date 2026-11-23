@@ -149,7 +149,7 @@ export function ProjectsSidebar({
 
 
   return (
-    <aside className="flex h-full w-[300px] shrink-0 flex-col border-r border-secondary bg-primary">
+    <aside className="my-3 flex h-[calc(100%-1.5rem)] w-[300px] shrink-0 flex-col rounded-r-xl rounded-l-none border border-secondary bg-primary dark:border-white/10 dark:bg-[#1A1A1E]">
       <div className="flex items-center justify-between px-4 py-4">
         <h2 className="text-lg font-semibold text-primary">Projects</h2>
         <ButtonUtility size="sm" color="tertiary" icon={LayoutAlt01} tooltip="Collapse sidebar" onClick={onCollapse} />

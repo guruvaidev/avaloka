@@ -1,0 +1,12 @@
+diff --git a/ui/src/lib/analysis-workspace.ts b/ui/src/lib/analysis-workspace.ts
+--- a/ui/src/lib/analysis-workspace.ts
++++ b/ui/src/lib/analysis-workspace.ts
+@@ -202,7 +202,7 @@ export function dataViewSource(
+     return Array.from(keys);
+   })();
+   const dataViewRows: Record<string, unknown>[] =
+-    lastDataView === "results" && hasSelectedRun ? selectedResultRows : sampleRows;
++    sampleRows;
+   const dataViewColumns: string[] = (() => {
+     if (lastDataView === "sample" && viewDataset?.schema?.length) return viewDataset.schema;
+     const keys = new Set<string>();

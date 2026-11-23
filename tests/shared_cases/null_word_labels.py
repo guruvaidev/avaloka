@@ -142,6 +142,36 @@ CASES = [
         expected={"amount": ["1.5", "unknown", "NA", "2.5"]},
     ),
     Case(
+        # The second clause of the rule (2026-10-18). pandas' default list has no
+        # lowercase "none" and no "-", so one such cell made a numeric column
+        # text, kept the words as its top values and reported no gaps at all.
+        name="numeric column with a few stray words: typed, the words are gaps",
+        csv="glucose\n98\n105\nnone\n110\n87\nN/A\n92\n-\n101\n99\n108\n95\n",
+        expected={"glucose": [98.0, 105.0, MISSING, 110.0, 87.0, MISSING, 92.0,
+                              MISSING, 101.0, 99.0, 108.0, 95.0]},
+    ),
+    Case(
+        # The share is taken with null-like words in ANY case and the junk
+        # tokens "-" and "?" set aside: counted as real cells, 6 numbers in 10
+        # (60%) would have left this column text.
+        name="numeric column with NONE, none, - and ?: the share sets them all aside",
+        csv="reading\n4\nNONE\n7\n-\n9\nnone\n12\n?\n15\n18\n",
+        expected={"reading": [4.0, MISSING, 7.0, MISSING, 9.0, MISSING, 12.0,
+                              MISSING, 15.0, 18.0]},
+    ),
+    Case(
+        # 2026-10-19, the diabetes re-run: diag_3 was 1,423 "?" and 5,058 real
+        # ICD-9 V/E codes short of numeric, and the second clause read all
+        # 6,481 as missing. Only a gap token may become missing; "V45" and
+        # "E888" are codes, so the column stays text and keeps every one.
+        name="mostly numeric with real codes: mixed, the codes kept, only ? and NA missing",
+        csv=("diag\n250.01\n401\nV45\n?\n428\n414\nE888\n276\n427\n250\n"
+             "599\nNA\n786\n403\nV58\n585\n491\n38\n682\n780\n"),
+        expected={"diag": ["250.01", "401", "V45", MISSING, "428", "414", "E888", "276",
+                           "427", "250", "599", MISSING, "786", "403", "V58", "585",
+                           "491", "38", "682", "780"]},
+    ),
+    Case(
         name="whitespace-only cells are not real strings: the column stays typed",
         csv="pad,n\n  ,1\nNA,2\n  ,3\n",
         expected={"pad": ["  ", MISSING, "  "], "n": [1, 2, 3]},

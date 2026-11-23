@@ -10,10 +10,28 @@ services:
   celery-worker:
     image: python:3.11-slim
     environment:
+      # Third-party usage beacons off (app/core/thirdparty_optout.py).
+      DO_NOT_TRACK: "true"
+      SCARF_NO_ANALYTICS: "true"
+      ORT_DISABLE_TELEMETRY: "1"
+      ANONYMIZED_TELEMETRY: "False"
+      MLFLOW_DISABLE_TELEMETRY: "true"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      DVC_NO_ANALYTICS: "1"
+      RAY_USAGE_STATS_ENABLED: "0"
+      STREAMLIT_BROWSER_GATHER_USAGE_STATS: "false"
+      LANGGRAPH_CLI_NO_ANALYTICS: "1"
+      LANGGRAPH_NO_VERSION_CHECK: "true"
+      # Who operates this deployment (app/core/editions.declared_deployment):
+      # self_hosted or avaloka_hosted. Declared so the worker never runs undeclared.
+      AVALOKA_DEPLOYMENT: ${AVALOKA_DEPLOYMENT:-self_hosted}
       # Required only when a selected training column needs keyed PII
       # pseudonymisation/tokenisation. Compose does not inherit host variables
       # unless they are declared here.
       AVALOKA_PII_KEY: ${AVALOKA_PII_KEY:-}
+      # Who operates this install (docs/deployment.md): your own, unless the host
+      # environment says avaloka_hosted.
+      AVALOKA_DEPLOYMENT: ${AVALOKA_DEPLOYMENT:-self_hosted}
     command: >
       bash -c "
         chown -R root:root /root/.config &&
@@ -37,6 +55,20 @@ services:
 
   celery-redbeat-worker:
     image: python:3.11-slim
+    environment:
+      # Third-party usage beacons off (app/core/thirdparty_optout.py).
+      DO_NOT_TRACK: "true"
+      SCARF_NO_ANALYTICS: "true"
+      ORT_DISABLE_TELEMETRY: "1"
+      ANONYMIZED_TELEMETRY: "False"
+      MLFLOW_DISABLE_TELEMETRY: "true"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      DVC_NO_ANALYTICS: "1"
+      RAY_USAGE_STATS_ENABLED: "0"
+      STREAMLIT_BROWSER_GATHER_USAGE_STATS: "false"
+      LANGGRAPH_CLI_NO_ANALYTICS: "1"
+      LANGGRAPH_NO_VERSION_CHECK: "true"
+      AVALOKA_DEPLOYMENT: ${AVALOKA_DEPLOYMENT:-self_hosted}
     command: >
       bash -c "
         cd /app &&

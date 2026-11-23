@@ -1,0 +1,31 @@
+{
+ "_about": "Built by ~/avaloka-work/cardtruth/scripts/build_fixture18c.py: sentences rc18c (db446704) showed in the rweb18c regrade (rw7c), and the taxi_rg fare result table recomputed from the file the regrade used (mean fare_amount per payment_type; n is each group's trip count, not part of the result table).",
+ "shown": {
+  "notes_pie": "Notes is split into follow-up booked (9 rows, 15.0%), n/a (9 rows, 15.0%), - (8 rows, 13.3%), ? (8 rows, 13.3%), called back (8 rows, 13.3%) in the sample, with 18 missing (30.0%).",
+  "fare": "Average avg_fare_amount by payment_type: highest is 1 (21.65, from 1 row), lowest is 4 (1.51, from 1 row) in the sample. The top gr…"
+ },
+ "fare_result_rows": [
+  {
+   "payment_type": 1,
+   "avg_fare_amount": 21.65
+  },
+  {
+   "payment_type": 2,
+   "avg_fare_amount": 19.9
+  },
+  {
+   "payment_type": 3,
+   "avg_fare_amount": 7.14
+  },
+  {
+   "payment_type": 4,
+   "avg_fare_amount": 1.51
+  }
+ ],
+ "fare_group_trips": {
+  "1": 152005,
+  "2": 42345,
+  "3": 1715,
+  "4": 3935
+ }
+}

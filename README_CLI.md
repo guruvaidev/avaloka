@@ -183,19 +183,36 @@ avaloka --version
 
 Local execution is **free** and keeps your data on your machine. An LLM is used
 only to enrich narrative prose (never to invent numbers) and is entirely
-optional — install the extra and set `ANTHROPIC_API_KEY` to enable it:
+optional. `--llm` uses the first configured provider, local first:
+
+| Provider (`--llm-provider`) | Configured by | Default model (`--llm-model`) |
+|---|---|---|
+| `local` (Ollama, any OpenAI-compatible server) | `OLLAMA_HOST`, `INFERENCE_LOCAL_BASE_URL` or `AVALOKA_LOCAL_MODEL` | `gemma4:e4b` |
+| `groq` | `GROQ_API_KEY` | `openai/gpt-oss-120b` |
+| `openrouter` | `OPENROUTER_API_KEY` | `openai/gpt-oss-120b` |
+| `openai` | `OPENAI_API_KEY` (`OPENAI_BASE_URL` for a compatible endpoint) | `gpt-4o-mini` |
+| `anthropic` | `ANTHROPIC_API_KEY`, plus `pip install -e ".[llm]"` | `claude-haiku-5-5` |
 
 ```bash
-pip install -e ".[llm]"
-export ANTHROPIC_API_KEY=...   # enables --llm phrasing
+ollama pull gemma4:e4b && export OLLAMA_HOST=127.0.0.1:11434
+avaloka analyze data.csv --goal "..." --llm            # local first
+avaloka analyze data.csv --goal "..." --llm-provider groq   # implies --llm
 ```
 
-The extra installs `anthropic` (see `[project.optional-dependencies]` in
-`pyproject.toml`), and this is the **CLI's** optional narrator — separate
-from the server's
-inference provider, which defaults to OpenRouter and is configured with
-`INFERENCE_PROVIDER` (see the main [README](README.md)). Nothing in the CLI
-requires either.
+`AVALOKA_LLM_PROVIDER` and `AVALOKA_LLM_MODEL` set the same choices from the
+environment, and `AVALOKA_LLM_BASE_URL` points any OpenAI-compatible provider
+elsewhere. The first four share one standard-library HTTP client, so the CLI
+keeps its eight runtime dependencies; only Anthropic needs the extra. A key
+that is set but rejected, a missing model or an unreachable server prints one
+line naming the provider and the fix, and the run says it continues with the
+deterministic wording. Cost: a cost the provider reports (OpenRouter) is used
+as given, otherwise `AVALOKA_MODEL_PRICES` (`{"model": [in, out]}` USD per
+million tokens); without a price, a hosted call is recorded as cost unknown,
+not guessed.
+
+This is the **CLI's** optional narrator — separate from the server's
+inference provider, which is configured with `INFERENCE_PROVIDER` (see the
+main [README](README.md)). Nothing in the CLI requires either.
 
 ## The swarm — Avaloka's self-clones
 
@@ -214,8 +231,8 @@ Avaloka  Here's what jumped out at me:
 ```
 
 Every observation she makes is pinned to a **measured statistic** — the magic is
-real, never generated. Add `--llm` (with `ANTHROPIC_API_KEY`) to let her phrase
-things with Claude; `--quiet` drops to machine-only output for scripting.
+real, never generated. Add `--llm` to let a model phrase her lines
+(see the provider table above); `--quiet` drops to machine-only output for scripting.
 
 Under the hood each clone is a **firefly**: an *economic* unit, not an
 anthropomorphic demo. Each maps to an expensive human responsibility and
@@ -353,9 +370,17 @@ Where `batch` fans *partitions* across Ray, `coordinate` fans whole
 main Avaloka converges one answer from their partial profiles.
 
 ```bash
-avaloka coordinate customers.csv --goal "Profile the book of business" --workers 4
+avaloka coordinate customers.csv --goal "Profile the book of business" --swarm 2
+avaloka coordinate customers.csv --goal "Profile the book of business" --swarm 2 --debug
 avaloka coordinate 'sqlite:///./app.db#customers' --goal "..." --kind train --target churned
 ```
+
+`--swarm N` (`--workers` is the same option under its old name) is the number
+of clones; above your edition's cap the run proceeds at the cap and one line
+says so. `-v` narrates the team's story as it happens and `--debug` adds every
+specialist step inside every clone — each sentence produced from a trace record
+as it is written, so what is printed is what ran. The full option reference and
+a transcript are in [docs/cli-user-guide.html](docs/cli-user-guide.html).
 
 The source may be any URI from [Sources](#sources--where-the-data-may-live), so
 the fleet can run against a database table or object storage without a manual

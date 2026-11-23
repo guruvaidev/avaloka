@@ -1,0 +1,56 @@
+{
+  "recipe": "regress",
+  "version_major": 1,
+  "verdict": "qualified",
+  "reason": null,
+  "figures": [
+    {
+      "id": "/fit/r2",
+      "value": 87.1,
+      "decimals": 1,
+      "unit": "percent"
+    },
+    {
+      "id": "/n",
+      "value": 300.0,
+      "decimals": 0,
+      "unit": "count"
+    },
+    {
+      "id": "/drivers/count",
+      "value": 3.0,
+      "decimals": 0,
+      "unit": "count"
+    },
+    {
+      "id": "/tests/vif_max",
+      "value": 224.0,
+      "decimals": 1,
+      "unit": "unitless"
+    },
+    {
+      "id": "/tests/breusch_pagan_p",
+      "value": 0.667,
+      "decimals": 3,
+      "unit": "unitless"
+    },
+    {
+      "id": "/rows/duplicates",
+      "value": 0.0,
+      "decimals": 0,
+      "unit": "count"
+    }
+  ],
+  "caveats": [
+    "independence"
+  ],
+  "must_not_say": [
+    "cause",
+    "causes",
+    "drives",
+    "because",
+    "effect of",
+    "leads to"
+  ],
+  "note": "statsmodels OLS with HC3 as clean_two_drivers; impressions is ad_spend * 20 plus noise so the largest VIF is 224 (> 10); Breusch-Pagan p = 0.667."
+}

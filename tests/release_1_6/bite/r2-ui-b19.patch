@@ -1,0 +1,13 @@
+diff --git a/ui/src/components/dashboard/ProjectDetailsView.tsx b/ui/src/components/dashboard/ProjectDetailsView.tsx
+index f2d5135c..2f9b0505 100644
+--- a/ui/src/components/dashboard/ProjectDetailsView.tsx
++++ b/ui/src/components/dashboard/ProjectDetailsView.tsx
+@@ -237,7 +237,7 @@ export function ProjectDetailsView({
+           <button
+             type="button"
+             onClick={() => setUploadOpen(true)}
+-            className="inline-flex items-center gap-1.5 rounded-lg bg-[#1565ef] px-3 py-2 text-sm font-semibold text-white shadow-xs hover:bg-[#1257d6]"
++            className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-primary shadow-xs hover:bg-[#1257d6]"
+           >
+             <Plus className="size-4" />
+             New Analysis

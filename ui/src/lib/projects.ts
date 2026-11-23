@@ -80,6 +80,7 @@ export async function createProjectWithAnalysis(name: string): Promise<Project> 
 export function useProjects() {
   return useQuery({
     queryKey: projectsKey,
+    refetchInterval: 15_000,
     queryFn: async () => {
       return fetchProjects();
     },

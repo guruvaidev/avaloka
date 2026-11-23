@@ -1,0 +1,13 @@
+diff --git a/app/mcp_server/multi_tenant_mcp_server.py b/app/mcp_server/multi_tenant_mcp_server.py
+index b23387dd..f6d93f0a 100644
+--- a/app/mcp_server/multi_tenant_mcp_server.py
++++ b/app/mcp_server/multi_tenant_mcp_server.py
+@@ -820,7 +820,7 @@ def query(sql: str) -> dict:
+             rows = result.fetchall()
+             cols = list(result.keys()) if result.keys() else []
+ 
+-        safe_rows = [[_jsonable(cell) for cell in row] for row in rows]
++        safe_rows = [[_jsonable(cell) for cell in row] for row in rows][:-1]
+         execution_time_ms = int((time.time() - t0) * 1000)
+ 
+         logger.info(f"Query executed successfully. Rows: {len(safe_rows)}, Columns: {cols}")

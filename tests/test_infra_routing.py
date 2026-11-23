@@ -18,7 +18,9 @@ from app.agents.planner import plan_etl_job
 
 @pytest.mark.parametrize("mode", ["local", "k8s-ray", "cloud", None])
 def test_pending_infra_request_routes_to_provision(mode):
-    state = {"infrastructure_request": {"type": "gcp", "app_type": "python-docker"}}
+    # Confirmed by the user (infra_confirmation); an unconfirmed one provisions
+    # nothing (tests/test_ray_seed_needs_confirmation.py).
+    state = {"infrastructure_request": {"type": "gcp", "app_type": "python-docker", "confirmed": True}}
     if mode is not None:
         state["execution_mode"] = mode
     assert wf.route_planner_output(state) == "provision_infra"
@@ -59,24 +61,40 @@ def _deploy_turn(prompt):
     })
 
 
-def test_deploy_on_gcp_sets_request_and_replies():
-    result = _deploy_turn("deploy this on GCP")
+def _confirm(first):
+    """The reply 'yes' to the confirmation ``first`` asked for."""
+    return plan_etl_job({
+        "messages": first.get("messages", []) + [HumanMessage(content="yes")],
+        "user_id": "u",
+        "session_id": "s",
+        "pending_clarification": first.get("pending_clarification"),
+    })
+
+
+# An explicit deploy asks before provisioning (app/agents/infra_confirmation.py);
+# these used to assert the request was set on the first message.
+def test_deploy_on_gcp_asks_then_sets_request_and_replies():
+    first = _deploy_turn("deploy this on GCP")
+    assert not first.get("infrastructure_request")
+    assert "gcp" in [m for m in first["messages"] if isinstance(m, AIMessage)][-1].content.lower()
+    result = _confirm(first)
     assert (result.get("infrastructure_request") or {}).get("type") == "gcp"
     ai_replies = [m for m in result.get("messages", []) if isinstance(m, AIMessage)]
     assert ai_replies, "deploy request must produce a user-visible reply"
     assert "gcp" in ai_replies[-1].content.lower()
 
 
-def test_deploy_on_aws_sets_request_and_replies():
-    result = _deploy_turn("deploy this on AWS please")
+def test_deploy_on_aws_asks_then_sets_request_and_replies():
+    result = _confirm(_deploy_turn("deploy this on AWS please"))
     assert (result.get("infrastructure_request") or {}).get("type") == "aws"
     ai_replies = [m for m in result.get("messages", []) if isinstance(m, AIMessage)]
     assert ai_replies
 
 
-def test_deploy_turn_routes_to_provision_infra():
-    result = _deploy_turn("deploy this on GCP")
-    assert wf.route_planner_output(result) == "provision_infra"
+def test_confirmed_deploy_turn_routes_to_provision_infra():
+    first = _deploy_turn("deploy this on GCP")
+    assert wf.route_planner_output(first) != "provision_infra"
+    assert wf.route_planner_output(_confirm(first)) == "provision_infra"
 
 
 def test_keyword_branch_does_not_refire_after_provisioning():
@@ -108,7 +126,7 @@ def test_ordinary_prompts_are_not_hijacked_by_infra_keywords(prompt):
 
 
 def test_whole_word_infra_keywords_still_fire():
-    result = _deploy_turn("deployment to kubernetes please")
+    result = _confirm(_deploy_turn("deployment to kubernetes please"))
     assert (result.get("infrastructure_request") or {}).get("type") == "gcp"
 
 

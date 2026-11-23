@@ -1,0 +1,12 @@
+diff --git a/ui/src/routes/api/public/send-analysis-email.ts b/ui/src/routes/api/public/send-analysis-email.ts
+--- a/ui/src/routes/api/public/send-analysis-email.ts
++++ b/ui/src/routes/api/public/send-analysis-email.ts
+@@ -39,7 +39,7 @@ export const Route = createFileRoute("/api/public/send-analysis-email")({
+ 
+         const text = await response.text();
+         return new Response(text, {
+-          status: response.status,
++          status: 200,
+           headers: { "Content-Type": response.headers.get("content-type") ?? "application/json", ...CORS },
+         });
+       },

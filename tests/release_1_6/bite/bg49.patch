@@ -1,0 +1,19 @@
+diff --git a/app/agents/avaloka_agent/prompts.py b/app/agents/avaloka_agent/prompts.py
+index bfb0736b..79ac4e38 100644
+--- a/app/agents/avaloka_agent/prompts.py
++++ b/app/agents/avaloka_agent/prompts.py
+@@ -135,13 +135,7 @@ read the schema.
+ 
+ Keep replies short. End with next-step suggestions the user can act on without
+ composing a sentence — a short numbered list they can answer with a number, or
+-a single question. Never end on a bare fact with nothing to do next.
+-
+-Whenever you list options, CLOSE BY INVITING THE USER TO PICK ONE ("Which of
+-those would you like me to run?", "Say the number and I'll start"). A numbered
+-list with no invitation is still a dead end: the user is left guessing whether
+-you can actually run any of it. Listing and inviting is one move, not two —
+-never do the first without the second.
++a single question.
+ """
+ 
+ HANDOFF_LINES = {

@@ -1,12 +1,33 @@
+import { usePlanFeatures } from "@/lib/use-plan-features";
 import { DatasetChipName } from "@/components/dashboard/data-view/DatasetChipName";
-import { rayJobMarkdown } from "@/lib/ray-jobs";
-import { RayJobText } from "@/components/ray-jobs/RayJobText";
+import {
+  buildAutoInsightsDatasets,
+  dataViewSource,
+  datasetSizeMb,
+  datasetTotalRows,
+  mergeThreadDatasetChips,
+  nextThreadDatasetSelection,
+  normalizeDatasetSchema,
+  workspaceDatasetFromChip,
+  type DatasetChip,
+  type UploadedDataset,
+} from "@/lib/analysis-workspace";
+import { ChartCarousel, InlineMarkdown } from "@/components/analysis/ChartCarousel";
+import { rayJobMarkdown, rayJobIdFromHref } from "@/lib/rayDashboard";
+import { RayJobLink, RayJobText } from "@/components/analysis/RayJobLink";
+
+/** Reply links: a Ray job id (rayJobMarkdown) opens the dashboard; anything else is a plain anchor. */
+const renderReplyLink = ({ href, children }: { href?: string; children?: ReactNode }): ReactNode =>
+  rayJobIdFromHref(href) ? <RayJobLink jobId={rayJobIdFromHref(href) ?? ""}>{children}</RayJobLink> : <a href={href}>{children}</a>;
 import { Link } from "@tanstack/react-router";
 import { DataWorkspaceCard } from "@/components/dashboard/data-view/DataWorkspaceCard";
+import { DataViewTabs } from "@/components/dashboard/data-view/DataViewTabs";
 import { getKeyFindings, keyFindingBullets, messagesWithKeyFindings, splitAtKeyFindings } from "@/lib/workspace-findings";
 import { KeyFindingsCard } from "@/components/dashboard/KeyFindingsCard";
 import { ChatResizeHandle } from "@/components/analysis/ChatResizeHandle";
 import { UserMessageEditor } from "@/components/analysis/MessageActions";
+import { FidelitySwitch } from "@/components/analysis/FidelitySwitch";
+import { type FidelityReply, type FidelityState } from "@/lib/analysis-fidelity";
 import { clampChatWidth, clearChatWidth, defaultChatWidth, readChatWidth, writeChatWidth } from "@/lib/chat-width";
 import { currentSelectionText, shouldStartReplyDrag } from "@/lib/reply-drag";
 import { pickFindingText, pickTopInsights, type TopInsightChart } from "@/lib/top-insights";
@@ -40,6 +61,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
@@ -93,6 +115,20 @@ import {
 } from "@untitledui/icons";
 import { readChatDock, writeChatDock, type ChatDockSide } from "@/lib/chat-dock";
 import { ChatDockControls } from "@/components/analysis/ChatDockControls";
+import { ChatIntroCard, useChatIntro } from "@/components/analysis/ChatIntroCard";
+import {
+  GoalPlanActions,
+  useGoalFirstGate,
+  type GoalChatLine,
+} from "@/components/analysis/GoalPlanActions";
+import { PageCommentaryCard } from "@/components/analysis/PageCommentaryCard";
+import { pageCommentary } from "@/lib/page-commentary";
+import { verifierNotice, type VerifierNotice } from "@/lib/verifier-notice";
+import { VerifierNoticeBlock } from "@/components/analysis/VerifierNoticeBlock";
+import { answeredBy, type AnsweredBy } from "@/lib/answered-by";
+import { AnsweredByNote } from "@/components/analysis/AnsweredByNote";
+import { isNewChatThread } from "@/lib/chatbot-intro";
+import { planLinesToRestore } from "@/lib/goal-plan";
 import { Dialog, DialogContent, DialogPortal, DialogOverlay, DialogTitle } from "@/components/ui/dialog";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { Maximize2 } from "lucide-react";
@@ -114,6 +150,7 @@ import {
 import { IconRail } from "@/components/dashboard/IconRail";
 import { speakText, stopSpeaking, useVoiceInput } from "@/hooks/useVoiceInput";
 import { AutoInsightsModal } from "@/components/dashboard/AutoInsightsModal";
+import { deliverPendingChatPrompt, getPendingChatPrompt, setPendingChatPrompt, subscribePendingChatPrompt } from "@/lib/pending-chat-prompt";
 import { AnalysisReportSummary, isReportResult } from "@/components/dashboard/AnalysisReportSummary";
 import { Button } from "@/components/base/buttons/button";
 import { collectVizInsights, DynamicChart, normalizeVizConfig, type Slide } from "@/components/dashboard/dynamicChart";
@@ -124,7 +161,11 @@ import { CommentsPanel } from "@/components/dashboard/CommentsPanel";
 import { ProjectNotificationsPopover } from "@/components/dashboard/ProjectNotificationsPopover";
 import { ShareCollaboratorsButton } from "@/components/dashboard/ShareCollaboratorsButton";
 import { backendApi, isDeferredTurn } from "@/lib/api/backendApi";
-import { buildUploadSummaryMessage } from "@/lib/upload-summary";
+import { buildUploadSummaryMessage, buildUploadSummarySegments } from "@/lib/upload-summary";
+import { MarkdownContent } from "@/components/chat/MarkdownContent";
+import { CommentaryText } from "@/components/chat/CommentaryText";
+import { CollectedInsight, collectSlidesInsights } from "@/components/chat/InsightLine";
+import { parseReplySegments, type ReplySegment } from "@/lib/reply-segments";
 
 /** Analyses whose upload summary was already saved this session (prevents duplicates). */
 const summaryPersisted = new Set<string>();
@@ -150,12 +191,19 @@ import {
   type AnalysisMessage,
   type ChildAnalysisSummary,
 } from "@/lib/analysis-messages";
+import { useNotifications } from "@/hooks/useNotifications";
+import { batchIdOfTranscriptRow, isThreadJobNotification, jobNoteChatMessages, type JobNoteBatch } from "@/lib/job-notes";
 
 import { cx } from "@/lib/utils/cx";
+import { AgentTracePanel } from "@/components/agent-trace/AgentTracePanel";
+import { promptsToMessages, type QuickReply } from "@/lib/assistant-prompts";
 import { toast } from "sonner";
+import { chipsWithFinishedProfile, pendingProfileDatasetId, waitForDeferredProfile } from "@/lib/deferred-profile";
+import { readDatasetBatch as readDatasetBatchOf, storeDatasetBatch as storeDatasetBatchOf, type StoredBatch as StoredBatchOf } from "@/lib/dataset-batch";
 import { resolveHistoryViewPayload, type HistoryViewPayload } from "@/lib/analysis-history";
 import { HistoryCollaborationDetailModal } from "@/components/dashboard/HistoryCollaborationDetailModal";
 import { supabase } from "@/integrations/supabase/client";
+import { displayNameOf, fetchDisplayProfiles, indexDisplayProfiles } from "@/lib/display-profiles";
 import { getCurrentProfileId } from "@/lib/current-profile";
 
 import { BACKEND_API_BASE as BACKEND_CODE_BASE } from "@/lib/api/backend-config";
@@ -177,6 +225,8 @@ import { DataSourceGrid } from "@/components/dashboard/DataSourceGrid";
 const bgPattern = { url: "/assets/dashboard/Background_pattern_decorative.png" };
 const illustration = { url: "/assets/dashboard/Upload_Illustration.png" };
 import { useUpgradeGate } from "@/components/dashboard/UpgradeGate";
+import { saveExecuteOutcome } from "@/lib/save-execute-outcome";
+import { userFacingError } from "@/lib/user-facing-error";
 
 export const Route = createFileRoute("/analysis")({
   head: () => ({
@@ -197,6 +247,9 @@ type ChatMessage = {
   role: "ai" | "user";
   content: string;
   time: string;
+  // A code-written background-job note (app/core/job_notes.py): shown like a
+  // reply, but it takes no feedback and is never persisted by the UI.
+  jobNote?: boolean;
   thinking?: boolean;
   insight?: boolean;
   sectionId?: string;
@@ -206,6 +259,16 @@ type ChatMessage = {
   authorName?: string;
   authorAvatar?: string | null;
   isSelf?: boolean;
+  /** Avaloka's per-step prompt (assistant_prompts): buttons that send a reply. */
+  quickReplies?: QuickReply[];
+  link?: { label: string; href: string };
+  step?: string;
+  /** reply_segments (2.0): which parts are model-written commentary. Absent on older threads. */
+  segments?: ReplySegment[];
+  /** The claim verifier did not clear this reply (verification_safe_to_present === false). */
+  verification?: VerifierNotice | null;
+  /** A fallback model answered instead of the configured one (ChatResponse.answered_by). */
+  answeredBy?: AnsweredBy | null;
 };
 
 const ANALYSIS_COMPLETE_MESSAGE = "Analysis complete. Please check your output table and charts for analysis.";
@@ -231,44 +294,9 @@ function mainSectionId(tabId: string) {
   return `${tabId}-main`;
 }
 
-type DatasetChip = {
-  id: string;
-  name: string;
-  sheetName?: string | null;
-  /** Original workbook file when this dataset is one of its sheets. */
-  sourceWorkbook?: string | null;
-  rows?: number | null;
-  available?: boolean;
-  sessionId?: string;
-  threadId?: string;
-  schema?: unknown;
-  samples?: Record<string, unknown>[];
-  rowsSampled?: number;
-  totalRows?: number;
-  sizeMb?: number;
-  visualizationConfig?: unknown;
-  visualizationStatus?: string;
-};
 
 /** Total dataset size in MB from a register/upload response (0 / missing → undefined). */
-function datasetSizeMb(source: any): number | undefined {
-  const mb =
-    typeof source?.file_size_mb === "number"
-      ? source.file_size_mb
-      : typeof source?.file_size_bytes === "number"
-        ? source.file_size_bytes / (1024 * 1024)
-        : undefined;
-  return mb && mb > 0 ? mb : undefined;
-}
 
-function datasetTotalRows(source: any): number | undefined {
-  const value =
-    source?.total_rows ??
-    source?.visualization_config?.dataset?.total_rows ??
-    source?.visualizationConfig?.dataset?.total_rows;
-  const number = Number(value);
-  return Number.isFinite(number) && number > 0 ? number : undefined;
-}
 
 export function formatDatasetSize(mb?: number): string | null {
   if (!mb || mb <= 0) return null;
@@ -277,25 +305,6 @@ export function formatDatasetSize(mb?: number): string | null {
   return `${mb.toFixed(mb < 10 ? 2 : 1)} MB`;
 }
 
-function normalizeDatasetSchema(schema: unknown, samples: unknown[]): string[] {
-  if (Array.isArray(schema)) {
-    const columns = schema
-      .map((column) =>
-        typeof column === "string"
-          ? column
-          : column && typeof column === "object" && "name" in column
-            ? String((column as { name: unknown }).name)
-            : "",
-      )
-      .filter(Boolean);
-    if (columns.length) return columns;
-  }
-  if (schema && typeof schema === "object") return Object.keys(schema);
-  const first = samples[0];
-  if (first && typeof first === "object" && !Array.isArray(first)) return Object.keys(first);
-  if (Array.isArray(first)) return first.map((_, index) => `col_${index + 1}`);
-  return [];
-}
 
 function populatedDatasetFromResponse(response: any, filename: string): UploadedDataset | null {
   if (
@@ -365,30 +374,11 @@ function datasetChipLabel(name: string): string {
   return readableDatasetName(tail);
 }
 
-const BATCH_KEY = "analysis:batch";
-type StoredBatch = { chips: DatasetChip[]; selectedId: string | null };
-
-function storeDatasetBatch(analysisId: string | null | undefined, batch: StoredBatch) {
-  try {
-    const raw = JSON.stringify(batch);
-    sessionStorage.setItem(BATCH_KEY, raw);
-    if (analysisId) sessionStorage.setItem(`${BATCH_KEY}:${analysisId}`, raw);
-  } catch {
-    /* ignore */
-  }
-}
-
-function readDatasetBatch(analysisId: string | null | undefined): StoredBatch | null {
-  try {
-    const raw =
-      (analysisId ? sessionStorage.getItem(`${BATCH_KEY}:${analysisId}`) : null) ?? sessionStorage.getItem(BATCH_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as StoredBatch;
-    return Array.isArray(parsed?.chips) && parsed.chips.length ? parsed : null;
-  } catch {
-    return null;
-  }
-}
+type StoredBatch = StoredBatchOf<DatasetChip>;
+const storeDatasetBatch = (analysisId: string | null | undefined, batch: StoredBatch) =>
+  storeDatasetBatchOf<DatasetChip>(analysisId, batch);
+const readDatasetBatch = (analysisId: string | null | undefined): StoredBatch | null =>
+  readDatasetBatchOf<DatasetChip>(analysisId);
 
 type UserInsightEntry = { id: string; sectionId: string; vizConfig: unknown; samples?: unknown[] };
 
@@ -621,21 +611,9 @@ function slidesForDashboardTab(
   return indices.map((i) => allSlides[i]).filter((s): s is Slide => s != null);
 }
 
-function collectSlidesInsights(slides: Slide[]) {
-  const summaries: string[] = [];
-  const insights: string[] = [];
-  const seen = new Set<string>();
-  const add = (list: string[], text?: string | null) => {
-    const t = text?.trim();
-    if (!t || seen.has(t)) return;
-    seen.add(t);
-    list.push(t);
-  };
-  for (const slide of slides) {
-    add(summaries, slide.subtitle);
-    slide.insights.forEach((item) => add(insights, item));
-  }
-  return { summaries, insights };
+/** One collected insight, through CommentaryText with the chat's inline markdown. */
+function InsightLine({ text, segments }: { text: string; segments?: ReplySegment[] }) {
+  return <CollectedInsight text={text} segments={segments} renderText={(t) => <InlineMarkdown content={t} />} />;
 }
 
 const chartData = [
@@ -668,6 +646,20 @@ function AnalysisPage() {
     return typeof v === "string" ? v : null;
   }, [search]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+
+  // Background-job notes. The API delivers a batch at a turn boundary and
+  // writes its transcript row; here each batch is shown once, after the reply
+  // it followed, keyed by batch_id so a hydrated row, a turn's reply and a
+  // bell-driven fetch never show the same note twice.
+  const seenJobNoteBatchesRef = useRef<Set<string>>(new Set());
+  const appendJobNotes = useCallback((batches: JobNoteBatch[] | null | undefined) => {
+    const notes = jobNoteChatMessages(
+      batches,
+      new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }),
+      seenJobNoteBatchesRef.current,
+    );
+    if (notes.length) setMessages((curr) => [...curr, ...notes]);
+  }, []);
   const [chatDraft, setChatDraft] = useState("");
   const [chatOpen, setChatOpen] = useState(true);
   const [chatPreferenceReady, setChatPreferenceReady] = useState(false);
@@ -749,7 +741,7 @@ function AnalysisPage() {
   const sessionUploadedDataset = useUploadedDataset();
 
   const [moveOpen, setMoveOpen] = useState(false);
-  const { blocked: upgradeBlocked, dialog: upgradeDialog } = useUpgradeGate();
+  const { isFree, blocked: upgradeBlocked, dialog: upgradeDialog } = useUpgradeGate();
 
   const [moveSuccess, setMoveSuccess] = useState<string | null>(null);
   const [pane, setPane] = useState<"workspace" | "project">("workspace");
@@ -765,6 +757,8 @@ function AnalysisPage() {
   const [autoInsightsDatasetName, setAutoInsightsDatasetName] = useState<string | undefined>(undefined);
 
   const [autoInsightsSamples, setAutoInsightsSamples] = useState<any[] | undefined>(undefined);
+  // Set when the upload answered before its data profile finished.
+  const [deferredProfile, setDeferredProfile] = useState<{ datasetId: string; initialCfg: any; initialChipCfg?: any } | null>(null);
   // User Insights: latest chart derived from a user prompt reply (separate
   // from the stable Auto Insights generated at upload time).
   const [userInsightsOpen, setUserInsightsOpen] = useState(false);
@@ -785,9 +779,39 @@ function AnalysisPage() {
     "quick_sample" | "portfolio_samples" | "entire_dataset" | undefined
   >(undefined);
   const [selectedSampleName, setSelectedSampleName] = useState<string | undefined>(undefined);
+  const [fidelityChatResponse, setFidelityChatResponse] = useState<FidelityReply | null>(null);
+  const fidelityStateRef = useRef<FidelityState | null>(null);
+  const handleFidelityState = useCallback((state: FidelityState) => {
+    fidelityStateRef.current = state;
+    setAnalysisFidelity(state.analysis_fidelity);
+    setSelectedSampleName(state.selected_sample_name ?? undefined);
+  }, []);
   const [datasetChips, setDatasetChips] = useState<DatasetChip[]>([]);
   const datasetChipsRef = useRef<DatasetChip[]>([]);
   datasetChipsRef.current = datasetChips;
+  const fidelityDatasetId = selectedDatasetIds[selectedDatasetIds.length - 1] ?? datasetChips[0]?.id ?? null;
+  const fidelityDatasetIdRef = useRef(fidelityDatasetId);
+  fidelityDatasetIdRef.current = fidelityDatasetId;
+  useEffect(() => {
+    fidelityStateRef.current = null;
+    setFidelityChatResponse(null);
+  }, [fidelityDatasetId, sessionId, threadId]);
+  const refreshFidelitySample = useCallback(async (datasetId: string) => {
+    if (!sessionId) return;
+    const preview = await backendApi.getDatasetPreview(datasetId, sessionId, true, threadId);
+    if (!preview) throw new Error("Sample preview unavailable");
+    if (fidelityDatasetIdRef.current !== datasetId) return;
+    const rows = Array.isArray(preview.samples) ? preview.samples : Array.isArray(preview.rows) ? preview.rows : [];
+    const schema = normalizeDatasetSchema(preview.schema ?? preview.columns, rows);
+    setPersistedDataset((previous) => ({
+      ...previous,
+      filename: previous?.filename ?? preview.filename ?? "Dataset",
+      schema,
+      samples: rows,
+      rows_sampled: preview.rows_sampled ?? rows.length,
+    }));
+    setDatasetChips((chips) => chips.map((chip) => chip.id === datasetId ? { ...chip, samples: rows, schema } : chip));
+  }, [sessionId, threadId]);
 
   // Analysis output from sendMessage
   const [analysisRows, setAnalysisRows] = useState<Record<string, unknown>[] | null>(null);
@@ -821,9 +845,13 @@ function AnalysisPage() {
   const [plannerGraphUrl, setPlannerGraphUrl] = useState<string | null>(null);
   const [plannerGraphLoading, setPlannerGraphLoading] = useState(false);
   const [plannerGraphError, setPlannerGraphError] = useState<string | null>(null);
+  // Agent trace (app/trace): the latest recorded turn, and whether its panel is open.
+  const [traceTurnId, setTraceTurnId] = useState<string | null>(null);
+  const [traceOpen, setTraceOpen] = useState(false);
 
   const updatePlannerGraphAvailability = (res: any) => {
     if (!res) return;
+    if (typeof res.trace_turn_id === "string" && res.trace_turn_id) setTraceTurnId(res.trace_turn_id);
     const failed = res.planner_graph_status === "failure";
     const hasGraph =
       (res.planner_graph_status === "success" && !!res.planner_graph_display_url) ||
@@ -986,15 +1014,7 @@ function AnalysisPage() {
         return;
       }
 
-      const schema = normalizeDatasetSchema(dataset.schema, dataset.samples);
-      setPersistedDataset({
-        filename: dataset.name,
-        schema,
-        samples: dataset.samples,
-        rows_sampled: dataset.rowsSampled ?? dataset.samples.length,
-        total_rows: dataset.totalRows ?? datasetTotalRows(dataset.visualizationConfig),
-        size_mb: dataset.sizeMb,
-      });
+      setPersistedDataset(workspaceDatasetFromChip(dataset, dataset.samples));
       setAutoInsightsSamples(dataset.samples);
 
       const config = dataset.visualizationConfig ?? deriveVizFromRows(dataset.samples);
@@ -1008,29 +1028,10 @@ function AnalysisPage() {
   /** Per-dataset tabs for the Auto Insights modal (grouped uploads).
    *  One entry per DISTINCT dataset_id, each carrying its OWN config + OWN rows.
    *  Never pairs one dataset's chart spec with another dataset's rows. */
-  const autoInsightsDatasets = useMemo(() => {
-    const byId = new Map<string, { id: string; name: string; config: any; status?: string; samples?: any[] }>();
-    const multi = datasetChips.length > 1;
-    datasetChips.forEach((d) => {
-      if (!d?.id || byId.has(d.id)) return;
-      // Unselected chips stay in the analysis, but their insights are hidden until selected.
-      if (multi && selectedDatasetIds.length && !selectedDatasetIds.includes(d.id)) return;
-      // Own rows only: chip samples, or the persisted preview when it belongs
-      // to THIS dataset (same filename), otherwise none.
-      const ownSamples =
-        (Array.isArray(d.samples) && d.samples.length ? d.samples : undefined) ??
-        (persistedDataset?.filename && persistedDataset.filename === d.name ? persistedDataset.samples : undefined);
-      const ownConfig = d.visualizationConfig ?? (ownSamples?.length ? deriveVizFromRows(ownSamples) : null);
-      byId.set(d.id, {
-        id: d.id,
-        name: multi ? chipLabel(d) : d.name,
-        config: ownConfig,
-        status: d.visualizationStatus ?? (ownConfig ? "ready" : undefined),
-        samples: ownSamples,
-      });
-    });
-    return Array.from(byId.values());
-  }, [datasetChips, persistedDataset, selectedDatasetIds]);
+  const autoInsightsDatasets = useMemo(
+    () => buildAutoInsightsDatasets(datasetChips, persistedDataset, selectedDatasetIds),
+    [datasetChips, persistedDataset, selectedDatasetIds],
+  );
 
   const vizInsights = useMemo(
     () => collectVizInsights(analysisVizConfig, chartSamples),
@@ -1254,11 +1255,20 @@ function AnalysisPage() {
     setActiveAnalysisId(null);
     // Explain the data right away, built only from the upload response.
     let summaryText: string | null = null;
+    let summarySegments: ReplySegment[] | undefined;
     try {
       summaryText = buildUploadSummaryMessage(up, navState?.filename);
+      summarySegments = buildUploadSummarySegments(up) ?? undefined;
     } catch (err) {
       console.error("[auto-insight-message]", err);
     }
+    // Avaloka's first word after the auto-insights: what she saw, one question,
+    // quick replies (assistant_prompts on the upload response).
+    const uploadPrompts = promptsToMessages(
+      up,
+      `upload-${key}`,
+      new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }),
+    );
     if (summaryText) {
       setMessages([
         {
@@ -1266,16 +1276,23 @@ function AnalysisPage() {
           role: "ai",
           content: summaryText,
           time: new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }),
+          segments: summarySegments,
         } as any,
+        ...uploadPrompts,
       ]);
       if (freshAid && !summaryPersisted.has(freshAid)) {
         summaryPersisted.add(freshAid);
-        persistMessage({ analysis_id: freshAid, role: "assistant", content: summaryText }).catch((err) =>
+        persistMessage({
+          analysis_id: freshAid,
+          role: "assistant",
+          content: summaryText,
+          output: summarySegments ? { reply_segments: summarySegments } : undefined,
+        }).catch((err) =>
           console.warn("Failed to save upload summary message", err),
         );
       }
     } else {
-      setMessages([]);
+      setMessages(uploadPrompts);
     }
     setUserInsightsList([]);
     setUserInsightsViz(null);
@@ -1301,6 +1318,18 @@ function AnalysisPage() {
     setAutoInsightsStatus(status ?? (cfg ? "ready" : undefined));
     setAutoInsightsDatasetName(navState?.filename ?? up.dataset_id);
     setAutoInsightsSamples(populatedDataset?.samples);
+    const pendingProfileId = pendingProfileDatasetId(up);
+    setDeferredProfile(
+      pendingProfileId
+        ? {
+            datasetId: pendingProfileId,
+            initialCfg: cfg,
+            // The chip's own upload-time config: what the Auto Insights modal shows.
+            initialChipCfg: datasetChipsFromResponse(up, navState?.filename).find((c) => c.id === pendingProfileId)
+              ?.visualizationConfig,
+          }
+        : null,
+    );
     setPersistedDataset(populatedDataset);
     if (cfg && (!status || status === "ready")) {
       setAnalysisVizConfig(cfg);
@@ -1335,6 +1364,37 @@ function AnalysisPage() {
       });
     }
   }, [navState, aidFromUrl, childIdFromUrl, navigate]);
+
+  // The upload's data profile is still running: wait for it, then swap in the
+  // charts written with it unless other charts are already on screen. A
+  // failed profile is said in a toast (and in the notification bell).
+  useEffect(() => {
+    if (!deferredProfile) return;
+    const ctrl = new AbortController();
+    const { datasetId, initialCfg, initialChipCfg } = deferredProfile;
+    waitForDeferredProfile(() => backendApi.getDatasetProfile(datasetId), { signal: ctrl.signal }).then(
+      (outcome) => {
+        if (ctrl.signal.aborted) return;
+        if (outcome.kind === "failed") {
+          toast.error(outcome.message);
+        } else if (outcome.kind === "ready" && outcome.visualizationConfig) {
+          const next = outcome.visualizationConfig;
+          setAutoInsightsConfig((prev: any) => (prev === initialCfg ? next : prev));
+          setAnalysisVizConfig((prev: any) => (prev === initialCfg ? next : prev));
+          // The modal reads each dataset's chip: swap the finished profile in there too,
+          // and in the stored batch, or the next restore brings the upload-time chip back.
+          setDatasetChips((chips) => chipsWithFinishedProfile(chips, datasetId, initialChipCfg, next));
+          for (const key of [null, aidFromUrl]) {
+            const stored = readDatasetBatch(key);
+            if (!stored) continue;
+            const swapped = chipsWithFinishedProfile(stored.chips, datasetId, initialChipCfg, next);
+            if (swapped !== stored.chips) storeDatasetBatch(key, { ...stored, chips: swapped });
+          }
+        }
+      },
+    );
+    return () => ctrl.abort();
+  }, [deferredProfile]);
 
   const [addToDashboardOpen, setAddToDashboardOpen] = useState(false);
   const [dashboardChartIndex, setDashboardChartIndex] = useState(0);
@@ -1627,12 +1687,10 @@ function AnalysisPage() {
         return;
       }
       const {
-        status,
         planner_status,
         planner_notes,
         final_code,
         corrected_code,
-        validation_passed,
         validation_feedback,
         output_json,
         output_file_data,
@@ -1651,12 +1709,18 @@ function AnalysisPage() {
         }
       }
 
-      if (status === "validation_failed" || validation_passed === false) {
+      // HTTP 200 is not success: a failed run comes back 200 with its status.
+      const outcome = saveExecuteOutcome(body);
+      if (outcome.kind === "needs_fix") {
         setValidationFeedback(typeof validation_feedback === "string" ? validation_feedback : "Validation failed.");
         if (typeof corrected_code === "string" && corrected_code) {
           setCodeText(corrected_code);
         }
         toast.error("Couldn't run — the code still needs fixing");
+        return;
+      }
+      if (outcome.kind === "failed") {
+        toast.error(outcome.message);
         return;
       }
 
@@ -1909,6 +1973,34 @@ function AnalysisPage() {
   // standalone analysis into a project one).
   const resolvedProjectId = analysisId ? loadedProjectId : (ctx?.projectId ?? loadedProjectId ?? null);
   const resolvedAnalysisId = activeAnalysisId ?? analysisId ?? ctx?.analysisId ?? null;
+  const { isEnterprise, loading: sharePlanLoading } = usePlanFeatures();
+  const analysisShareAccessQuery = useQuery({
+    queryKey: ["analysis-share-access", resolvedAnalysisId, isFree, isEnterprise],
+    refetchInterval: 15_000,
+    enabled: Boolean(resolvedAnalysisId) && !isEnterprise && !sharePlanLoading,
+    staleTime: 15_000,
+    queryFn: async () => {
+      const [access, owner, profile] = await Promise.all([
+        (supabase as any).rpc("analysis_share_access_level", { p_analysis_id: resolvedAnalysisId }),
+        supabase.from("analyses").select("owner_id").eq("id", resolvedAnalysisId).single(),
+        supabase.rpc("current_profile_id"),
+      ]);
+      if (access.error) throw access.error;
+      // A revoked grant also hides the owner row. Resolve zero access instead
+      // of retaining the previous successful query's edit permission.
+      if (Number(access.data ?? 0) === 0) return { level: 0, isOwner: false };
+      if (owner.error) throw owner.error;
+      if (profile.error) throw profile.error;
+      return {
+        level: Number(access.data ?? 0),
+        isOwner: Boolean(profile.data) && owner.data.owner_id === profile.data,
+      };
+    },
+  });
+  const analysisAccessLevel = resolvedAnalysisId ? (analysisShareAccessQuery.data?.level ?? 0) : 3;
+  const sharedAnalysisNeedsUpgrade = isFree && Boolean(resolvedAnalysisId)
+    && analysisShareAccessQuery.isSuccess && !analysisShareAccessQuery.data.isOwner;
+  const canEditSharedAnalysis = isEnterprise || (!sharePlanLoading && (!resolvedAnalysisId || analysisAccessLevel >= 3));
 
   /**
    * Refresh the chips under the chat from GET /threads/{thread_id}/datasets.
@@ -1920,54 +2012,15 @@ function AnalysisPage() {
     async (opts?: { selectNew?: boolean }): Promise<number> => {
       if (!threadId) return 0;
       const items = await backendApi.listThreadDatasets(threadId);
-      const fresh: DatasetChip[] = (items ?? [])
-        .filter((d) => d?.dataset_id)
-        .map((d) => ({
-          id: d.dataset_id,
-          name: d.alias || d.filename || d.dataset_id,
-          sheetName: d.sheet_name ?? null,
-          sourceWorkbook: d.source_workbook ?? null,
-          rows: d.rows ?? null,
-          available: d.available !== false,
-          threadId,
-        }));
-      const serverSelected = (items ?? [])
-        .filter((d) => d?.dataset_id && d.selected === true && d.available !== false)
-        .map((d) => d.dataset_id);
       const prevChips = datasetChipsRef.current;
-      const prevIds = new Set(prevChips.map((c) => c.id));
-      const byId = new Map(prevChips.map((c) => [c.id, c] as const));
-      for (const c of fresh) {
-        const existing = byId.get(c.id);
-        byId.set(
-          c.id,
-          existing
-            ? {
-                ...existing,
-                name: c.name,
-                sheetName: c.sheetName,
-                sourceWorkbook: c.sourceWorkbook,
-                rows: c.rows,
-                available: c.available,
-              }
-            : c,
-        );
-      }
-      const merged = Array.from(byId.values());
-      const newIds = fresh.filter((c) => !prevIds.has(c.id) && c.available !== false).map((c) => c.id);
-      const unavailable = new Set(merged.filter((c) => c.available === false).map((c) => c.id));
+      const { merged, newIds, unavailable, serverSelected } = mergeThreadDatasetChips(prevChips, items, threadId);
       datasetChipsRef.current = merged;
       setDatasetChips(merged);
       storeDatasetBatch(resolvedAnalysisId ?? aidFromUrl ?? null, {
         chips: merged,
         selectedId: newIds[newIds.length - 1] ?? merged[0]?.id ?? null,
       });
-      setSelectedDatasetIds((prev) => {
-        // The saved selection (GET selected: true) is authoritative after a reload.
-        const base = serverSelected.length ? serverSelected : prev;
-        const kept = base.filter((id) => !unavailable.has(id));
-        return opts?.selectNew ? Array.from(new Set([...kept, ...newIds])) : kept;
-      });
+      setSelectedDatasetIds((prev) => nextThreadDatasetSelection(prev, serverSelected, unavailable, newIds, opts?.selectNew));
       return merged.length - prevChips.length;
     },
     [threadId, resolvedAnalysisId, aidFromUrl],
@@ -2165,12 +2218,13 @@ function AnalysisPage() {
         );
         let authorMap: Record<string, { name?: string; avatar?: string | null }> = {};
         if (authorIds.length) {
-          const { data: profs } = await supabase
-            .from("profiles")
-            .select("id, full_name, avatar_url")
-            .in("id", authorIds);
+          // Authors of a shared analysis may be in other organisations: display fields only.
+          const profs = await fetchDisplayProfiles(supabase, authorIds);
           authorMap = Object.fromEntries(
-            (profs ?? []).map((p: any) => [p.id, { name: p.full_name ?? undefined, avatar: p.avatar_url ?? null }]),
+            Array.from(indexDisplayProfiles(profs), ([id, p]) => [id, {
+              name: displayNameOf(p) || undefined,
+              avatar: p.avatar_url ?? null,
+            }]),
           );
         }
         const chatRows = rows.filter((r) => {
@@ -2181,9 +2235,12 @@ function AnalysisPage() {
           chatRows.map((r, idx) => {
             const authorMeta = r.author_id ? authorMap[r.author_id] : undefined;
             const isSelf = r.role === "user" ? (myProfileId ? r.author_id === myProfileId : true) : false;
+            const noteBatchId = r.role === "assistant" ? batchIdOfTranscriptRow(r.output) : null;
+            if (noteBatchId) seenJobNoteBatchesRef.current.add(noteBatchId);
             const base = {
               id: r.id,
               role: r.role === "user" ? ("user" as const) : ("ai" as const),
+              jobNote: noteBatchId ? true : undefined,
               content:
                 r.role === "assistant"
                   ? chatDisplayContent(extractTabularContent(r.content).text, r.output)
@@ -2196,6 +2253,10 @@ function AnalysisPage() {
               authorName: authorMeta?.name,
               authorAvatar: authorMeta?.avatar ?? null,
               isSelf,
+              segments:
+                r.role === "assistant"
+                  ? parseReplySegments((r.output as { reply_segments?: unknown } | null)?.reply_segments) ?? undefined
+                  : undefined,
             };
             if (r.role !== "user") return base;
             const next = chatRows[idx + 1];
@@ -2230,18 +2291,18 @@ function AnalysisPage() {
       });
       if (!hasChat && row) {
         let summaryText: string | null = null;
+        let summarySegments: ReplySegment[] | undefined;
         try {
-          summaryText = buildUploadSummaryMessage(
-            {
-              dataset_id: row?.dataset_id ?? null,
-              filename: row?.filename ?? null,
-              alias: row?.name ?? null,
-              schema: row?.schema ?? null,
-              samples: row?.samples ?? null,
-              visualization_config: row?.viz_config ?? null,
-            },
-            row?.filename ?? row?.name ?? undefined,
-          );
+          const summarySource = {
+            dataset_id: row?.dataset_id ?? null,
+            filename: row?.filename ?? null,
+            alias: row?.name ?? null,
+            schema: row?.schema ?? null,
+            samples: row?.samples ?? null,
+            visualization_config: row?.viz_config ?? null,
+          };
+          summaryText = buildUploadSummaryMessage(summarySource, row?.filename ?? row?.name ?? undefined);
+          summarySegments = buildUploadSummarySegments(summarySource) ?? undefined;
         } catch (err) {
           console.error("[auto-insight-message]", err);
         }
@@ -2252,11 +2313,17 @@ function AnalysisPage() {
               role: "ai",
               content: summaryText,
               time: new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }),
+              segments: summarySegments,
             } as any,
           ]);
           if (!summaryPersisted.has(targetAnalysisId)) {
             summaryPersisted.add(targetAnalysisId);
-            persistMessage({ analysis_id: targetAnalysisId, role: "assistant", content: summaryText }).catch((err) =>
+            persistMessage({
+              analysis_id: targetAnalysisId,
+              role: "assistant",
+              content: summaryText,
+              output: summarySegments ? { reply_segments: summarySegments } : undefined,
+            }).catch((err) =>
               console.warn("Failed to save upload summary message", err),
             );
           }
@@ -2268,7 +2335,16 @@ function AnalysisPage() {
       setSelectedRunId(hydratedRuns.length ? hydratedRuns[hydratedRuns.length - 1]!.id : null);
       setPastedAnalyses(extractPastedAnalysesFromMessages(rows, hydrateDefaultSectionId));
 
-      const lastOutput = [...rows].reverse().find((r) => r.role === "assistant" && r.output != null);
+      // A text-only reply stores just its reply_segments; it carries no result,
+      // so it must not hide the last turn that did.
+      const lastOutput = [...rows]
+        .reverse()
+        .find(
+          (r) =>
+            r.role === "assistant" &&
+            r.output != null &&
+            !(typeof r.output === "object" && Object.keys(r.output).every((k) => k === "reply_segments")),
+        );
       let lastMessageViz: unknown = null;
       if (lastOutput?.output) {
         const out = lastOutput.output as { output_json?: unknown[]; viz_config?: unknown };
@@ -2553,21 +2629,6 @@ function AnalysisPage() {
     }
     setChildPickerOpen(true);
   }, [motherAnalysisId, resolvedProjectId]);
-
-  const addWorkspaceSection = useCallback(() => {
-    const tabId = resolvedTabIdRef.current || resolvedTabId;
-    if (!tabId) return;
-    const id = `${tabId}-extra-${Date.now()}`;
-    setExtraSectionsByTab((prev) => ({
-      ...prev,
-      [tabId]: [...(prev[tabId] ?? []), { id }],
-    }));
-    activeSectionIdRef.current = id;
-    setActiveSectionId(id);
-    window.setTimeout(() => {
-      sectionRefs.current[id]?.scrollIntoView({ behavior: "smooth", block: "start" });
-    }, 50);
-  }, [resolvedTabId]);
 
   const refreshThreadInsightSources = useCallback(async (motherId: string, children: ChildAnalysisSummary[]) => {
     const ids = [motherId, ...children.map((c) => c.id)];
@@ -2924,25 +2985,16 @@ function AnalysisPage() {
     : [];
   // Data sample and chat analysis results are separate views: the sample is
   // always the uploaded dataset's rows; results come from tableRuns only.
-  const sampleRows: Record<string, unknown>[] = viewDataset?.samples ?? [];
-  const sampleColumns: string[] = (() => {
-    if (viewDataset?.schema?.length) return viewDataset.schema;
-    const keys = new Set<string>();
-    sampleRows.slice(0, 50).forEach((row) => Object.keys(row ?? {}).forEach((key) => keys.add(key)));
-    return Array.from(keys);
-  })();
   const selectedRunTables = selectedRun ? tablesForRun(selectedRun) : [];
   const safeResultTableIndex = Math.min(resultTableIndex, Math.max(selectedRunTables.length - 1, 0));
   const selectedResultRows: Record<string, unknown>[] = selectedRunTables[safeResultTableIndex]?.rows ?? [];
   // Chart and Column Summary follow the last active sample/results table.
-  const dataViewRows: Record<string, unknown>[] =
-    lastDataView === "results" && selectedRun ? selectedResultRows : sampleRows;
-  const dataViewColumns: string[] = (() => {
-    if (lastDataView === "sample" && viewDataset?.schema?.length) return viewDataset.schema;
-    const keys = new Set<string>();
-    dataViewRows.slice(0, 50).forEach((row) => Object.keys(row ?? {}).forEach((key) => keys.add(key)));
-    return Array.from(keys);
-  })();
+  const { sampleRows, sampleColumns, dataViewRows, dataViewColumns } = dataViewSource(
+    viewDataset,
+    lastDataView,
+    !!selectedRun,
+    selectedResultRows,
+  );
   const dataSourceLabel =
     lastDataView === "results" && selectedRun ? `Analysis ${selectedRunIndex + 1}` : "Data sample";
   const dataSourceSwitch =
@@ -2988,10 +3040,8 @@ function AnalysisPage() {
           { label: "Open code", Icon: CodeSnippet02 },
           { label: "Good Response", Icon: ThumbsUp },
           { label: "Bad Response", Icon: ThumbsDown },
-          { label: "Add New Section", Icon: PlusSquareIcon },
         ].map(({ label, Icon }) => {
           const isComment = label === "Add to Comment";
-          const isNewSection = label === "Add New Section";
           const isThumbUp = label === "Good Response";
           const isThumbDown = label === "Bad Response";
           const isRefresh = label === "Refresh";
@@ -3009,9 +3059,7 @@ function AnalysisPage() {
                   ? () => openAddToDashboard(0)
                   : isComment
                     ? () => setInsightCommentOpen((v) => !v)
-                    : isNewSection
-                      ? () => addWorkspaceSection()
-                      : label === "Open code"
+                    : label === "Open code"
                         ? () => {
                             void handleOpenCode();
                           }
@@ -3323,6 +3371,26 @@ function AnalysisPage() {
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages, chatOpen]);
 
+  // One-time hand-off from Auto Insights "Suggested next steps": send through
+  // the existing chat send once, after any running answer finishes.
+  const pendingChatPrompt = useSyncExternalStore(subscribePendingChatPrompt, getPendingChatPrompt, () => null);
+  const sentPendingPromptIds = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!pendingChatPrompt) return;
+    void deliverPendingChatPrompt({
+      aid: aidFromUrl,
+      isBusy: isSending,
+      sentIds: sentPendingPromptIds.current,
+      send,
+      onBeforeSend: () => setChatOpen(true),
+      onFailed: (text) => {
+        setChatDraft(text);
+        setChatOpen(true);
+      },
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingChatPrompt, isSending, aidFromUrl]);
+
   // Hydrate workspace from Supabase whenever ?aid= (mother) changes.
   useEffect(() => {
     if (!aidFromUrl) {
@@ -3498,6 +3566,7 @@ function AnalysisPage() {
    */
   const applyBackgroundTrainingResult = (res: any, label?: string | null) => {
     if (!res || typeof res !== "object") return;
+    setFidelityChatResponse({ analysis_fidelity: res.analysis_fidelity, selected_sample_name: res.selected_sample_name });
     updatePlannerGraphAvailability(res);
     const sectionId = activeSectionIdRef.current || mainSectionId(resolvedTabIdRef.current || activeTabId);
     const nowTime = new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
@@ -3509,16 +3578,21 @@ function AnalysisPage() {
       ? extractTabularContent(lastAssistant.content as string)
       : { text: "", tables: [] as ParsedTable[] };
 
+    const bgId = `bg-${Date.now()}`;
     setMessages((curr) => [
       ...curr.filter((m) => !m.thinking),
       {
-        id: `bg-${Date.now()}`,
+        id: bgId,
         role: "ai",
         content: extracted.text || ANALYSIS_COMPLETE_MESSAGE,
         time: nowTime,
         sectionId,
+        verification: verifierNotice(res),
+        answeredBy: answeredBy(res),
       },
+      ...promptsToMessages(res, bgId, nowTime),
     ]);
+    appendJobNotes((res as { job_notes?: JobNoteBatch[] | null }).job_notes);
 
     const runId = `bg-run-${Date.now()}`;
     const rows: Record<string, unknown>[] | null =
@@ -3555,6 +3629,27 @@ function AnalysisPage() {
 
   // Background training results: claim anything that landed for this thread
   // while we were unmounted, and listen for completions from the global store.
+  // The bell is the per-thread live event: a notification whose metadata names
+  // this thread and a job id means a job of this chat finished. Ask the API
+  // for the thread's notes; if a turn is in flight it says so and the notes
+  // arrive with that turn's reply instead.
+  const { items: bellItems } = useNotifications();
+  const seenJobBellRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!threadId || !sessionId) return;
+    const fresh = bellItems.filter(
+      (n) => isThreadJobNotification(n as { metadata?: unknown }, threadId) && !seenJobBellRef.current.has(n.id),
+    );
+    if (!fresh.length) return;
+    for (const n of fresh) seenJobBellRef.current.add(n.id);
+    backendApi
+      .getThreadJobNotes(threadId, sessionId)
+      .then((r) => {
+        if (r.delivered) appendJobNotes([r.delivered]);
+      })
+      .catch((err) => console.warn("[analysis] job notes fetch failed", err));
+  }, [bellItems, threadId, sessionId, appendJobNotes]);
+
   useEffect(() => {
     if (!threadId) return;
     const drain = () => {
@@ -3576,9 +3671,17 @@ function AnalysisPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [threadId]);
 
-  const send = async (content: string): Promise<boolean> => {
+  const runTurn = async (content: string, opts?: { showUser?: boolean }): Promise<boolean> => {
     content = content.trim();
     if (!content || isSending) return false;
+    if (sharedAnalysisNeedsUpgrade) {
+      upgradeBlocked("Working on a shared analysis");
+      return false;
+    }
+    if (!canEditSharedAnalysis) {
+      toast.error("You have read-only access to this analysis.");
+      return false;
+    }
 
     const tabId = resolvedTabIdRef.current || resolvedTabId || activeTabId;
     const targetSectionId = activeSectionIdRef.current || mainSectionId(tabId);
@@ -3590,16 +3693,21 @@ function AnalysisPage() {
 
     setMessages((m) => [
       ...m,
-      {
-        id: userId,
-        role: "user",
-        content,
-        time: nowTime,
-        replyTo: carriedReply ?? undefined,
-        sectionId: targetSectionId || undefined,
-        authorId: myProfileId,
-        isSelf: true,
-      },
+      // A goal approved from its plan is already on screen above the plan.
+      ...(opts?.showUser === false
+        ? []
+        : [
+            {
+              id: userId,
+              role: "user" as const,
+              content,
+              time: nowTime,
+              replyTo: carriedReply ?? undefined,
+              sectionId: targetSectionId || undefined,
+              authorId: myProfileId,
+              isSelf: true,
+            },
+          ]),
       { id: placeholderId, role: "ai", content: "Analyzing...", time: nowTime, thinking: true },
     ]);
     setReplyContext(null);
@@ -3649,10 +3757,11 @@ function AnalysisPage() {
         sessionId,
         content,
         datasetIdsToSend,
-        analysisFidelity,
-        selectedSampleName,
-        { dataset_id: pinnedId },
+        undefined,
+        undefined,
+        { dataset_id: pinnedId, analysis_id: aid },
       );
+      setFidelityChatResponse({ analysis_fidelity: res.analysis_fidelity, selected_sample_name: res.selected_sample_name });
       // eslint-disable-next-line no-console
       console.log("[analysis.sendMessage] raw response", res);
 
@@ -3704,6 +3813,7 @@ function AnalysisPage() {
           // Claim it so the background listener doesn't render it twice.
           claimTrainingResult(threadId);
           res = pending.result;
+          setFidelityChatResponse({ analysis_fidelity: res.analysis_fidelity, selected_sample_name: res.selected_sample_name });
           // eslint-disable-next-line no-console
           console.log("[analysis.sendMessage] deferred result", res);
         } else if (pending.status === "error") {
@@ -3768,11 +3878,28 @@ function AnalysisPage() {
 
       // Placeholder only when this turn produced an execution result AND the
       // assistant returned no usable text after stripping tables.
-      const assistantMsgs = lastAssistantText
-        ? [{ id: `${placeholderId}-a0`, role: "ai" as const, content: lastAssistantText, time: nowTime() }]
+      // The verifier's findings ride on the reply they are about.
+      const verification = verifierNotice(res);
+      const answered = answeredBy(res);
+      // Which sentences of the reply a model wrote (2.0): reply_segments on the
+      // assistant message. The string already carries the suffix after each;
+      // the segments let the bubble mark them instead.
+      const replySegments = parseReplySegments(lastAssistant?.reply_segments) ?? undefined;
+      const assistantMsgs: ChatMessage[] = lastAssistantText
+        ? [{ id: `${placeholderId}-a0`, role: "ai" as const, segments: replySegments, content: lastAssistantText, time: nowTime(), verification }]
         : hasExecutionResult(res) || lastAssistant || extractedTables.length
-          ? [{ id: `${placeholderId}-a0`, role: "ai" as const, content: ANALYSIS_COMPLETE_MESSAGE, time: nowTime() }]
+          ? [
+              {
+                id: `${placeholderId}-a0`,
+                role: "ai" as const,
+                content: ANALYSIS_COMPLETE_MESSAGE,
+                time: nowTime(),
+                verification,
+              },
+            ]
           : [];
+      // Which model answered rides on the reply too, when a fallback tier stood in.
+      for (const m of assistantMsgs) m.answeredBy = answered;
 
       // SCHEDULED TASK SIGNAL: if the backend returns task_info with a
       // task_id, this response belongs to the Scheduled Analysis phase.
@@ -3807,10 +3934,13 @@ function AnalysisPage() {
             });
           })
           .catch(() => {});
+        const isOneTimeRun = (scheduledTaskInfo as { max_runs?: number }).max_runs === 1;
         assistantMsgs.push({
           id: `${placeholderId}-sched`,
           role: "ai" as const,
-          content: `📅 Scheduled task created — task_id: \`${scheduledTaskInfo.task_id}\` · ${schedule}. Open **Scheduled Analysis** to manage it.`,
+          content: isOneTimeRun
+            ? `🗓 Full-dataset job started — task_id: \`${scheduledTaskInfo.task_id}\` · runs once on all rows. Open **Scheduled Analysis** to follow it.`
+            : `📅 Scheduled task created — task_id: \`${scheduledTaskInfo.task_id}\` · ${schedule}. Open **Scheduled Analysis** to manage it.`,
           time: new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }),
         });
       }
@@ -3837,9 +3967,13 @@ function AnalysisPage() {
         });
       }
 
+      // Avaloka talks through the steps this turn took (assistant_prompts):
+      // one bubble per step, each with its question and quick replies.
+      const stepPrompts = promptsToMessages(res, placeholderId, nowTime(), lastAssistant?.content as string | undefined);
       setMessages((curr) => {
         const without = curr.filter((m) => m.id !== placeholderId);
-        if (assistantMsgs.length) return [...without, ...assistantMsgs];
+        if (assistantMsgs.length) return [...without, ...assistantMsgs, ...stepPrompts];
+        if (stepPrompts.length) return [...without, ...stepPrompts];
         return [
           ...without,
           {
@@ -3850,6 +3984,9 @@ function AnalysisPage() {
           },
         ];
       });
+      // Jobs that finished before or during this turn: told after the reply,
+      // not persisted here (the API wrote the transcript row).
+      appendJobNotes(res.job_notes);
 
       // If the assistant returned markdown tables with no structured output_json,
       // parse them into result runs so they render in the Data Table panel.
@@ -3931,7 +4068,7 @@ function AnalysisPage() {
               analysis_id: aid,
               role: "assistant",
               content: am.content,
-              output,
+              output: am.segments ? { ...(output ?? {}), reply_segments: am.segments } : output,
             }).catch((err) => console.warn("Failed to save assistant message", err));
           }
         } else {
@@ -4088,6 +4225,62 @@ function AnalysisPage() {
     }
   };
 
+  // Goal first: the first message of a new chat gets a plan, and nothing runs
+  // until the user says go. The datasets are the ones the turn would carry.
+  const planDatasets = useMemo(() => {
+    const available = datasetChips.filter((c) => c.available !== false && c.id);
+    const selected = available.filter((c) => selectedDatasetIds.includes(c.id));
+    return (selected.length ? selected : available).map((c) => ({ id: c.id, name: chipLabel(c) }));
+  }, [datasetChips, selectedDatasetIds]);
+  const appendGoalLines = useCallback(
+    (lines: GoalChatLine[]) => {
+      const time = new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+      const stamp = Date.now();
+      setMessages((m) => [
+        ...m,
+        ...lines.map((line, i) => ({
+          id: `g${stamp}-${i}`,
+          role: line.role,
+          content: line.content,
+          time,
+          ...(line.role === "user" ? { authorId: myProfileId, isSelf: true } : {}),
+        })),
+      ]);
+    },
+    [myProfileId],
+  );
+  const isNewChat = isNewChatThread(messages);
+  const goalGate = useGoalFirstGate({
+    runTurn,
+    appendLines: appendGoalLines,
+    datasets: planDatasets,
+    isNewChat,
+    // Keyed by thread: a reload restores the waiting plan and its Go action,
+    // and switching threads shows that thread's plan (or none).
+    storageKey: threadId,
+  });
+  // A restored plan's goal and plan lines are not part of the persisted chat,
+  // so put them back once the thread has hydrated without them.
+  const restoreLines = useMemo(
+    () => planLinesToRestore(goalGate.pending, messages),
+    [goalGate.pending, messages],
+  );
+  useEffect(() => {
+    if (restoreLines.length) appendGoalLines(restoreLines);
+  }, [restoreLines, appendGoalLines]);
+  const chatIntro = useChatIntro(myProfileId, threadId);
+  const showChatIntro = !chatIntro.dismissed && isNewChat;
+  const send = async (content: string): Promise<boolean> => {
+    if (!content.trim() || isSending) return false;
+    // The intro is shown once: the first message counts as seeing it.
+    if (!chatIntro.dismissed) chatIntro.dismiss();
+    return goalGate.send(content);
+  };
+  const pageCommentaryLines = useMemo(
+    () => pageCommentary(autoInsightsConfig, { datasetCount: planDatasets.length }),
+    [autoInsightsConfig, planDatasets.length],
+  );
+
   const projectContextLoading = !!analysisId && !ctx;
 
   const isChatFloat = effectiveChatDock === "float";
@@ -4167,6 +4360,8 @@ function AnalysisPage() {
               <span className="text-xs text-tertiary">Today</span>
               <div className="h-px flex-1 bg-border-secondary" />
             </div>
+            {showChatIntro && <ChatIntroCard onDismiss={chatIntro.dismiss} />}
+            <PageCommentaryCard lines={pageCommentaryLines} datasetName={autoInsightsDatasetName} />
             {displayMessages.map((m) => (
               <div
                 key={m.id}
@@ -4198,9 +4393,13 @@ function AnalysisPage() {
                   onRefresh={() => {
                     void handleRefresh();
                   }}
-                  onThumb={(t) => {
-                    void handleThumb(t);
-                  }}
+                  onThumb={
+                    m.jobNote
+                      ? undefined // a code-written job note is not an answer to rate
+                      : (t) => {
+                          void handleThumb(t);
+                        }
+                  }
                   onCopy={() => {
                     try {
                       void navigator.clipboard?.writeText(m.content);
@@ -4215,6 +4414,14 @@ function AnalysisPage() {
                 />
               </div>
             ))}
+            {goalGate.pending && (
+              <GoalPlanActions
+                disabled={isSending}
+                onGo={() => {
+                  void goalGate.approve();
+                }}
+              />
+            )}
           </div>
         </div>
       )}
@@ -4241,6 +4448,23 @@ function AnalysisPage() {
           </div>
         )}
         <TypingIndicator users={typingUsers} />
+        {!isEnterprise && resolvedAnalysisId && analysisShareAccessQuery.isSuccess && analysisAccessLevel < 3 && (
+          <p className="mb-2 rounded-lg bg-secondary px-3 py-2 text-xs text-tertiary">
+            {analysisAccessLevel >= 2 ? "You can comment on this analysis, but only Edit access can run new analysis prompts." : "You have View access to this analysis."}
+          </p>
+        )}
+        {sharedAnalysisNeedsUpgrade && (
+          <div className="mb-2 rounded-lg bg-secondary px-3 py-2 text-xs text-tertiary">
+            You can view this shared analysis. Upgrade your plan to work on it, even with Edit access.
+            <button
+              type="button"
+              className="ml-1 font-semibold text-[#1565ef] hover:underline"
+              onClick={() => upgradeBlocked("Working on a shared analysis")}
+            >
+              Upgrade your plan
+            </button>
+          </div>
+        )}
         <ChatComposer
           draft={chatDraft}
           onDraftChange={setChatDraft}
@@ -4249,6 +4473,7 @@ function AnalysisPage() {
           onAvatarModeChange={() => setAvatarMode((value) => !value)}
           onListeningChange={setVoiceListening}
           onSend={send}
+          readOnly={!isEnterprise && Boolean(resolvedAnalysisId) && (analysisShareAccessQuery.isPending || !canEditSharedAnalysis || sharedAnalysisNeedsUpgrade)}
           onTyping={notifyTyping}
           onStopTyping={stopTyping}
         />
@@ -4656,6 +4881,17 @@ function AnalysisPage() {
                           ) : null}
                         </button>
                       ))}
+                      {pane === "workspace" && fidelityDatasetId && sessionId ? (
+                        <FidelitySwitch
+                          key={fidelityDatasetId}
+                          datasetId={fidelityDatasetId}
+                          sessionId={sessionId}
+                          threadId={threadId}
+                          chatResponse={fidelityChatResponse}
+                          onStateChange={handleFidelityState}
+                          onSampleChange={refreshFidelitySample}
+                        />
+                      ) : null}
                       <button
                         type="button"
                         aria-label="Add analysis"
@@ -4673,12 +4909,23 @@ function AnalysisPage() {
                   <>
                     {!resolvedProjectId ? (
                       <div className="border-b border-secondary bg-primary">
-                        <div className="flex items-center gap-3 px-5 py-3">
-                          <div className="flex min-w-0 flex-1 items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-3 px-5 py-3">
+                          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
                             <Folder className="size-5 text-fg-secondary" />
-                            <p className="truncate text-md font-semibold text-primary">
+                            <p className="min-w-0 truncate text-md font-semibold text-primary">
                               {workspaceHeading || "New Analysis"}
                             </p>
+                            {fidelityDatasetId && sessionId ? (
+                              <FidelitySwitch
+                                key={fidelityDatasetId}
+                                datasetId={fidelityDatasetId}
+                                sessionId={sessionId}
+                                threadId={threadId}
+                                chatResponse={fidelityChatResponse}
+                                onStateChange={handleFidelityState}
+                                onSampleChange={refreshFidelitySample}
+                              />
+                            ) : null}
                           </div>
                           <div className="ml-auto flex items-center gap-2">
                             <div
@@ -4723,11 +4970,14 @@ function AnalysisPage() {
                             </div>
                             <button
                               onClick={() => {
+                                if (!canEditSharedAnalysis || sharedAnalysisNeedsUpgrade) return;
                                 if (upgradeBlocked("Moving analyses into a project")) return;
                                 setMoveOpen(true);
                               }}
 
-                              className="inline-flex items-center gap-2 rounded-lg border border-secondary bg-primary px-3 py-2 text-sm font-semibold text-primary shadow-xs hover:bg-primary_hover"
+                              disabled={!canEditSharedAnalysis || sharedAnalysisNeedsUpgrade}
+                              title={!canEditSharedAnalysis ? "Edit access is required to move this analysis" : undefined}
+                              className="inline-flex items-center gap-2 rounded-lg border border-secondary bg-primary px-3 py-2 text-sm font-semibold text-primary shadow-xs hover:bg-primary_hover disabled:cursor-not-allowed disabled:opacity-50"
                             >
                               <Folder className="size-4 text-fg-secondary" />
                               Move to project
@@ -4790,43 +5040,7 @@ function AnalysisPage() {
                           >
                             <DataWorkspaceCard>
                               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--workspace-border)] bg-[var(--workspace-header-bg)] px-3 py-2">
-                                <div
-                                  role="tablist"
-                                  aria-label="Dataset views"
-                                  className="inline-flex items-center rounded-lg bg-[var(--workspace-tablist-bg)] p-0.5"
-                                >
-                                  {(
-                                    [
-                                      ["sample", "Data sample"],
-                                      [
-                                        "results",
-                                        tableRuns.length
-                                          ? `Analysis results (${tableRuns.length})`
-                                          : "Analysis results",
-                                      ],
-                                      ["chart", "Chart"],
-                                      ["preview", "Column Summary"],
-                                    ] as const
-                                  ).map(([key, label]) => (
-                                    <button
-                                      key={key}
-                                      role="tab"
-                                      aria-selected={view === key}
-                                      onClick={() => setView(key)}
-                                      title={
-                                        key === "preview" ? "Structure of the dataset: one row per column" : undefined
-                                      }
-                                      className={cx(
-                                        "rounded-md px-3 py-1.5 text-sm font-semibold transition",
-                                        view === key
-                                          ? "bg-primary text-primary shadow-[0_1px_2px_rgba(16,24,40,0.12)]"
-                                          : "text-tertiary hover:text-primary",
-                                      )}
-                                    >
-                                      {label}
-                                    </button>
-                                  ))}
-                                </div>
+                                <DataViewTabs view={view} resultCount={tableRuns.length} onSelect={setView} />
                                 <div className="flex items-center gap-2">
                                   {(view === "sample" && sampleRows.length > 0) ||
                                   (view === "results" && selectedResultRows.length > 0) ? (
@@ -4856,6 +5070,17 @@ function AnalysisPage() {
                                       {plannerGraphLoading ? "Loading…" : "Planner Graph"}
                                     </button>
                                   ) : null}
+                                  {threadId ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => setTraceOpen((open) => !open)}
+                                      aria-expanded={traceOpen}
+                                      aria-controls="agent-trace-panel"
+                                      className="inline-flex items-center gap-1.5 rounded-lg border border-secondary bg-primary px-2.5 py-1.5 text-xs font-semibold text-primary shadow-xs hover:bg-primary_hover"
+                                    >
+                                      {traceOpen ? "Hide agent trace" : "Agent trace"}
+                                    </button>
+                                  ) : null}
                                   {plannerGraphError ? (
                                     <span className="text-xs text-error-primary">{plannerGraphError}</span>
                                   ) : null}
@@ -4866,6 +5091,26 @@ function AnalysisPage() {
                                 className="data-workspace-content"
                                 data-table-view={view === "sample" || view === "results"}
                               >
+                                {traceOpen && threadId ? (
+                                  <div
+                                    id="agent-trace-panel"
+                                    className="mb-4 rounded-xl border border-secondary bg-primary p-4 shadow-xs"
+                                  >
+                                    <div className="mb-3 flex items-center justify-between gap-2">
+                                      <h3 className="text-sm font-semibold text-primary">Agent trace</h3>
+                                      <a
+                                        href={`/agent-trace?thread=${encodeURIComponent(threadId)}${
+                                          traceTurnId ? `&turn=${encodeURIComponent(traceTurnId)}` : ""
+                                        }${analysisId ?? aidFromUrl ? `&aid=${encodeURIComponent(String(analysisId ?? aidFromUrl))}` : ""}`}
+                                        className="text-xs font-semibold text-brand-secondary hover:text-brand-secondary_hover"
+                                      >
+                                        Open full page
+                                      </a>
+                                    </div>
+                                    <AgentTracePanel threadId={threadId} turnId={traceTurnId} refreshKey={traceTurnId} compact />
+                                  </div>
+                                ) : null}
+
                                 {view === "preview" ? (
                                   <>
                                     <p className="mb-2 text-xs text-tertiary">
@@ -5142,7 +5387,7 @@ function AnalysisPage() {
 
         {upgradeDialog}
         <MoveProjectModal
-          open={moveOpen}
+          open={moveOpen && canEditSharedAnalysis && !sharedAnalysisNeedsUpgrade}
           onOpenChange={setMoveOpen}
           analysisId={resolvedAnalysisId}
           onMoved={(name) => {
@@ -5264,8 +5509,13 @@ function AnalysisPage() {
           primaryDatasetId={selectedDatasetIds[selectedDatasetIds.length - 1] ?? datasetChips[0]?.id ?? null}
           aid={aidFromUrl}
           onPrefillChat={(text) => {
-            setChatDraft(text);
+            if (!aidFromUrl) {
+              toast.error("You can't ask questions in this analysis.");
+              return false;
+            }
+            if (!setPendingChatPrompt(text, aidFromUrl)) return false;
             setChatOpen(true);
+            return true;
           }}
         />
 
@@ -5699,7 +5949,7 @@ function InlineCodeEditor({
       {validationFeedback && (
         <div className="flex items-start justify-between gap-3 border-b border-[#fecdca] bg-[#fef3f2] px-4 py-2 text-[12px] text-[#b42318]">
           <pre className="whitespace-pre-wrap break-words font-mono text-[12px] leading-relaxed">
-            {validationFeedback}
+            {userFacingError(validationFeedback, "Your code couldn't be checked, so it was not run.")}
           </pre>
           {onDismissValidation && (
             <button
@@ -6253,6 +6503,7 @@ function ChatComposer({
   onTyping,
   onStopTyping,
   onListeningChange,
+  readOnly = false,
 }: {
   draft: string;
   onDraftChange: (value: string) => void;
@@ -6263,10 +6514,11 @@ function ChatComposer({
   onTyping?: () => void;
   onStopTyping?: () => void;
   onListeningChange?: (listening: boolean) => void;
+  readOnly?: boolean;
 }) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const disabled = isSending || isSubmitting;
+  const disabled = isSending || isSubmitting || readOnly;
 
   const sendText = async (raw: string) => {
     const content = raw.trim();
@@ -6340,6 +6592,7 @@ function ChatComposer({
             }
           }}
           placeholder={voice.listening ? "Listening..." : "Ask me anything... "}
+          disabled={readOnly}
           rows={1}
           className="field-sizing-content min-h-5 max-h-[240px] flex-1 resize-none overflow-y-auto bg-transparent text-sm text-primary placeholder:text-tertiary focus:outline-none"
         />
@@ -6392,6 +6645,7 @@ function ChatComposer({
 function MessageRow({
   message,
   onReply,
+  onQuickReply,
   onSectionSelect,
   activeSectionId,
   onRefresh,
@@ -6407,6 +6661,8 @@ function MessageRow({
   /** User's own messages: Save in the inline editor re-sends the edited text. */
   onEditResend?: (text: string) => void;
   onReply?: () => void;
+  /** A quick-reply button: sends its text as the user's next message. */
+  onQuickReply?: (text: string) => void;
   onSectionSelect?: (sectionId: string) => void;
   activeSectionId?: string;
   onRefresh?: () => void;
@@ -6543,16 +6799,41 @@ function MessageRow({
                   const parts = splitAtKeyFindings(message.content);
                   return (
                     <>
-                      {parts.before.trim() ? <MarkdownContent content={parts.before} /> : null}
+                      {parts.before.trim() ? <MarkdownContent content={rayJobMarkdown(parts.before)} prepare={stripTabularContent} renderLink={renderReplyLink} /> : null}
                       {keyFindings}
-                      {parts.after.trim() ? <MarkdownContent content={parts.after} /> : null}
+                      {parts.after.trim() ? <MarkdownContent content={rayJobMarkdown(parts.after)} prepare={stripTabularContent} renderLink={renderReplyLink} /> : null}
                     </>
                   );
                 })()
               ) : (
-                <MarkdownContent content={message.content} />
+                // Ray job ids (dta-…) in a reply link to the Ray dashboard, as on 1.6.
+                <MarkdownContent content={rayJobMarkdown(message.content)} segments={message.segments} prepare={(md) => rayJobMarkdown(stripTabularContent(md))} renderLink={renderReplyLink} />
               )}
+              {message.link ? (
+                <a
+                  href={message.link.href}
+                  className="mt-1.5 inline-block text-xs font-semibold text-brand-secondary hover:text-brand-secondary_hover"
+                >
+                  {message.link.label}
+                </a>
+              ) : null}
             </div>
+            {message.verification && <VerifierNoticeBlock notice={message.verification} />}
+            {message.answeredBy && <AnsweredByNote answeredBy={message.answeredBy} />}
+            {message.quickReplies?.length ? (
+              <div className="mt-2 flex flex-wrap gap-1.5" data-testid="quick-replies">
+                {message.quickReplies.map((reply) => (
+                  <button
+                    key={`${message.id}-${reply.label}`}
+                    type="button"
+                    onClick={() => onQuickReply?.(reply.send)}
+                    className="rounded-full border border-secondary bg-primary px-2.5 py-1 text-xs font-semibold text-primary shadow-xs hover:border-[#b2ddff] hover:bg-primary_hover"
+                  >
+                    {reply.label}
+                  </button>
+                ))}
+              </div>
+            ) : null}
             <div className="mt-2 flex items-center gap-3 text-fg-quaternary">
               <button
                 aria-label="Refresh"
@@ -6681,57 +6962,6 @@ function MessageRow({
   );
 }
 
-function MarkdownContent({ content }: { content: string }) {
-  return (
-    <div className="prose-sm max-w-none break-words text-sm leading-relaxed [&_a]:text-[#1565ef] [&_a]:underline [&_code]:rounded [&_code]:bg-secondary/60 [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-[12px] [&_pre]:my-2 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:bg-[#0f172a] [&_pre]:p-3 [&_pre]:text-[12px] [&_pre]:text-white [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_pre_code]:text-white [&_h1]:mt-2 [&_h1]:mb-1 [&_h1]:text-base [&_h1]:font-semibold [&_h2]:mt-2 [&_h2]:mb-1 [&_h2]:text-sm [&_h2]:font-semibold [&_h3]:mt-2 [&_h3]:mb-1 [&_h3]:text-sm [&_h3]:font-semibold [&_p]:my-1 [&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:my-0.5 [&_blockquote]:my-2 [&_blockquote]:border-l-2 [&_blockquote]:border-secondary [&_blockquote]:pl-3 [&_blockquote]:text-secondary [&_table]:my-2 [&_table]:w-full [&_table]:border-collapse [&_th]:border [&_th]:border-secondary [&_th]:px-2 [&_th]:py-1 [&_th]:text-left [&_td]:border [&_td]:border-secondary [&_td]:px-2 [&_td]:py-1 [&_hr]:my-2 [&_hr]:border-secondary [&_strong]:font-semibold">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={{
-          a: ({ children, href }) =>
-            href?.startsWith("/ray-jobs?job=") ? (
-              <Link to="/ray-jobs" search={{ job: href.slice("/ray-jobs?job=".length), status: "", kind: "" }}>
-                {children}
-              </Link>
-            ) : (
-              <a href={href}>{children}</a>
-            ),
-        }}
-      >
-        {rayJobMarkdown(content)}
-      </ReactMarkdown>
-    </div>
-  );
-}
-
-function InlineMarkdown({ content }: { content: string }) {
-  return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
-      components={{
-        p: ({ children }) => <>{children}</>,
-        a: ({ children, href }) =>
-          href?.startsWith("/ray-jobs?job=") ? (
-            <Link
-              to="/ray-jobs"
-              search={{ job: href.slice("/ray-jobs?job=".length), status: "", kind: "" }}
-              className="text-brand-secondary underline"
-            >
-              {children}
-            </Link>
-          ) : (
-            <a href={href} className="text-[#1565ef] underline" target="_blank" rel="noreferrer">
-              {children}
-            </a>
-          ),
-        code: ({ children }) => <code className="rounded bg-secondary/60 px-1 py-0.5 text-[12px]">{children}</code>,
-        strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
-        em: ({ children }) => <em className="italic">{children}</em>,
-      }}
-    >
-      {rayJobMarkdown(content)}
-    </ReactMarkdown>
-  );
-}
 
 function workspaceChartCardKey(keyPrefix: string, slide: Slide, index: number) {
   return `${keyPrefix}::${slideFingerprint(slide)}::${index}`;
@@ -6744,6 +6974,7 @@ function WorkspaceChartCards({
   onDismiss,
   activeRunId,
   onRunChange,
+  showNeighbors = true,
 }: {
   slides: RunSlide[];
   keyPrefix: string;
@@ -6751,6 +6982,7 @@ function WorkspaceChartCards({
   onDismiss?: (cardKey: string) => void;
   activeRunId?: string | null;
   onRunChange?: (runId: string) => void;
+  showNeighbors?: boolean;
 }) {
   const visible = useMemo(
     () =>
@@ -6765,218 +6997,7 @@ function WorkspaceChartCards({
     [slides, keyPrefix, dismissedKeys],
   );
   if (!visible.length) return null;
-  return <ChartCarousel items={visible} onDismiss={onDismiss} activeRunId={activeRunId} onRunChange={onRunChange} />;
-}
-
-function ChartCarousel({
-  items,
-  onDismiss,
-  activeRunId,
-  onRunChange,
-}: {
-  items: { slide: Slide; index: number; cardKey: string; runId?: string }[];
-  onDismiss?: (cardKey: string) => void;
-  activeRunId?: string | null;
-  onRunChange?: (runId: string) => void;
-}) {
-  const [active, setActive] = useState(0);
-  const [fullscreenOpen, setFullscreenOpen] = useState(false);
-  const total = items.length;
-  const safeActive = Math.min(active, total - 1);
-  const runIdsKey = items.map((item) => item.runId ?? "").join("\u001f");
-  const selectIndex = useCallback(
-    (i: number) => {
-      setActive((current) => (current === i ? current : i));
-      const rid = items[i]?.runId;
-      if (rid && rid !== activeRunId) onRunChange?.(rid);
-    },
-    [items, activeRunId, onRunChange],
-  );
-  const go = (dir: -1 | 1) => selectIndex((safeActive + dir + total) % total);
-  const activeItem = items[safeActive]!;
-  const s = activeItem.slide;
-  const cardKey = activeItem.cardKey;
-
-  // Keep the carousel on the run selected elsewhere (e.g. the Data table pager),
-  // without fighting the user when they page within the same run's charts.
-  useEffect(() => {
-    if (!activeRunId) return;
-    if (items[safeActive]?.runId === activeRunId) return;
-    const i = items.findIndex((it) => it.runId === activeRunId);
-    if (i >= 0) setActive((current) => (current === i ? current : i));
-  }, [activeRunId, runIdsKey, safeActive]);
-
-  // Offset from center: -1 = prev, 0 = active, 1 = next. Only render 3 neighbours.
-  const getOffset = (i: number) => {
-    if (total <= 1) return 0;
-    let d = i - safeActive;
-    if (d > total / 2) d -= total;
-    if (d < -total / 2) d += total;
-    return d;
-  };
-
-  const CHART_H = 320;
-  const STAGE_H = CHART_H + 140; // header + chart + padding
-
-  return (
-    <div className="space-y-3 rounded-2xl bg-secondary/50 p-4">
-      <div className="relative">
-        {total > 1 ? (
-          <button
-            type="button"
-            aria-label="Previous chart"
-            onClick={() => go(-1)}
-            className="absolute left-0 top-1/2 z-30 -translate-y-1/2 rounded-full bg-brand-600 p-2.5 text-white shadow-md hover:bg-brand-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600"
-          >
-            <ChevronLeft className="size-5" strokeWidth={2.5} />
-          </button>
-        ) : null}
-        {total > 1 ? (
-          <button
-            type="button"
-            aria-label="Next chart"
-            onClick={() => go(1)}
-            className="absolute right-0 top-1/2 z-30 -translate-y-1/2 rounded-full bg-brand-600 p-2.5 text-white shadow-md hover:bg-brand-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600"
-          >
-            <ChevronRight className="size-5" strokeWidth={2.5} />
-          </button>
-        ) : null}
-
-        {/* Arrows (40px) sit in 52px gutters: 12px clear of the active card on each side. */}
-        <div
-          className="relative mx-auto overflow-hidden"
-          style={{ height: STAGE_H, perspective: "1600px", width: total > 1 ? "calc(100% - 104px)" : "100%" }}
-        >
-          {items.map((it, i) => {
-            const off = getOffset(i);
-            if (Math.abs(off) > 1) return null; // only render 3 nearest
-            const isActive = off === 0;
-            const translateX = off * 52; // percent
-            const translateY = isActive ? 0 : -10;
-            const scale = isActive ? 1 : 0.86;
-            const rotY = off * -10; // subtle 3D tilt toward center
-            const opacity = isActive ? 1 : 0.4;
-            const z = isActive ? 20 : 10;
-            const filter = isActive ? "none" : "grayscale(1) blur(0.3px)";
-
-            return (
-              <div
-                key={it.cardKey}
-                aria-hidden={!isActive}
-                onClick={() => {
-                  if (!isActive) selectIndex(i);
-                }}
-                className="absolute left-1/2 top-0 w-[88%] will-change-transform"
-                style={{
-                  transform: isActive
-                    ? `translate3d(-50%, 0, 0)`
-                    : `translate3d(calc(-50% + ${translateX}%), ${translateY}px, 0) scale(${scale}) rotateY(${rotY}deg)`,
-                  transformStyle: "preserve-3d",
-                  opacity,
-                  zIndex: z,
-                  filter,
-                  transition: "transform 550ms cubic-bezier(0.22, 1, 0.36, 1), opacity 400ms ease, filter 400ms ease",
-                  pointerEvents: "auto",
-                  cursor: isActive ? "default" : "pointer",
-                }}
-              >
-                <div
-                  className={cx(
-                    "relative rounded-xl p-4",
-                    isActive ? "border border-secondary bg-primary shadow-sm" : "pointer-events-none select-none border border-primary bg-muted/90",
-                  )}
-                >
-                  {isActive && onDismiss ? (
-                    <button
-                      type="button"
-                      aria-label="Close chart"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onDismiss(cardKey);
-                      }}
-                      className="absolute right-3 top-3 z-10 rounded-md p-1 text-fg-quaternary hover:bg-primary_hover hover:text-fg-secondary"
-                    >
-                      <X className="size-4" />
-                    </button>
-                  ) : null}
-                  <div className="flex flex-wrap items-center gap-2 pr-8">
-                    <h3 className="text-sm font-semibold text-primary">{it.slide.title}</h3>
-                    {(it.slide as Slide & { sourceLabel?: string }).sourceLabel ? (
-                      <span className="rounded-full bg-secondary px-2 py-0.5 text-[11px] font-medium text-secondary">
-                        {(it.slide as Slide & { sourceLabel?: string }).sourceLabel}
-                      </span>
-                    ) : null}
-                    {isActive ? <TagPicker size="sm" /> : null}
-                    {isActive ? (
-                      <button
-                        type="button"
-                        aria-label={`Maximize ${it.slide.title} chart`}
-                        title="Maximize chart"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          setFullscreenOpen(true);
-                        }}
-                        className="ml-auto rounded-md border border-secondary bg-primary p-1.5 text-fg-secondary shadow-sm transition hover:bg-secondary hover:text-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600"
-                      >
-                        <Maximize2 className="size-4" aria-hidden="true" />
-                      </button>
-                    ) : null}
-                    {isActive && total > 1 ? (
-                      <span className="text-xs text-tertiary">
-                        {safeActive + 1} / {total}
-                      </span>
-                    ) : null}
-                  </div>
-                  {isActive && it.slide.subtitle ? (
-                    <p className="text-xs text-tertiary">
-                      <InlineMarkdown content={it.slide.subtitle} />
-                    </p>
-                  ) : null}
-                  <div className="mt-3 h-[320px] w-full min-w-0 shrink-0">
-                    <DynamicChart slide={it.slide} height={CHART_H} chartKey={it.cardKey} />
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-      {total > 1 ? (
-        <div className="flex items-center justify-center gap-1.5">
-          {items.map((it, i) => (
-            <button
-              key={it.cardKey}
-              type="button"
-              aria-label={`Go to chart ${i + 1}`}
-              onClick={() => selectIndex(i)}
-              className={
-                i === safeActive
-                  ? "h-2 w-6 rounded-full bg-brand-solid transition-all"
-                  : "h-2 w-2 rounded-full bg-muted-foreground/40 hover:bg-muted-foreground/60 transition-all"
-              }
-            />
-          ))}
-        </div>
-      ) : null}
-      <Dialog open={fullscreenOpen} onOpenChange={setFullscreenOpen}>
-        <DialogContent className="grid h-[90vh] w-[94vw] max-w-none grid-rows-[auto_auto_1fr] gap-3 overflow-hidden rounded-xl border-secondary bg-primary p-5 shadow-2xl">
-          <DialogTitle className="pr-10 text-base font-semibold text-primary">{s.title}</DialogTitle>
-          {s.subtitle ? (
-            <p className="text-sm text-tertiary">
-              <InlineMarkdown content={s.subtitle} />
-            </p>
-          ) : null}
-          <div className="min-h-0 w-full overflow-auto">
-            <DynamicChart
-              slide={s}
-              height={typeof window === "undefined" ? 590 : Math.max(360, window.innerHeight * 0.68)}
-              chartKey={`${cardKey}-fullscreen`}
-            />
-          </div>
-        </DialogContent>
-      </Dialog>
-    </div>
-  );
+  return <ChartCarousel items={visible} onDismiss={onDismiss} activeRunId={activeRunId} onRunChange={onRunChange} showNeighbors={showNeighbors} />;
 }
 
 function CollapsibleInsights({
@@ -7050,16 +7071,6 @@ function WorkspaceSectionUserInsights({
         onRunChange={onRunChange}
       />
     </div>
-  );
-}
-
-// Small inline icons used in MessageRow (kept local to avoid extra imports)
-function PlusSquareIcon({ className }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.33" className={className} aria-hidden>
-      <rect x="2" y="2" width="12" height="12" rx="2" />
-      <path d="M8 5v6M5 8h6" strokeLinecap="round" />
-    </svg>
   );
 }
 
@@ -7146,14 +7157,6 @@ const tableRows: TableRow[] = (() => {
   return rows;
 })();
 
-type UploadedDataset = {
-  filename: string;
-  schema: string[];
-  samples: Record<string, unknown>[];
-  rows_sampled: number;
-  total_rows?: number;
-  size_mb?: number;
-};
 
 function useUploadedDataset(): UploadedDataset | null {
   const [data, setData] = useState<UploadedDataset | null>(null);
@@ -7800,12 +7803,12 @@ function PastedAnalysisSection({ runs, slides, insights, index }: PastedAnalysis
               <>
                 {insights.summaries.map((summary, i) => (
                   <li key={`${run.id}-summary-${i}`}>
-                    <InlineMarkdown content={summary} />
+                    <InsightLine text={summary} segments={(insights as { segments?: Record<string, ReplySegment[]> }).segments?.[summary]} />
                   </li>
                 ))}
                 {insights.insights.map((insight, i) => (
                   <li key={`${run.id}-insight-${i}`}>
-                    <InlineMarkdown content={insight} />
+                    <InsightLine text={insight} segments={(insights as { segments?: Record<string, ReplySegment[]> }).segments?.[insight]} />
                   </li>
                 ))}
               </>

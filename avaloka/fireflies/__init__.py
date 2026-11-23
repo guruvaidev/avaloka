@@ -19,11 +19,16 @@ from avaloka.fireflies.data_scout import DataScout
 from avaloka.fireflies.sampling_specialist import SamplingSpecialist
 from avaloka.fireflies.data_engineer import DataEngineer
 from avaloka.fireflies.analysis_planner import AnalysisPlanner
+from avaloka.fireflies.workload_optimizer import WorkloadOptimizer
 from avaloka.fireflies.model_scientist import ModelScientist
 from avaloka.fireflies.validator import Validator
 from avaloka.fireflies.ml_engineer import MLEngineer
 from avaloka.fireflies.finops import FinOps
 from avaloka.fireflies.reporter import Reporter
+from avaloka.fireflies.analytical_specialists import (ConformalCalibrator,
+                                                        Experimenter,
+                                                        FeatureEngineer,
+                                                        Statistician)
 
 __all__ = [
     "Firefly",
@@ -31,9 +36,12 @@ __all__ = [
     "SamplingSpecialist",
     "DataEngineer",
     "AnalysisPlanner",
+    "WorkloadOptimizer",
     "ModelScientist",
     "Validator",
     "MLEngineer",
     "FinOps",
     "Reporter",
+    "FeatureEngineer", "Statistician", "Experimenter",
+    "ConformalCalibrator",
 ]

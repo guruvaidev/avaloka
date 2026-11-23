@@ -1,0 +1,53 @@
+{
+  "correction_date": "2026-10-31",
+  "applies_to": [
+    "benchmarks/results/2.0-rc7/dab/rc7-openrouter-claude-haiku55.json",
+    "benchmarks/results/2.0/dab/2.0-openrouter-claude-haiku55.json"
+  ],
+  "note": "Sidecar, not a rewrite: the records keep the cost_usd the harness charged at run time. Those figures priced every call at Claude Haiku 5.5's flat OpenRouter rate. OpenRouter bills calls with 100,000 or more prompt tokens at the long-prompt tier. The corrected figures below re-price each record's own logged per-call usage (the trajectory's model events) with the tier; tests/test_bench_tiered_pricing.py recomputes them from the records and fails if they drift.",
+  "model": "anthropic/claude-haiku-5.5",
+  "rates_usd_per_mtok": {
+    "flat": {"prompt": 0.10, "completion": 0.50},
+    "tier": {"min_prompt_tokens": 100000, "prompt": 0.50, "completion": 2.50}
+  },
+  "rate_source": "benchmarks/catalog/openrouter_models.json (fetched 2026-10-17, pricing.overrides); unchanged in the live https://openrouter.ai/api/v1/models catalog fetched 2026-11-01T06:17Z (2026-10-31 US Pacific)",
+  "cells": {
+    "rc7-openrouter-claude-haiku55": {
+      "git_commit": "616d2ee4",
+      "calls": 452,
+      "calls_at_tier": 43,
+      "reported_usd": 1.981631,
+      "tiered_usd": 4.483581,
+      "run_ceiling_usd": 3.00,
+      "over_run_ceiling_at_tiered": true,
+      "per_trial_cap_usd": 2.00,
+      "max_trial": {"task_id": "dab:DEPS_DEV_V1:2", "reported_usd": 0.210344, "tiered_usd": 0.901808},
+      "trial_outcomes_changed": false
+    },
+    "2.0-openrouter-claude-haiku55": {
+      "git_commit": "a90fa8af",
+      "calls": 457,
+      "calls_at_tier": 41,
+      "reported_usd": 1.881814,
+      "tiered_usd": 3.951599,
+      "run_ceiling_usd": 5.00,
+      "over_run_ceiling_at_tiered": false,
+      "per_trial_cap_usd": 2.00,
+      "max_trial": {"task_id": "dab:DEPS_DEV_V1:2", "reported_usd": 0.218579, "tiered_usd": 1.0845},
+      "trial_outcomes_changed": false
+    }
+  },
+  "billed_check": {
+    "source": "OpenRouter GET /api/v1/generation, total_cost, read 2026-10-31",
+    "generations": [
+      {"id": "gen-1792455351-0VUvhfNVDHfAQ3JX8bB9", "task_id": "dab:agnews:3", "prompt_tokens": 115767, "completion_tokens": 781, "flat_usd": 0.01197, "tiered_usd": 0.05984, "billed_usd": 0.059836},
+      {"id": "gen-1792455357-YdGtm4DxZqERoPEzJ2Qz", "task_id": "dab:agnews:3", "prompt_tokens": 156425, "completion_tokens": 838, "flat_usd": 0.01606, "tiered_usd": 0.08031, "billed_usd": 0.0803075},
+      {"id": "gen-1792455364-8aViduMjZR37M1Y1l2kS", "task_id": "dab:agnews:3", "prompt_tokens": 157005, "completion_tokens": 921, "flat_usd": 0.01616, "tiered_usd": 0.08081, "billed_usd": 0.080805},
+      {"id": "gen-1792455370-C8rrQeezchLrVBm73yZW", "task_id": "dab:agnews:3", "prompt_tokens": 157522, "completion_tokens": 727, "flat_usd": 0.01612, "tiered_usd": 0.08058, "billed_usd": 0.0805785},
+      {"id": "gen-1792455206-7ekZ0SkRgVxGwWfqkcpt", "task_id": "dab:agnews:1", "prompt_tokens": 2913, "completion_tokens": 278, "flat_usd": 0.00043, "tiered_usd": 0.00043, "billed_usd": 0.0004303},
+      {"id": "gen-1792455209-6As0fQu1ykvwJXcv9FRr", "task_id": "dab:agnews:1", "prompt_tokens": 3979, "completion_tokens": 454, "flat_usd": 0.00062, "tiered_usd": 0.00062, "billed_usd": 0.0006249},
+      {"id": "gen-1792455211-LLjKdahBlyVP3LcwUEmx", "task_id": "dab:agnews:1", "prompt_tokens": 5258, "completion_tokens": 746, "flat_usd": 0.00090, "tiered_usd": 0.00090, "billed_usd": 0.0008988},
+      {"id": "gen-1792455215-mnEc65f8D5oPxGXHmrbk", "task_id": "dab:agnews:1", "prompt_tokens": 6304, "completion_tokens": 665, "flat_usd": 0.00096, "tiered_usd": 0.00096, "billed_usd": 0.0009629}
+    ]
+  }
+}

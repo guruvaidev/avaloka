@@ -1,0 +1,13 @@
+diff --git a/ui/src/components/dashboard/DataSourceGrid.tsx b/ui/src/components/dashboard/DataSourceGrid.tsx
+index 2ec31a14..240f1be3 100644
+--- a/ui/src/components/dashboard/DataSourceGrid.tsx
++++ b/ui/src/components/dashboard/DataSourceGrid.tsx
+@@ -89,7 +89,7 @@ export function DataSourceGrid({ onSelect, disabled = false }: { onSelect?: (id:
+           >
+             <span className="flex h-10 items-center justify-center">
+               <span className="flex items-center justify-center rounded-md dark:bg-white dark:p-1.5">
+-                <img src={s.logoUrl} alt={s.name} className="h-7 w-auto max-w-[112px] object-contain object-center" />
++                <img src={s.logoUrl} alt={s.name} className="w-auto max-w-[112px]" />
+               </span>
+             </span>
+             <span className="text-[13px] font-medium text-foreground">{s.name}</span>

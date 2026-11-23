@@ -1,0 +1,182 @@
+{
+ "_about": "Two rweb18c turns (rc18c @ db446704) whose result-contract sentence was false. Minimum fields: the question, the blueprint contract and the executed code as the API logged them (final-api.log), and the sentence shown. The validator's recipes sample was not kept, so recipe_names holds the first 100 Name values of the same recipes file; the taxi turn's validation sample is tests/fixtures/rc16_taxi_avg_fare.json sample_rows, whose fares span the live sentence's [-27.5, 94.0] and give payment type 4 its -1.5167.",
+ "recipes": {
+  "run": "rw7a recipes_jsonl chat",
+  "question": "what kinds of recipes dominate?",
+  "contract": {
+   "result_kind": "aggregate",
+   "source_columns": [
+    "Name"
+   ],
+   "result_columns": [
+    {
+     "name": "token",
+     "role": "key",
+     "dtype": "string"
+    },
+    {
+     "name": "count",
+     "role": "metric",
+     "dtype": "numeric",
+     "min": 0.0
+    }
+   ],
+   "row_relation": {
+    "type": "one_per_group",
+    "group_by": [
+     "token"
+    ]
+   },
+   "unique_key": [
+    "token"
+   ],
+   "not_null": [
+    "token",
+    "count"
+   ]
+  },
+  "code": "import pandas as pd\nimport re\nfrom collections import Counter\n\ndef main(df):\n    print('Columns:', list(df.columns))\n    print('Dtypes:\\n', df.dtypes)\n    names = df['Name'].dropna().astype(str)\n    stop_words = {'und', 'mit', 'oder', 'das', 'die', 'der', 'ein', 'eine', 'einen', 'einem', 'zu', 'auf', 'für', 'von', 'im', 'in', 'den', 'dem', 's', 'ist', 'wie', 'suppe', 'salat', 'pasta', 'pizza', 'kuchen', 'torte', 'gericht', 'speise', 'essen', 'zubereitung', 'backen', 'kochen', 'rezept'}\n    token_list = []\n    for name in names:\n        cleaned = re.sub('[^a-zäöüß0-9]', ' ', name.lower())\n        for token in cleaned.split():\n            if token in stop_words:\n                continue\n            if token.isdigit():\n                continue\n            token_list.append(token)\n    token_counts = Counter(token_list)\n    result = pd.DataFrame({'token': list(token_counts.keys()), 'count': list(token_counts.values())})\n    result = result.sort_values(by='count', ascending=False).reset_index(drop=True)\n    return result\nif __name__ == '__main__':\n    df = read_csv_best_effort('input.csv')\n    df = main(df)\n    df.to_csv('output.csv', index=False)\n",
+  "shown": "not_aggregated: the plan promised one row per ['token'] but the result has 174 rows against 100 input rows -- the raw rows were returned instead of the aggregate",
+  "recipe_names": [
+   "Gebratener Hasenrücken",
+   "Pilz Stroganoff",
+   "Kaninchen a la Gioff",
+   "Spanisches Knoblauch-Kaninchen",
+   "Gnocchi - Hack - Pfanne mit Basilikum",
+   "Spaghetti Siracusani",
+   "Rehrücken in Salzkruste mit Waldpilzgulasch",
+   "Eier in Senfsauce",
+   "Äppelufflaaf mett Woi",
+   "Gefüllte Schinkenröllchen",
+   "Leichtes Mittagessen",
+   "Herzhafte Pfannkuchen",
+   "Raizenkarpfen",
+   "Bulgur Buddha Bowl",
+   "Überbackene Rigatoni in Schinken-Sahne-Soße",
+   "Gittas Schmorgurken",
+   "Griechische Hackfleischquiche",
+   "Kartoffelgratin mit Cheddar",
+   "Sahne-Kräuter-Hähnchen",
+   "Rotbarschfilet auf pürierten Tomaten mit Zucchini - Mozzarellahaube",
+   "Bayerische Schinkennudeln",
+   "Herzhafte Pfannkuchen",
+   "Gebratener Hasenrücken",
+   "Süße Schupfnudeln",
+   "Kürbis - Quiche",
+   "Mit Hackfleisch gefüllte Zucchini",
+   "Fegato di Vitello alla Paesana",
+   "Türkische Pide mit Käse und Sucuk",
+   "Entenkeulen à la bourguignonne",
+   "Chili sin Carne",
+   "Kürbis-Orangen-Waffeln",
+   "Deftiger Rehrücken",
+   "Kritharaki-Salat mit Hackfleisch",
+   "Nannis Reisauflauf",
+   "Rosmarin-Balsamico-Schweinefilet",
+   "Indischer Linseneintopf",
+   "Böhmisches Gulasch",
+   "Krautwickel mit Knackwurstfüllung",
+   "Pangasiusfilet auf Ratatouille",
+   "Kartoffel-Parmesan Puffer",
+   "Entenkeulen à la bourguignonne",
+   "Kartoffelsalat mit Hackbällchen",
+   "Hirsesalat",
+   "Rotbarschfilet auf pürierten Tomaten mit Zucchini - Mozzarellahaube",
+   "Eier in Senfsauce",
+   "Böhmisches Gulasch",
+   "Fischsuppe",
+   "Kartoffelsuppe mit Würstchen",
+   "Äppelufflaaf mett Woi",
+   "Eier in Senfsauce",
+   "Fischsuppe",
+   "Schweineschnitzel unter Bärlauch-Cornflakes Haube",
+   "Gefüllte Paprika mit Hackfleisch und Reis",
+   "Gefüllte Koteletts",
+   "Fladenbrotpizza \"Napoli\"",
+   "Putenspieße mit Schafkäsesauce",
+   "Makkaroni in Tomatensahnesoße",
+   "Putenspieße mit Schafkäsesauce",
+   "Indischer Linseneintopf",
+   "Hähnchenschlegel mit Bärlauchkruste",
+   "Schweinefilet Normandie",
+   "Gemüsepfanne mit Leberkäse",
+   "Gebratener grüner Spargel mit Kirschtomaten und Kartöffelchen",
+   "Chilinudeln mit Cashewnüssen",
+   "Bäckerofen aus dem Elsaß",
+   "Kürbis - Quiche",
+   "Gefüllte Erdäpfel",
+   "New York Club Sandwich",
+   "Kölner Neujahrskarpfen",
+   "Börek",
+   "Reiberdatschi",
+   "Klassisches Jägerschnitzel",
+   "Yufka mit Gemüse- und Rindfleischfüllung",
+   "Hackklöße in Curry - Sahnesoße",
+   "Rehkeule mit Bratäpfel",
+   "Gittas Schmorgurken",
+   "Sächsische Kartoffelsuppe - vegane Variante",
+   "Mit Hackfleisch gefüllte Zucchini",
+   "Kalbsschnitzel mit Zitrone und Kapern",
+   "Wirsing - Quiche",
+   "Geflügelsalat",
+   "Pangasius aus dem Pergament",
+   "Deftiger Rehrücken",
+   "Gyrosschichtbraten",
+   "Schinken-Hack-Rouladen",
+   "Sahne-Kräuter-Hähnchen",
+   "Bayerische Schinkennudeln",
+   "Bohnensuppe mit Rippchen",
+   "Hähnchenschlegel mit Bärlauchkruste",
+   "Nannis Reisauflauf",
+   "Geflügelsalat",
+   "Fischstäbchenspieße zum Grillen und Braten",
+   "Eier - Rouladen",
+   "Hirsch - Medaillons in Pfeffersauce",
+   "Indischer Linseneintopf",
+   "Flammkuchen mit Ziegenkäse, Rosmarin und Honig",
+   "Risotto vom Fisch",
+   "Gebratener Hasenrücken",
+   "Geschichtetes Kraut",
+   "Blumenkohlauflauf mit Hackfleisch und Kartoffelbrei"
+  ]
+ },
+ "taxi": {
+  "run": "rw7a taxi_rg ask",
+  "question": "What is the average fare_amount by payment_type?",
+  "contract": {
+   "result_kind": "aggregate",
+   "source_columns": [
+    "payment_type",
+    "fare_amount"
+   ],
+   "result_columns": [
+    {
+     "name": "payment_type",
+     "role": "key",
+     "dtype": "numeric"
+    },
+    {
+     "name": "average_fare_amount",
+     "role": "metric",
+     "dtype": "numeric",
+     "min": 0.0
+    }
+   ],
+   "row_relation": {
+    "type": "one_per_group",
+    "group_by": [
+     "payment_type"
+    ]
+   },
+   "unique_key": [
+    "payment_type"
+   ],
+   "not_null": [
+    "payment_type",
+    "average_fare_amount"
+   ]
+  },
+  "code": "import pandas as pd\n\ndef main(df):\n    print('Columns and dtypes:')\n    print(df.dtypes)\n    df = df.dropna(subset=['payment_type', 'fare_amount'])\n    df['fare_amount'] = pd.to_numeric(df['fare_amount'], errors='coerce')\n    df = df.dropna(subset=['fare_amount'])\n    result = df.groupby('payment_type', as_index=False)['fare_amount'].mean().rename(columns={'fare_amount': 'average_fare_amount'})\n    result = result.sort_values('payment_type').reset_index(drop=True)\n    return result\nif __name__ == '__main__':\n    df = read_csv_best_effort('input.csv')\n    df = main(df)\n    df.to_csv('output.csv', index=False)\n",
+  "shown": "unverified_range: 'average_fare_amount' declared min 0.0, a bound the plan did not derive (no derivable range implies it: data gives [-27.5, 94.0]); has -1.5166666666666668."
+ }
+}

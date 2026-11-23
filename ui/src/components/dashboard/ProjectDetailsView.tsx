@@ -41,6 +41,7 @@ export type AnalysisRow = {
 };
 
 interface ProjectDetailsViewProps {
+  readOnly?: boolean;
   projectId?: string | null;
   projectName: string;
   projectDescription?: string | null;
@@ -115,6 +116,7 @@ export function ProjectDetailsView({
   rows,
   onRenameAnalysis,
   onDeleteAnalysis,
+  readOnly = false,
 }: ProjectDetailsViewProps) {
   const navigate = useNavigate();
   const [view, setView] = useState<"grid" | "table">("grid");
@@ -172,17 +174,19 @@ export function ProjectDetailsView({
     });
 
   const handleRename = (r: AnalysisRow) => {
+    if (readOnly) return;
     const next = typeof window !== "undefined" ? window.prompt("Rename analysis", r.name) : null;
     if (next && next.trim() && next !== r.name) onRenameAnalysis?.(r.id, next.trim());
   };
   const handleDelete = (r: AnalysisRow) => {
+    if (readOnly) return;
     setDeleteTarget(r);
   };
 
 
   return (
     <div className="relative flex h-full flex-col">
-      <header className="flex items-center justify-between gap-2 border-b border-secondary bg-primary px-6 py-4">
+      <header className="flex items-center justify-between gap-2 border-b border-secondary bg-primary px-6 py-4 dark:border-white/10 dark:bg-[#111418]">
         <div className="flex items-start gap-2">
           <Monitor01 className="mt-0.5 size-5 text-fg-quaternary" />
           <div>
@@ -236,7 +240,8 @@ export function ProjectDetailsView({
         <div className="flex items-center gap-3">
           <button
             type="button"
-            onClick={() => setUploadOpen(true)}
+            disabled={readOnly}
+            onClick={() => { if (!readOnly) setUploadOpen(true); }}
             className="inline-flex items-center gap-1.5 rounded-lg bg-[#1565ef] px-3 py-2 text-sm font-semibold text-white shadow-xs hover:bg-[#1257d6]"
           >
             <Plus className="size-4" />
@@ -326,7 +331,7 @@ export function ProjectDetailsView({
         </Button>
       </footer>
 
-      <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
+      <Dialog open={uploadOpen && !readOnly} onOpenChange={setUploadOpen}>
         <DialogContent className="max-w-2xl bg-primary p-6 text-primary">
           <DialogHeader>
             <DialogTitle>New Analysis</DialogTitle>
@@ -411,10 +416,10 @@ function GridView({
                 aria-label={`Select ${r.name}`}
                 className={cx(
                   "flex size-9 items-center justify-center rounded-lg",
-                  isSelected ? "bg-brand-secondary" : "bg-success-secondary",
+                  isSelected ? "bg-brand-secondary" : "bg-success-secondary dark:bg-green-500/15",
                 )}
               >
-                <File02 className={cx("size-5", isSelected ? "text-fg-brand-primary" : "text-fg-success-primary")} />
+                <File02 className={cx("size-5", isSelected ? "text-fg-brand-primary" : "text-fg-success-primary dark:text-green-300")} />
               </button>
               <AnalysisDropdown onRename={() => onRename(r)} onDelete={() => onDelete(r)} />
             </div>

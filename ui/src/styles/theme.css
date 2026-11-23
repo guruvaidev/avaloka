@@ -676,14 +676,15 @@
         --color-text-error-primary_hover: var(--color-red-300);
         --color-text-brand-secondary_hover: var(--color-neutral-200);
 
-        --color-border-secondary: var(--color-neutral-800);
+        /* Quiet cool-gray outlines keep dark cards distinct without a bright halo. */
+        --color-border-secondary: rgb(255 255 255 / 0.07);
         --color-border-error_subtle: var(--color-red-500);
-        --color-border-primary: var(--color-neutral-700);
+        --color-border-primary: rgb(255 255 255 / 0.09);
         --color-border-brand: var(--color-brand-400);
         --color-border-error: var(--color-red-400);
-        --color-border-tertiary: var(--color-neutral-800);
+        --color-border-tertiary: rgb(255 255 255 / 0.045);
         --color-border-brand_alt: var(--color-neutral-700);
-        --color-border-secondary_alt: var(--color-neutral-800);
+        --color-border-secondary_alt: rgb(255 255 255 / 0.07);
 
         --color-fg-secondary: var(--color-neutral-300);
         --color-fg-warning-primary: var(--color-yellow-500);

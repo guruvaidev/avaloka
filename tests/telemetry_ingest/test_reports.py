@@ -7,6 +7,7 @@ a report never states a rate it does not have the evidence for.
 from __future__ import annotations
 
 import hashlib
+import json
 import time
 
 import pytest
@@ -359,3 +360,95 @@ class TestAnalyticsEventsDoNotDistortTheReports:
         row = reports.freshness(store, now=now).rows[0]
         assert row["events_held"] == 31 + 5
         assert "analytics" in reports.freshness.__doc__
+
+
+# ------------------------------------------------------------ understanding
+
+def understanding_event(index, install, **extra):
+    record = {
+        "event_id": f"7{index:031x}",
+        "event_type": "agent.understanding",
+        "install_id": iid(install),
+        "agent": "data_scout",
+        "role": "understanding",
+        "outcome": "success",
+        "duration_ms": 120,
+        "row_count_bucket": "1e3-1e4",
+        "column_count_bucket": "5-10",
+        "column_type_counts": {"numeric": 4, "categorical": 2},
+        "null_rate_counts": {"0": 5, "10-50%": 1},
+        "cardinality_counts": {"2": 1, "11-100": 5},
+        "file_format": "csv",
+        "size_bucket": "1-10MB",
+        **extra,
+    }
+    return record
+
+
+def swarm_understanding_event(index, install, **extra):
+    return {
+        "event_id": f"8{index:031x}",
+        "event_type": "swarm.understanding",
+        "install_id": iid(install),
+        "clones": 2,
+        "parallel": 2,
+        "steps_total": 12,
+        "steps_per_clone_min": 6,
+        "steps_per_clone_max": 6,
+        "role_counts": {"understanding": 2, "verification": 2},
+        "outcome": "success",
+        "verdict": "warn",
+        "merge_agreement": "unanimous",
+        "model_selected": False,
+        "candidates": 0,
+        "checks_run": 8, "checks_passed": 7, "checks_warned": 1, "checks_failed": 0,
+        **extra,
+    }
+
+
+class TestUnderstanding:
+    def _data(self, store, now):
+        from telemetry_service.schema import validate_batch
+
+        records = (
+            [install_event(i, f"user-{i}") for i in range(2)]
+            + [understanding_event(10, "user-0"),
+               understanding_event(11, "user-0", agent="sampling_specialist", role="sampling", sampled=True,
+                                   sampling_strategy="random", sample_fraction_bucket="10-50%"),
+               understanding_event(12, "user-1", agent="data_engineer", role="feature_engineering",
+                                   operation_count=3, op_counts={"drop_duplicate_rows": 1, "strip_whitespace": 2}),
+               understanding_event(13, "user-1", agent="validator", role="verification", checks_run=4,
+                                   checks_passed=3, checks_warned=1, checks_failed=0, verdict="warn",
+                                   llm_provider="groq", llm_model="other", tokens_in=200, tokens_out=30)]
+            + [swarm_understanding_event(20, "user-0"), swarm_understanding_event(21, "user-1", clones=4,
+                                                                                  merge_agreement="split")]
+        )
+        sent = [records[0]] + [{k: v for k, v in r.items() if k != "install_id"} for r in records[1:]]
+        validate_batch(sent)  # the samples are records the ingest really accepts
+        store.store(records, received_at=now)
+
+    def test_it_sums_histograms_and_counts_roles_never_per_column(self, store):
+        from telemetry_service.reports import understanding
+
+        self._data(store, time.time())
+        row, = understanding(store).rows
+        assert row["steps"] == 4 and row["missions"] == 2 and row["installations"] == 2
+        assert row["roles"] == {"feature_engineering": 1, "sampling": 1, "understanding": 1, "verification": 1}
+        assert row["sampled_steps"] == 1 and row["sampling_decisions"] == 1
+        assert row["sample_fraction_buckets"] == {"10-50%": 1}
+        assert row["operations"] == {"drop_duplicate_rows": 1, "strip_whitespace": 2}
+        assert row["checks"] == {"run": 4, "passed": 3, "warned": 1, "failed": 0}
+        assert row["column_kinds"] == {"categorical": 8, "numeric": 16}
+        assert row["null_rate_bands"] == {"0": 20, "10-50%": 4}
+        assert row["size_buckets"] == {"1-10MB": 4}
+        assert row["tokens_in"] == 200 and row["tokens_out"] == 30
+        assert row["fleet_sizes"] == {"2": 1, "4": 1}
+        assert row["merged_verdicts"] == {"warn": 2} and row["merge_agreement"] == {"split": 1, "unanimous": 1}
+        text = json.dumps(understanding(store).as_dict())
+        assert "data_scout" not in text  # roles, not agents: the report is about what was done
+
+    def test_an_empty_store_says_so(self, store):
+        from telemetry_service.reports import understanding
+
+        report = understanding(store)
+        assert report.rows == [] and "No understanding" in report.caveat

@@ -1,0 +1,7 @@
+{
+ "note": "first reply names a recipe outside RECIPE_IDS; the retry is well-formed",
+ "replies": [
+  "```json\n{\"recipe\": \"forecast\", \"params\": {\"measure\": \"revenue\", \"time\": \"order_date\"}, \"flags\": [], \"confidence\": 0.8}\n```",
+  "{\"recipe\": \"trend\", \"params\": {\"measure\": \"revenue\", \"time\": \"order_date\", \"grain\": \"month\"}, \"flags\": [], \"confidence\": 0.9}"
+ ]
+}

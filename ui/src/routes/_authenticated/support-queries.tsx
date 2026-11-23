@@ -3,18 +3,19 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { LifeBuoy01, SearchLg } from "@untitledui/icons";
 import { getCachedAuthUser } from "@/lib/auth-user";
-import { listAllSupportTickets } from "@/lib/support-tickets.functions";
-import { SUPPORT_ADMIN_EMAIL } from "@/lib/support-admin";
+import { amISupportAdmin, listAllSupportTickets } from "@/lib/support-tickets.functions";
 import { SupportThreadPanel, SupportStatusPill } from "@/components/support/SupportThreadPanel";
 import { Input } from "@/components/ui/input";
 
 export const Route = createFileRoute("/_authenticated/support-queries")({
-  // UI-level gate; the server functions independently verify the caller's
-  // email before returning any client data.
+  // UI-level gate; the server functions independently verify the caller
+  // against ADMIN_EMAILS before returning any client data.
   beforeLoad: async () => {
     const user = await getCachedAuthUser();
-    const email = String(user?.email ?? "").trim().toLowerCase();
-    if (email !== SUPPORT_ADMIN_EMAIL) throw redirect({ to: "/support" });
+    const { isAdmin } = user
+      ? await amISupportAdmin().catch(() => ({ isAdmin: false }))
+      : { isAdmin: false };
+    if (!isAdmin) throw redirect({ to: "/support" });
   },
   head: () => ({
     meta: [

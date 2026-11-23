@@ -2,11 +2,11 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { listDepartments, listConfigRoles, listBranches, listAppUsers, listTeams, resendAppUserInvite, deleteAppUser } from "@/lib/configurations.functions";
+import { hasSupabaseSession } from "@/lib/has-session";
+import { listDepartments, listConfigRoles, listBranches, listAppUsers, listTeams, resendAppUserInvite, deleteAppUser, deleteTeam } from "@/lib/configurations.functions";
 import { toast } from "sonner";
 
 import { supabase } from "@/integrations/supabase/client";
-import { PlanGate } from "@/components/dashboard/PlanGate";
 import { usePlanFeatures } from "@/lib/use-plan-features";
 
 import {
@@ -46,7 +46,9 @@ import { NewBranchModal } from "@/components/dashboard/NewBranchModal";
 import { EditBranchModal, type EditBranch } from "@/components/dashboard/EditBranchModal";
 import { NewUserModal } from "@/components/dashboard/NewUserModal";
 import { NewTeamModal } from "@/components/dashboard/NewTeamModal";
+import { UpgradePlanDialog } from "@/components/dashboard/UpgradeGate";
 import { EditTeamModal, type EditTeam } from "@/components/dashboard/EditTeamModal";
+import { TeamInviteModal } from "@/components/dashboard/TeamInviteModal";
 import { RegisterModelModal } from "@/components/dashboard/RegisterModelModal";
 import { ModelDetailView } from "@/components/dashboard/ModelDetailView";
 import { backendApi, type BackendModel } from "@/lib/api/backendApi";
@@ -67,6 +69,7 @@ import {
   MOCK_TEAMS,
 } from "@/lib/configurations.mock";
 import { cn } from "@/lib/utils";
+import { LlmModelsPanel } from "@/components/settings/LlmModelsPanel";
 import { useUserMgmtPerms } from "@/lib/use-user-mgmt-perms";
 import { getCachedAuthUser } from "@/lib/auth-user";
 
@@ -96,17 +99,18 @@ function formatModelDate(input: string | null): string | null {
 
 
 export const Route = createFileRoute("/_authenticated/configurations")({
+  validateSearch: (search: Record<string, unknown>): { run_id?: string } => ({ run_id: typeof search.run_id === "string" ? search.run_id : undefined }),
   head: () => ({
     meta: [
       { title: "Configurations · Avaloka AI" },
       { name: "description", content: "Manage divisions, roles, branches, users, teams and models." },
+      { property: "og:title", content: "Configurations · Avaloka AI" },
+      { property: "og:description", content: "Manage divisions, roles, branches, users, teams and models." },
+      { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary" },
     ],
   }),
-  component: () => (
-    <PlanGate>
-      <ConfigurationsPage />
-    </PlanGate>
-  ),
+  component: () => <ConfigurationsPage />,
 });
 
 type SectionId = "department" | "roles" | "branches" | "user" | "teams" | "models";
@@ -178,6 +182,8 @@ type Team = {
   member_ids: string[];
   branch: string;
   status: DbStatus;
+  is_professional_team?: boolean;
+  can_delete?: boolean;
 };
 
 type Model = BackendModel;
@@ -192,7 +198,8 @@ const PERMISSION_STYLES: Record<string, string> = {
 
 
 function ConfigurationsPage() {
-  const [section, setSection] = useState<SectionId>("department");
+  const { run_id } = Route.useSearch();
+  const [section, setSection] = useState<SectionId>(run_id ? "models" : "department");
   const [tableSearch, setTableSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<DbStatus>("Active");
   const [page, setPage] = useState(1);
@@ -202,9 +209,12 @@ function ConfigurationsPage() {
   const [newBranchOpen, setNewBranchOpen] = useState(false);
   const [newUserOpen, setNewUserOpen] = useState(false);
   const [newTeamOpen, setNewTeamOpen] = useState(false);
+  const [teamUpgradeOpen, setTeamUpgradeOpen] = useState(false);
   const [registerModelOpen, setRegisterModelOpen] = useState(false);
-  const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
+  const [selectedModelId, setSelectedModelId] = useState<string | null>(run_id ?? null);
+  useEffect(() => { if (run_id) { setSection("models"); setSelectedModelId(run_id); } }, [run_id]);
   const [editTeam, setEditTeam] = useState<EditTeam | null>(null);
+  const [inviteTeam, setInviteTeam] = useState<{ id: string; name: string } | null>(null);
   const [editUser, setEditUser] = useState<EditUser | null>(null);
   const [editBranch, setEditBranch] = useState<EditBranch | null>(null);
   const [editRole, setEditRole] = useState<EditRole | null>(null);
@@ -214,14 +224,15 @@ function ConfigurationsPage() {
   const userPerms = useUserMgmtPerms();
   const planFeatures = usePlanFeatures();
   const gateUserCreate = section === "user" && !userPerms.canCreate;
+  const gateTeamCreate = section === "teams" && !planFeatures.canCreateTeams;
 
-  // Professional plan: Models only. Otherwise hide the User tab when the
-  // current user lacks View permission.
+  // Professional plan: Models and Teams (owner ruling 2026-11-01). Otherwise
+  // hide the User tab when the current user lacks View permission.
   const allowedSections = useMemo(
     () =>
       planFeatures.canUseAllConfigSections
         ? SECTIONS.filter((s) => s.id !== "user" || userPerms.canView)
-        : SECTIONS.filter((s) => s.id === "models"),
+        : SECTIONS.filter((s) => s.id === "models" || s.id === "teams"),
     [userPerms.canView, planFeatures.canUseAllConfigSections],
   );
 
@@ -245,21 +256,21 @@ function ConfigurationsPage() {
 
   const deptQ = useQuery<Dept[]>({
     queryKey: ["config", "departments"],
-    queryFn: async () => (await listDepartmentsFn()) as Dept[],
+    queryFn: async () => ((await hasSupabaseSession()) ? ((await listDepartmentsFn()) as Dept[]) : []),
   });
   const rolesQ = useQuery<Role[]>({
     queryKey: ["config", "roles"],
-    queryFn: async () => (await listConfigRolesFn()) as Role[],
+    queryFn: async () => ((await hasSupabaseSession()) ? ((await listConfigRolesFn()) as Role[]) : []),
     enabled: section === "roles",
   });
   const branchesQ = useQuery<Branch[]>({
     queryKey: ["config", "branches"],
-    queryFn: async () => (await listBranchesFn()) as Branch[],
+    queryFn: async () => ((await hasSupabaseSession()) ? ((await listBranchesFn()) as Branch[]) : []),
     enabled: section === "branches",
   });
   const usersQ = useQuery<AppUser[]>({
     queryKey: ["config", "users"],
-    queryFn: async () => (await listAppUsersFn()) as AppUser[],
+    queryFn: async () => ((await hasSupabaseSession()) ? ((await listAppUsersFn()) as AppUser[]) : []),
     enabled: section === "user",
   });
   const resendInviteFn = useServerFn(resendAppUserInvite);
@@ -316,6 +327,24 @@ function ConfigurationsPage() {
     queryFn: async () => (await listTeamsFn()) as Team[],
     enabled: section === "teams",
   });
+  const deleteTeamFn = useServerFn(deleteTeam);
+  const [pendingDeleteTeam, setPendingDeleteTeam] = useState<Team | null>(null);
+  const [deletingTeam, setDeletingTeam] = useState(false);
+  const handleDeleteTeam = async () => {
+    if (!pendingDeleteTeam || deletingTeam) return;
+    setDeletingTeam(true);
+    try {
+      await deleteTeamFn({ data: { id: pendingDeleteTeam.id, isProfessionalTeam: Boolean(pendingDeleteTeam.is_professional_team) } });
+      setPendingDeleteTeam(null);
+      toast.success("Team deleted");
+      await teamsQ.refetch();
+      void usersQ.refetch();
+    } catch (error: any) {
+      toast.error(error?.message ?? "Could not delete this team.");
+    } finally {
+      setDeletingTeam(false);
+    }
+  };
   const modelsQ = useQuery<Model[]>({
     queryKey: ["config", "models"],
     queryFn: async () => {
@@ -493,6 +522,7 @@ function ConfigurationsPage() {
 
       {/* Main panel */}
       <main className="flex flex-1 flex-col overflow-y-auto bg-[#f4f6fb] dark:bg-[#0b0d10]">
+        {section === "models" && !selectedModelId && <LlmModelsPanel />}
         {section === "models" && selectedModelId ? (
           <ModelDetailView runId={selectedModelId} onBack={() => setSelectedModelId(null)} />
         ) : (
@@ -524,7 +554,7 @@ function ConfigurationsPage() {
               </div>
             </div>
             <div className="flex items-center gap-2">
-              {!["models", "department", "roles", "branches"].includes(section) && !gateUserCreate && (
+              {!["models", "department", "roles", "branches"].includes(section) && !gateUserCreate && !gateTeamCreate && (
                 <Button variant="outline" onClick={() => setBulkOpen(true)} className="gap-2">
                   <Upload className="h-4 w-4" />
                   Bulk Upload
@@ -537,9 +567,14 @@ function ConfigurationsPage() {
                     else if (section === "roles") setNewRoleOpen(true);
                     else if (section === "branches") setNewBranchOpen(true);
                     else if (section === "user") setNewUserOpen(true);
-                    else if (section === "teams") setNewTeamOpen(true);
+                    else if (section === "teams") {
+                      if (planFeatures.loading) return;
+                      if (!planFeatures.canCreateTeams) setTeamUpgradeOpen(true);
+                      else setNewTeamOpen(true);
+                    }
                     else if (section === "models") setRegisterModelOpen(true);
                   }}
+                  disabled={section === "teams" && planFeatures.loading}
                   className="gap-2 bg-[#1565EF] hover:bg-[#1257cf]"
                 >
                   <Plus className="h-4 w-4" />
@@ -824,7 +859,7 @@ function ConfigurationsPage() {
                         <Th label="Team Name" sortable />
                         <Th label="Team Lead" sortable />
                         <Th label="Users" />
-                        <Th label="Branch" />
+                        {planFeatures.isEnterprise && <Th label="Branch" />}
                         <Th label="Status" />
                       </tr>
                     </thead>
@@ -837,7 +872,11 @@ function ConfigurationsPage() {
                         return (
                           <tr
                             key={t.id}
-                            onClick={() =>
+                            onClick={() => {
+                              if (t.is_professional_team) {
+                                setInviteTeam({ id: t.id, name: t.name });
+                                return;
+                              }
                               setEditTeam({
                                 id: t.id,
                                 name: t.name,
@@ -846,9 +885,9 @@ function ConfigurationsPage() {
                                 branch: t.branch,
                                 status: t.status,
                                 member_ids: t.member_ids ?? [],
-                              })
-                            }
-                            className="cursor-pointer border-b border-border last:border-0 hover:bg-muted/30"
+                              });
+                            }}
+                            className={`${t.is_professional_team && !planFeatures.canCreateTeams ? "" : "cursor-pointer hover:bg-muted/30"} border-b border-border last:border-0`}
                           >
                             <td className="px-5 py-3.5 text-sm text-foreground">{t.name}</td>
                             <td className="px-5 py-3.5">
@@ -883,9 +922,26 @@ function ConfigurationsPage() {
                                 </div>
                               </div>
                             </td>
-                            <td className="px-5 py-3.5 text-sm text-foreground">{t.branch}</td>
+                            {planFeatures.isEnterprise && <td className="px-5 py-3.5 text-sm text-foreground">{t.branch}</td>}
                             <td className="px-5 py-3.5">
+                              <div className="flex items-center gap-3">
                               <StatusBadge status={t.status} />
+                              {(!t.is_professional_team || t.can_delete) && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="text-destructive hover:text-destructive"
+                                  aria-label={`Delete team ${t.name}`}
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    setPendingDeleteTeam(t);
+                                  }}
+                                >
+                                  <Trash2 className="mr-1.5 h-4 w-4" />
+                                  Delete
+                                </Button>
+                              )}
+                              </div>
                             </td>
                           </tr>
                         );
@@ -953,7 +1009,7 @@ function ConfigurationsPage() {
                             onKeyDown={runId ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); console.log("[Models] row key run id:", runId); setSelectedModelId(runId); } } : undefined}
                             className={`border-b border-border last:border-0 ${runId ? "cursor-pointer hover:bg-muted/30" : ""}`}
                           >
-                            <td className="px-5 py-3.5 text-sm text-foreground">{name ?? "—"}</td>
+                            <td className="px-5 py-3.5 text-sm text-foreground">{name ?? "—"}{runId && <span className="mt-0.5 block font-mono text-xs text-muted-foreground">{runId.slice(0, 8)}</span>}</td>
                             <td className="px-5 py-3.5 text-sm text-foreground">{taskLabel}</td>
                             <td className="px-5 py-3.5 text-sm text-muted-foreground">
                               {version ? (
@@ -1085,7 +1141,9 @@ function ConfigurationsPage() {
       <NewRoleModal open={newRoleOpen} onOpenChange={setNewRoleOpen} />
       <NewBranchModal open={newBranchOpen} onOpenChange={setNewBranchOpen} />
       <NewUserModal open={newUserOpen} onOpenChange={setNewUserOpen} />
+      <UpgradePlanDialog open={teamUpgradeOpen} feature="Creating a team" onClose={() => setTeamUpgradeOpen(false)} />
       <NewTeamModal open={newTeamOpen} onOpenChange={setNewTeamOpen} />
+      <TeamInviteModal team={inviteTeam} canInvite={planFeatures.canCreateTeams} onOpenChange={(open) => !open && setInviteTeam(null)} />
       <RegisterModelModal open={registerModelOpen} onOpenChange={setRegisterModelOpen} />
       <EditTeamModal
         open={!!editTeam}
@@ -1145,6 +1203,26 @@ function ConfigurationsPage() {
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
               {deletingId ? "Removing…" : "Remove"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <AlertDialog open={!!pendingDeleteTeam} onOpenChange={(open) => !open && !deletingTeam && setPendingDeleteTeam(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete team “{pendingDeleteTeam?.name}”?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This permanently deletes the team and removes its memberships and invitations. Members keep their Avaloka accounts.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deletingTeam}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={deletingTeam}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={(event) => { event.preventDefault(); void handleDeleteTeam(); }}
+            >
+              {deletingTeam ? "Deleting…" : "Delete team"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

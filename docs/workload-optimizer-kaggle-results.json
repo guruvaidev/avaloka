@@ -1,0 +1,51 @@
+{
+  "environment": {
+    "runtime": "local SQLite in-memory",
+    "rows_per_dataset": 100000,
+    "repeats": 7,
+    "cpu_metric": "median process CPU seconds",
+    "work_metric": "median SQLite virtual-machine steps",
+    "correctness": "baseline and optimized result sets matched exactly"
+  },
+  "results": [
+    {
+      "dataset": "Kaggle Telco Customer Churn",
+      "rows_returned": 159,
+      "baseline_wall_seconds": 0.979954792,
+      "optimized_wall_seconds": 0.00042775,
+      "baseline_cpu_seconds": 0.972539,
+      "optimized_cpu_seconds": 0.000427,
+      "baseline_vm_steps": 2300006,
+      "optimized_vm_steps": 1123,
+      "wall_speedup": 2290.9522,
+      "cpu_speedup": 2277.6089,
+      "vm_step_reduction_pct": 99.9512
+    },
+    {
+      "dataset": "Kaggle Titanic",
+      "rows_returned": 112,
+      "baseline_wall_seconds": 0.573736333,
+      "optimized_wall_seconds": 0.000302167,
+      "baseline_cpu_seconds": 0.570957,
+      "optimized_cpu_seconds": 0.0003,
+      "baseline_vm_steps": 1400006,
+      "optimized_vm_steps": 794,
+      "wall_speedup": 1898.7392,
+      "cpu_speedup": 1903.19,
+      "vm_step_reduction_pct": 99.9433
+    },
+    {
+      "dataset": "Kaggle Iris",
+      "rows_returned": 667,
+      "baseline_wall_seconds": 0.332296125,
+      "optimized_wall_seconds": 0.00182225,
+      "baseline_cpu_seconds": 0.328613,
+      "optimized_cpu_seconds": 0.001818,
+      "baseline_vm_steps": 800006,
+      "optimized_vm_steps": 4679,
+      "wall_speedup": 182.3548,
+      "cpu_speedup": 180.7552,
+      "vm_step_reduction_pct": 99.4151
+    }
+  ]
+}

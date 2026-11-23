@@ -61,7 +61,9 @@ def test_every_listed_task_fails_today(tmp_path):
     card = BenchmarkRunner(tmp_path, verbose=False).run(listed)
     passing = [r.task for r in card.results if r.passed]
     assert not passing, f"listed in KNOWN_DEFECTS but passing: {passing}"
-    assert len(listed) == len(KNOWN_DEFECTS) - 1   # + conv_avaloka_behaviour_is_unmeasured
+    # The conversational entries are graded by tests/conversational/test_product_replay.py,
+    # which has the application the product family needs.
+    assert len(listed) == len([k for k in KNOWN_DEFECTS if not k.startswith("conv_")])
 
 
 def _good():

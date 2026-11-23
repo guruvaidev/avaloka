@@ -8,6 +8,7 @@ import { EditableProjectHeader } from "@/components/dashboard/EditableProjectHea
 import { DataSourceGrid } from "@/components/dashboard/DataSourceGrid";
 import { Button } from "@/components/base/buttons/button";
 import type { ProjectItem } from "@/components/dashboard/ProjectsSidebar";
+import { useResourceAccess } from "@/lib/use-resource-access";
 import { useProjects, useProjectMutations } from "@/lib/projects";
 import { useAnalyses, useAnalysisMutations } from "@/lib/analyses";
 import { clearPendingDashboardAnalysis, getPendingDashboardAnalysis } from "@/lib/pending-dashboard-analysis";
@@ -90,6 +91,8 @@ function DashboardPage() {
 
   const [creatingNewProject, setCreatingNewProject] = useState(false);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const selectedProjectAccess = useResourceAccess("project", selectedProjectId);
+  const canEditSelectedProject = canEdit && selectedProjectAccess.canEdit;
   const [newProjectId, setNewProjectId] = useState<string | null>(null);
   const [reportsOpen, setReportsOpen] = useState(false);
   const [newProjectOpen, setNewProjectOpen] = useState(false);
@@ -217,11 +220,12 @@ function DashboardPage() {
         selectedProjectHasAnalyses ? (
           <ProjectDetailsView
             projectId={selectedProject.id}
+            readOnly={!selectedProjectAccess.canEdit}
             projectName={selectedProject.label}
             projectDescription={selectedProjectDescription}
             rows={toAnalysisRows(selectedAnalyses, selectedProject.label)}
             onRenameAnalysis={
-              canEdit
+              canEditSelectedProject
                 ? (id, name) => {
                     if (blocked("Renaming analyses")) return;
                     analysisMut.rename.mutate({ id, name });
@@ -229,7 +233,7 @@ function DashboardPage() {
                 : undefined
             }
             onDeleteAnalysis={
-              canEdit
+              canEditSelectedProject
                 ? (id) => {
                     if (blocked("Deleting analyses")) return;
                     analysisMut.softDelete.mutate(id);
@@ -246,17 +250,17 @@ function DashboardPage() {
                   projectId={selectedProject.id}
                   defaultName={selectedProject.label}
                   defaultDescription={selectedProjectDescription ?? ""}
-                  onNameCommit={canEdit ? (name) => rename.mutate({ id: selectedProject.id, name }) : undefined}
+                  onNameCommit={canEditSelectedProject ? (name) => rename.mutate({ id: selectedProject.id, name }) : undefined}
                   onDescriptionCommit={
-                    canEdit
+                    canEditSelectedProject
                       ? (description) => updateDescription.mutate({ id: selectedProject.id, description })
                       : undefined
                   }
-                  readOnly={!canEdit}
+                  readOnly={!canEditSelectedProject}
                 />
               </div>
             </div>
-            {canCreate && (
+            {canCreate && selectedProjectAccess.canEdit && (
               <div className="flex flex-1 flex-col items-center justify-center px-8 py-10">
                 <div className="mx-auto w-full max-w-[760px]">
                   <section>

@@ -1,0 +1,57 @@
+
+Estimated spend (before running):
+
+| Config | Model | Calls | $ low | $ high | price source |
+| --- | --- | --- | --- | --- | --- |
+| dab_avaloka_native | `ollama/gemma4:e4b` | 12 | $0.0000 | $0.0000 | unpriced |
+
+**Total: $0.0000 – $0.0000 over 12 calls.**
+
+The high figure assumes every answer uses its full `max_tokens` allowance, so it is a ceiling the provider cannot exceed for these configs — not a forecast.
+
+> ⚠️  UNPRICED, and therefore **excluded from both totals**: `dab_avaloka_native`. No catalog quote exists for these models, so their real spend is unknown — it is not zero.
+
+Running suite 'dab': 12 tasks x 1 configs
+config dab_avaloka_native (sut=avaloka_dab, sampling=entire_dataset, llm=ollama/gemma4:e4b) over 12 tasks x 1 trials
+  [dab_avaloka_native] dab:agnews:1 trial 1/1 ok q=0.000 $0.0000 216.76s
+  [dab_avaloka_native] dab:bookreview:1 trial 1/1 ERR q=0.000 unknown 630.02s
+  [dab_avaloka_native] dab:crmarenapro:1 trial 1/1 ok q=1.000 $0.0000 131.29s
+  [dab_avaloka_native] dab:DEPS_DEV_V1:1 trial 1/1 ERR q=0.000 unknown 630.05s
+  [dab_avaloka_native] dab:GITHUB_REPOS:1 trial 1/1 ok q=0.000 $0.0000 321.33s
+  [dab_avaloka_native] dab:googlelocal:1 trial 1/1 ok q=0.000 $0.0000 221.25s
+  [dab_avaloka_native] dab:music_brainz_20k:1 trial 1/1 ok q=0.000 $0.0000 137.28s
+  [dab_avaloka_native] dab:PANCANCER_ATLAS:1 trial 1/1 ok q=0.000 $0.0000 237.22s
+  [dab_avaloka_native] dab:PATENTS:1 trial 1/1 ok q=0.000 $0.0000 416.53s
+  [dab_avaloka_native] dab:stockindex:1 trial 1/1 ok q=0.000 $0.0000 465.16s
+  [dab_avaloka_native] dab:stockmarket:1 trial 1/1 ERR q=0.000 $0.0000 131.89s
+  [dab_avaloka_native] dab:yelp:1 trial 1/1 ok q=0.000 $0.0000 50.26s
+
+Observed spend: $0.0000 over 12 calls (2 unpriced/usage-missing — the ceiling could not see these)
+
+# Scorecard — suite `dab` (harness 0.2.0)
+
+- Observed spend: **$0.0000** over 12 calls · ceiling $1.00 · **2 unpriced**
+
+## Config `dab_avaloka_native`
+
+- sut: `avaloka_dab` · llm: `ollama/gemma4:e4b` · sampling: `entire_dataset` · env: `dab-local` · agents: `full_swarm` · trials: 1 · internet: False
+
+| Task | Pass@1 | Best-of-N | Quality (mean) | Cost $ (mean) | Latency s (mean) | Data scanned (mean) | Errors | Price src |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| dab:agnews:1 | 0.00 | 0.00 | 0 | 0 | 216.8 | — | — | `local_zero` |
+| **dab:bookreview:1** ⚠️ | 0.00 | 0.00 | 0 | — | 630 | — | **1/1 ALL** (timeout:1) | `unknown` |
+| dab:crmarenapro:1 | 1.00 | 1.00 | 1 | 0 | 131.3 | — | — | `local_zero` |
+| **dab:DEPS_DEV_V1:1** ⚠️ | 0.00 | 0.00 | 0 | — | 630 | — | **1/1 ALL** (timeout:1) | `unknown` |
+| dab:GITHUB_REPOS:1 | 0.00 | 0.00 | 0 | 0 | 321.3 | — | — | `local_zero` |
+| dab:googlelocal:1 | 0.00 | 0.00 | 0 | 0 | 221.3 | — | — | `local_zero` |
+| dab:music_brainz_20k:1 | 0.00 | 0.00 | 0 | 0 | 137.3 | — | — | `local_zero` |
+| dab:PANCANCER_ATLAS:1 | 0.00 | 0.00 | 0 | 0 | 237.2 | — | — | `local_zero` |
+| dab:PATENTS:1 | 0.00 | 0.00 | 0 | 0 | 416.5 | — | — | `local_zero` |
+| dab:stockindex:1 | 0.00 | 0.00 | 0 | 0 | 465.2 | — | — | `local_zero` |
+| **dab:stockmarket:1** ⚠️ | 0.00 | 0.00 | 0 | 0 | 131.9 | — | **1/1 ALL** (tool_error:1) | `local_zero` |
+| dab:yelp:1 | 0.00 | 0.00 | 0 | 0 | 50.26 | — | — | `local_zero` |
+
+> ⚠️  Rows marked **ALL** scored 0.00 because every trial errored — the model was never successfully measured. Do not read those as quality results.
+
+
+Wrote /private/tmp/claude-505/-Users-leelakrishna-code-ki-avaloka-dev/523f2974-7c63-4383-8c84-7340f46500b7/scratchpad/results/dab/2.0-ollama-gemma4-e4b-subset/dab.json, /private/tmp/claude-505/-Users-leelakrishna-code-ki-avaloka-dev/523f2974-7c63-4383-8c84-7340f46500b7/scratchpad/results/dab/2.0-ollama-gemma4-e4b-subset/dab.md, and /private/tmp/claude-505/-Users-leelakrishna-code-ki-avaloka-dev/523f2974-7c63-4383-8c84-7340f46500b7/scratchpad/results/dab/2.0-ollama-gemma4-e4b-subset/dab.trials.jsonl

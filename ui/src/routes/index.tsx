@@ -17,14 +17,16 @@ const slide5 = { url: "/assets/slide5.png" };
 const slide6 = { url: "/assets/slide-6.png" };
 const slide7 = { url: "/assets/slide-7.png" };
 import { supabase } from "@/integrations/supabase/client";
+import { isLocalAuth } from "@/integrations/supabase/config";
 import {
   checkMyAccountActive,
 
   sendLoginMagicLink,
 } from "@/lib/admin-login.functions";
 
-import { acceptAppUserInvite } from "@/lib/configurations.functions";
+import { acceptAppUserInvite, claimPendingProfessionalTeamInvitations } from "@/lib/configurations.functions";
 import { getMyActivePlan } from "@/lib/plan.functions";
+import { amISupportAdmin } from "@/lib/support-tickets.functions";
 import { ACTIVE_PLAN_KEY } from "@/lib/use-active-plan";
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -90,20 +92,31 @@ const slides = [
 function LoginPage() {
   const navigate = useNavigate();
   const acceptInviteFn = useServerFn(acceptAppUserInvite);
+  const claimTeamInvitesFn = useServerFn(claimPendingProfessionalTeamInvitations);
   const sendLoginMagicLinkFn = useServerFn(sendLoginMagicLink);
   const resolvePlanFn = useServerFn(getMyActivePlan);
   const checkAccountActiveFn = useServerFn(checkMyAccountActive);
   const queryClient = useQueryClient();
   const [email, setEmail] = useState("");
+  // AUTH_MODE=local (the quickstart): one local account, password sign-in
+  // against the API instead of a Supabase magic link.
+  const localAuth = isLocalAuth();
+  const [password, setPassword] = useState("");
   const [blockedMessage, setBlockedMessage] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [index, setIndex] = useState(0);
   const [theme, setTheme] = useState<"light" | "dark">("light");
 
-  const getPostLoginRoute = (userEmail?: string | null) =>
-    userEmail?.toLowerCase() === "support@avaloka.ai"
-      ? "/support-queries"
-      : "/proanalysis";
+  const amISupportAdminFn = useServerFn(amISupportAdmin);
+  // Support-desk admins (ADMIN_EMAILS, server configuration) land on the queue.
+  const getPostLoginRoute = async () => {
+    try {
+      const { isAdmin } = await amISupportAdminFn();
+      return isAdmin ? "/support-queries" : "/proanalysis";
+    } catch {
+      return "/proanalysis";
+    }
+  };
 
   // When we arrive from a magic link the URL carries the auth hash — render a
 
@@ -205,12 +218,17 @@ function LoginPage() {
             } catch (err) {
               console.error("Failed to activate invited user", err);
             } finally {
+              try {
+                await claimTeamInvitesFn();
+              } catch (err) {
+                console.error("Failed to accept team invitations", err);
+              }
               await primePlan();
               // Clear the hash so we don't re-process it
               history.replaceState(null, "", window.location.pathname + window.location.search);
               localStorage.removeItem("admin-bypass");
               navigate({
-                to: getPostLoginRoute(data.user?.email),
+                to: await getPostLoginRoute(),
                 replace: true,
               });
             }
@@ -236,10 +254,15 @@ function LoginPage() {
         console.error("Failed to activate invited user", err);
       }
       try {
+        await claimTeamInvitesFn();
+      } catch (err) {
+        console.error("Failed to accept team invitations", err);
+      }
+      try {
         await primePlan();
       } finally {
         localStorage.removeItem("admin-bypass");
-        navigate({ to: getPostLoginRoute(email), replace: true });
+        navigate({ to: await getPostLoginRoute(), replace: true });
       }
     };
 
@@ -259,7 +282,7 @@ function LoginPage() {
       }, 0);
     });
     return () => sub.subscription.unsubscribe();
-  }, [acceptInviteFn, checkAccountActiveFn, navigate, queryClient, resolvePlanFn]);
+  }, [acceptInviteFn, claimTeamInvitesFn, checkAccountActiveFn, navigate, queryClient, resolvePlanFn]);
 
   // Safety net: if signing in still hasn't finished after 15 s, reload once (the token
   // is fresh by then). If it is still stuck after that, show the login form instead
@@ -295,6 +318,13 @@ function LoginPage() {
     setSubmitting(true);
     setBlockedMessage(null);
     const normalized = email.trim().toLowerCase();
+    if (localAuth) {
+      // A session here fires onAuthStateChange above, which navigates on.
+      const { error } = await supabase.auth.signInWithPassword({ email: normalized, password });
+      if (error) toast.error(error.message || "Sign-in failed");
+      setSubmitting(false);
+      return;
+    }
     try {
       await sendLoginMagicLinkFn({
         data: { email: normalized, redirectTo: window.location.origin },
@@ -373,29 +403,53 @@ function LoginPage() {
                     htmlFor="email"
                     className="text-sm font-medium text-[color:var(--text-secondary)]"
                   >
-                    Work Email
+                    {localAuth ? "Email" : "Work Email"}
                   </label>
                   <Input
                     id="email"
                     type="email"
                     autoComplete="email"
                     required
-                    placeholder="Enter your email"
+                    placeholder={localAuth ? "local@avaloka.local" : "Enter your email"}
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     className="h-11 rounded-lg border-input bg-background text-base text-foreground placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-primary/30 dark:bg-input/30"
                   />
                 </div>
 
+                {localAuth ? (
+                  <div className="space-y-1.5">
+                    <label
+                      htmlFor="password"
+                      className="text-sm font-medium text-[color:var(--text-secondary)]"
+                    >
+                      Password
+                    </label>
+                    <Input
+                      id="password"
+                      type="password"
+                      autoComplete="current-password"
+                      required
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      className="h-11 rounded-lg border-input bg-background text-base text-foreground placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-primary/30 dark:bg-input/30"
+                    />
+                  </div>
+                ) : null}
+
                 <Button
                   type="submit"
                   disabled={submitting}
                   className="h-11 w-full rounded-lg bg-[#1565ef] px-4 py-1.5 text-base font-semibold text-white shadow-none hover:bg-[#1257d6] focus-visible:ring-2 focus-visible:ring-[#1565ef]/40"
                 >
-                  {submitting ? "Sending…" : "Send Login Link"}
+                  {localAuth
+                    ? submitting ? "Signing in…" : "Sign in"
+                    : submitting ? "Sending…" : "Send Login Link"}
                 </Button>
                 <p className="text-center text-xs text-[color:var(--text-tertiary)]">
-                  A secure login link will be sent to your inbox.
+                  {localAuth
+                    ? "Local account. The password is in .env.quickstart (scripts/quickstart.sh password)."
+                    : "A secure login link will be sent to your inbox."}
                 </p>
               </form>
 

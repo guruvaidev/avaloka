@@ -30,7 +30,7 @@ def create_ray_cluster(
     max_worker_replicas: int = MAX_WORKER_REPLICAS,
     head_resources: dict = DEFAULT_HEAD_RESOURCES,
     worker_resources: dict = DEFAULT_WORKER_RESOURCES,
-    docker_image: str = "rayproject/ray:2.10.0",
+    docker_image: str = "rayproject/ray:2.56.0-py311",
     namespace: str = "default",
     use_sa: bool = False,
     service_account_name: str | None = None,
@@ -97,7 +97,7 @@ def create_ray_cluster(
         "kind": "RayCluster",
         "metadata": {"name": cluster_name},
         "spec": {
-            "rayVersion": "2.10.0",
+            "rayVersion": "2.56.0",
             # Enable the Ray autoscaler sidecar on the head pod
             "enableInTreeAutoscaling": True,
             "autoscalerOptions": {

@@ -342,7 +342,7 @@ def test_profile_columns_numeric_and_categorical():
         {"num": "1", "cat": "a"},
         {"num": "2", "cat": "b"},
         {"num": "3", "cat": None},
-        {"num": "x", "cat": "a"},
+        {"num": "?", "cat": "a"},
     ]
     profiles = viz.profile_columns(rows)
 
@@ -353,8 +353,11 @@ def test_profile_columns_numeric_and_categorical():
     cat_col = by_name["cat"]
 
     # numeric detection
+    # "?" is a gap token, so the column is numeric with one gap. A real string
+    # ("x") would be a value, and the column would not be numeric: see
+    # test_a_real_string_keeps_a_column_off_the_numeric_path below.
     assert num_col["dtype"] == "numeric"
-    assert num_col["missing_ratio"] == 0.0
+    assert num_col["missing_ratio"] == pytest.approx(0.25)
     assert num_col["n_unique"] == 3  # 1,2,3
     stats = num_col["stats"]
     assert stats["min"] == 1.0
@@ -369,6 +372,16 @@ def test_profile_columns_numeric_and_categorical():
     # ensure None turned into "nan" bucket
     top_values = {t["value"] for t in cat_col["stats"]["top_k"]}
     assert "nan" in top_values
+
+
+def test_a_real_string_keeps_a_column_off_the_numeric_path():
+    """Only a gap token may become missing (2026-10-19): "x" is a value, and
+    charting the column as numbers would drop it silently."""
+    rows = [{"num": v} for v in ("1", "2", "3", "x")]
+    num_col = viz.profile_columns(rows)[0]
+    assert num_col["dtype"] == "categorical"
+    assert num_col["missing_ratio"] == 0.0
+    assert "x" in {t["value"] for t in num_col["stats"]["top_k"]}
 
 
 def test_compute_unsupervised_feature_ranking_basic():

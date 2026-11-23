@@ -59,12 +59,12 @@ spec:
               mountPath: /var/lib/postgresql/data
           resources:
             {{- toYaml .Values.postgres.resources | nindent 12 }}
-{{- if not .Values.postgres.persistence.enabled }}
+{{- if not (.Values.postgres.persistence).enabled }}
       volumes:
         - name: data
           emptyDir: {}
 {{- end }}
-{{- if .Values.postgres.persistence.enabled }}
+{{- if (.Values.postgres.persistence).enabled }}
   volumeClaimTemplates:
     - metadata:
         name: data

@@ -24,7 +24,6 @@ import os
 import re
 import json
 import hashlib
-import hmac
 import time
 import uuid
 import threading
@@ -409,6 +408,9 @@ class DatabaseConfig(BaseModel):
     created_at: str
     status: str = "active"
     api_key: str
+    # The user the onboarding service registered this customer for. An update
+    # to an existing customer must name the same owner (create_customer_database).
+    owner_user_id: Optional[str] = None
 
 
 class CustomerAPI(BaseModel):
@@ -683,47 +685,6 @@ def extract_customer_from_api_key(api_key: str) -> Optional[str]:
     return None
 
 
-# The persisted registry is the source of truth for which keys are live: a
-# customer deleted through the onboarding API (status "inactive") or re-registered
-# under a new key must stop authenticating at once, even if this process still
-# holds the old key in memory. Re-read only when the file changes.
-_registry_cache: Dict[str, Any] = {"stat": None, "data": {}}
-_registry_cache_lock = threading.Lock()
-
-
-def _persisted_registry() -> Optional[Dict[str, Any]]:
-    """customers.json as a dict ({} when absent), or None when it cannot be read."""
-    try:
-        st = os.stat(CUSTOMERS_FILE)
-    except FileNotFoundError:
-        return {}
-    except OSError as e:
-        logger.error(f"Could not stat '{CUSTOMERS_FILE}': {e}")
-        return None
-    stamp = (CUSTOMERS_FILE, st.st_mtime_ns, st.st_size, st.st_ino)
-    with _registry_cache_lock:
-        if _registry_cache["stat"] == stamp:
-            return _registry_cache["data"]
-    try:
-        with open(CUSTOMERS_FILE, "r") as f:
-            data = json.load(f)
-    except Exception as e:
-        logger.error(f"Could not read '{CUSTOMERS_FILE}': {e}")
-        return None
-    with _registry_cache_lock:
-        _registry_cache["stat"], _registry_cache["data"] = stamp, data
-    return data
-
-
-def _persisted_key_is_active(customer_id: str, api_key: str) -> bool:
-    """True only if customers.json holds customer_id as active under exactly api_key."""
-    record = (_persisted_registry() or {}).get(customer_id)
-    if not record or record.get("status") == "inactive":
-        return False
-    stored = record.get("api_key") or ""
-    return bool(stored) and hmac.compare_digest(stored.encode(), (api_key or "").encode())
-
-
 def get_current_customer(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)) -> str:
     """Validate API key and return customer_id"""
     if not credentials:
@@ -732,7 +693,14 @@ def get_current_customer(credentials: Optional[HTTPAuthorizationCredentials] = D
     api_key = credentials.credentials
     customer_id = extract_customer_from_api_key(api_key)
 
-    if not customer_id or not _persisted_key_is_active(customer_id, api_key):
+    if not customer_id:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+
+    # Memory alone is not enough: a customer deactivated by the onboarding
+    # service, whose eviction call never arrived, would answer until restart.
+    # The registry is the authority, so it is asked on every call.
+    if not _registry_allows(customer_id, api_key):
+        _evict_customer(customer_id)
         raise HTTPException(status_code=401, detail="Invalid API key")
 
     return customer_id
@@ -1018,8 +986,43 @@ app.add_middleware(
 )
 
 # Mount the customer-onboarding routes onto this server so registration and
-# /call_tool share one host. The standalone customer_dbs app on :8011 still works.
-from app.mcp_server.customer_dbs import router as onboarding_router, _is_service_request
+# /call_tool share one host. The standalone customer_dbs app (:8081) still works.
+from app.mcp_server.customer_dbs import router as onboarding_router
+from app.mcp_server.credentials import (
+    CredentialKeyMissing, api_key_matches, load_registry, migrate_registry, open_sealed_secret,
+    seal_record, verify_service_mac,
+)
+
+
+class SealedDatabaseConfig(BaseModel):
+    """What /admin/customers is sent: the connection string and api_key as sealed
+    handles (app/mcp_server/credentials.py), opened here with DB_ENCRYPTION_KEY.
+    A body carrying them in the clear does not validate (422). 1.6 port
+    (hotfix/1.6-chat-connection-sealing 88120343); the body is still signed
+    (_require_onboarding_service)."""
+    customer_id: str
+    connection_string_enc: Dict[str, Any]
+    database_type: str
+    max_rows: int = 1000
+    query_timeout: int = 30
+    created_at: str
+    status: str = "active"
+    api_key_enc: Dict[str, Any]
+    owner_user_id: Optional[str] = None
+
+    def open(self) -> "DatabaseConfig":
+        conn_str = open_sealed_secret(self.connection_string_enc)
+        api_key = open_sealed_secret(self.api_key_enc)
+        if not conn_str or not api_key:
+            raise CredentialKeyMissing(
+                "the registration's sealed credentials do not open under this server's "
+                "DB_ENCRYPTION_KEY (missing, or not the onboarding service's key)")
+        return DatabaseConfig(
+            customer_id=self.customer_id, connection_string=conn_str,
+            database_type=self.database_type, max_rows=self.max_rows,
+            query_timeout=self.query_timeout, created_at=self.created_at,
+            status=self.status, api_key=api_key, owner_user_id=self.owner_user_id,
+        )
 
 app.include_router(onboarding_router)
 
@@ -1050,25 +1053,119 @@ def _register_in_memory(config: DatabaseConfig) -> None:
     )
 
 
+# ---- Revocation ----
+#
+# The registry file is the authority on whether a customer is active: the
+# onboarding service marks a record inactive there (DELETE /customers/{id},
+# and the API's rollback of a failed save). Two layers stop a revoked key:
+#
+# * eviction: the onboarding service calls the signed DELETE /admin/customers/{id},
+#   which drops the api_key, the config and the engine (disposed) from memory;
+# * the per-call check below, so a missed eviction cannot keep a key alive.
+#
+# The check reads the file only when it has changed (inode, mtime, size), so
+# a call normally costs one stat(). An eviction drops the cache outright.
+
+_registry_cache_lock = threading.Lock()
+_registry_cache: Dict[str, Any] = {"stamp": None, "records": {}}
+
+
+def _registry_stamp(path: str):
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return (path, st.st_ino, st.st_mtime_ns, st.st_size)
+
+
+def _invalidate_registry_cache() -> None:
+    with _registry_cache_lock:
+        _registry_cache["stamp"] = None
+        _registry_cache["records"] = {}
+
+
+def _registry_allows(customer_id: str, api_key: str) -> bool:
+    """True only if the registry holds ``customer_id``, active, with this api_key.
+
+    Fails closed: no file, an unreadable file, or no record is a no.
+    """
+    path = CUSTOMERS_FILE
+    with _registry_cache_lock:
+        stamp = _registry_stamp(path)
+        if stamp is None:
+            return False
+        if stamp != _registry_cache["stamp"]:
+            try:
+                records = load_registry(path)
+            except Exception as e:
+                logger.error(f"Could not read '{path}' to check an api_key: {type(e).__name__}")
+                return False
+            _registry_cache["records"] = {
+                cid: (rec.get("status", "active") == "active", rec.get("api_key"))
+                for cid, rec in records.items()
+            }
+            _registry_cache["stamp"] = stamp
+        entry = _registry_cache["records"].get(customer_id)
+    if entry is None:
+        return False
+    active, expected = entry
+    return active and api_key_matches({"api_key": expected}, api_key)
+
+
+def _evict_customer(customer_id: str) -> bool:
+    """Drop a customer from memory: api_key, config, engine (disposed), Mongo client.
+
+    Returns whether anything was held for it.
+    """
+    engine = db_manager.engines.pop(customer_id, None)
+    config = db_manager.connection_configs.pop(customer_id, None)
+    db_manager.mongo_dbs.pop(customer_id, None)
+    mongo_client = db_manager.mongo_clients.pop(customer_id, None)
+    key = CUSTOMER_API_KEYS.pop(customer_id, None)
+    _invalidate_registry_cache()
+    if engine is not None:
+        try:
+            engine.dispose()
+        except Exception as e:
+            logger.warning(f"Disposing the engine for '{customer_id}' failed: {type(e).__name__}")
+    if mongo_client is not None:
+        try:
+            mongo_client.close()
+        except Exception as e:
+            logger.warning(f"Closing the Mongo client for '{customer_id}' failed: {type(e).__name__}")
+    held = any(x is not None for x in (engine, config, mongo_client, key))
+    if held:
+        logger.info(f"Evicted customer '{customer_id}' from the MCP registry")
+    return held
+
+
 def load_registered_customers() -> int:
     """Rehydrate db_manager + CUSTOMER_API_KEYS from CUSTOMERS_FILE on startup.
 
     Engines (and Mongo clients) are created lazily so an unreachable database
     does not block startup — the error surfaces on the actual tool call.
+
+    Secrets on disk are sealed under DB_ENCRYPTION_KEY (app.mcp_server.credentials);
+    a file written before that was so is re-sealed here, on first load.
     """
     path = CUSTOMERS_FILE
     if not os.path.exists(path):
         logger.info(f"No customers file at '{path}'; starting with empty registry.")
         return 0
     try:
-        with open(path, "r") as f:
-            customers = json.load(f)
+        with _customers_file_lock:
+            migrate_registry(path)
+            customers = load_registry(path)
     except Exception as e:
         logger.error(f"Could not read customers file '{path}': {e}")
         return 0
 
-    for stale in [cid for cid in CUSTOMER_API_KEYS if (customers.get(cid) or {}).get("status", "inactive") == "inactive"]:
-        _evict_customer(stale)
+    # A reload must not keep what the registry no longer allows: a customer
+    # deactivated, or removed, while this process held it goes now.
+    for customer_id in set(CUSTOMER_API_KEYS) | set(db_manager.connection_configs):
+        record = customers.get(customer_id)
+        if record is None or record.get("status") == "inactive":
+            _evict_customer(customer_id)
 
     loaded = 0
     for customer_id, record in customers.items():
@@ -1102,7 +1199,13 @@ def load_registered_customers() -> int:
 
 
 def _persist_customer(config: DatabaseConfig) -> None:
-    """Write-through a registration to CUSTOMERS_FILE so it survives a restart."""
+    """Write-through a registration to CUSTOMERS_FILE so it survives a restart.
+
+    The connection string and api_key are sealed before they touch the file;
+    other records are left exactly as they are on disk, so a record this key
+    cannot open is neither rewritten nor lost. Raises CredentialKeyMissing
+    rather than writing a plaintext secret.
+    """
     with _customers_file_lock:
         data: Dict[str, Any] = {}
         if os.path.exists(CUSTOMERS_FILE):
@@ -1113,8 +1216,9 @@ def _persist_customer(config: DatabaseConfig) -> None:
                 logger.warning(f"Could not read '{CUSTOMERS_FILE}' before write: {e}")
                 data = {}
 
-        record = data.get(config.customer_id, {})
-        record.update({
+        record = {k: v for k, v in data.get(config.customer_id, {}).items()
+                  if k not in ("connection_string", "api_key")}
+        record.update(seal_record({
             "customer_id": config.customer_id,
             "connection_string": config.connection_string,
             "database_type": config.database_type,
@@ -1123,76 +1227,107 @@ def _persist_customer(config: DatabaseConfig) -> None:
             "status": config.status,
             "max_rows": config.max_rows,
             "query_timeout": config.query_timeout,
-        })
+        }))
+        if config.owner_user_id:
+            record["owner_user_id"] = config.owner_user_id
         data[config.customer_id] = record
 
         try:
-            with open(CUSTOMERS_FILE, "w") as f:
+            tmp = f"{CUSTOMERS_FILE}.tmp"
+            with open(tmp, "w") as f:
                 json.dump(data, f, indent=2)
+            os.replace(tmp, CUSTOMERS_FILE)
         except Exception as e:
             logger.error(f"Failed to persist customer '{config.customer_id}': {e}")
 
 
 @app.on_event("startup")
 async def _startup_load_customers() -> None:
+    # Customer credentials are sealed at rest and in transit under
+    # DB_ENCRYPTION_KEY: provisioned from .env when missing, and the server
+    # refuses to start only if it still has none (app/core/encryption_key.py).
+    from app.core.encryption_key import require_db_encryption_key
+    require_db_encryption_key("The MCP server")
     load_registered_customers()
 
 
-def _admin_overwrite_refused(customer_id: str, api_key: str) -> bool:
-    """True when customer_id is already registered, active, under a different api_key.
+async def _require_onboarding_service(request: Request) -> None:
+    """Only the onboarding service, signing with the deployment key, may use an admin route.
 
-    A deleted customer may be registered again only if it was bound to a user;
-    one bound to nobody is retired. Fails closed: an unreadable registry refuses
-    the write.
+    Runs before the handler, so an unauthenticated caller never gets this
+    server to connect to a DSN of its choosing. No key configured: 401 to
+    everyone (credentials.verify_service_mac fails closed).
     """
-    registry = _persisted_registry()
-    if registry is None:
-        return True
-    record = registry.get(customer_id)
+    auth = request.headers.get("authorization") or ""
+    token = auth[len("bearer "):].strip() if auth.lower().startswith("bearer ") else ""
+    body = await request.body()
+    if not verify_service_mac(token, request.method, request.url.path, body):
+        raise HTTPException(status_code=401, detail="Admin routes require the onboarding service credential")
+
+
+class _RegistryUnreadable(Exception):
+    """The registry could not be read, so an ownership check cannot be made."""
+
+
+def _existing_customer(customer_id: str) -> Optional[Dict[str, Any]]:
+    """The customer's current record, from the registry file or this process's memory.
+
+    Fails closed (#564): an unreadable registry raises rather than answering
+    "no such customer", which would let the write through.
+    """
+    try:
+        record = load_registry(CUSTOMERS_FILE).get(customer_id)
+    except Exception as e:
+        logger.warning(f"Could not read '{CUSTOMERS_FILE}' for an ownership check: {type(e).__name__}")
+        raise _RegistryUnreadable() from e
     if record is not None:
-        if record.get("status") == "inactive":
-            # A deleted id bound to nobody is retired; a bound one may come back
-            # (customer_dbs has already checked it is its owner re-registering).
-            return not (record.get("owner_user_id") or "").strip()
-        existing = record.get("api_key") or ""
-    elif customer_id in CUSTOMER_API_KEYS:
-        existing = CUSTOMER_API_KEYS[customer_id].api_key
-    else:
+        return record
+    config = db_manager.connection_configs.get(customer_id)
+    if config is None and customer_id not in CUSTOMER_API_KEYS:
+        return None
+    key = CUSTOMER_API_KEYS.get(customer_id)
+    return {
+        "customer_id": customer_id,
+        "owner_user_id": getattr(config, "owner_user_id", None),
+        "api_key": key.api_key if key else (config.api_key if config else None),
+    }
+
+
+def _may_replace(existing: Dict[str, Any], config: DatabaseConfig) -> bool:
+    """An update may replace a customer only for that customer's own owner.
+
+    Owned: the request must name the same owner. Unowned (registered before
+    owners were recorded): only a re-push of the same api_key, which is what
+    scripts/resync_mcp_customers.py sends. Anything else would hand an
+    existing customer's api_key and DSN to whoever asked.
+    """
+    owner = existing.get("owner_user_id")
+    if owner:
+        return config.owner_user_id == owner
+    # A deleted customer bound to nobody is retired (#564): saved connections
+    # and DTA aliases can still name it, so it never comes back, not even
+    # under its old key.
+    if existing.get("status") == "inactive":
         return False
-    return not (existing and hmac.compare_digest(existing.encode(), (api_key or "").encode()))
+    return not config.owner_user_id and api_key_matches(existing, config.api_key)
 
 
-def _evict_customer(customer_id: str) -> bool:
-    """Drop a customer's key, config and connections from this process."""
-    found = CUSTOMER_API_KEYS.pop(customer_id, None) is not None
-    found = db_manager.connection_configs.pop(customer_id, None) is not None or found
-    engine = db_manager.engines.pop(customer_id, None)
-    clients = [engine, getattr(db_manager, "mongo_clients", {}).pop(customer_id, None)]
-    getattr(db_manager, "mongo_dbs", {}).pop(customer_id, None)
-    for client in clients:
-        if client is None:
-            continue
-        found = True
-        try:
-            client.dispose() if hasattr(client, "dispose") else client.close()
-        except Exception as e:
-            logger.warning(f"Could not close connections for '{customer_id}': {e}")
-    return found
-
-
-@app.post("/admin/customers")
-async def create_customer_database(config: DatabaseConfig, request: Request):
+@app.post("/admin/customers", dependencies=[Depends(_require_onboarding_service)])
+async def create_customer_database(sealed: SealedDatabaseConfig):
     """Create/update customer database configuration from onboarding service.
 
-    Service-only (MCP_SERVICE_TOKEN): it overwrites a record's api_key and
-    connection_string, so an open route would let anyone take over a customer.
+    The connection string and api_key arrive as sealed handles and are opened
+    here; a body with them in the clear is refused (422).
     """
-    if not _is_service_request(request):
-        raise HTTPException(status_code=401, detail="Authentication required")
-    # 1.6/1.7 records carry no owner here, so the api_key stands in for one: a
-    # re-sync of the same customer (same key) is allowed, a different key is a
-    # takeover. Checked before any connection attempt.
-    if _admin_overwrite_refused(config.customer_id, config.api_key):
+    try:
+        config = sealed.open()
+    except CredentialKeyMissing as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    try:
+        existing = _existing_customer(config.customer_id)
+    except _RegistryUnreadable:
+        raise HTTPException(status_code=503, detail="Customer registry unavailable")
+    if existing is not None and not _may_replace(existing, config):
         raise HTTPException(status_code=409, detail=f"Customer {config.customer_id} already registered")
     try:
         logger.info(f"Registering customer: {config.customer_id}")
@@ -1216,37 +1351,49 @@ async def create_customer_database(config: DatabaseConfig, request: Request):
             finally:
                 test_engine.dispose()
 
-        _register_in_memory(config)
         _persist_customer(config)
+        # A re-registration replaces the old key and engine; dispose of them.
+        _evict_customer(config.customer_id)
+        _register_in_memory(config)
 
         logger.info(f"Successfully registered customer {config.customer_id}")
 
         return {"customer_id": config.customer_id, "status": "registered"}
 
+    except CredentialKeyMissing as e:
+        logger.error(f"Registration refused for {config.customer_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
         logger.error(f"Registration failed for {config.customer_id}: {e}")
         raise HTTPException(status_code=400, detail=f"Database connection failed: {e}")
 
 
-@app.delete("/admin/customers/{customer_id}")
-async def evict_customer_database(customer_id: str, request: Request):
-    """Evict a deleted customer from this process. Service-only (MCP_SERVICE_TOKEN)."""
-    if not _is_service_request(request):
-        raise HTTPException(status_code=401, detail="Authentication required")
-    return {"customer_id": customer_id, "evicted": _evict_customer(customer_id)}
+@app.delete("/admin/customers/{customer_id}", dependencies=[Depends(_require_onboarding_service)])
+async def evict_customer(customer_id: str):
+    """Forget a deactivated or deleted customer at once: its api_key and its engine.
+
+    Called by the onboarding service, signed, after it marks the record
+    inactive. Idempotent: evicting a customer this process does not hold is
+    still a 200, so a retry or a second server is not an error.
+    """
+    held = _evict_customer(customer_id)
+    return {"customer_id": customer_id, "status": "evicted", "was_loaded": held}
 
 
-@app.post("/connect", response_model=ConnectionResponse)
-async def connect_database(connection: DatabaseConnection, request: Request):
+@app.post("/connect", response_model=ConnectionResponse, dependencies=[Depends(_require_onboarding_service)])
+async def connect_database(connection: DatabaseConnection):
     """Connect and register a new database connection.
 
-    Service-only, and create-only: it connects to a caller-supplied DSN (SSRF)
-    and replaces the in-memory api_key for that name (takeover of /call_tool).
+    An admin route: it connects to the DSN it is given and mints an api_key,
+    so it takes the onboarding service credential, and it never replaces a
+    customer that already exists.
     """
-    if not _is_service_request(request):
-        raise HTTPException(status_code=401, detail="Authentication required")
-    if connection.connection_name in CUSTOMER_API_KEYS or connection.connection_name in db_manager.connection_configs:
-        raise HTTPException(status_code=409, detail=f"Connection {connection.connection_name} already registered")
+    try:
+        taken = _existing_customer(connection.connection_name) is not None
+    except _RegistryUnreadable:
+        raise HTTPException(status_code=503, detail="Customer registry unavailable")
+    if taken:
+        raise HTTPException(status_code=409, detail=f"Customer {connection.connection_name} already registered")
     try:
         api_key = generate_api_key(connection.connection_name)
 
@@ -1258,6 +1405,13 @@ async def connect_database(connection: DatabaseConnection, request: Request):
             permissions=["read"],
             created_at=datetime.now().isoformat()
         )
+        # /call_tool answers only for a customer the registry holds active,
+        # so a connection made here is written through like any other.
+        try:
+            _persist_customer(db_manager.get_config(customer_id))
+        except Exception:
+            _evict_customer(customer_id)
+            raise
 
         mcp_endpoint = f"http://localhost:8080/sse"
 
@@ -1276,11 +1430,9 @@ async def connect_database(connection: DatabaseConnection, request: Request):
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@app.get("/connections")
-async def list_connections(request: Request):
-    """List all registered database connections. Service-only: it names every tenant."""
-    if not _is_service_request(request):
-        raise HTTPException(status_code=401, detail="Authentication required")
+@app.get("/connections", dependencies=[Depends(_require_onboarding_service)])
+async def list_connections():
+    """List all registered database connections"""
     connections = []
 
     for customer_id, config in db_manager.connection_configs.items():

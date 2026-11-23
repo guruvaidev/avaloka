@@ -1,4 +1,4 @@
-import { X, Attachment01 } from "@untitledui/icons";
+import { Attachment01, X } from "@untitledui/icons";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { getCurrentProfileId } from "@/lib/current-profile";
@@ -18,6 +18,7 @@ import {
   InsightCommentAttachmentList,
 } from "@/components/dashboard/InsightCommentAttachments";
 import { toast } from "sonner";
+import { COMMENTS_NEED_PRO, usePlanFeatures } from "@/lib/use-plan-features";
 
 export function ReportCommentsPanel({
   onClose,
@@ -28,6 +29,7 @@ export function ReportCommentsPanel({
   reportId?: string | null;
   open?: boolean;
 }) {
+  const { canComment } = usePlanFeatures();
   const [comments, setComments] = useState<ReportComment[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -160,6 +162,9 @@ export function ReportCommentsPanel({
         )}
       </div>
 
+      {!canComment ? (
+        <p className="border-t border-secondary p-3 text-sm text-tertiary">{COMMENTS_NEED_PRO}</p>
+      ) : (
       <div className="border-t border-secondary p-3">
         <input
           ref={fileInputRef}
@@ -219,6 +224,7 @@ export function ReportCommentsPanel({
           </div>
         </div>
       </div>
+      )}
     </aside>
   );
 }

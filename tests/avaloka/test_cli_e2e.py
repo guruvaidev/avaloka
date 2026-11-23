@@ -18,6 +18,10 @@ from pathlib import Path
 
 import pytest
 
+#: The release version, read from the file the package itself reads, so a
+#: VERSION bump does not need a matching edit here.
+_VERSION = (Path(__file__).resolve().parents[2] / "VERSION").read_text().strip()
+
 
 def test_e2e_cli_process_help_and_version():
     """True external process invocation of CLI version and help."""
@@ -28,7 +32,10 @@ def test_e2e_cli_process_help_and_version():
         text=True,
     )
     assert res_ver.returncode == 0
-    assert "1.6" in res_ver.stdout or "avaloka" in res_ver.stdout.lower()
+    # VERSION is the single source, and the public tree carries its own number,
+    # so a literal here fails on one tree or the other.
+    expected = (Path(__file__).resolve().parents[2] / "VERSION").read_text().strip()
+    assert expected in res_ver.stdout, f"--version printed {res_ver.stdout!r}, VERSION says {expected!r}"
 
     # Test --help
     res_help = subprocess.run(

@@ -1,0 +1,59 @@
+{
+  "recipe": "describe",
+  "version_major": 1,
+  "verdict": "qualified",
+  "reason": null,
+  "figures": [
+    {
+      "id": "/measure/n",
+      "value": 195.0,
+      "decimals": 0,
+      "unit": "count"
+    },
+    {
+      "id": "/measure/median",
+      "value": 46.59,
+      "decimals": 2,
+      "unit": "currency"
+    },
+    {
+      "id": "/measure/mean",
+      "value": 65.54,
+      "decimals": 2,
+      "unit": "currency"
+    },
+    {
+      "id": "/measure/std",
+      "value": 60.42,
+      "decimals": 2,
+      "unit": "currency"
+    },
+    {
+      "id": "/measure/p90",
+      "value": 141.47,
+      "decimals": 2,
+      "unit": "currency"
+    },
+    {
+      "id": "/measure/skew",
+      "value": 3.1,
+      "decimals": 2,
+      "unit": "unitless"
+    },
+    {
+      "id": "/rows/duplicates",
+      "value": 25.0,
+      "decimals": 0,
+      "unit": "count"
+    }
+  ],
+  "caveats": [
+    "data_quality"
+  ],
+  "must_not_say": [
+    "causes",
+    "drives",
+    "because",
+    "proves"
+  ]
+}

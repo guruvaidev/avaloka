@@ -11,6 +11,7 @@ class CodingAgentState(TypedDict):
     output_location: str
     schema: Dict[str, str]
     input_data_type: str
+    complex_structure: Optional[Dict]
     sample_data: Optional[str]
     requirements: Optional[str]
     uploaded_csv_preview: Optional[List[List[str]]]
@@ -33,6 +34,8 @@ class CodingAgentState(TypedDict):
     syntax_error: Optional[bool]
     static_semantic_error: Optional[bool]
     logical_semantic_error: Optional[bool]
+    # The sample run of main(df) raised (workflow.logical_review_with_sample_crash_gate).
+    sample_crash_error: Optional[bool]
     # What the logical reviewer decided, recorded by logical_review_verdict.py.
     # Booleans/None and one closed-vocabulary string; never acted on.
     logical_review_decided_by: Optional[str]
@@ -56,3 +59,9 @@ class CodingAgentState(TypedDict):
     coder_contract: Optional[dict]
     contract_error: Optional[bool]
     contract_violations: Optional[list]
+    # Stated postconditions logged but not enforced, and where an exact row
+    # count came from (blueprint_contract.exact_count_decision).
+    contract_advisories: Optional[list]
+    contract_row_count: Optional[dict]
+    # Each declared min/max bound and its source (blueprint_contract.bound_decision).
+    contract_bounds: Optional[list]

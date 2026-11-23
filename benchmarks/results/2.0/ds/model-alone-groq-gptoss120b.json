@@ -1,0 +1,1661 @@
+{
+  "schema_version": "ds-model-alone-1",
+  "prompt_version": "ds-model-alone-v1",
+  "system": "model_alone",
+  "provider": "groq",
+  "model": "openai/gpt-oss-120b",
+  "price": {
+    "model_id": "openai/gpt-oss-120b",
+    "prompt_usd_per_1m": 0.15,
+    "completion_usd_per_1m": 0.6,
+    "cost_source": "openrouter_proxy",
+    "context_length": 131072,
+    "tiers": []
+  },
+  "generated_at": "2026-10-18T06:30:02.880219+00:00",
+  "repository": {
+    "captured_at": "2026-10-18T06:30:02.883854+00:00",
+    "git_commit": "77d7d28e76859b94ea80b77d81526da1808b15bc",
+    "git_branch": "bench/2.0-vs-1.0",
+    "git_dirty": false,
+    "python": "3.11.16",
+    "git_source": "asserted_by_launcher"
+  },
+  "trials": 3,
+  "omitted_checks": [
+    "economics_sane",
+    "firefly_active[*]",
+    "firefly_dormant[*]",
+    "temporal_split_performed"
+  ],
+  "summary": {
+    "mean_score": 0.8364,
+    "pass_rate": 0.6667,
+    "by_task": {
+      "ds_classification_churn": 0.3333,
+      "ds_regression_housing": 0.8333,
+      "ds_leakage_detection": 0.8667,
+      "ds_temporal_split_on_time_ordered_data": 1.0,
+      "ds_constant_column_does_not_break_training": 0.9048,
+      "ds_continuous_features_reach_the_model": 0.9167,
+      "ds_no_signal_is_reported_as_no_signal": 1.0
+    },
+    "spend_usd": 0.0198
+  },
+  "results": [
+    {
+      "task": "ds_classification_churn",
+      "family": "data_science",
+      "trial": 0,
+      "metric": "roc_auc",
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": true,
+          "detail": "roc_auc=0.8045 on the harness holdout",
+          "weight": 2.0
+        },
+        {
+          "name": "model_min_score",
+          "passed": true,
+          "detail": "roc_auc=0.8045 vs floor 0.6",
+          "weight": 2.0
+        },
+        {
+          "name": "beats_baseline",
+          "passed": true,
+          "detail": "roc_auc: model=0.8045, baseline=0.5000, gain=+0.3045 >= 0.05 (measured)",
+          "weight": 2.0
+        }
+      ],
+      "measured": {
+        "model": 0.8045190104013634,
+        "baseline": 0.5,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "classification",
+        "split_strategy": "stratified_holdout",
+        "column_roles": {
+          "customer_id": "id",
+          "tenure": "numeric",
+          "monthly_charges": "numeric",
+          "support_tickets": "numeric",
+          "contract": "categorical",
+          "churned": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [],
+          "id_columns": [
+            "customer_id"
+          ],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [],
+        "features_used": [
+          "tenure",
+          "monthly_charges",
+          "support_tickets",
+          "contract"
+        ],
+        "baseline_strategy": "prior",
+        "baseline_score": 0.5,
+        "expected_beats_baseline": true,
+        "verdict": "pass",
+        "max_safe_deployment_level": 3
+      },
+      "program_chars": 1304,
+      "error": null,
+      "prompt_tokens": 1158,
+      "completion_tokens": 1802,
+      "cost_usd": 0.0012549,
+      "cost_source": "openrouter_proxy",
+      "latency_s": 6.04
+    },
+    {
+      "task": "ds_classification_churn",
+      "family": "data_science",
+      "trial": 1,
+      "metric": "roc_auc",
+      "passed": false,
+      "score": 0.0,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": false,
+          "detail": "no gradable predictions: execution_error: exit 1:   File \"/tmp/ds-model-alone-foakkq__/program.py\", line 1\n    icRegression(max_iter=1000, solver='lbfgs'))\\n])\\n\\n# Fit on the full training set\\nmodel.fit(X_train, y_train)\\n\\n# Predict probability of churn (class 1) for test set\\nproba = model.predict_proba(X_test)[:, 1]\\n\\n# Save predictions\\npd.DataFrame({'prediction': proba}).to_csv('predictions.csv', index=False)\\n\n                        ^\nSyntaxError: unexpected character after line continuation character\n",
+          "weight": 2.0
+        }
+      ],
+      "measured": {
+        "model": null,
+        "baseline": 0.5,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "classification",
+        "split_strategy": "stratified_holdout",
+        "column_roles": {
+          "customer_id": "id",
+          "tenure": "numeric",
+          "monthly_charges": "numeric",
+          "support_tickets": "numeric",
+          "contract": "categorical",
+          "churned": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [],
+          "id_columns": [
+            "customer_id"
+          ],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [],
+        "features_used": [
+          "tenure",
+          "monthly_charges",
+          "support_tickets",
+          "contract"
+        ],
+        "baseline_strategy": "majority_class",
+        "baseline_score": 0.5,
+        "expected_beats_baseline": true,
+        "verdict": "pass",
+        "max_safe_deployment_level": 3
+      },
+      "program_chars": 1308,
+      "error": "execution_error: exit 1:   File \"/tmp/ds-model-alone-foakkq__/program.py\", line 1\n    icRegression(max_iter=1000, solver='lbfgs'))\\n])\\n\\n# Fit on the full training set\\nmodel.fit(X_train, y_train)\\n\\n# Predict probability of churn (class 1) for test set\\nproba = model.predict_proba(X_test)[:, 1]\\n\\n# Save predictions\\npd.DataFrame({'prediction': proba}).to_csv('predictions.csv', index=False)\\n\n                        ^\nSyntaxError: unexpected character after line continuation character\n",
+      "prompt_tokens": 1158,
+      "completion_tokens": 1260,
+      "cost_usd": 0.0009297000000000001,
+      "cost_source": "openrouter_proxy",
+      "latency_s": 3.01
+    },
+    {
+      "task": "ds_classification_churn",
+      "family": "data_science",
+      "trial": 2,
+      "metric": "roc_auc",
+      "passed": false,
+      "score": 0.0,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": false,
+          "detail": "no gradable predictions: execution_error: exit 1:   File \"/tmp/ds-model-alone-xqe2dh67/program.py\", line 1\n    n_test_split(X, y, test_size=0.2, stratify=y, random_state=0)\\n    clf.fit(X_train, y_train)\\n    # train on full data for final model\\n    clf.fit(X, y)\\n    preds = clf.predict_proba(test)[:, 1]\\n    pd.DataFrame({'prediction': preds}).to_csv('predictions.csv', index=False)\\n\\nif __name__ == '__main__':\\n    main()\n                        ^\nSyntaxError: unexpected character after line continuation character\n",
+          "weight": 2.0
+        }
+      ],
+      "measured": {
+        "model": null,
+        "baseline": 0.5,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "classification",
+        "split_strategy": "stratified_holdout",
+        "column_roles": {
+          "customer_id": "id",
+          "tenure": "numeric",
+          "monthly_charges": "numeric",
+          "support_tickets": "numeric",
+          "contract": "categorical",
+          "churned": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [],
+          "id_columns": [
+            "customer_id"
+          ],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [],
+        "features_used": [
+          "tenure",
+          "monthly_charges",
+          "support_tickets",
+          "contract"
+        ],
+        "baseline_strategy": "prior",
+        "baseline_score": 0.5,
+        "expected_beats_baseline": true,
+        "verdict": "pass",
+        "max_safe_deployment_level": 3
+      },
+      "program_chars": 1317,
+      "error": "execution_error: exit 1:   File \"/tmp/ds-model-alone-xqe2dh67/program.py\", line 1\n    n_test_split(X, y, test_size=0.2, stratify=y, random_state=0)\\n    clf.fit(X_train, y_train)\\n    # train on full data for final model\\n    clf.fit(X, y)\\n    preds = clf.predict_proba(test)[:, 1]\\n    pd.DataFrame({'prediction': preds}).to_csv('predictions.csv', index=False)\\n\\nif __name__ == '__main__':\\n    main()\n                        ^\nSyntaxError: unexpected character after line continuation character\n",
+      "prompt_tokens": 1158,
+      "completion_tokens": 1565,
+      "cost_usd": 0.0011126999999999999,
+      "cost_source": "openrouter_proxy",
+      "latency_s": 3.52
+    },
+    {
+      "task": "ds_regression_housing",
+      "family": "data_science",
+      "trial": 0,
+      "metric": "r2",
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": true,
+          "detail": "r2=0.8899 on the harness holdout",
+          "weight": 2.0
+        },
+        {
+          "name": "model_min_score",
+          "passed": true,
+          "detail": "r2=0.8899 vs floor 0.55",
+          "weight": 2.0
+        },
+        {
+          "name": "beats_baseline",
+          "passed": true,
+          "detail": "r2: model=0.8899, baseline=-0.0024, gain=+0.8923 >= 0.4 (measured)",
+          "weight": 2.0
+        },
+        {
+          "name": "role[location]",
+          "passed": true,
+          "detail": "inferred 'categorical', expected 'categorical'",
+          "weight": 1.0
+        },
+        {
+          "name": "role[area_sqft]",
+          "passed": true,
+          "detail": "inferred 'numeric', expected 'numeric'",
+          "weight": 1.0
+        }
+      ],
+      "measured": {
+        "model": 0.8899313826330602,
+        "baseline": -0.002413920138795378,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "regression",
+        "split_strategy": "random_holdout",
+        "column_roles": {
+          "area_sqft": "numeric",
+          "bedrooms": "numeric",
+          "age_years": "numeric",
+          "location": "categorical",
+          "price": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [],
+          "id_columns": [],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [],
+        "features_used": [
+          "area_sqft",
+          "bedrooms",
+          "age_years",
+          "location"
+        ],
+        "baseline_strategy": "mean",
+        "baseline_score": 0.0,
+        "expected_beats_baseline": true,
+        "verdict": "pass",
+        "max_safe_deployment_level": 1
+      },
+      "program_chars": 1228,
+      "error": null,
+      "prompt_tokens": 1096,
+      "completion_tokens": 1170,
+      "cost_usd": 0.0008664,
+      "cost_source": "openrouter_proxy",
+      "latency_s": 5.2
+    },
+    {
+      "task": "ds_regression_housing",
+      "family": "data_science",
+      "trial": 1,
+      "metric": "r2",
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": true,
+          "detail": "r2=0.8899 on the harness holdout",
+          "weight": 2.0
+        },
+        {
+          "name": "model_min_score",
+          "passed": true,
+          "detail": "r2=0.8899 vs floor 0.55",
+          "weight": 2.0
+        },
+        {
+          "name": "beats_baseline",
+          "passed": true,
+          "detail": "r2: model=0.8899, baseline=-0.0024, gain=+0.8923 >= 0.4 (measured)",
+          "weight": 2.0
+        },
+        {
+          "name": "role[location]",
+          "passed": true,
+          "detail": "inferred 'categorical', expected 'categorical'",
+          "weight": 1.0
+        },
+        {
+          "name": "role[area_sqft]",
+          "passed": true,
+          "detail": "inferred 'numeric', expected 'numeric'",
+          "weight": 1.0
+        }
+      ],
+      "measured": {
+        "model": 0.889863299727164,
+        "baseline": -0.002413920138795378,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "regression",
+        "split_strategy": "random_holdout",
+        "column_roles": {
+          "area_sqft": "numeric",
+          "bedrooms": "numeric",
+          "age_years": "numeric",
+          "location": "categorical",
+          "price": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [],
+          "id_columns": [],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [],
+        "features_used": [
+          "area_sqft",
+          "bedrooms",
+          "age_years",
+          "location"
+        ],
+        "baseline_strategy": "mean",
+        "baseline_score": 0.0,
+        "expected_beats_baseline": true,
+        "verdict": "pass",
+        "max_safe_deployment_level": 2
+      },
+      "program_chars": 1090,
+      "error": null,
+      "prompt_tokens": 1096,
+      "completion_tokens": 1264,
+      "cost_usd": 0.0009227999999999999,
+      "cost_source": "openrouter_proxy",
+      "latency_s": 4.86
+    },
+    {
+      "task": "ds_regression_housing",
+      "family": "data_science",
+      "trial": 2,
+      "metric": "r2",
+      "passed": false,
+      "score": 0.5,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": false,
+          "detail": "no gradable predictions: execution_error: exit 1: ures = ['area_sqft', 'bedrooms', 'age_years']\\n\\npreprocess = ColumnTransformer(\\n    transformers=[\\n        ('cat', OneHotEncoder(handle_unknown='ignore'), categorical_features),\\n        ('num', 'passthrough', numeric_features)\\n    ]\\n)\\n\\nmodel = GradientBoostingRegressor(random_state=42)\\n\\npipe = Pipeline(steps=[('preprocess', preprocess), ('model', model)])\\n\\npipe.fit(X_train, y_train)\\n\\npred = pipe.predict(test)\\n\\npd.DataFrame({'prediction': pred}).to_csv('predictions.csv', index=False)\\n\n                        ^\nSyntaxError: unexpected character after line continuation character\n",
+          "weight": 2.0
+        },
+        {
+          "name": "role[location]",
+          "passed": true,
+          "detail": "inferred 'categorical', expected 'categorical'",
+          "weight": 1.0
+        },
+        {
+          "name": "role[area_sqft]",
+          "passed": true,
+          "detail": "inferred 'numeric', expected 'numeric'",
+          "weight": 1.0
+        }
+      ],
+      "measured": {
+        "model": null,
+        "baseline": -0.002413920138795378,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "regression",
+        "split_strategy": "random_holdout",
+        "column_roles": {
+          "area_sqft": "numeric",
+          "bedrooms": "numeric",
+          "age_years": "numeric",
+          "location": "categorical",
+          "price": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [],
+          "id_columns": [],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [],
+        "features_used": [
+          "area_sqft",
+          "bedrooms",
+          "age_years",
+          "location"
+        ],
+        "baseline_strategy": "mean",
+        "baseline_score": 0.0,
+        "expected_beats_baseline": true,
+        "verdict": "pass",
+        "max_safe_deployment_level": 2
+      },
+      "program_chars": 918,
+      "error": "execution_error: exit 1: ures = ['area_sqft', 'bedrooms', 'age_years']\\n\\npreprocess = ColumnTransformer(\\n    transformers=[\\n        ('cat', OneHotEncoder(handle_unknown='ignore'), categorical_features),\\n        ('num', 'passthrough', numeric_features)\\n    ]\\n)\\n\\nmodel = GradientBoostingRegressor(random_state=42)\\n\\npipe = Pipeline(steps=[('preprocess', preprocess), ('model', model)])\\n\\npipe.fit(X_train, y_train)\\n\\npred = pipe.predict(test)\\n\\npd.DataFrame({'prediction': pred}).to_csv('predictions.csv', index=False)\\n\n                        ^\nSyntaxError: unexpected character after line continuation character\n",
+      "prompt_tokens": 1096,
+      "completion_tokens": 1207,
+      "cost_usd": 0.0008885999999999999,
+      "cost_source": "openrouter_proxy",
+      "latency_s": 2.9
+    },
+    {
+      "task": "ds_leakage_detection",
+      "family": "data_science",
+      "trial": 0,
+      "metric": "roc_auc",
+      "passed": false,
+      "score": 0.8,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": false,
+          "detail": "no gradable predictions: execution_error: exit 1: main():\\n    train = pd.read_csv('train.csv')\\n    test = pd.read_csv('test.csv')\\n    leakage = ['leak_score', 'outcome_label']\\n    X = train.drop(columns=leakage + ['target'])\\n    y = train['target']\\n    model = LogisticRegression(max_iter=1000, n_jobs=5)\\n    model.fit(X, y)\\n    test_features = test.drop(columns=leakage)\\n    preds = model.predict_proba(test_features)[:, 1]\\n    pd.DataFrame({'prediction': preds}).to_csv('predictions.csv', index=False)\\n\\nif __name__ == '__main__':\\n    main()\n                        ^\nSyntaxError: unexpected character after line continuation character\n",
+          "weight": 2.0
+        },
+        {
+          "name": "leakage[leak_score]",
+          "passed": true,
+          "detail": "'leak_score' flagged; leaks=['leak_score', 'outcome_label']",
+          "weight": 2.0
+        },
+        {
+          "name": "leakage[outcome_label]",
+          "passed": true,
+          "detail": "'outcome_label' flagged; leaks=['leak_score', 'outcome_label']",
+          "weight": 2.0
+        },
+        {
+          "name": "verdict",
+          "passed": true,
+          "detail": "verdict 'fail', expected 'fail'",
+          "weight": 2.0
+        },
+        {
+          "name": "max_safe_deployment_level",
+          "passed": true,
+          "detail": "ceiling 1, expected 1",
+          "weight": 2.0
+        }
+      ],
+      "measured": {
+        "model": null,
+        "baseline": 0.5,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "classification",
+        "split_strategy": "random_holdout",
+        "column_roles": {
+          "feature_a": "numeric",
+          "feature_b": "numeric",
+          "noise": "numeric",
+          "leak_score": "numeric",
+          "outcome_label": "categorical",
+          "target": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [],
+          "id_columns": [],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [
+          "leak_score",
+          "outcome_label"
+        ],
+        "features_used": [
+          "feature_a",
+          "feature_b",
+          "noise"
+        ],
+        "baseline_strategy": "majority_class",
+        "baseline_score": 0.5,
+        "expected_beats_baseline": false,
+        "verdict": "fail",
+        "max_safe_deployment_level": 1
+      },
+      "program_chars": 585,
+      "error": "execution_error: exit 1: main():\\n    train = pd.read_csv('train.csv')\\n    test = pd.read_csv('test.csv')\\n    leakage = ['leak_score', 'outcome_label']\\n    X = train.drop(columns=leakage + ['target'])\\n    y = train['target']\\n    model = LogisticRegression(max_iter=1000, n_jobs=5)\\n    model.fit(X, y)\\n    test_features = test.drop(columns=leakage)\\n    preds = model.predict_proba(test_features)[:, 1]\\n    pd.DataFrame({'prediction': preds}).to_csv('predictions.csv', index=False)\\n\\nif __name__ == '__main__':\\n    main()\n                        ^\nSyntaxError: unexpected character after line continuation character\n",
+      "prompt_tokens": 1568,
+      "completion_tokens": 1133,
+      "cost_usd": 0.0009149999999999999,
+      "cost_source": "openrouter_proxy",
+      "latency_s": 2.65
+    },
+    {
+      "task": "ds_leakage_detection",
+      "family": "data_science",
+      "trial": 1,
+      "metric": "roc_auc",
+      "passed": false,
+      "score": 0.8,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": false,
+          "detail": "no gradable predictions: execution_error: exit 1: n():\\n    train = pd.read_csv('train.csv')\\n    test = pd.read_csv('test.csv')\\n    leakage = ['leak_score', 'outcome_label']\\n    X = train.drop(columns=leakage + ['target'])\\n    y = train['target']\\n    model = LogisticRegression(max_iter=1000, n_jobs=5)\\n    model.fit(X, y)\\n    X_test = test.drop(columns=leakage, errors='ignore')\\n    preds = model.predict_proba(X_test)[:, 1]\\n    pd.DataFrame({'prediction': preds}).to_csv('predictions.csv', index=False)\\n\\nif __name__ == '__main__':\\n    main()\n                        ^\nSyntaxError: unexpected character after line continuation character\n",
+          "weight": 2.0
+        },
+        {
+          "name": "leakage[leak_score]",
+          "passed": true,
+          "detail": "'leak_score' flagged; leaks=['leak_score', 'outcome_label']",
+          "weight": 2.0
+        },
+        {
+          "name": "leakage[outcome_label]",
+          "passed": true,
+          "detail": "'outcome_label' flagged; leaks=['leak_score', 'outcome_label']",
+          "weight": 2.0
+        },
+        {
+          "name": "verdict",
+          "passed": true,
+          "detail": "verdict 'fail', expected 'fail'",
+          "weight": 2.0
+        },
+        {
+          "name": "max_safe_deployment_level",
+          "passed": true,
+          "detail": "ceiling 1, expected 1",
+          "weight": 2.0
+        }
+      ],
+      "measured": {
+        "model": null,
+        "baseline": 0.5,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "classification",
+        "split_strategy": "stratified_holdout",
+        "column_roles": {
+          "feature_a": "numeric",
+          "feature_b": "numeric",
+          "noise": "numeric",
+          "leak_score": "numeric",
+          "outcome_label": "categorical",
+          "target": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [],
+          "id_columns": [],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [
+          "leak_score",
+          "outcome_label"
+        ],
+        "features_used": [
+          "feature_a",
+          "feature_b",
+          "noise"
+        ],
+        "baseline_strategy": "majority_class",
+        "baseline_score": 0.5,
+        "expected_beats_baseline": false,
+        "verdict": "fail",
+        "max_safe_deployment_level": 1
+      },
+      "program_chars": 608,
+      "error": "execution_error: exit 1: n():\\n    train = pd.read_csv('train.csv')\\n    test = pd.read_csv('test.csv')\\n    leakage = ['leak_score', 'outcome_label']\\n    X = train.drop(columns=leakage + ['target'])\\n    y = train['target']\\n    model = LogisticRegression(max_iter=1000, n_jobs=5)\\n    model.fit(X, y)\\n    X_test = test.drop(columns=leakage, errors='ignore')\\n    preds = model.predict_proba(X_test)[:, 1]\\n    pd.DataFrame({'prediction': preds}).to_csv('predictions.csv', index=False)\\n\\nif __name__ == '__main__':\\n    main()\n                        ^\nSyntaxError: unexpected character after line continuation character\n",
+      "prompt_tokens": 1568,
+      "completion_tokens": 1039,
+      "cost_usd": 0.0008585999999999999,
+      "cost_source": "openrouter_proxy",
+      "latency_s": 2.76
+    },
+    {
+      "task": "ds_leakage_detection",
+      "family": "data_science",
+      "trial": 2,
+      "metric": "roc_auc",
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": true,
+          "detail": "roc_auc=0.9741 on the harness holdout",
+          "weight": 2.0
+        },
+        {
+          "name": "leakage[leak_score]",
+          "passed": true,
+          "detail": "'leak_score' flagged; leaks=['leak_score', 'outcome_label']",
+          "weight": 2.0
+        },
+        {
+          "name": "leakage[outcome_label]",
+          "passed": true,
+          "detail": "'outcome_label' flagged; leaks=['leak_score', 'outcome_label']",
+          "weight": 2.0
+        },
+        {
+          "name": "verdict",
+          "passed": true,
+          "detail": "verdict 'fail', expected 'fail'",
+          "weight": 2.0
+        },
+        {
+          "name": "max_safe_deployment_level",
+          "passed": true,
+          "detail": "ceiling 1, expected 1",
+          "weight": 2.0
+        }
+      ],
+      "measured": {
+        "model": 0.9741414141414142,
+        "baseline": 0.5,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "classification",
+        "split_strategy": "stratified_holdout",
+        "column_roles": {
+          "feature_a": "numeric",
+          "feature_b": "numeric",
+          "noise": "numeric",
+          "leak_score": "numeric",
+          "outcome_label": "categorical",
+          "target": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [],
+          "id_columns": [],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [
+          "leak_score",
+          "outcome_label"
+        ],
+        "features_used": [
+          "feature_a",
+          "feature_b",
+          "noise"
+        ],
+        "baseline_strategy": "majority_class",
+        "baseline_score": 0.5,
+        "expected_beats_baseline": true,
+        "verdict": "fail",
+        "max_safe_deployment_level": 1
+      },
+      "program_chars": 685,
+      "error": null,
+      "prompt_tokens": 1568,
+      "completion_tokens": 1394,
+      "cost_usd": 0.0010716,
+      "cost_source": "openrouter_proxy",
+      "latency_s": 5.99
+    },
+    {
+      "task": "ds_temporal_split_on_time_ordered_data",
+      "family": "data_science",
+      "trial": 0,
+      "metric": "rmse",
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": true,
+          "detail": "rmse=5.0423 on the harness holdout",
+          "weight": 2.0
+        },
+        {
+          "name": "beats_baseline",
+          "passed": true,
+          "detail": "measured rmse: model=5.0423, baseline=109.3416, gain=+104.2993, margin=2.1868; beats=True, expected True",
+          "weight": 3.0
+        },
+        {
+          "name": "plan_task",
+          "passed": true,
+          "detail": "task 'regression', expected 'regression'",
+          "weight": 1.0
+        },
+        {
+          "name": "plan_split",
+          "passed": true,
+          "detail": "split 'time_based_holdout', expected 'time_based_holdout' (reported, not verified)",
+          "weight": 2.0
+        },
+        {
+          "name": "baseline_reported",
+          "passed": true,
+          "detail": "baseline_score=100.0 (mean)",
+          "weight": 2.0
+        },
+        {
+          "name": "role[order_date]",
+          "passed": true,
+          "detail": "inferred 'datetime', expected 'datetime'",
+          "weight": 1.0
+        }
+      ],
+      "measured": {
+        "model": 5.0422915456604525,
+        "baseline": 109.34155630599093,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "regression",
+        "split_strategy": "time_based_holdout",
+        "column_roles": {
+          "order_date": "datetime",
+          "promo": "categorical",
+          "base_demand": "numeric",
+          "revenue": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [],
+          "id_columns": [],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [],
+        "features_used": [
+          "order_date",
+          "promo",
+          "base_demand"
+        ],
+        "baseline_strategy": "mean",
+        "baseline_score": 100.0,
+        "expected_beats_baseline": true,
+        "verdict": "pass",
+        "max_safe_deployment_level": 1
+      },
+      "program_chars": 943,
+      "error": null,
+      "prompt_tokens": 1093,
+      "completion_tokens": 1192,
+      "cost_usd": 0.00087915,
+      "cost_source": "openrouter_proxy",
+      "latency_s": 4.61
+    },
+    {
+      "task": "ds_temporal_split_on_time_ordered_data",
+      "family": "data_science",
+      "trial": 1,
+      "metric": "rmse",
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": true,
+          "detail": "rmse=5.0395 on the harness holdout",
+          "weight": 2.0
+        },
+        {
+          "name": "beats_baseline",
+          "passed": true,
+          "detail": "measured rmse: model=5.0395, baseline=109.3416, gain=+104.3020, margin=2.1868; beats=True, expected True",
+          "weight": 3.0
+        },
+        {
+          "name": "plan_task",
+          "passed": true,
+          "detail": "task 'regression', expected 'regression'",
+          "weight": 1.0
+        },
+        {
+          "name": "plan_split",
+          "passed": true,
+          "detail": "split 'time_based_holdout', expected 'time_based_holdout' (reported, not verified)",
+          "weight": 2.0
+        },
+        {
+          "name": "baseline_reported",
+          "passed": true,
+          "detail": "baseline_score=120.0 (mean)",
+          "weight": 2.0
+        },
+        {
+          "name": "role[order_date]",
+          "passed": true,
+          "detail": "inferred 'datetime', expected 'datetime'",
+          "weight": 1.0
+        }
+      ],
+      "measured": {
+        "model": 5.039519619055117,
+        "baseline": 109.34155630599093,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "regression",
+        "split_strategy": "time_based_holdout",
+        "column_roles": {
+          "order_date": "datetime",
+          "promo": "categorical",
+          "base_demand": "numeric",
+          "revenue": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [],
+          "id_columns": [],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [],
+        "features_used": [
+          "order_date",
+          "promo",
+          "base_demand"
+        ],
+        "baseline_strategy": "mean",
+        "baseline_score": 120.0,
+        "expected_beats_baseline": true,
+        "verdict": "pass",
+        "max_safe_deployment_level": 1
+      },
+      "program_chars": 667,
+      "error": null,
+      "prompt_tokens": 1093,
+      "completion_tokens": 1455,
+      "cost_usd": 0.00103695,
+      "cost_source": "openrouter_proxy",
+      "latency_s": 4.4
+    },
+    {
+      "task": "ds_temporal_split_on_time_ordered_data",
+      "family": "data_science",
+      "trial": 2,
+      "metric": "rmse",
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": true,
+          "detail": "rmse=5.0423 on the harness holdout",
+          "weight": 2.0
+        },
+        {
+          "name": "beats_baseline",
+          "passed": true,
+          "detail": "measured rmse: model=5.0423, baseline=109.3416, gain=+104.2993, margin=2.1868; beats=True, expected True",
+          "weight": 3.0
+        },
+        {
+          "name": "plan_task",
+          "passed": true,
+          "detail": "task 'regression', expected 'regression'",
+          "weight": 1.0
+        },
+        {
+          "name": "plan_split",
+          "passed": true,
+          "detail": "split 'time_based_holdout', expected 'time_based_holdout' (reported, not verified)",
+          "weight": 2.0
+        },
+        {
+          "name": "baseline_reported",
+          "passed": true,
+          "detail": "baseline_score=200.0 (mean)",
+          "weight": 2.0
+        },
+        {
+          "name": "role[order_date]",
+          "passed": true,
+          "detail": "inferred 'datetime', expected 'datetime'",
+          "weight": 1.0
+        }
+      ],
+      "measured": {
+        "model": 5.0422915456604525,
+        "baseline": 109.34155630599093,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "regression",
+        "split_strategy": "time_based_holdout",
+        "column_roles": {
+          "order_date": "datetime",
+          "promo": "numeric",
+          "base_demand": "numeric",
+          "revenue": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [],
+          "id_columns": [],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [],
+        "features_used": [
+          "order_date",
+          "promo",
+          "base_demand"
+        ],
+        "baseline_strategy": "mean",
+        "baseline_score": 200.0,
+        "expected_beats_baseline": true,
+        "verdict": "pass",
+        "max_safe_deployment_level": 2
+      },
+      "program_chars": 965,
+      "error": null,
+      "prompt_tokens": 1093,
+      "completion_tokens": 1124,
+      "cost_usd": 0.0008383500000000001,
+      "cost_source": "openrouter_proxy",
+      "latency_s": 5.15
+    },
+    {
+      "task": "ds_constant_column_does_not_break_training",
+      "family": "data_science",
+      "trial": 0,
+      "metric": "roc_auc",
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": true,
+          "detail": "roc_auc=0.7431 on the harness holdout",
+          "weight": 2.0
+        },
+        {
+          "name": "baseline_reported",
+          "passed": true,
+          "detail": "baseline_score=0.5 (prior)",
+          "weight": 2.0
+        },
+        {
+          "name": "role[country]",
+          "passed": true,
+          "detail": "inferred 'constant', expected 'constant'",
+          "weight": 1.0
+        },
+        {
+          "name": "role[row_id]",
+          "passed": true,
+          "detail": "inferred 'id', expected 'id'",
+          "weight": 1.0
+        },
+        {
+          "name": "quality[constant_columns:country]",
+          "passed": true,
+          "detail": "'country' in constant_columns=['country']",
+          "weight": 1.0
+        }
+      ],
+      "measured": {
+        "model": 0.7430644472897995,
+        "baseline": 0.5,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "classification",
+        "split_strategy": "stratified_holdout",
+        "column_roles": {
+          "row_id": "id",
+          "country": "constant",
+          "tenure": "numeric",
+          "support_tickets": "numeric",
+          "monthly_charges": "numeric",
+          "churned": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [
+            "country"
+          ],
+          "id_columns": [
+            "row_id"
+          ],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [],
+        "features_used": [
+          "tenure",
+          "support_tickets",
+          "monthly_charges"
+        ],
+        "baseline_strategy": "prior",
+        "baseline_score": 0.5,
+        "expected_beats_baseline": true,
+        "verdict": "pass",
+        "max_safe_deployment_level": 1
+      },
+      "program_chars": 690,
+      "error": null,
+      "prompt_tokens": 1107,
+      "completion_tokens": 1166,
+      "cost_usd": 0.0008656499999999999,
+      "cost_source": "openrouter_proxy",
+      "latency_s": 4.94
+    },
+    {
+      "task": "ds_constant_column_does_not_break_training",
+      "family": "data_science",
+      "trial": 1,
+      "metric": "roc_auc",
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": true,
+          "detail": "roc_auc=0.7471 on the harness holdout",
+          "weight": 2.0
+        },
+        {
+          "name": "baseline_reported",
+          "passed": true,
+          "detail": "baseline_score=0.5 (majority_class)",
+          "weight": 2.0
+        },
+        {
+          "name": "role[country]",
+          "passed": true,
+          "detail": "inferred 'constant', expected 'constant'",
+          "weight": 1.0
+        },
+        {
+          "name": "role[row_id]",
+          "passed": true,
+          "detail": "inferred 'id', expected 'id'",
+          "weight": 1.0
+        },
+        {
+          "name": "quality[constant_columns:country]",
+          "passed": true,
+          "detail": "'country' in constant_columns=['country']",
+          "weight": 1.0
+        }
+      ],
+      "measured": {
+        "model": 0.7471190781049936,
+        "baseline": 0.5,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "classification",
+        "split_strategy": "stratified_holdout",
+        "column_roles": {
+          "row_id": "id",
+          "country": "constant",
+          "tenure": "numeric",
+          "support_tickets": "numeric",
+          "monthly_charges": "numeric",
+          "churned": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [
+            "country"
+          ],
+          "id_columns": [
+            "row_id"
+          ],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [],
+        "features_used": [
+          "tenure",
+          "support_tickets",
+          "monthly_charges"
+        ],
+        "baseline_strategy": "majority_class",
+        "baseline_score": 0.5,
+        "expected_beats_baseline": true,
+        "verdict": "pass",
+        "max_safe_deployment_level": 1
+      },
+      "program_chars": 1032,
+      "error": null,
+      "prompt_tokens": 1107,
+      "completion_tokens": 1421,
+      "cost_usd": 0.0010186499999999999,
+      "cost_source": "openrouter_proxy",
+      "latency_s": 4.91
+    },
+    {
+      "task": "ds_constant_column_does_not_break_training",
+      "family": "data_science",
+      "trial": 2,
+      "metric": "roc_auc",
+      "passed": false,
+      "score": 0.7143,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": false,
+          "detail": "no gradable predictions: execution_error: exit 1: dation (not printed)\\n    X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, stratify=y, random_state=42)\\n    model = LogisticRegression(max_iter=1000, solver='saga', n_jobs=5, class_weight='balanced')\\n    model.fit(X_train, y_train)\\n    # fit on full data for final model\\n    model.fit(X, y)\\n    test_pred = model.predict_proba(test[feature_cols])[:, 1]\\n    pd.DataFrame({'prediction': test_pred}).to_csv('predictions.csv', index=False)\\n\\nif __name__ == '__main__':\\n    main()\n                        ^\nSyntaxError: unexpected character after line continuation character\n",
+          "weight": 2.0
+        },
+        {
+          "name": "baseline_reported",
+          "passed": true,
+          "detail": "baseline_score=0.5 (prior)",
+          "weight": 2.0
+        },
+        {
+          "name": "role[country]",
+          "passed": true,
+          "detail": "inferred 'constant', expected 'constant'",
+          "weight": 1.0
+        },
+        {
+          "name": "role[row_id]",
+          "passed": true,
+          "detail": "inferred 'id', expected 'id'",
+          "weight": 1.0
+        },
+        {
+          "name": "quality[constant_columns:country]",
+          "passed": true,
+          "detail": "'country' in constant_columns=['country']",
+          "weight": 1.0
+        }
+      ],
+      "measured": {
+        "model": null,
+        "baseline": 0.5,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "classification",
+        "split_strategy": "stratified_holdout",
+        "column_roles": {
+          "row_id": "id",
+          "country": "constant",
+          "tenure": "numeric",
+          "support_tickets": "numeric",
+          "monthly_charges": "numeric",
+          "churned": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [
+            "country"
+          ],
+          "id_columns": [
+            "row_id"
+          ],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [],
+        "features_used": [
+          "tenure",
+          "support_tickets",
+          "monthly_charges"
+        ],
+        "baseline_strategy": "prior",
+        "baseline_score": 0.5,
+        "expected_beats_baseline": true,
+        "verdict": "pass",
+        "max_safe_deployment_level": 1
+      },
+      "program_chars": 865,
+      "error": "execution_error: exit 1: dation (not printed)\\n    X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, stratify=y, random_state=42)\\n    model = LogisticRegression(max_iter=1000, solver='saga', n_jobs=5, class_weight='balanced')\\n    model.fit(X_train, y_train)\\n    # fit on full data for final model\\n    model.fit(X, y)\\n    test_pred = model.predict_proba(test[feature_cols])[:, 1]\\n    pd.DataFrame({'prediction': test_pred}).to_csv('predictions.csv', index=False)\\n\\nif __name__ == '__main__':\\n    main()\n                        ^\nSyntaxError: unexpected character after line continuation character\n",
+      "prompt_tokens": 1107,
+      "completion_tokens": 1402,
+      "cost_usd": 0.00100725,
+      "cost_source": "openrouter_proxy",
+      "latency_s": 3.35
+    },
+    {
+      "task": "ds_continuous_features_reach_the_model",
+      "family": "data_science",
+      "trial": 0,
+      "metric": "rmse",
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": true,
+          "detail": "rmse=4.2536 on the harness holdout",
+          "weight": 2.0
+        },
+        {
+          "name": "beats_baseline",
+          "passed": true,
+          "detail": "measured rmse: model=4.2536, baseline=37.8529, gain=+33.5993, margin=0.7571; beats=True, expected True",
+          "weight": 3.0
+        },
+        {
+          "name": "baseline_reported",
+          "passed": true,
+          "detail": "baseline_score=15.0 (mean)",
+          "weight": 2.0
+        },
+        {
+          "name": "feature_used[latency_ms]",
+          "passed": true,
+          "detail": "latency_ms kept (model saw: ['cpu_load', 'latency_ms'])",
+          "weight": 2.0
+        },
+        {
+          "name": "feature_used[cpu_load]",
+          "passed": true,
+          "detail": "cpu_load kept (model saw: ['cpu_load', 'latency_ms'])",
+          "weight": 2.0
+        }
+      ],
+      "measured": {
+        "model": 4.25362865841091,
+        "baseline": 37.85288862913285,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "regression",
+        "split_strategy": "random_holdout",
+        "column_roles": {
+          "latency_ms": "numeric",
+          "cpu_load": "numeric",
+          "throughput": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [],
+          "id_columns": [],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [],
+        "features_used": [
+          "latency_ms",
+          "cpu_load"
+        ],
+        "baseline_strategy": "mean",
+        "baseline_score": 15.0,
+        "expected_beats_baseline": true,
+        "verdict": "pass",
+        "max_safe_deployment_level": 1
+      },
+      "program_chars": 648,
+      "error": null,
+      "prompt_tokens": 1243,
+      "completion_tokens": 1313,
+      "cost_usd": 0.00097425,
+      "cost_source": "openrouter_proxy",
+      "latency_s": 5.16
+    },
+    {
+      "task": "ds_continuous_features_reach_the_model",
+      "family": "data_science",
+      "trial": 1,
+      "metric": "rmse",
+      "passed": false,
+      "score": 0.75,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": false,
+          "detail": "no gradable predictions: execution_error: exit 1: pd\\nfrom sklearn.linear_model import LinearRegression\\n\\ndef main():\\n    train = pd.read_csv('train.csv')\\n    test = pd.read_csv('test.csv')\\n    feature_cols = ['latency_ms', 'cpu_load']\\n    X_train = train[feature_cols]\\n    y_train = train['throughput']\\n    model = LinearRegression()\\n    model.fit(X_train, y_train)\\n    predictions = model.predict(test[feature_cols])\\n    pd.DataFrame({'prediction': predictions}).to_csv('predictions.csv', index=False)\\n\\nif __name__ == '__main__':\\n    main()\n                        ^\nSyntaxError: unexpected character after line continuation character\n",
+          "weight": 2.0
+        },
+        {
+          "name": "baseline_reported",
+          "passed": true,
+          "detail": "baseline_score=15.0 (mean)",
+          "weight": 2.0
+        },
+        {
+          "name": "feature_used[latency_ms]",
+          "passed": true,
+          "detail": "latency_ms kept (model saw: ['cpu_load', 'latency_ms'])",
+          "weight": 2.0
+        },
+        {
+          "name": "feature_used[cpu_load]",
+          "passed": true,
+          "detail": "cpu_load kept (model saw: ['cpu_load', 'latency_ms'])",
+          "weight": 2.0
+        }
+      ],
+      "measured": {
+        "model": null,
+        "baseline": 37.85288862913285,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "regression",
+        "split_strategy": "random_holdout",
+        "column_roles": {
+          "latency_ms": "numeric",
+          "cpu_load": "numeric",
+          "throughput": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [],
+          "id_columns": [],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [],
+        "features_used": [
+          "latency_ms",
+          "cpu_load"
+        ],
+        "baseline_strategy": "mean",
+        "baseline_score": 15.0,
+        "expected_beats_baseline": true,
+        "verdict": "pass",
+        "max_safe_deployment_level": 1
+      },
+      "program_chars": 522,
+      "error": "execution_error: exit 1: pd\\nfrom sklearn.linear_model import LinearRegression\\n\\ndef main():\\n    train = pd.read_csv('train.csv')\\n    test = pd.read_csv('test.csv')\\n    feature_cols = ['latency_ms', 'cpu_load']\\n    X_train = train[feature_cols]\\n    y_train = train['throughput']\\n    model = LinearRegression()\\n    model.fit(X_train, y_train)\\n    predictions = model.predict(test[feature_cols])\\n    pd.DataFrame({'prediction': predictions}).to_csv('predictions.csv', index=False)\\n\\nif __name__ == '__main__':\\n    main()\n                        ^\nSyntaxError: unexpected character after line continuation character\n",
+      "prompt_tokens": 1243,
+      "completion_tokens": 1146,
+      "cost_usd": 0.00087405,
+      "cost_source": "openrouter_proxy",
+      "latency_s": 2.77
+    },
+    {
+      "task": "ds_continuous_features_reach_the_model",
+      "family": "data_science",
+      "trial": 2,
+      "metric": "rmse",
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": true,
+          "detail": "rmse=31.4989 on the harness holdout",
+          "weight": 2.0
+        },
+        {
+          "name": "beats_baseline",
+          "passed": true,
+          "detail": "measured rmse: model=31.4989, baseline=37.8529, gain=+6.3540, margin=0.7571; beats=True, expected True",
+          "weight": 3.0
+        },
+        {
+          "name": "baseline_reported",
+          "passed": true,
+          "detail": "baseline_score=14.7 (mean)",
+          "weight": 2.0
+        },
+        {
+          "name": "feature_used[latency_ms]",
+          "passed": true,
+          "detail": "latency_ms kept (model saw: ['cpu_load', 'latency_ms'])",
+          "weight": 2.0
+        },
+        {
+          "name": "feature_used[cpu_load]",
+          "passed": true,
+          "detail": "cpu_load kept (model saw: ['cpu_load', 'latency_ms'])",
+          "weight": 2.0
+        }
+      ],
+      "measured": {
+        "model": 31.498897990166014,
+        "baseline": 37.85288862913285,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "regression",
+        "split_strategy": "random_holdout",
+        "column_roles": {
+          "latency_ms": "numeric",
+          "cpu_load": "numeric",
+          "throughput": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [],
+          "id_columns": [],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [],
+        "features_used": [
+          "latency_ms",
+          "cpu_load"
+        ],
+        "baseline_strategy": "mean",
+        "baseline_score": 14.7,
+        "expected_beats_baseline": true,
+        "verdict": "pass",
+        "max_safe_deployment_level": 2
+      },
+      "program_chars": 925,
+      "error": null,
+      "prompt_tokens": 1243,
+      "completion_tokens": 2053,
+      "cost_usd": 0.00141825,
+      "cost_source": "openrouter_proxy",
+      "latency_s": 6.24
+    },
+    {
+      "task": "ds_no_signal_is_reported_as_no_signal",
+      "family": "data_science",
+      "trial": 0,
+      "metric": "roc_auc",
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": true,
+          "detail": "roc_auc=0.5000 on the harness holdout",
+          "weight": 2.0
+        },
+        {
+          "name": "beats_baseline",
+          "passed": true,
+          "detail": "measured roc_auc: model=0.5000, baseline=0.5000, gain=+0.0000, margin=0.0200; beats=False, expected False",
+          "weight": 3.0
+        },
+        {
+          "name": "verdict",
+          "passed": true,
+          "detail": "verdict 'fail', expected 'fail'",
+          "weight": 2.0
+        },
+        {
+          "name": "max_safe_deployment_level",
+          "passed": true,
+          "detail": "ceiling 1, expected 1",
+          "weight": 2.0
+        },
+        {
+          "name": "baseline_reported",
+          "passed": true,
+          "detail": "baseline_score=0.5 (prior)",
+          "weight": 2.0
+        }
+      ],
+      "measured": {
+        "model": 0.5,
+        "baseline": 0.5,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "classification",
+        "split_strategy": "random_holdout",
+        "column_roles": {
+          "a": "numeric",
+          "b": "numeric",
+          "c": "categorical",
+          "outcome": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [],
+          "id_columns": [],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [],
+        "features_used": [],
+        "baseline_strategy": "prior",
+        "baseline_score": 0.5,
+        "expected_beats_baseline": false,
+        "verdict": "fail",
+        "max_safe_deployment_level": 1
+      },
+      "program_chars": 388,
+      "error": null,
+      "prompt_tokens": 1190,
+      "completion_tokens": 783,
+      "cost_usd": 0.0006482999999999999,
+      "cost_source": "openrouter_proxy",
+      "latency_s": 2.25
+    },
+    {
+      "task": "ds_no_signal_is_reported_as_no_signal",
+      "family": "data_science",
+      "trial": 1,
+      "metric": "roc_auc",
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": true,
+          "detail": "roc_auc=0.5000 on the harness holdout",
+          "weight": 2.0
+        },
+        {
+          "name": "beats_baseline",
+          "passed": true,
+          "detail": "measured roc_auc: model=0.5000, baseline=0.5000, gain=+0.0000, margin=0.0200; beats=False, expected False",
+          "weight": 3.0
+        },
+        {
+          "name": "verdict",
+          "passed": true,
+          "detail": "verdict 'fail', expected 'fail'",
+          "weight": 2.0
+        },
+        {
+          "name": "max_safe_deployment_level",
+          "passed": true,
+          "detail": "ceiling 1, expected 1",
+          "weight": 2.0
+        },
+        {
+          "name": "baseline_reported",
+          "passed": true,
+          "detail": "baseline_score=0.5 (majority_class)",
+          "weight": 2.0
+        }
+      ],
+      "measured": {
+        "model": 0.5,
+        "baseline": 0.5,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "classification",
+        "split_strategy": "random_holdout",
+        "column_roles": {
+          "a": "numeric",
+          "b": "numeric",
+          "c": "categorical",
+          "outcome": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [],
+          "id_columns": [],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [],
+        "features_used": [],
+        "baseline_strategy": "majority_class",
+        "baseline_score": 0.5,
+        "expected_beats_baseline": false,
+        "verdict": "fail",
+        "max_safe_deployment_level": 1
+      },
+      "program_chars": 338,
+      "error": null,
+      "prompt_tokens": 1190,
+      "completion_tokens": 1069,
+      "cost_usd": 0.0008198999999999999,
+      "cost_source": "openrouter_proxy",
+      "latency_s": 2.93
+    },
+    {
+      "task": "ds_no_signal_is_reported_as_no_signal",
+      "family": "data_science",
+      "trial": 2,
+      "metric": "roc_auc",
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": true,
+          "detail": "roc_auc=0.5000 on the harness holdout",
+          "weight": 2.0
+        },
+        {
+          "name": "beats_baseline",
+          "passed": true,
+          "detail": "measured roc_auc: model=0.5000, baseline=0.5000, gain=+0.0000, margin=0.0200; beats=False, expected False",
+          "weight": 3.0
+        },
+        {
+          "name": "verdict",
+          "passed": true,
+          "detail": "verdict 'fail', expected 'fail'",
+          "weight": 2.0
+        },
+        {
+          "name": "max_safe_deployment_level",
+          "passed": true,
+          "detail": "ceiling 1, expected 1",
+          "weight": 2.0
+        },
+        {
+          "name": "baseline_reported",
+          "passed": true,
+          "detail": "baseline_score=0.5 (prior)",
+          "weight": 2.0
+        }
+      ],
+      "measured": {
+        "model": 0.5,
+        "baseline": 0.5,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "classification",
+        "split_strategy": "random_holdout",
+        "column_roles": {
+          "a": "numeric",
+          "b": "numeric",
+          "c": "categorical",
+          "outcome": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [],
+          "id_columns": [],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [],
+        "features_used": [],
+        "baseline_strategy": "prior",
+        "baseline_score": 0.5,
+        "expected_beats_baseline": false,
+        "verdict": "fail",
+        "max_safe_deployment_level": 1
+      },
+      "program_chars": 461,
+      "error": null,
+      "prompt_tokens": 1190,
+      "completion_tokens": 781,
+      "cost_usd": 0.0006471000000000001,
+      "cost_source": "openrouter_proxy",
+      "latency_s": 2.62
+    }
+  ]
+}

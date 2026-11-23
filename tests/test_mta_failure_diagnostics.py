@@ -127,3 +127,20 @@ def test_formatter_does_not_trust_persisted_summary_or_actions():
     assert "private stack trace" not in message
     assert "secret-value" not in message
     assert "Retry the training run once" in message
+
+
+def test_a_time_column_with_unreadable_dates_names_the_real_cause():
+    """nullxlsx (2026-10-19 web re-run): the trainer said exactly what was wrong,
+    and the user read "an unclassified error" while the cause sat in the log."""
+    error = ("Time column 'visit_date' contains 48 missing or invalid value(s). "
+             "Every row needs a valid timestamp for time-ordered training.")
+    failure = build_training_failure(error)
+    assert failure["code"] == "TIME_COLUMN_INVALID"
+    assert failure["affected_columns"] == ["visit_date"]
+    assert failure["invalid_time_values"] == 48
+    for message in (failure["user_message"], format_training_failure(failure)):
+        assert "unclassified" not in message
+        assert "`visit_date`" in message and "48 row(s)" in message
+        assert "without a readable date" in message
+        assert "`TIME_COLUMN_INVALID`" in message
+        assert error not in message, "the raw trainer text is not the user's message"

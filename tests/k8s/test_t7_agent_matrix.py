@@ -15,6 +15,8 @@ from the environment, so the same file runs against kind, minikube or GKE:
     AVALOKA_API_TOKEN       a Supabase access token  (required for T7d)
     AVALOKA_NAMESPACE       kubernetes namespace     (default "default"; GKE uses "avaloka")
     AVALOKA_EXPECT_NODEPORTS  set when the target exposes NodePorts (kind/minikube)
+    AVALOKA_DEPLOYMENT      the target's own value: avaloka_hosted for a hosted site,
+                            where the API docs need a login (unset = self-hosted rules)
     AVALOKA_PROMPT_SWEEP    opt in to the T7ad live prompt sweep: "full", a
                             prompt count ("40"), or "sample" (24); unset = skip
 
@@ -53,6 +55,14 @@ API_TOKEN = os.getenv("AVALOKA_API_TOKEN") or ""
 # Namespace differs per environment (kind/minikube use "default", GKE overlays
 # use "avaloka"), so never hardcode it.
 NAMESPACE = os.getenv("AVALOKA_NAMESPACE", "default")
+# The target's AVALOKA_DEPLOYMENT, declared by whoever runs the suite exactly as the
+# deployment declares it (app/core/editions.py). On a hosted target the API docs and
+# schema need a login; everywhere else they are public. Never inferred from the URL.
+from app.core.editions import normalize_deployment as _normalize_deployment  # noqa: E402
+
+TARGET_HOSTED = _normalize_deployment(os.getenv("AVALOKA_DEPLOYMENT")) == "avaloka_hosted"
+#: Public on self-hosted and undeclared targets, behind a login on a hosted one.
+DOCS_PATHS = {"/docs", "/openapi.json"}
 # NodePorts only exist on the kind/minikube overlays; cloud overlays run the
 # services as ClusterIP behind a Gateway.
 EXPECT_NODEPORTS = os.getenv("AVALOKA_EXPECT_NODEPORTS", "").lower() in {"1", "true", "yes"}
@@ -467,7 +477,14 @@ def test_t7c_endpoint_reachable(name, base_env, path, expect):
     base = (os.getenv(base_env) or "").rstrip("/")
     if not base:
         pytest.skip(f"{base_env} unset")
-    r = requests.get(f"{base}{path}", timeout=30)
+    if base_env == "AVALOKA_API_URL" and path in DOCS_PATHS and TARGET_HOSTED:
+        anonymous = requests.get(f"{base}{path}", timeout=30)
+        assert anonymous.status_code == 401, f"{name}: hosted, anonymous -> {anonymous.status_code}"
+        if not API_TOKEN:
+            pytest.skip("AVALOKA_API_TOKEN unset — the signed-in leg cannot run on a hosted target")
+        r = requests.get(f"{base}{path}", headers=_auth(), timeout=30)
+    else:
+        r = requests.get(f"{base}{path}", timeout=30)
     assert r.status_code == expect, f"{name} -> {r.status_code}"
 
 
@@ -889,11 +906,13 @@ def test_t7e_route_declared_in_source(method, path):
 
 
 @requires_api
+@requires_token
 @pytest.mark.parametrize("method,path", API_ROUTES, ids=[f"{m} {p}" for m, p in API_ROUTES])
 def test_t7e_route_in_openapi(method, path):
     """The deployed API must expose the same surface the source declares."""
     requests = pytest.importorskip("requests")
-    spec = requests.get(f"{API_URL}/openapi.json", timeout=30).json()
+    # Signed: no test depends on reading the schema without a token.
+    spec = requests.get(f"{API_URL}/openapi.json", headers=_auth(), timeout=30).json()
     assert path in spec.get("paths", {}), f"{path} absent from the deployed OpenAPI"
     assert method.lower() in spec["paths"][path], f"{method} not allowed on {path}"
 
@@ -1279,8 +1298,16 @@ def test_t7j_protected_route_without_token(path):
 @requires_api
 @pytest.mark.parametrize("path", ["/health", "/version", "/docs", "/openapi.json"])
 def test_t7j_public_route_needs_no_token(path):
+    """Public everywhere, except the docs and schema on a hosted target (owner ruling)."""
     requests = pytest.importorskip("requests")
-    assert requests.get(f"{API_URL}{path}", timeout=30).status_code == 200
+    anonymous = requests.get(f"{API_URL}{path}", timeout=30).status_code
+    if path in DOCS_PATHS and TARGET_HOSTED:
+        assert anonymous == 401, f"hosted: anonymous {path} -> {anonymous}"
+        if not API_TOKEN:
+            pytest.skip("AVALOKA_API_TOKEN unset — the signed-in leg cannot run on a hosted target")
+        assert requests.get(f"{API_URL}{path}", headers=_auth(), timeout=30).status_code == 200
+    else:
+        assert anonymous == 200, f"{path} -> {anonymous}"
 
 
 @requires_api
@@ -1310,9 +1337,10 @@ def test_t7j_unknown_id_does_not_crash(path, expect):
 
 
 @requires_api
+@requires_token
 def test_t7j_openapi_is_valid_json():
     requests = pytest.importorskip("requests")
-    spec = requests.get(f"{API_URL}/openapi.json", timeout=30).json()
+    spec = requests.get(f"{API_URL}/openapi.json", headers=_auth(), timeout=30).json()
     assert spec.get("openapi") and spec.get("paths")
 
 

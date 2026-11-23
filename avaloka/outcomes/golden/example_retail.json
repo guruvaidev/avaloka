@@ -1,0 +1,412 @@
+{
+  "schema_version": "1.0",
+  "report_id": "rpt_3f9a0c1d2e4b5a69",
+  "kind": "analysis",
+  "domain": "retail",
+  "template": "retail_performance",
+  "audience": "executive",
+  "created_at": "2026-10-18T16:02:11Z",
+  "analysis": {
+    "analysis_id": "a-77",
+    "thread_id": "t-12",
+    "turn_id": "turn-3",
+    "version": 3,
+    "parent_version": 2,
+    "dataset_ids": [
+      "ds-sales"
+    ]
+  },
+  "headline": {
+    "text": "Net sales grew {f1} year on year; price did most of the work.",
+    "bullets": [
+      {
+        "so_what": "Price added {f2} of the {f3} rise; volume added {f4}.",
+        "now_what": "Check whether the price gain holds in the next promotion window."
+      },
+      {
+        "so_what": "The West region sells through {f5} of stock against {f6} elsewhere.",
+        "now_what": "Rebalance inventory toward West before the holiday period."
+      }
+    ]
+  },
+  "figures": [
+    {
+      "id": "f1",
+      "value": 8.4,
+      "unit": "percent",
+      "decimals": 1,
+      "evidence_ref": "/kpi/net_sales/yoy_pct"
+    },
+    {
+      "id": "f2",
+      "value": 1900000,
+      "unit": "currency",
+      "currency": "USD",
+      "decimals": 0,
+      "evidence_ref": "/bridge/price"
+    },
+    {
+      "id": "f3",
+      "value": 2600000,
+      "unit": "currency",
+      "currency": "USD",
+      "decimals": 0,
+      "evidence_ref": "/bridge/total"
+    },
+    {
+      "id": "f4",
+      "value": 700000,
+      "unit": "currency",
+      "currency": "USD",
+      "decimals": 0,
+      "evidence_ref": "/bridge/volume"
+    },
+    {
+      "id": "f5",
+      "value": 81.0,
+      "unit": "percent",
+      "decimals": 0,
+      "evidence_ref": "/sell_through/west"
+    },
+    {
+      "id": "f6",
+      "value": 64.0,
+      "unit": "percent",
+      "decimals": 0,
+      "evidence_ref": "/sell_through/rest"
+    },
+    {
+      "id": "f7",
+      "value": 0.6,
+      "unit": "percent",
+      "decimals": 1,
+      "evidence_ref": "/whatif/w1/s1/lo"
+    },
+    {
+      "id": "f8",
+      "value": 1.4,
+      "unit": "percent",
+      "decimals": 1,
+      "evidence_ref": "/whatif/w1/s1/mid"
+    },
+    {
+      "id": "f9",
+      "value": 2.2,
+      "unit": "percent",
+      "decimals": 1,
+      "evidence_ref": "/whatif/w1/s1/hi"
+    },
+    {
+      "id": "f10",
+      "value": 64,
+      "unit": "count",
+      "decimals": 0,
+      "evidence_ref": "/power/s1/n_required"
+    },
+    {
+      "id": "f11",
+      "value": 41,
+      "unit": "count",
+      "decimals": 0,
+      "evidence_ref": "/power/s1/n_available"
+    }
+  ],
+  "kpis": [
+    {
+      "id": "net_sales",
+      "label": "Net sales",
+      "value": "f3",
+      "delta": "f1",
+      "delta_kind": "pct",
+      "baseline_label": "same period last year",
+      "direction_good": "up"
+    }
+  ],
+  "charts": [
+    {
+      "id": "yoy_bridge",
+      "title": "Where the growth came from",
+      "question_type": "bridge",
+      "chart_kind": "waterfall",
+      "option": {
+        "xAxis": {
+          "type": "category"
+        },
+        "series": [
+          {
+            "type": "bar",
+            "stack": "w"
+          }
+        ]
+      },
+      "alt_text": "Waterfall from last year's net sales to this year's: price adds the most, volume less, mix slightly negative.",
+      "data_table": {
+        "columns": [
+          "component",
+          "change_usd"
+        ],
+        "rows": [
+          [
+            "price",
+            1900000
+          ],
+          [
+            "volume",
+            700000
+          ]
+        ]
+      },
+      "evidence": {
+        "turn_id": "turn-3",
+        "step_no": 7,
+        "agent": "execute_locally"
+      }
+    }
+  ],
+  "maps": [
+    {
+      "id": "region_map",
+      "title": "Sell-through by state",
+      "question_type": "geo",
+      "chart_kind": "choropleth",
+      "geo_kind": "us_state",
+      "asset": "us_states_20m",
+      "suppressed_regions": 4,
+      "k_floor": 10,
+      "option": {
+        "series": [
+          {
+            "type": "map",
+            "map": "us_states_20m"
+          }
+        ]
+      },
+      "alt_text": "US map shaded by sell-through; western states are darkest, four states are suppressed for few rows.",
+      "data_table": {
+        "columns": [
+          "state",
+          "sell_through_pct"
+        ],
+        "rows": [
+          [
+            "CA",
+            83
+          ],
+          [
+            "OR",
+            79
+          ]
+        ]
+      }
+    }
+  ],
+  "whatif": [
+    {
+      "id": "w1",
+      "kpi": "net_sales",
+      "y0": 2600000,
+      "z": 1.96,
+      "evidence_kind": "associational",
+      "drivers": [
+        {
+          "id": "discount",
+          "label": "Average discount",
+          "unit": "percent",
+          "baseline": 12,
+          "lo": 5,
+          "hi": 25,
+          "step": 0.5,
+          "form": "piecewise",
+          "knots": [
+            [
+              5,
+              -400000,
+              -600000,
+              -200000
+            ],
+            [
+              12,
+              0,
+              -100000,
+              100000
+            ],
+            [
+              25,
+              500000,
+              100000,
+              900000
+            ]
+          ]
+        }
+      ],
+      "evidence": {
+        "turn_id": "turn-3",
+        "step_no": 9,
+        "artifact": "drivers.json"
+      }
+    }
+  ],
+  "strategies": [
+    {
+      "id": "s1",
+      "rank": 1,
+      "action": "Test a deeper discount in West stores.",
+      "text": "In this data, net sales are {f8} higher (range {f7} to {f9}) where discount is near its upper quartile. This is a pattern, not a tested effect; run it as a test first.",
+      "impact": {
+        "kpi": "net_sales",
+        "low": "f7",
+        "mid": "f8",
+        "high": "f9"
+      },
+      "confidence": "medium",
+      "evidence_kind": "associational",
+      "verified": true,
+      "tier": "intermediate",
+      "downgraded_from": "immediate",
+      "step": "test",
+      "design": {
+        "type": "ab_test",
+        "metric": "mean",
+        "alpha": 0.05,
+        "power": 0.8,
+        "mde": "f8",
+        "n_required": "f10",
+        "n_available": "f11",
+        "duration_days": 28,
+        "cv": "none",
+        "reason": "West has fewer stores than a 28-day test needs per arm."
+      },
+      "evidence": {
+        "turn_id": "turn-3",
+        "step_no": 9,
+        "artifact": "drivers.json"
+      },
+      "whatif": "w1"
+    }
+  ],
+  "method": {
+    "summary": "Price-volume bridge on order lines; sell-through by state; partial dependence of a gradient-boosted model.",
+    "sample": {
+      "rows_analyzed": 200000,
+      "total_rows": 1850000,
+      "is_sampled": true
+    }
+  },
+  "steps": [
+    {
+      "id": "bridge",
+      "order": 1,
+      "title": "Explain the year-on-year change",
+      "status": "done"
+    },
+    {
+      "id": "promo",
+      "order": 2,
+      "title": "Compare against the promotion calendar",
+      "status": "needs_data",
+      "needs": "a promotion calendar"
+    },
+    {
+      "id": "test",
+      "order": 3,
+      "title": "Choose stores for a discount test",
+      "status": "needs_decision"
+    }
+  ],
+  "completion": {
+    "state": "partial",
+    "missing": [
+      "Promotion effects are not separated from price."
+    ]
+  },
+  "follow_ups": [
+    {
+      "id": "fu1",
+      "label": "Split by category",
+      "prompt": "Break the price effect down by product category."
+    },
+    {
+      "id": "fu2",
+      "label": "Plan the test",
+      "prompt": "Which West stores would make a fair discount test?"
+    }
+  ],
+  "side_notes": [
+    {
+      "id": "sn_retail_promo_calendar",
+      "what": "A promotion calendar",
+      "why": "Separates promotion lift from list-price changes in the bridge.",
+      "connector": "postgresql",
+      "dismissable": true
+    }
+  ],
+  "caveats": [
+    {
+      "kind": "associational",
+      "text": "Driver effects are patterns in this data, not tested effects."
+    },
+    {
+      "kind": "suppressed_geo",
+      "text": "4 states with fewer than 10 rows are not shown."
+    }
+  ],
+  "evidence": {
+    "kpi": {
+      "net_sales": {
+        "yoy_pct": {
+          "value": 0.084,
+          "unit": "fraction"
+        }
+      }
+    },
+    "bridge": {
+      "price": 1900000,
+      "volume": 700000,
+      "total": 2600000
+    },
+    "sell_through": {
+      "west": {
+        "value": 0.812,
+        "unit": "fraction"
+      },
+      "rest": {
+        "value": 0.643,
+        "unit": "fraction"
+      }
+    },
+    "whatif": {
+      "w1": {
+        "s1": {
+          "lo": {
+            "value": 0.0061,
+            "unit": "fraction"
+          },
+          "mid": {
+            "value": 0.0142,
+            "unit": "fraction"
+          },
+          "hi": {
+            "value": 0.0218,
+            "unit": "fraction"
+          }
+        }
+      }
+    },
+    "power": {
+      "s1": {
+        "n_required": 64,
+        "n_available": 41
+      }
+    }
+  },
+  "provenance": {
+    "generator": "avaloka",
+    "generator_version": "2.0.0",
+    "llm_used": true,
+    "llm_model": "gemma4:e4b",
+    "verifier": {
+      "passed": true,
+      "rejections": []
+    }
+  }
+}

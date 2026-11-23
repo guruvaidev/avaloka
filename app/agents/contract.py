@@ -140,14 +140,25 @@ def clear_registry() -> None:
 AGENT_ERRORS_KEY = "agent_errors"
 
 
-def _record_failure(name: str, exc: BaseException) -> Dict[str, Any]:
+def failure_record(name: str, exc: BaseException) -> Dict[str, Any]:
+    """One ``agent_errors`` entry for *exc* raised (or caught) in agent *name*.
+
+    The shape every failure travels in: the API returns the list as-is on the
+    chat response, and the agent trace reads ``error_class`` off a node's
+    result to mark the step failed (app.trace.recorder.recorded_failure). A
+    graph node that has to answer the user instead of raising appends one of
+    these to the state and returns normally.
+    """
     return {
-        AGENT_ERRORS_KEY: [{
-            "agent": name,
-            "error": f"{type(exc).__name__}: {exc}",
-            "traceback": traceback.format_exc(limit=6),
-        }]
+        "agent": name,
+        "error_class": type(exc).__name__,
+        "error": f"{type(exc).__name__}: {exc}",
+        "traceback": traceback.format_exc(limit=6),
     }
+
+
+def _record_failure(name: str, exc: BaseException) -> Dict[str, Any]:
+    return {AGENT_ERRORS_KEY: [failure_record(name, exc)]}
 
 
 def missing_reads(spec: AgentSpec, state: Mapping[str, Any]) -> Tuple[str, ...]:

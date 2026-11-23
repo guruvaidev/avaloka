@@ -166,6 +166,7 @@ def sample_quick(
         sample_with_profiling,
         _estimate_dataset_size,
         _load_file_with_daft,
+        describe_source,
         create_base_sample,
         create_sample_portfolio,
         aggregate_statistics_from_portfolio,
@@ -177,6 +178,9 @@ def sample_quick(
             path, source_type, cloud_credentials=kwargs.get("cloud_credentials")
         )
         is_multi = _is_multi_file_source(path)
+        # Bytes and rows per file, for the optimizer and the profile (empty
+        # for cloud paths, whose probe lives in _estimate_dataset_size).
+        source_summary = describe_source(path, source_type)
 
         from app.core.analysis_limits import analysis_max_inmemory_bytes, byte_routing_enabled
         if byte_routing_enabled():
@@ -249,6 +253,8 @@ def sample_quick(
             return result
 
         # Large dataset: read only the first N_QUICK rows for the quick preview
+        from app.core.thirdparty_optout import disable_thirdparty_telemetry
+        disable_thirdparty_telemetry()  # before daft: its import-time usage beacon
         import daft
 
         df_lazy, temp_files = _load_file_with_daft(path, source_type, **kwargs)
@@ -349,6 +355,8 @@ def sample_quick(
             # whole frame's estimated uncompressed in-memory footprint
             "bytes_per_row": round(bytes_per_row, 2),
             "estimated_full_bytes": estimated_full_bytes,
+            # Format, file count, bytes and rows per partition (no names).
+            "source": source_summary,
         }
 
         return {
@@ -1086,6 +1094,7 @@ async def _update_bg_sampling_session_status(
     session_id: str,
     portfolio_sample_uris: Dict[str, str],
     available_samples: Optional[List[str]] = None,
+    profile_ready: bool = True,
 ) -> bool:
     """Update Redis-backed session state inside a single event loop."""
     from app.services import session_service as _ss
@@ -1103,7 +1112,9 @@ async def _update_bg_sampling_session_status(
             return False
 
         sess["sample_status"] = "full_sample"
-        sess["profiling_status"] = "full_profile"
+        # A failed profile never upgrades the session: the quick profile stands.
+        if profile_ready:
+            sess["profiling_status"] = "full_profile"
         if not sess.get("analysis_fidelity") or sess.get("analysis_fidelity") == "quick_sample":
             sess["analysis_fidelity"] = "portfolio_samples"
         if portfolio_sample_uris:
@@ -1121,6 +1132,14 @@ async def _update_bg_sampling_session_status(
         except Exception:
             pass
         _ss.cache = previous_cache if previous_cache is not cache else None
+
+
+class BackgroundSamplingFailed(RuntimeError):
+    """The background sampling job did not produce samples.
+
+    Raised, not returned: a returned ``{"error": ...}`` made the Celery task
+    SUCCESS (app/core/celery_app.py), so nothing upstream saw the failure.
+    """
 
 
 def run_background_sampling(state: dict) -> dict:
@@ -1151,7 +1170,7 @@ def run_background_sampling(state: dict) -> dict:
 
     if not cloud_uri:
         logger.error("[bg_sampling] No cloud URI — cannot run Ray job")
-        return {**state, "error": "No cloud URI for background sampling"}
+        raise BackgroundSamplingFailed("No cloud URI for background sampling")
 
     # ── Resolve cloud credentials ────────────────────────────────────
     from app.api.cloud_connections import get_cloud_connection
@@ -1228,7 +1247,7 @@ def run_background_sampling(state: dict) -> dict:
         )
     except Exception as exc:
         logger.error("[bg_sampling] Ray job submission failed: %s", exc, exc_info=True)
-        return {**state, "error": f"Ray job failed: {exc}"}
+        raise BackgroundSamplingFailed(f"Ray job failed: {exc}") from exc
     finally:
         if secret_name and secret_name != os.getenv("CLOUD_SECRET_NAME", "cloud-creds"):
             try:
@@ -1238,7 +1257,7 @@ def run_background_sampling(state: dict) -> dict:
 
     if outcome.status != "SUCCEEDED":
         logger.error("[bg_sampling] Ray job did not succeed: %s\n%s", outcome.status, outcome.logs[-2000:])
-        return {**state, "error": f"Ray job status: {outcome.status}"}
+        raise BackgroundSamplingFailed(f"Ray job status: {outcome.status}")
 
     # ── Read artifact from GCS ───────────────────────────────────────
     artifact: Dict[str, Any] = {}
@@ -1264,7 +1283,7 @@ def run_background_sampling(state: dict) -> dict:
         logger.info("[bg_sampling] Read artifact (%d keys) from %s", len(artifact), artifact_uri)
     except Exception as exc:
         logger.error("[bg_sampling] Could not read artifact from %s: %s", artifact_uri, exc)
-        return {**state, "error": f"Could not read sampling artifact: {exc}"}
+        raise BackgroundSamplingFailed(f"Could not read sampling artifact: {exc}") from exc
 
     portfolio_samples = artifact.get("portfolio_samples") or {}
     available_samples = artifact.get("available_samples") or list(portfolio_samples.keys())
@@ -1274,20 +1293,28 @@ def run_background_sampling(state: dict) -> dict:
     ddl_schema = artifact.get("ddl_schema") or ""
     total_rows = artifact.get("total_rows") or 0
 
+    if not any(portfolio_samples.values()):
+        # A job that succeeded and sampled nothing has no samples to upgrade to.
+        raise BackgroundSamplingFailed("The sampling job produced no samples")
+
     display_rows = (portfolio_samples.get("random_baseline") or [])[:5000]
 
     # ── Run lightweight semantic profiling locally ────────────────────
     full_profiling_result: Optional[Dict[str, Any]] = None
     try:
-        from app.agents.profiling_agent import profile_full
+        from app.agents.profiling_agent import profile_full, usable_full_profile
         schema_list = list(schema.keys()) if isinstance(schema, dict) else list(schema)
         prof_res = profile_full(
             schema=schema_list,
             sample_rows=display_rows,
             sample_statistics=sample_statistics,
         )
-        full_profiling_result = prof_res.get("full_profiling_result")
-        logger.info("[bg_sampling] Semantic profiling completed")
+        # profile_full returns its error in the profile's place; that is no profile.
+        full_profiling_result = usable_full_profile(prof_res)
+        if full_profiling_result is None:
+            logger.warning("[bg_sampling] Semantic profiling produced no profile")
+        else:
+            logger.info("[bg_sampling] Semantic profiling completed")
     except Exception as exc:
         logger.warning("[bg_sampling] profile_full failed (non-fatal): %s", exc)
 
@@ -1386,6 +1413,7 @@ def run_background_sampling(state: dict) -> dict:
                 session_id,
                 portfolio_sample_uris,
                 available_samples=available_samples,
+                profile_ready=full_profiling_result is not None,
             ))
     except Exception as exc:
         logger.warning("[bg_sampling] Session update failed (non-fatal): %s", exc)
@@ -1394,7 +1422,8 @@ def run_background_sampling(state: dict) -> dict:
     return {
         **state,
         "sample_status": "full_sample",
-        "profiling_status": "full_profile",
+        "profiling_status": "full_profile" if full_profiling_result is not None
+                            else state.get("profiling_status"),
         "portfolio_samples": portfolio_samples,
         "available_samples": available_samples,
         "sample_statistics": sample_statistics,

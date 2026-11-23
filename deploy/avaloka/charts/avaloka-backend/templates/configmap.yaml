@@ -21,6 +21,20 @@ data:
   {{- if .Values.gcpKeySecret.enabled }}
   {{- $_ := set $defaults "GOOGLE_APPLICATION_CREDENTIALS" "/secrets/gcp-key.json" }}
   {{- end }}
+  {{- /* Third-party usage beacons off (app/core/thirdparty_optout.py); backendEnv can opt back in. */}}
+  {{- $optout := dict
+        "DO_NOT_TRACK" "true"
+        "SCARF_NO_ANALYTICS" "true"
+        "ORT_DISABLE_TELEMETRY" "1"
+        "ANONYMIZED_TELEMETRY" "False"
+        "MLFLOW_DISABLE_TELEMETRY" "true"
+        "HF_HUB_DISABLE_TELEMETRY" "1"
+        "DVC_NO_ANALYTICS" "1"
+        "RAY_USAGE_STATS_ENABLED" "0"
+        "STREAMLIT_BROWSER_GATHER_USAGE_STATS" "false"
+        "LANGGRAPH_CLI_NO_ANALYTICS" "1"
+        "LANGGRAPH_NO_VERSION_CHECK" "true" }}
+  {{- $defaults = merge $defaults $optout }}
   {{- $env := mergeOverwrite $defaults (.Values.backendEnv | default dict) }}
   {{- range $key, $val := $env }}
   {{ $key }}: {{ $val | quote }}

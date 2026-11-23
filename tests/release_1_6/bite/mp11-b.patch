@@ -1,0 +1,12 @@
+diff --git a/app/core/inference.py b/app/core/inference.py
+index 1c5936ff..39e3d5fb 100644
+--- a/app/core/inference.py
++++ b/app/core/inference.py
+@@ -442,7 +442,6 @@ def _build_azure(*, agent, tier, temperature):
+     api_version = _env_first("AZURE_OPENAI_API_VERSION", default="2024-10-21")
+     tier_up = "SMALL" if str(tier).lower() == "small" else "LARGE"
+     deployment = _env_first(
+-        f"AVALOKA_{agent.upper()}_AZURE_DEPLOYMENT",
+         f"AZURE_OPENAI_DEPLOYMENT_{tier_up}",
+         "AZURE_OPENAI_DEPLOYMENT",
+     )

@@ -12,20 +12,25 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AuthenticatedRouteRouteImport } from './routes/_authenticated/route'
 import { Route as AnalysisRouteImport } from './routes/analysis'
+import { Route as InstantRouteImport } from './routes/instant'
 import { Route as LogoutRouteImport } from './routes/logout'
 import { Route as ProanalysisRouteImport } from './routes/proanalysis'
+import { Route as RayJobsRouteImport } from './routes/ray-jobs'
 import { Route as ScheduledAnalysisRouteImport } from './routes/scheduled-analysis'
+import { Route as AuthenticatedAgentTraceRouteImport } from './routes/_authenticated/agent-trace'
 import { Route as AuthenticatedConfigurationsRouteImport } from './routes/_authenticated/configurations'
 import { Route as AuthenticatedDashboardRouteImport } from './routes/_authenticated/dashboard'
 import { Route as AuthenticatedDatabaseRouteImport } from './routes/_authenticated/database'
 import { Route as AuthenticatedDatasetsRouteImport } from './routes/_authenticated/datasets'
 import { Route as AuthenticatedDbTablesRouteImport } from './routes/_authenticated/db-tables'
+import { Route as AuthenticatedInferenceRouteImport } from './routes/_authenticated/inference'
 import { Route as AuthenticatedPaypalBootstrapRouteImport } from './routes/_authenticated/paypal-bootstrap'
-import { Route as AuthenticatedRayJobsRouteImport } from './routes/_authenticated/ray-jobs'
 import { Route as AuthenticatedReportsRouteImport } from './routes/_authenticated/reports'
 import { Route as AuthenticatedSettingsRouteImport } from './routes/_authenticated/settings'
 import { Route as AuthenticatedSupportRouteImport } from './routes/_authenticated/support'
 import { Route as AuthenticatedSupportQueriesRouteImport } from './routes/_authenticated/support-queries'
+import { Route as AuthenticatedSwarmRouteImport } from './routes/_authenticated/swarm'
+import { Route as InstantRunIdRouteImport } from './routes/instant_.$runId'
 import { Route as ProanalysisIndexRouteImport } from './routes/proanalysis.index'
 import { Route as ProanalysisScheduledAnalysisRouteImport } from './routes/proanalysis.scheduled-analysis'
 import { Route as SharedReportTokenRouteImport } from './routes/shared-report.$token'
@@ -41,6 +46,7 @@ import { Route as ApiPublicSendReportEmailRouteImport } from './routes/api/publi
 import { Route as ApiPublicStripeWebhookRouteImport } from './routes/api/public/stripe-webhook'
 import { Route as ApiSharedTokenRouteImport } from './routes/api/shared.$token'
 import { Route as ApiAnalysisAnalysisIdShareLinkRouteImport } from './routes/api/analysis.$analysisId.share-link'
+import { Route as ApiPublicLocalAuthSplatRouteImport } from './routes/api/public/local-auth.$'
 import { Route as ApiPublicSharedReportTokenRouteImport } from './routes/api/public/shared-report.$token'
 import { Route as ApiAnalysisAnalysisIdShareLinkTokenRouteImport } from './routes/api/analysis.$analysisId.share-link.$token'
 
@@ -58,6 +64,11 @@ const AnalysisRoute = AnalysisRouteImport.update({
   path: '/analysis',
   getParentRoute: () => rootRouteImport,
 } as any)
+const InstantRoute = InstantRouteImport.update({
+  id: '/instant',
+  path: '/instant',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const LogoutRoute = LogoutRouteImport.update({
   id: '/logout',
   path: '/logout',
@@ -68,10 +79,20 @@ const ProanalysisRoute = ProanalysisRouteImport.update({
   path: '/proanalysis',
   getParentRoute: () => rootRouteImport,
 } as any)
+const RayJobsRoute = RayJobsRouteImport.update({
+  id: '/ray-jobs',
+  path: '/ray-jobs',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ScheduledAnalysisRoute = ScheduledAnalysisRouteImport.update({
   id: '/scheduled-analysis',
   path: '/scheduled-analysis',
   getParentRoute: () => rootRouteImport,
+} as any)
+const AuthenticatedAgentTraceRoute = AuthenticatedAgentTraceRouteImport.update({
+  id: '/agent-trace',
+  path: '/agent-trace',
+  getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
 const AuthenticatedConfigurationsRoute =
   AuthenticatedConfigurationsRouteImport.update({
@@ -99,17 +120,17 @@ const AuthenticatedDbTablesRoute = AuthenticatedDbTablesRouteImport.update({
   path: '/db-tables',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
+const AuthenticatedInferenceRoute = AuthenticatedInferenceRouteImport.update({
+  id: '/inference',
+  path: '/inference',
+  getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
 const AuthenticatedPaypalBootstrapRoute =
   AuthenticatedPaypalBootstrapRouteImport.update({
     id: '/paypal-bootstrap',
     path: '/paypal-bootstrap',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
-const AuthenticatedRayJobsRoute = AuthenticatedRayJobsRouteImport.update({
-  id: '/ray-jobs',
-  path: '/ray-jobs',
-  getParentRoute: () => AuthenticatedRouteRoute,
-} as any)
 const AuthenticatedReportsRoute = AuthenticatedReportsRouteImport.update({
   id: '/reports',
   path: '/reports',
@@ -131,6 +152,16 @@ const AuthenticatedSupportQueriesRoute =
     path: '/support-queries',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
+const AuthenticatedSwarmRoute = AuthenticatedSwarmRouteImport.update({
+  id: '/swarm',
+  path: '/swarm',
+  getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
+const InstantRunIdRoute = InstantRunIdRouteImport.update({
+  id: '/instant_/$runId',
+  path: '/instant/$runId',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ProanalysisIndexRoute = ProanalysisIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -214,6 +245,11 @@ const ApiAnalysisAnalysisIdShareLinkRoute =
     path: '/api/analysis/$analysisId/share-link',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ApiPublicLocalAuthSplatRoute = ApiPublicLocalAuthSplatRouteImport.update({
+  id: '/api/public/local-auth/$',
+  path: '/api/public/local-auth/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiPublicSharedReportTokenRoute =
   ApiPublicSharedReportTokenRouteImport.update({
     id: '/api/public/shared-report/$token',
@@ -230,20 +266,25 @@ const ApiAnalysisAnalysisIdShareLinkTokenRoute =
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/analysis': typeof AnalysisRoute
+  '/instant': typeof InstantRoute
   '/logout': typeof LogoutRoute
   '/proanalysis': typeof ProanalysisRouteWithChildren
+  '/ray-jobs': typeof RayJobsRoute
   '/scheduled-analysis': typeof ScheduledAnalysisRoute
+  '/agent-trace': typeof AuthenticatedAgentTraceRoute
   '/configurations': typeof AuthenticatedConfigurationsRoute
   '/dashboard': typeof AuthenticatedDashboardRoute
   '/database': typeof AuthenticatedDatabaseRoute
   '/datasets': typeof AuthenticatedDatasetsRoute
   '/db-tables': typeof AuthenticatedDbTablesRoute
+  '/inference': typeof AuthenticatedInferenceRoute
   '/paypal-bootstrap': typeof AuthenticatedPaypalBootstrapRoute
-  '/ray-jobs': typeof AuthenticatedRayJobsRoute
   '/reports': typeof AuthenticatedReportsRouteWithChildren
   '/settings': typeof AuthenticatedSettingsRoute
   '/support': typeof AuthenticatedSupportRoute
   '/support-queries': typeof AuthenticatedSupportQueriesRoute
+  '/swarm': typeof AuthenticatedSwarmRoute
+  '/instant/$runId': typeof InstantRunIdRoute
   '/proanalysis/scheduled-analysis': typeof ProanalysisScheduledAnalysisRoute
   '/shared-report/$token': typeof SharedReportTokenRoute
   '/shared/$token': typeof SharedTokenRoute
@@ -259,24 +300,30 @@ export interface FileRoutesByFullPath {
   '/api/shared/$token': typeof ApiSharedTokenRoute
   '/reports/': typeof AuthenticatedReportsIndexRoute
   '/api/analysis/$analysisId/share-link': typeof ApiAnalysisAnalysisIdShareLinkRouteWithChildren
+  '/api/public/local-auth/$': typeof ApiPublicLocalAuthSplatRoute
   '/api/public/shared-report/$token': typeof ApiPublicSharedReportTokenRoute
   '/api/analysis/$analysisId/share-link/$token': typeof ApiAnalysisAnalysisIdShareLinkTokenRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/analysis': typeof AnalysisRoute
+  '/instant': typeof InstantRoute
   '/logout': typeof LogoutRoute
+  '/ray-jobs': typeof RayJobsRoute
   '/scheduled-analysis': typeof ScheduledAnalysisRoute
+  '/agent-trace': typeof AuthenticatedAgentTraceRoute
   '/configurations': typeof AuthenticatedConfigurationsRoute
   '/dashboard': typeof AuthenticatedDashboardRoute
   '/database': typeof AuthenticatedDatabaseRoute
   '/datasets': typeof AuthenticatedDatasetsRoute
   '/db-tables': typeof AuthenticatedDbTablesRoute
+  '/inference': typeof AuthenticatedInferenceRoute
   '/paypal-bootstrap': typeof AuthenticatedPaypalBootstrapRoute
-  '/ray-jobs': typeof AuthenticatedRayJobsRoute
   '/settings': typeof AuthenticatedSettingsRoute
   '/support': typeof AuthenticatedSupportRoute
   '/support-queries': typeof AuthenticatedSupportQueriesRoute
+  '/swarm': typeof AuthenticatedSwarmRoute
+  '/instant/$runId': typeof InstantRunIdRoute
   '/proanalysis/scheduled-analysis': typeof ProanalysisScheduledAnalysisRoute
   '/shared-report/$token': typeof SharedReportTokenRoute
   '/shared/$token': typeof SharedTokenRoute
@@ -292,6 +339,7 @@ export interface FileRoutesByTo {
   '/api/shared/$token': typeof ApiSharedTokenRoute
   '/reports': typeof AuthenticatedReportsIndexRoute
   '/api/analysis/$analysisId/share-link': typeof ApiAnalysisAnalysisIdShareLinkRouteWithChildren
+  '/api/public/local-auth/$': typeof ApiPublicLocalAuthSplatRoute
   '/api/public/shared-report/$token': typeof ApiPublicSharedReportTokenRoute
   '/api/analysis/$analysisId/share-link/$token': typeof ApiAnalysisAnalysisIdShareLinkTokenRoute
 }
@@ -300,20 +348,25 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/_authenticated': typeof AuthenticatedRouteRouteWithChildren
   '/analysis': typeof AnalysisRoute
+  '/instant': typeof InstantRoute
   '/logout': typeof LogoutRoute
   '/proanalysis': typeof ProanalysisRouteWithChildren
+  '/ray-jobs': typeof RayJobsRoute
   '/scheduled-analysis': typeof ScheduledAnalysisRoute
+  '/_authenticated/agent-trace': typeof AuthenticatedAgentTraceRoute
   '/_authenticated/configurations': typeof AuthenticatedConfigurationsRoute
   '/_authenticated/dashboard': typeof AuthenticatedDashboardRoute
   '/_authenticated/database': typeof AuthenticatedDatabaseRoute
   '/_authenticated/datasets': typeof AuthenticatedDatasetsRoute
   '/_authenticated/db-tables': typeof AuthenticatedDbTablesRoute
+  '/_authenticated/inference': typeof AuthenticatedInferenceRoute
   '/_authenticated/paypal-bootstrap': typeof AuthenticatedPaypalBootstrapRoute
-  '/_authenticated/ray-jobs': typeof AuthenticatedRayJobsRoute
   '/_authenticated/reports': typeof AuthenticatedReportsRouteWithChildren
   '/_authenticated/settings': typeof AuthenticatedSettingsRoute
   '/_authenticated/support': typeof AuthenticatedSupportRoute
   '/_authenticated/support-queries': typeof AuthenticatedSupportQueriesRoute
+  '/_authenticated/swarm': typeof AuthenticatedSwarmRoute
+  '/instant_/$runId': typeof InstantRunIdRoute
   '/proanalysis/scheduled-analysis': typeof ProanalysisScheduledAnalysisRoute
   '/shared-report/$token': typeof SharedReportTokenRoute
   '/shared/$token': typeof SharedTokenRoute
@@ -329,6 +382,7 @@ export interface FileRoutesById {
   '/api/shared/$token': typeof ApiSharedTokenRoute
   '/_authenticated/reports/': typeof AuthenticatedReportsIndexRoute
   '/api/analysis/$analysisId/share-link': typeof ApiAnalysisAnalysisIdShareLinkRouteWithChildren
+  '/api/public/local-auth/$': typeof ApiPublicLocalAuthSplatRoute
   '/api/public/shared-report/$token': typeof ApiPublicSharedReportTokenRoute
   '/api/analysis/$analysisId/share-link/$token': typeof ApiAnalysisAnalysisIdShareLinkTokenRoute
 }
@@ -337,20 +391,25 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/analysis'
+    | '/instant'
     | '/logout'
     | '/proanalysis'
+    | '/ray-jobs'
     | '/scheduled-analysis'
+    | '/agent-trace'
     | '/configurations'
     | '/dashboard'
     | '/database'
     | '/datasets'
     | '/db-tables'
+    | '/inference'
     | '/paypal-bootstrap'
-    | '/ray-jobs'
     | '/reports'
     | '/settings'
     | '/support'
     | '/support-queries'
+    | '/swarm'
+    | '/instant/$runId'
     | '/proanalysis/scheduled-analysis'
     | '/shared-report/$token'
     | '/shared/$token'
@@ -366,24 +425,30 @@ export interface FileRouteTypes {
     | '/api/shared/$token'
     | '/reports/'
     | '/api/analysis/$analysisId/share-link'
+    | '/api/public/local-auth/$'
     | '/api/public/shared-report/$token'
     | '/api/analysis/$analysisId/share-link/$token'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/analysis'
+    | '/instant'
     | '/logout'
+    | '/ray-jobs'
     | '/scheduled-analysis'
+    | '/agent-trace'
     | '/configurations'
     | '/dashboard'
     | '/database'
     | '/datasets'
     | '/db-tables'
+    | '/inference'
     | '/paypal-bootstrap'
-    | '/ray-jobs'
     | '/settings'
     | '/support'
     | '/support-queries'
+    | '/swarm'
+    | '/instant/$runId'
     | '/proanalysis/scheduled-analysis'
     | '/shared-report/$token'
     | '/shared/$token'
@@ -399,6 +464,7 @@ export interface FileRouteTypes {
     | '/api/shared/$token'
     | '/reports'
     | '/api/analysis/$analysisId/share-link'
+    | '/api/public/local-auth/$'
     | '/api/public/shared-report/$token'
     | '/api/analysis/$analysisId/share-link/$token'
   id:
@@ -406,20 +472,25 @@ export interface FileRouteTypes {
     | '/'
     | '/_authenticated'
     | '/analysis'
+    | '/instant'
     | '/logout'
     | '/proanalysis'
+    | '/ray-jobs'
     | '/scheduled-analysis'
+    | '/_authenticated/agent-trace'
     | '/_authenticated/configurations'
     | '/_authenticated/dashboard'
     | '/_authenticated/database'
     | '/_authenticated/datasets'
     | '/_authenticated/db-tables'
+    | '/_authenticated/inference'
     | '/_authenticated/paypal-bootstrap'
-    | '/_authenticated/ray-jobs'
     | '/_authenticated/reports'
     | '/_authenticated/settings'
     | '/_authenticated/support'
     | '/_authenticated/support-queries'
+    | '/_authenticated/swarm'
+    | '/instant_/$runId'
     | '/proanalysis/scheduled-analysis'
     | '/shared-report/$token'
     | '/shared/$token'
@@ -435,6 +506,7 @@ export interface FileRouteTypes {
     | '/api/shared/$token'
     | '/_authenticated/reports/'
     | '/api/analysis/$analysisId/share-link'
+    | '/api/public/local-auth/$'
     | '/api/public/shared-report/$token'
     | '/api/analysis/$analysisId/share-link/$token'
   fileRoutesById: FileRoutesById
@@ -443,9 +515,12 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AuthenticatedRouteRoute: typeof AuthenticatedRouteRouteWithChildren
   AnalysisRoute: typeof AnalysisRoute
+  InstantRoute: typeof InstantRoute
   LogoutRoute: typeof LogoutRoute
   ProanalysisRoute: typeof ProanalysisRouteWithChildren
+  RayJobsRoute: typeof RayJobsRoute
   ScheduledAnalysisRoute: typeof ScheduledAnalysisRoute
+  InstantRunIdRoute: typeof InstantRunIdRoute
   SharedReportTokenRoute: typeof SharedReportTokenRoute
   SharedTokenRoute: typeof SharedTokenRoute
   ApiPublicBackendProxyRoute: typeof ApiPublicBackendProxyRoute
@@ -456,6 +531,7 @@ export interface RootRouteChildren {
   ApiPublicStripeWebhookRoute: typeof ApiPublicStripeWebhookRoute
   ApiSharedTokenRoute: typeof ApiSharedTokenRoute
   ApiAnalysisAnalysisIdShareLinkRoute: typeof ApiAnalysisAnalysisIdShareLinkRouteWithChildren
+  ApiPublicLocalAuthSplatRoute: typeof ApiPublicLocalAuthSplatRoute
   ApiPublicSharedReportTokenRoute: typeof ApiPublicSharedReportTokenRoute
 }
 
@@ -482,6 +558,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AnalysisRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/instant': {
+      id: '/instant'
+      path: '/instant'
+      fullPath: '/instant'
+      preLoaderRoute: typeof InstantRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/logout': {
       id: '/logout'
       path: '/logout'
@@ -496,12 +579,26 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ProanalysisRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/ray-jobs': {
+      id: '/ray-jobs'
+      path: '/ray-jobs'
+      fullPath: '/ray-jobs'
+      preLoaderRoute: typeof RayJobsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/scheduled-analysis': {
       id: '/scheduled-analysis'
       path: '/scheduled-analysis'
       fullPath: '/scheduled-analysis'
       preLoaderRoute: typeof ScheduledAnalysisRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/_authenticated/agent-trace': {
+      id: '/_authenticated/agent-trace'
+      path: '/agent-trace'
+      fullPath: '/agent-trace'
+      preLoaderRoute: typeof AuthenticatedAgentTraceRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
     }
     '/_authenticated/configurations': {
       id: '/_authenticated/configurations'
@@ -538,18 +635,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedDbTablesRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/inference': {
+      id: '/_authenticated/inference'
+      path: '/inference'
+      fullPath: '/inference'
+      preLoaderRoute: typeof AuthenticatedInferenceRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/paypal-bootstrap': {
       id: '/_authenticated/paypal-bootstrap'
       path: '/paypal-bootstrap'
       fullPath: '/paypal-bootstrap'
       preLoaderRoute: typeof AuthenticatedPaypalBootstrapRouteImport
-      parentRoute: typeof AuthenticatedRouteRoute
-    }
-    '/_authenticated/ray-jobs': {
-      id: '/_authenticated/ray-jobs'
-      path: '/ray-jobs'
-      fullPath: '/ray-jobs'
-      preLoaderRoute: typeof AuthenticatedRayJobsRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
     '/_authenticated/reports': {
@@ -579,6 +676,20 @@ declare module '@tanstack/react-router' {
       fullPath: '/support-queries'
       preLoaderRoute: typeof AuthenticatedSupportQueriesRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/swarm': {
+      id: '/_authenticated/swarm'
+      path: '/swarm'
+      fullPath: '/swarm'
+      preLoaderRoute: typeof AuthenticatedSwarmRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/instant_/$runId': {
+      id: '/instant_/$runId'
+      path: '/instant/$runId'
+      fullPath: '/instant/$runId'
+      preLoaderRoute: typeof InstantRunIdRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/proanalysis/': {
       id: '/proanalysis/'
@@ -685,6 +796,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAnalysisAnalysisIdShareLinkRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/public/local-auth/$': {
+      id: '/api/public/local-auth/$'
+      path: '/api/public/local-auth/$'
+      fullPath: '/api/public/local-auth/$'
+      preLoaderRoute: typeof ApiPublicLocalAuthSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/public/shared-report/$token': {
       id: '/api/public/shared-report/$token'
       path: '/api/public/shared-report/$token'
@@ -718,31 +836,35 @@ const AuthenticatedReportsRouteWithChildren =
   AuthenticatedReportsRoute._addFileChildren(AuthenticatedReportsRouteChildren)
 
 interface AuthenticatedRouteRouteChildren {
+  AuthenticatedAgentTraceRoute: typeof AuthenticatedAgentTraceRoute
   AuthenticatedConfigurationsRoute: typeof AuthenticatedConfigurationsRoute
   AuthenticatedDashboardRoute: typeof AuthenticatedDashboardRoute
   AuthenticatedDatabaseRoute: typeof AuthenticatedDatabaseRoute
   AuthenticatedDatasetsRoute: typeof AuthenticatedDatasetsRoute
   AuthenticatedDbTablesRoute: typeof AuthenticatedDbTablesRoute
+  AuthenticatedInferenceRoute: typeof AuthenticatedInferenceRoute
   AuthenticatedPaypalBootstrapRoute: typeof AuthenticatedPaypalBootstrapRoute
-  AuthenticatedRayJobsRoute: typeof AuthenticatedRayJobsRoute
   AuthenticatedReportsRoute: typeof AuthenticatedReportsRouteWithChildren
   AuthenticatedSettingsRoute: typeof AuthenticatedSettingsRoute
   AuthenticatedSupportRoute: typeof AuthenticatedSupportRoute
   AuthenticatedSupportQueriesRoute: typeof AuthenticatedSupportQueriesRoute
+  AuthenticatedSwarmRoute: typeof AuthenticatedSwarmRoute
 }
 
 const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
+  AuthenticatedAgentTraceRoute: AuthenticatedAgentTraceRoute,
   AuthenticatedConfigurationsRoute: AuthenticatedConfigurationsRoute,
   AuthenticatedDashboardRoute: AuthenticatedDashboardRoute,
   AuthenticatedDatabaseRoute: AuthenticatedDatabaseRoute,
   AuthenticatedDatasetsRoute: AuthenticatedDatasetsRoute,
   AuthenticatedDbTablesRoute: AuthenticatedDbTablesRoute,
+  AuthenticatedInferenceRoute: AuthenticatedInferenceRoute,
   AuthenticatedPaypalBootstrapRoute: AuthenticatedPaypalBootstrapRoute,
-  AuthenticatedRayJobsRoute: AuthenticatedRayJobsRoute,
   AuthenticatedReportsRoute: AuthenticatedReportsRouteWithChildren,
   AuthenticatedSettingsRoute: AuthenticatedSettingsRoute,
   AuthenticatedSupportRoute: AuthenticatedSupportRoute,
   AuthenticatedSupportQueriesRoute: AuthenticatedSupportQueriesRoute,
+  AuthenticatedSwarmRoute: AuthenticatedSwarmRoute,
 }
 
 const AuthenticatedRouteRouteWithChildren =
@@ -781,9 +903,12 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AuthenticatedRouteRoute: AuthenticatedRouteRouteWithChildren,
   AnalysisRoute: AnalysisRoute,
+  InstantRoute: InstantRoute,
   LogoutRoute: LogoutRoute,
   ProanalysisRoute: ProanalysisRouteWithChildren,
+  RayJobsRoute: RayJobsRoute,
   ScheduledAnalysisRoute: ScheduledAnalysisRoute,
+  InstantRunIdRoute: InstantRunIdRoute,
   SharedReportTokenRoute: SharedReportTokenRoute,
   SharedTokenRoute: SharedTokenRoute,
   ApiPublicBackendProxyRoute: ApiPublicBackendProxyRoute,
@@ -796,18 +921,9 @@ const rootRouteChildren: RootRouteChildren = {
   ApiSharedTokenRoute: ApiSharedTokenRoute,
   ApiAnalysisAnalysisIdShareLinkRoute:
     ApiAnalysisAnalysisIdShareLinkRouteWithChildren,
+  ApiPublicLocalAuthSplatRoute: ApiPublicLocalAuthSplatRoute,
   ApiPublicSharedReportTokenRoute: ApiPublicSharedReportTokenRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
-
-import type { getRouter } from './router.tsx'
-import type { startInstance } from './start.ts'
-declare module '@tanstack/react-start' {
-  interface Register {
-    ssr: true
-    router: Awaited<ReturnType<typeof getRouter>>
-    config: Awaited<ReturnType<typeof startInstance.getOptions>>
-  }
-}

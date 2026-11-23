@@ -1,0 +1,1720 @@
+{
+  "schema_version": "ds-model-alone-1",
+  "prompt_version": "ds-model-alone-v1",
+  "system": "model_alone",
+  "provider": "openrouter",
+  "model": "anthropic/claude-haiku-5.5",
+  "price": {
+    "model_id": "anthropic/claude-haiku-5.5",
+    "prompt_usd_per_1m": 0.09999999999999999,
+    "completion_usd_per_1m": 0.5,
+    "cost_source": "catalog",
+    "context_length": 1000000,
+    "tiers": [
+      {
+        "min_prompt_tokens": 100000,
+        "prompt_usd_per_1m": 0.5,
+        "completion_usd_per_1m": 2.5
+      }
+    ]
+  },
+  "generated_at": "2026-10-18T06:33:00.092744+00:00",
+  "repository": {
+    "captured_at": "2026-10-18T06:33:00.094031+00:00",
+    "git_commit": "77d7d28e76859b94ea80b77d81526da1808b15bc",
+    "git_branch": "bench/2.0-vs-1.0",
+    "git_dirty": false,
+    "python": "3.11.16",
+    "git_source": "asserted_by_launcher"
+  },
+  "trials": 3,
+  "omitted_checks": [
+    "economics_sane",
+    "firefly_active[*]",
+    "firefly_dormant[*]",
+    "temporal_split_performed"
+  ],
+  "summary": {
+    "mean_score": 1.0,
+    "pass_rate": 1.0,
+    "by_task": {
+      "ds_classification_churn": 1.0,
+      "ds_regression_housing": 1.0,
+      "ds_leakage_detection": 1.0,
+      "ds_temporal_split_on_time_ordered_data": 1.0,
+      "ds_constant_column_does_not_break_training": 1.0,
+      "ds_continuous_features_reach_the_model": 1.0,
+      "ds_no_signal_is_reported_as_no_signal": 1.0
+    },
+    "spend_usd": 0.0175
+  },
+  "results": [
+    {
+      "task": "ds_classification_churn",
+      "family": "data_science",
+      "trial": 0,
+      "metric": "roc_auc",
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": true,
+          "detail": "roc_auc=0.8043 on the harness holdout",
+          "weight": 2.0
+        },
+        {
+          "name": "model_min_score",
+          "passed": true,
+          "detail": "roc_auc=0.8043 vs floor 0.6",
+          "weight": 2.0
+        },
+        {
+          "name": "beats_baseline",
+          "passed": true,
+          "detail": "roc_auc: model=0.8043, baseline=0.5000, gain=+0.3043 >= 0.05 (measured)",
+          "weight": 2.0
+        }
+      ],
+      "measured": {
+        "model": 0.8042545689604513,
+        "baseline": 0.5,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "classification",
+        "split_strategy": "stratified_holdout",
+        "column_roles": {
+          "customer_id": "id",
+          "tenure": "numeric",
+          "monthly_charges": "numeric",
+          "support_tickets": "numeric",
+          "contract": "categorical",
+          "churned": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [],
+          "id_columns": [
+            "customer_id"
+          ],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [],
+        "features_used": [
+          "tenure",
+          "monthly_charges",
+          "support_tickets",
+          "contract"
+        ],
+        "baseline_strategy": "prior (constant predicted probability, ROC AUC 0.5)",
+        "baseline_score": 0.5,
+        "expected_beats_baseline": true,
+        "verdict": "warn",
+        "max_safe_deployment_level": 2
+      },
+      "program_chars": 644,
+      "error": null,
+      "prompt_tokens": 1441,
+      "completion_tokens": 1607,
+      "cost_usd": 0.0009475999999999999,
+      "cost_source": "catalog",
+      "latency_s": 8.53
+    },
+    {
+      "task": "ds_classification_churn",
+      "family": "data_science",
+      "trial": 1,
+      "metric": "roc_auc",
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": true,
+          "detail": "roc_auc=0.8043 on the harness holdout",
+          "weight": 2.0
+        },
+        {
+          "name": "model_min_score",
+          "passed": true,
+          "detail": "roc_auc=0.8043 vs floor 0.6",
+          "weight": 2.0
+        },
+        {
+          "name": "beats_baseline",
+          "passed": true,
+          "detail": "roc_auc: model=0.8043, baseline=0.5000, gain=+0.3043 >= 0.05 (measured)",
+          "weight": 2.0
+        }
+      ],
+      "measured": {
+        "model": 0.8042545689604513,
+        "baseline": 0.5,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "classification",
+        "split_strategy": "stratified_holdout",
+        "column_roles": {
+          "customer_id": "id",
+          "tenure": "numeric",
+          "monthly_charges": "numeric",
+          "support_tickets": "numeric",
+          "contract": "categorical",
+          "churned": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [],
+          "id_columns": [
+            "customer_id"
+          ],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [],
+        "features_used": [
+          "tenure",
+          "monthly_charges",
+          "support_tickets",
+          "contract"
+        ],
+        "baseline_strategy": "majority_class",
+        "baseline_score": 0.5,
+        "expected_beats_baseline": true,
+        "verdict": "warn",
+        "max_safe_deployment_level": 2
+      },
+      "program_chars": 1117,
+      "error": null,
+      "prompt_tokens": 1441,
+      "completion_tokens": 1937,
+      "cost_usd": 0.0011126,
+      "cost_source": "catalog",
+      "latency_s": 11.57
+    },
+    {
+      "task": "ds_classification_churn",
+      "family": "data_science",
+      "trial": 2,
+      "metric": "roc_auc",
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": true,
+          "detail": "roc_auc=0.7834 on the harness holdout",
+          "weight": 2.0
+        },
+        {
+          "name": "model_min_score",
+          "passed": true,
+          "detail": "roc_auc=0.7834 vs floor 0.6",
+          "weight": 2.0
+        },
+        {
+          "name": "beats_baseline",
+          "passed": true,
+          "detail": "roc_auc: model=0.7834, baseline=0.5000, gain=+0.2834 >= 0.05 (measured)",
+          "weight": 2.0
+        }
+      ],
+      "measured": {
+        "model": 0.7833930775107245,
+        "baseline": 0.5,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "classification",
+        "split_strategy": "stratified_holdout",
+        "column_roles": {
+          "customer_id": "id",
+          "tenure": "numeric",
+          "monthly_charges": "numeric",
+          "support_tickets": "numeric",
+          "contract": "categorical",
+          "churned": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [],
+          "id_columns": [
+            "customer_id"
+          ],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [],
+        "features_used": [
+          "tenure",
+          "monthly_charges",
+          "support_tickets",
+          "contract"
+        ],
+        "baseline_strategy": "majority_class",
+        "baseline_score": 0.5,
+        "expected_beats_baseline": true,
+        "verdict": "warn",
+        "max_safe_deployment_level": 2
+      },
+      "program_chars": 617,
+      "error": null,
+      "prompt_tokens": 1441,
+      "completion_tokens": 1565,
+      "cost_usd": 0.0009266,
+      "cost_source": "catalog",
+      "latency_s": 17.85
+    },
+    {
+      "task": "ds_regression_housing",
+      "family": "data_science",
+      "trial": 0,
+      "metric": "r2",
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": true,
+          "detail": "r2=0.9079 on the harness holdout",
+          "weight": 2.0
+        },
+        {
+          "name": "model_min_score",
+          "passed": true,
+          "detail": "r2=0.9079 vs floor 0.55",
+          "weight": 2.0
+        },
+        {
+          "name": "beats_baseline",
+          "passed": true,
+          "detail": "r2: model=0.9079, baseline=-0.0024, gain=+0.9103 >= 0.4 (measured)",
+          "weight": 2.0
+        },
+        {
+          "name": "role[location]",
+          "passed": true,
+          "detail": "inferred 'categorical', expected 'categorical'",
+          "weight": 1.0
+        },
+        {
+          "name": "role[area_sqft]",
+          "passed": true,
+          "detail": "inferred 'numeric', expected 'numeric'",
+          "weight": 1.0
+        }
+      ],
+      "measured": {
+        "model": 0.9079052228221145,
+        "baseline": -0.002413920138795378,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "regression",
+        "split_strategy": "random_holdout",
+        "column_roles": {
+          "area_sqft": "numeric",
+          "bedrooms": "numeric",
+          "age_years": "numeric",
+          "location": "categorical",
+          "price": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [],
+          "id_columns": [],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [],
+        "features_used": [
+          "area_sqft",
+          "bedrooms",
+          "age_years",
+          "location"
+        ],
+        "baseline_strategy": "mean",
+        "baseline_score": 0.0,
+        "expected_beats_baseline": true,
+        "verdict": "pass",
+        "max_safe_deployment_level": 1
+      },
+      "program_chars": 780,
+      "error": null,
+      "prompt_tokens": 1348,
+      "completion_tokens": 1549,
+      "cost_usd": 0.0009093,
+      "cost_source": "catalog",
+      "latency_s": 10.15
+    },
+    {
+      "task": "ds_regression_housing",
+      "family": "data_science",
+      "trial": 1,
+      "metric": "r2",
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": true,
+          "detail": "r2=0.8904 on the harness holdout",
+          "weight": 2.0
+        },
+        {
+          "name": "model_min_score",
+          "passed": true,
+          "detail": "r2=0.8904 vs floor 0.55",
+          "weight": 2.0
+        },
+        {
+          "name": "beats_baseline",
+          "passed": true,
+          "detail": "r2: model=0.8904, baseline=-0.0024, gain=+0.8928 >= 0.4 (measured)",
+          "weight": 2.0
+        },
+        {
+          "name": "role[location]",
+          "passed": true,
+          "detail": "inferred 'categorical', expected 'categorical'",
+          "weight": 1.0
+        },
+        {
+          "name": "role[area_sqft]",
+          "passed": true,
+          "detail": "inferred 'numeric', expected 'numeric'",
+          "weight": 1.0
+        }
+      ],
+      "measured": {
+        "model": 0.8903760268234916,
+        "baseline": -0.002413920138795378,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "regression",
+        "split_strategy": "random_holdout",
+        "column_roles": {
+          "area_sqft": "numeric",
+          "bedrooms": "numeric",
+          "age_years": "numeric",
+          "location": "categorical",
+          "price": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [],
+          "id_columns": [],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [],
+        "features_used": [
+          "area_sqft",
+          "bedrooms",
+          "age_years",
+          "location"
+        ],
+        "baseline_strategy": "mean",
+        "baseline_score": 0.0,
+        "expected_beats_baseline": true,
+        "verdict": "pass",
+        "max_safe_deployment_level": 2
+      },
+      "program_chars": 613,
+      "error": null,
+      "prompt_tokens": 1348,
+      "completion_tokens": 1290,
+      "cost_usd": 0.0007798,
+      "cost_source": "catalog",
+      "latency_s": 9.22
+    },
+    {
+      "task": "ds_regression_housing",
+      "family": "data_science",
+      "trial": 2,
+      "metric": "r2",
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": true,
+          "detail": "r2=0.8889 on the harness holdout",
+          "weight": 2.0
+        },
+        {
+          "name": "model_min_score",
+          "passed": true,
+          "detail": "r2=0.8889 vs floor 0.55",
+          "weight": 2.0
+        },
+        {
+          "name": "beats_baseline",
+          "passed": true,
+          "detail": "r2: model=0.8889, baseline=-0.0024, gain=+0.8914 >= 0.4 (measured)",
+          "weight": 2.0
+        },
+        {
+          "name": "role[location]",
+          "passed": true,
+          "detail": "inferred 'categorical', expected 'categorical'",
+          "weight": 1.0
+        },
+        {
+          "name": "role[area_sqft]",
+          "passed": true,
+          "detail": "inferred 'numeric', expected 'numeric'",
+          "weight": 1.0
+        }
+      ],
+      "measured": {
+        "model": 0.8889492600911834,
+        "baseline": -0.002413920138795378,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "regression",
+        "split_strategy": "random_holdout",
+        "column_roles": {
+          "area_sqft": "numeric",
+          "bedrooms": "numeric",
+          "age_years": "numeric",
+          "location": "categorical",
+          "price": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [],
+          "id_columns": [],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [],
+        "features_used": [
+          "area_sqft",
+          "bedrooms",
+          "age_years",
+          "location"
+        ],
+        "baseline_strategy": "mean",
+        "baseline_score": 0.0,
+        "expected_beats_baseline": true,
+        "verdict": "pass",
+        "max_safe_deployment_level": 2
+      },
+      "program_chars": 727,
+      "error": null,
+      "prompt_tokens": 1348,
+      "completion_tokens": 1390,
+      "cost_usd": 0.0008298,
+      "cost_source": "catalog",
+      "latency_s": 7.32
+    },
+    {
+      "task": "ds_leakage_detection",
+      "family": "data_science",
+      "trial": 0,
+      "metric": "roc_auc",
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": true,
+          "detail": "roc_auc=0.9746 on the harness holdout",
+          "weight": 2.0
+        },
+        {
+          "name": "leakage[leak_score]",
+          "passed": true,
+          "detail": "'leak_score' flagged; leaks=['leak_score', 'outcome_label']",
+          "weight": 2.0
+        },
+        {
+          "name": "leakage[outcome_label]",
+          "passed": true,
+          "detail": "'outcome_label' flagged; leaks=['leak_score', 'outcome_label']",
+          "weight": 2.0
+        },
+        {
+          "name": "verdict",
+          "passed": true,
+          "detail": "verdict 'fail', expected 'fail'",
+          "weight": 2.0
+        },
+        {
+          "name": "max_safe_deployment_level",
+          "passed": true,
+          "detail": "ceiling 1, expected 1",
+          "weight": 2.0
+        }
+      ],
+      "measured": {
+        "model": 0.9746464646464648,
+        "baseline": 0.5,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "classification",
+        "split_strategy": "stratified_holdout",
+        "column_roles": {
+          "feature_a": "numeric",
+          "feature_b": "numeric",
+          "noise": "numeric",
+          "leak_score": "numeric",
+          "outcome_label": "categorical",
+          "target": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [],
+          "id_columns": [],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [
+          "leak_score",
+          "outcome_label"
+        ],
+        "features_used": [
+          "feature_a",
+          "feature_b",
+          "noise"
+        ],
+        "baseline_strategy": "majority_class",
+        "baseline_score": 0.5,
+        "expected_beats_baseline": true,
+        "verdict": "fail",
+        "max_safe_deployment_level": 1
+      },
+      "program_chars": 483,
+      "error": null,
+      "prompt_tokens": 1867,
+      "completion_tokens": 1277,
+      "cost_usd": 0.0008251999999999999,
+      "cost_source": "catalog",
+      "latency_s": 7.33
+    },
+    {
+      "task": "ds_leakage_detection",
+      "family": "data_science",
+      "trial": 1,
+      "metric": "roc_auc",
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": true,
+          "detail": "roc_auc=0.9747 on the harness holdout",
+          "weight": 2.0
+        },
+        {
+          "name": "leakage[leak_score]",
+          "passed": true,
+          "detail": "'leak_score' flagged; leaks=['leak_score', 'outcome_label']",
+          "weight": 2.0
+        },
+        {
+          "name": "leakage[outcome_label]",
+          "passed": true,
+          "detail": "'outcome_label' flagged; leaks=['leak_score', 'outcome_label']",
+          "weight": 2.0
+        },
+        {
+          "name": "verdict",
+          "passed": true,
+          "detail": "verdict 'fail', expected 'fail'",
+          "weight": 2.0
+        },
+        {
+          "name": "max_safe_deployment_level",
+          "passed": true,
+          "detail": "ceiling 1, expected 1",
+          "weight": 2.0
+        }
+      ],
+      "measured": {
+        "model": 0.9747474747474748,
+        "baseline": 0.5,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "classification",
+        "split_strategy": "stratified_holdout",
+        "column_roles": {
+          "feature_a": "numeric",
+          "feature_b": "numeric",
+          "noise": "numeric",
+          "leak_score": "numeric",
+          "outcome_label": "categorical",
+          "target": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [],
+          "id_columns": [],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [
+          "outcome_label",
+          "leak_score"
+        ],
+        "features_used": [
+          "feature_a",
+          "feature_b",
+          "noise"
+        ],
+        "baseline_strategy": "prior",
+        "baseline_score": 0.5,
+        "expected_beats_baseline": true,
+        "verdict": "fail",
+        "max_safe_deployment_level": 1
+      },
+      "program_chars": 382,
+      "error": null,
+      "prompt_tokens": 1867,
+      "completion_tokens": 1087,
+      "cost_usd": 0.0007302000000000001,
+      "cost_source": "catalog",
+      "latency_s": 7.06
+    },
+    {
+      "task": "ds_leakage_detection",
+      "family": "data_science",
+      "trial": 2,
+      "metric": "roc_auc",
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": true,
+          "detail": "roc_auc=0.9747 on the harness holdout",
+          "weight": 2.0
+        },
+        {
+          "name": "leakage[leak_score]",
+          "passed": true,
+          "detail": "'leak_score' flagged; leaks=['leak_score', 'outcome_label']",
+          "weight": 2.0
+        },
+        {
+          "name": "leakage[outcome_label]",
+          "passed": true,
+          "detail": "'outcome_label' flagged; leaks=['leak_score', 'outcome_label']",
+          "weight": 2.0
+        },
+        {
+          "name": "verdict",
+          "passed": true,
+          "detail": "verdict 'fail', expected 'fail'",
+          "weight": 2.0
+        },
+        {
+          "name": "max_safe_deployment_level",
+          "passed": true,
+          "detail": "ceiling 1, expected 1",
+          "weight": 2.0
+        }
+      ],
+      "measured": {
+        "model": 0.9747474747474748,
+        "baseline": 0.5,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "classification",
+        "split_strategy": "stratified_holdout",
+        "column_roles": {
+          "feature_a": "numeric",
+          "feature_b": "numeric",
+          "noise": "numeric",
+          "leak_score": "numeric",
+          "outcome_label": "categorical",
+          "target": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [],
+          "id_columns": [],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [
+          "leak_score",
+          "outcome_label"
+        ],
+        "features_used": [
+          "feature_a",
+          "feature_b"
+        ],
+        "baseline_strategy": "prior",
+        "baseline_score": 0.5,
+        "expected_beats_baseline": true,
+        "verdict": "fail",
+        "max_safe_deployment_level": 1
+      },
+      "program_chars": 335,
+      "error": null,
+      "prompt_tokens": 1867,
+      "completion_tokens": 1087,
+      "cost_usd": 0.0007302000000000001,
+      "cost_source": "catalog",
+      "latency_s": 5.85
+    },
+    {
+      "task": "ds_temporal_split_on_time_ordered_data",
+      "family": "data_science",
+      "trial": 0,
+      "metric": "rmse",
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": true,
+          "detail": "rmse=2.0060 on the harness holdout",
+          "weight": 2.0
+        },
+        {
+          "name": "beats_baseline",
+          "passed": true,
+          "detail": "measured rmse: model=2.0060, baseline=109.3416, gain=+107.3356, margin=2.1868; beats=True, expected True",
+          "weight": 3.0
+        },
+        {
+          "name": "plan_task",
+          "passed": true,
+          "detail": "task 'regression', expected 'regression'",
+          "weight": 1.0
+        },
+        {
+          "name": "plan_split",
+          "passed": true,
+          "detail": "split 'time_based_holdout', expected 'time_based_holdout' (reported, not verified)",
+          "weight": 2.0
+        },
+        {
+          "name": "baseline_reported",
+          "passed": true,
+          "detail": "baseline_score=90.0 (mean)",
+          "weight": 2.0
+        },
+        {
+          "name": "role[order_date]",
+          "passed": true,
+          "detail": "inferred 'datetime', expected 'datetime'",
+          "weight": 1.0
+        }
+      ],
+      "measured": {
+        "model": 2.005952628299898,
+        "baseline": 109.34155630599093,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "regression",
+        "split_strategy": "time_based_holdout",
+        "column_roles": {
+          "order_date": "datetime",
+          "promo": "numeric",
+          "base_demand": "numeric",
+          "revenue": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [],
+          "id_columns": [],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [],
+        "features_used": [
+          "promo",
+          "base_demand",
+          "days_since_start"
+        ],
+        "baseline_strategy": "mean",
+        "baseline_score": 90.0,
+        "expected_beats_baseline": true,
+        "verdict": "warn",
+        "max_safe_deployment_level": 1
+      },
+      "program_chars": 644,
+      "error": null,
+      "prompt_tokens": 1311,
+      "completion_tokens": 1844,
+      "cost_usd": 0.0010531,
+      "cost_source": "catalog",
+      "latency_s": 10.12
+    },
+    {
+      "task": "ds_temporal_split_on_time_ordered_data",
+      "family": "data_science",
+      "trial": 1,
+      "metric": "rmse",
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": true,
+          "detail": "rmse=2.0060 on the harness holdout",
+          "weight": 2.0
+        },
+        {
+          "name": "beats_baseline",
+          "passed": true,
+          "detail": "measured rmse: model=2.0060, baseline=109.3416, gain=+107.3356, margin=2.1868; beats=True, expected True",
+          "weight": 3.0
+        },
+        {
+          "name": "plan_task",
+          "passed": true,
+          "detail": "task 'regression', expected 'regression'",
+          "weight": 1.0
+        },
+        {
+          "name": "plan_split",
+          "passed": true,
+          "detail": "split 'time_based_holdout', expected 'time_based_holdout' (reported, not verified)",
+          "weight": 2.0
+        },
+        {
+          "name": "baseline_reported",
+          "passed": true,
+          "detail": "baseline_score=100.0 (mean)",
+          "weight": 2.0
+        },
+        {
+          "name": "role[order_date]",
+          "passed": true,
+          "detail": "inferred 'datetime', expected 'datetime'",
+          "weight": 1.0
+        }
+      ],
+      "measured": {
+        "model": 2.0059526282999203,
+        "baseline": 109.34155630599093,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "regression",
+        "split_strategy": "time_based_holdout",
+        "column_roles": {
+          "order_date": "datetime",
+          "promo": "numeric",
+          "base_demand": "numeric",
+          "revenue": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [],
+          "id_columns": [],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [],
+        "features_used": [
+          "promo",
+          "base_demand",
+          "t"
+        ],
+        "baseline_strategy": "mean",
+        "baseline_score": 100.0,
+        "expected_beats_baseline": true,
+        "verdict": "warn",
+        "max_safe_deployment_level": 1
+      },
+      "program_chars": 456,
+      "error": null,
+      "prompt_tokens": 1311,
+      "completion_tokens": 1270,
+      "cost_usd": 0.0007661,
+      "cost_source": "catalog",
+      "latency_s": 7.39
+    },
+    {
+      "task": "ds_temporal_split_on_time_ordered_data",
+      "family": "data_science",
+      "trial": 2,
+      "metric": "rmse",
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": true,
+          "detail": "rmse=2.0019 on the harness holdout",
+          "weight": 2.0
+        },
+        {
+          "name": "beats_baseline",
+          "passed": true,
+          "detail": "measured rmse: model=2.0019, baseline=109.3416, gain=+107.3396, margin=2.1868; beats=True, expected True",
+          "weight": 3.0
+        },
+        {
+          "name": "plan_task",
+          "passed": true,
+          "detail": "task 'regression', expected 'regression'",
+          "weight": 1.0
+        },
+        {
+          "name": "plan_split",
+          "passed": true,
+          "detail": "split 'time_based_holdout', expected 'time_based_holdout' (reported, not verified)",
+          "weight": 2.0
+        },
+        {
+          "name": "baseline_reported",
+          "passed": true,
+          "detail": "baseline_score=115.0 (mean)",
+          "weight": 2.0
+        },
+        {
+          "name": "role[order_date]",
+          "passed": true,
+          "detail": "inferred 'datetime', expected 'datetime'",
+          "weight": 1.0
+        }
+      ],
+      "measured": {
+        "model": 2.0019204133919666,
+        "baseline": 109.34155630599093,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "regression",
+        "split_strategy": "time_based_holdout",
+        "column_roles": {
+          "order_date": "datetime",
+          "promo": "categorical",
+          "base_demand": "numeric",
+          "revenue": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [],
+          "id_columns": [],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [],
+        "features_used": [
+          "promo",
+          "base_demand",
+          "order_date"
+        ],
+        "baseline_strategy": "mean",
+        "baseline_score": 115.0,
+        "expected_beats_baseline": true,
+        "verdict": "warn",
+        "max_safe_deployment_level": 1
+      },
+      "program_chars": 1077,
+      "error": null,
+      "prompt_tokens": 1311,
+      "completion_tokens": 1798,
+      "cost_usd": 0.0010301,
+      "cost_source": "catalog",
+      "latency_s": 9.49
+    },
+    {
+      "task": "ds_constant_column_does_not_break_training",
+      "family": "data_science",
+      "trial": 0,
+      "metric": "roc_auc",
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": true,
+          "detail": "roc_auc=0.7473 on the harness holdout",
+          "weight": 2.0
+        },
+        {
+          "name": "baseline_reported",
+          "passed": true,
+          "detail": "baseline_score=0.5 (prior)",
+          "weight": 2.0
+        },
+        {
+          "name": "role[country]",
+          "passed": true,
+          "detail": "inferred 'constant', expected 'constant'",
+          "weight": 1.0
+        },
+        {
+          "name": "role[row_id]",
+          "passed": true,
+          "detail": "inferred 'id', expected 'id'",
+          "weight": 1.0
+        },
+        {
+          "name": "quality[constant_columns:country]",
+          "passed": true,
+          "detail": "'country' in constant_columns=['country']",
+          "weight": 1.0
+        }
+      ],
+      "measured": {
+        "model": 0.7473324797268459,
+        "baseline": 0.5,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "classification",
+        "split_strategy": "stratified_holdout",
+        "column_roles": {
+          "row_id": "id",
+          "country": "constant",
+          "tenure": "numeric",
+          "support_tickets": "numeric",
+          "monthly_charges": "numeric",
+          "churned": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [
+            "country"
+          ],
+          "id_columns": [
+            "row_id"
+          ],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [],
+        "features_used": [
+          "tenure",
+          "support_tickets",
+          "monthly_charges"
+        ],
+        "baseline_strategy": "prior",
+        "baseline_score": 0.5,
+        "expected_beats_baseline": true,
+        "verdict": "warn",
+        "max_safe_deployment_level": 2
+      },
+      "program_chars": 492,
+      "error": null,
+      "prompt_tokens": 1367,
+      "completion_tokens": 1244,
+      "cost_usd": 0.0007587000000000001,
+      "cost_source": "catalog",
+      "latency_s": 6.68
+    },
+    {
+      "task": "ds_constant_column_does_not_break_training",
+      "family": "data_science",
+      "trial": 1,
+      "metric": "roc_auc",
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": true,
+          "detail": "roc_auc=0.7473 on the harness holdout",
+          "weight": 2.0
+        },
+        {
+          "name": "baseline_reported",
+          "passed": true,
+          "detail": "baseline_score=0.5 (prior)",
+          "weight": 2.0
+        },
+        {
+          "name": "role[country]",
+          "passed": true,
+          "detail": "inferred 'constant', expected 'constant'",
+          "weight": 1.0
+        },
+        {
+          "name": "role[row_id]",
+          "passed": true,
+          "detail": "inferred 'id', expected 'id'",
+          "weight": 1.0
+        },
+        {
+          "name": "quality[constant_columns:country]",
+          "passed": true,
+          "detail": "'country' in constant_columns=['country']",
+          "weight": 1.0
+        }
+      ],
+      "measured": {
+        "model": 0.7473324797268459,
+        "baseline": 0.5,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "classification",
+        "split_strategy": "stratified_holdout",
+        "column_roles": {
+          "row_id": "id",
+          "country": "constant",
+          "tenure": "numeric",
+          "support_tickets": "numeric",
+          "monthly_charges": "numeric",
+          "churned": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [
+            "country"
+          ],
+          "id_columns": [
+            "row_id"
+          ],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [],
+        "features_used": [
+          "tenure",
+          "support_tickets",
+          "monthly_charges"
+        ],
+        "baseline_strategy": "prior",
+        "baseline_score": 0.5,
+        "expected_beats_baseline": false,
+        "verdict": "warn",
+        "max_safe_deployment_level": 1
+      },
+      "program_chars": 537,
+      "error": null,
+      "prompt_tokens": 1367,
+      "completion_tokens": 1293,
+      "cost_usd": 0.0007832000000000001,
+      "cost_source": "catalog",
+      "latency_s": 7.33
+    },
+    {
+      "task": "ds_constant_column_does_not_break_training",
+      "family": "data_science",
+      "trial": 2,
+      "metric": "roc_auc",
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": true,
+          "detail": "roc_auc=0.7473 on the harness holdout",
+          "weight": 2.0
+        },
+        {
+          "name": "baseline_reported",
+          "passed": true,
+          "detail": "baseline_score=0.5 (prior)",
+          "weight": 2.0
+        },
+        {
+          "name": "role[country]",
+          "passed": true,
+          "detail": "inferred 'constant', expected 'constant'",
+          "weight": 1.0
+        },
+        {
+          "name": "role[row_id]",
+          "passed": true,
+          "detail": "inferred 'id', expected 'id'",
+          "weight": 1.0
+        },
+        {
+          "name": "quality[constant_columns:country]",
+          "passed": true,
+          "detail": "'country' in constant_columns=['country']",
+          "weight": 1.0
+        }
+      ],
+      "measured": {
+        "model": 0.7473324797268459,
+        "baseline": 0.5,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "classification",
+        "split_strategy": "stratified_holdout",
+        "column_roles": {
+          "row_id": "id",
+          "country": "constant",
+          "tenure": "numeric",
+          "support_tickets": "numeric",
+          "monthly_charges": "numeric",
+          "churned": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [
+            "country"
+          ],
+          "id_columns": [
+            "row_id"
+          ],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [],
+        "features_used": [
+          "tenure",
+          "support_tickets",
+          "monthly_charges"
+        ],
+        "baseline_strategy": "prior",
+        "baseline_score": 0.5,
+        "expected_beats_baseline": false,
+        "verdict": "warn",
+        "max_safe_deployment_level": 1
+      },
+      "program_chars": 518,
+      "error": null,
+      "prompt_tokens": 1367,
+      "completion_tokens": 1234,
+      "cost_usd": 0.0007537,
+      "cost_source": "catalog",
+      "latency_s": 6.97
+    },
+    {
+      "task": "ds_continuous_features_reach_the_model",
+      "family": "data_science",
+      "trial": 0,
+      "metric": "rmse",
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": true,
+          "detail": "rmse=1.7845 on the harness holdout",
+          "weight": 2.0
+        },
+        {
+          "name": "beats_baseline",
+          "passed": true,
+          "detail": "measured rmse: model=1.7845, baseline=37.8529, gain=+36.0684, margin=0.7571; beats=True, expected True",
+          "weight": 3.0
+        },
+        {
+          "name": "baseline_reported",
+          "passed": true,
+          "detail": "baseline_score=15.0 (mean)",
+          "weight": 2.0
+        },
+        {
+          "name": "feature_used[latency_ms]",
+          "passed": true,
+          "detail": "latency_ms kept (model saw: ['cpu_load', 'latency_ms'])",
+          "weight": 2.0
+        },
+        {
+          "name": "feature_used[cpu_load]",
+          "passed": true,
+          "detail": "cpu_load kept (model saw: ['cpu_load', 'latency_ms'])",
+          "weight": 2.0
+        }
+      ],
+      "measured": {
+        "model": 1.7845024128654052,
+        "baseline": 37.85288862913285,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "regression",
+        "split_strategy": "random_holdout",
+        "column_roles": {
+          "latency_ms": "numeric",
+          "cpu_load": "numeric",
+          "throughput": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [],
+          "id_columns": [],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [],
+        "features_used": [
+          "latency_ms",
+          "cpu_load"
+        ],
+        "baseline_strategy": "mean",
+        "baseline_score": 15.0,
+        "expected_beats_baseline": true,
+        "verdict": "warn",
+        "max_safe_deployment_level": 1
+      },
+      "program_chars": 437,
+      "error": null,
+      "prompt_tokens": 1462,
+      "completion_tokens": 1232,
+      "cost_usd": 0.0007622,
+      "cost_source": "catalog",
+      "latency_s": 7.36
+    },
+    {
+      "task": "ds_continuous_features_reach_the_model",
+      "family": "data_science",
+      "trial": 1,
+      "metric": "rmse",
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": true,
+          "detail": "rmse=1.7845 on the harness holdout",
+          "weight": 2.0
+        },
+        {
+          "name": "beats_baseline",
+          "passed": true,
+          "detail": "measured rmse: model=1.7845, baseline=37.8529, gain=+36.0684, margin=0.7571; beats=True, expected True",
+          "weight": 3.0
+        },
+        {
+          "name": "baseline_reported",
+          "passed": true,
+          "detail": "baseline_score=12.0 (mean)",
+          "weight": 2.0
+        },
+        {
+          "name": "feature_used[latency_ms]",
+          "passed": true,
+          "detail": "latency_ms kept (model saw: ['cpu_load', 'latency_ms'])",
+          "weight": 2.0
+        },
+        {
+          "name": "feature_used[cpu_load]",
+          "passed": true,
+          "detail": "cpu_load kept (model saw: ['cpu_load', 'latency_ms'])",
+          "weight": 2.0
+        }
+      ],
+      "measured": {
+        "model": 1.7845024128654052,
+        "baseline": 37.85288862913285,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "regression",
+        "split_strategy": "random_holdout",
+        "column_roles": {
+          "latency_ms": "numeric",
+          "cpu_load": "numeric",
+          "throughput": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [],
+          "id_columns": [],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [],
+        "features_used": [
+          "latency_ms",
+          "cpu_load"
+        ],
+        "baseline_strategy": "mean",
+        "baseline_score": 12.0,
+        "expected_beats_baseline": true,
+        "verdict": "warn",
+        "max_safe_deployment_level": 1
+      },
+      "program_chars": 443,
+      "error": null,
+      "prompt_tokens": 1462,
+      "completion_tokens": 1152,
+      "cost_usd": 0.0007222,
+      "cost_source": "catalog",
+      "latency_s": 6.96
+    },
+    {
+      "task": "ds_continuous_features_reach_the_model",
+      "family": "data_science",
+      "trial": 2,
+      "metric": "rmse",
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": true,
+          "detail": "rmse=1.7845 on the harness holdout",
+          "weight": 2.0
+        },
+        {
+          "name": "beats_baseline",
+          "passed": true,
+          "detail": "measured rmse: model=1.7845, baseline=37.8529, gain=+36.0684, margin=0.7571; beats=True, expected True",
+          "weight": 3.0
+        },
+        {
+          "name": "baseline_reported",
+          "passed": true,
+          "detail": "baseline_score=17.0 (mean)",
+          "weight": 2.0
+        },
+        {
+          "name": "feature_used[latency_ms]",
+          "passed": true,
+          "detail": "latency_ms kept (model saw: ['cpu_load', 'latency_ms'])",
+          "weight": 2.0
+        },
+        {
+          "name": "feature_used[cpu_load]",
+          "passed": true,
+          "detail": "cpu_load kept (model saw: ['cpu_load', 'latency_ms'])",
+          "weight": 2.0
+        }
+      ],
+      "measured": {
+        "model": 1.7845024128654052,
+        "baseline": 37.85288862913285,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "regression",
+        "split_strategy": "random_holdout",
+        "column_roles": {
+          "latency_ms": "numeric",
+          "cpu_load": "numeric",
+          "throughput": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [],
+          "id_columns": [],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [],
+        "features_used": [
+          "latency_ms",
+          "cpu_load"
+        ],
+        "baseline_strategy": "mean",
+        "baseline_score": 17.0,
+        "expected_beats_baseline": true,
+        "verdict": "pass",
+        "max_safe_deployment_level": 1
+      },
+      "program_chars": 693,
+      "error": null,
+      "prompt_tokens": 1462,
+      "completion_tokens": 1485,
+      "cost_usd": 0.0008887,
+      "cost_source": "catalog",
+      "latency_s": 7.61
+    },
+    {
+      "task": "ds_no_signal_is_reported_as_no_signal",
+      "family": "data_science",
+      "trial": 0,
+      "metric": "roc_auc",
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": true,
+          "detail": "roc_auc=0.4885 on the harness holdout",
+          "weight": 2.0
+        },
+        {
+          "name": "beats_baseline",
+          "passed": true,
+          "detail": "measured roc_auc: model=0.4885, baseline=0.5000, gain=-0.0115, margin=0.0200; beats=False, expected False",
+          "weight": 3.0
+        },
+        {
+          "name": "verdict",
+          "passed": true,
+          "detail": "verdict 'fail', expected 'fail'",
+          "weight": 2.0
+        },
+        {
+          "name": "max_safe_deployment_level",
+          "passed": true,
+          "detail": "ceiling 1, expected 1",
+          "weight": 2.0
+        },
+        {
+          "name": "baseline_reported",
+          "passed": true,
+          "detail": "baseline_score=0.5 (prior)",
+          "weight": 2.0
+        }
+      ],
+      "measured": {
+        "model": 0.4885488548854886,
+        "baseline": 0.5,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "classification",
+        "split_strategy": "stratified_holdout",
+        "column_roles": {
+          "a": "numeric",
+          "b": "numeric",
+          "c": "categorical",
+          "outcome": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [],
+          "id_columns": [],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [],
+        "features_used": [
+          "a",
+          "b",
+          "c"
+        ],
+        "baseline_strategy": "prior",
+        "baseline_score": 0.5,
+        "expected_beats_baseline": false,
+        "verdict": "fail",
+        "max_safe_deployment_level": 1
+      },
+      "program_chars": 468,
+      "error": null,
+      "prompt_tokens": 1449,
+      "completion_tokens": 1053,
+      "cost_usd": 0.0006714,
+      "cost_source": "catalog",
+      "latency_s": 5.56
+    },
+    {
+      "task": "ds_no_signal_is_reported_as_no_signal",
+      "family": "data_science",
+      "trial": 1,
+      "metric": "roc_auc",
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": true,
+          "detail": "roc_auc=0.4885 on the harness holdout",
+          "weight": 2.0
+        },
+        {
+          "name": "beats_baseline",
+          "passed": true,
+          "detail": "measured roc_auc: model=0.4885, baseline=0.5000, gain=-0.0115, margin=0.0200; beats=False, expected False",
+          "weight": 3.0
+        },
+        {
+          "name": "verdict",
+          "passed": true,
+          "detail": "verdict 'fail', expected 'fail'",
+          "weight": 2.0
+        },
+        {
+          "name": "max_safe_deployment_level",
+          "passed": true,
+          "detail": "ceiling 1, expected 1",
+          "weight": 2.0
+        },
+        {
+          "name": "baseline_reported",
+          "passed": true,
+          "detail": "baseline_score=0.5 (majority_class)",
+          "weight": 2.0
+        }
+      ],
+      "measured": {
+        "model": 0.4885488548854886,
+        "baseline": 0.5,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "classification",
+        "split_strategy": "stratified_holdout",
+        "column_roles": {
+          "a": "numeric",
+          "b": "numeric",
+          "c": "categorical",
+          "outcome": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [],
+          "id_columns": [],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [],
+        "features_used": [
+          "a",
+          "b",
+          "c"
+        ],
+        "baseline_strategy": "majority_class",
+        "baseline_score": 0.5,
+        "expected_beats_baseline": false,
+        "verdict": "fail",
+        "max_safe_deployment_level": 1
+      },
+      "program_chars": 502,
+      "error": null,
+      "prompt_tokens": 1449,
+      "completion_tokens": 1105,
+      "cost_usd": 0.0006974,
+      "cost_source": "catalog",
+      "latency_s": 6.22
+    },
+    {
+      "task": "ds_no_signal_is_reported_as_no_signal",
+      "family": "data_science",
+      "trial": 2,
+      "metric": "roc_auc",
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "name": "model_present",
+          "passed": true,
+          "detail": "roc_auc=0.4885 on the harness holdout",
+          "weight": 2.0
+        },
+        {
+          "name": "beats_baseline",
+          "passed": true,
+          "detail": "measured roc_auc: model=0.4885, baseline=0.5000, gain=-0.0115, margin=0.0200; beats=False, expected False",
+          "weight": 3.0
+        },
+        {
+          "name": "verdict",
+          "passed": true,
+          "detail": "verdict 'fail', expected 'fail'",
+          "weight": 2.0
+        },
+        {
+          "name": "max_safe_deployment_level",
+          "passed": true,
+          "detail": "ceiling 1, expected 1",
+          "weight": 2.0
+        },
+        {
+          "name": "baseline_reported",
+          "passed": true,
+          "detail": "baseline_score=0.5 (prior)",
+          "weight": 2.0
+        }
+      ],
+      "measured": {
+        "model": 0.4885488548854886,
+        "baseline": 0.5,
+        "holdout": "last 25% of rows"
+      },
+      "report": {
+        "task": "classification",
+        "split_strategy": "stratified_holdout",
+        "column_roles": {
+          "a": "numeric",
+          "b": "numeric",
+          "c": "categorical",
+          "outcome": "target"
+        },
+        "quality_flags": {
+          "constant_columns": [],
+          "id_columns": [],
+          "high_missing_columns": []
+        },
+        "leakage_columns": [],
+        "features_used": [
+          "a",
+          "b",
+          "c"
+        ],
+        "baseline_strategy": "prior",
+        "baseline_score": 0.5,
+        "expected_beats_baseline": false,
+        "verdict": "fail",
+        "max_safe_deployment_level": 1
+      },
+      "program_chars": 622,
+      "error": null,
+      "prompt_tokens": 1449,
+      "completion_tokens": 1285,
+      "cost_usd": 0.0007874,
+      "cost_source": "catalog",
+      "latency_s": 6.33
+    }
+  ]
+}

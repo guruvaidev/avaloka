@@ -30,6 +30,58 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- printf "%s-celery" (include "avaloka.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
+{{/* Secret values that have shipped in this repository (chart defaults, .env.example
+placeholders). A generated secret equal to one of them is replaced, as
+app/core/provisioning.py PUBLISHED_VALUES does. Comma-separated, lower case.
+password1234 is the admin password MLflow's basic_auth.ini shipped before 3.17. */}}
+{{- define "avaloka.publishedSecretValues" -}}
+avaloka-local-dev-encryption-key,<generate-with-openssl-rand-hex-32>,<generate-and-store-a-strong-random-secret>,changeme,change-me,secret,test,dev,development,password,password1234
+{{- end -}}
+
+{{/* True ("true") when the value given for a generated secret is a published one. */}}
+{{- define "avaloka.isPublishedSecret" -}}
+{{- if has (lower (trim (toString .))) (splitList "," (include "avaloka.publishedSecretValues" .)) -}}true{{- end -}}
+{{- end -}}
+
+{{/* A generated secret (app/core/provisioning.py GENERATED_SECRETS): the value
+given, unless it is empty or published; else the value this release's Secret
+already holds (lookup, so an upgrade never rotates it), unless that one is
+published; else a new random one. Call with (dict "ctx" . "key" NAME "value" GIVEN).
+Include it once per key: each call without a value or Secret draws a new random. */}}
+{{- define "avaloka.generatedSecret" -}}
+{{- $ctx := .ctx -}}
+{{- $v := trim (toString (.value | default "")) -}}
+{{- if include "avaloka.isPublishedSecret" $v -}}{{- $v = "" -}}{{- end -}}
+{{- if not $v -}}
+{{- $existing := lookup "v1" "Secret" $ctx.Release.Namespace (include "avaloka.secretName" $ctx) -}}
+{{- if and $existing $existing.data (index $existing.data .key) -}}
+{{- $old := index $existing.data .key | b64dec -}}
+{{- if not (include "avaloka.isPublishedSecret" $old) -}}{{- $v = $old -}}{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- $v | default (randAlphaNum 48) -}}
+{{- end -}}
+
+{{/*
+The agents' model provider (MP-01, owner ruling 2026-11-02). An explicit
+inference.provider is kept. "auto" picks what the release's keys can serve:
+openrouter with an OpenRouter key, else groq with a Groq key, else openrouter.
+With existingSecret the keys are not visible here, so nothing is emitted and
+app/core/inference.py applies the same key-aware rule to the real environment.
+*/}}
+{{- define "avaloka.inferenceProvider" -}}
+{{- $p := lower (default "auto" .Values.inference.provider) -}}
+{{- if ne $p "auto" -}}
+{{- $p -}}
+{{- else if .Values.secrets.openrouterKey -}}
+openrouter
+{{- else if or .Values.secrets.groqPlanningKey .Values.secrets.groqCodingKey .Values.secrets.groqApiKey -}}
+groq
+{{- else if not .Values.existingSecret -}}
+openrouter
+{{- end -}}
+{{- end -}}
+
 {{/* Name of the Secret holding the GROQ keys (existing or chart-managed). */}}
 {{- define "avaloka.secretName" -}}
 {{- if .Values.existingSecret -}}
@@ -37,6 +89,36 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- else -}}
 {{- printf "%s-secrets" (include "avaloka.fullname" .) -}}
 {{- end -}}
+{{- end -}}
+
+{{/* Namespace of the shared RayCluster/RayService (config.mtaRayNamespace, else
+the release namespace). */}}
+{{- define "avaloka.rayNamespace" -}}
+{{- .Values.config.mtaRayNamespace | default .Release.Namespace -}}
+{{- end -}}
+
+{{/* Secret the Ray pods and the KubeRay operator read the Ray auth token from
+(key auth_token, the key KubeRay's authOptions.secretName expects). The raw
+manifests in deploy/helm/ray name it literally: avaloka-ray-auth. */}}
+{{- define "avaloka.rayAuthSecretName" -}}
+{{- printf "%s-ray-auth" (include "avaloka.fullname" .) -}}
+{{- end -}}
+
+{{/* NetworkPolicy peer for the KubeRay operator pod, which reads job and Serve
+status from Ray dashboards. ray.networkPolicy.operatorNamespace narrows it to
+one namespace; empty admits the operator pod in any namespace (ray_manager
+installs it in the release namespace, k8s_invoker in kuberay-operator). */}}
+{{- define "avaloka.kuberayOperatorPeer" -}}
+- namespaceSelector:
+    {{- with (dig "networkPolicy" "operatorNamespace" "" (.Values.ray | default dict)) }}
+    matchLabels:
+      kubernetes.io/metadata.name: {{ . | quote }}
+    {{- else }}
+    matchLabels: {}
+    {{- end }}
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: kuberay-operator
 {{- end -}}
 
 {{/* Effective Ray address based on connect-vs-provision toggle. */}}
@@ -171,9 +253,9 @@ app.kubernetes.io/instance: {{ .Release.Name }}
      the app can only have one S3 endpoint — so it is refused loudly here instead
      of silently resolving to whichever branch happens to be checked first. */}}
 {{- define "avaloka.objectStoreName" -}}
-{{- if and .Values.seaweedfs.enabled .Values.minio.enabled -}}
+{{- if and (.Values.seaweedfs).enabled .Values.minio.enabled -}}
 {{- fail "seaweedfs.enabled and minio.enabled are both true; the chart runs exactly one in-cluster object store (minio is the rollback path for one release)" -}}
-{{- else if .Values.seaweedfs.enabled -}}
+{{- else if (.Values.seaweedfs).enabled -}}
 {{- "seaweedfs" -}}
 {{- else if .Values.minio.enabled -}}
 {{- "minio" -}}
@@ -504,4 +586,112 @@ storage.className commentary in values.yaml, which already states this correctly
 {{- $component := .component | default dict -}}
 {{- $persistence := $component.persistence | default dict -}}
 {{- $persistence.accessMode | default (.ctx.Values.storage).accessMode | default "ReadWriteOnce" -}}
+{{- end -}}
+
+
+{{/*
+Namespace the data transfer agent's KubeRay RayJobs and their per-job
+credential Secrets go in: config.dtaJobNamespace, else "<release>-dta-jobs".
+A dedicated namespace, so the app's Secret verbs there reach no other Secret.
+*/}}
+{{- define "avaloka.dtaJobNamespace" -}}
+{{- default (printf "%s-dta-jobs" .Release.Name) .Values.config.dtaJobNamespace -}}
+{{- end -}}
+
+{{/*
+Comma-separated admin addresses from admin.emails (a list, or a comma-separated
+string). Empty when unset: no account is an admin, and nothing falls back to a
+built-in address. Consumers normalise case and whitespace.
+*/}}
+{{- define "avaloka.adminEmails" -}}
+{{- $raw := (.Values.admin).emails | default list -}}
+{{- $list := list -}}
+{{- if kindIs "string" $raw -}}
+{{- $list = splitList "," $raw -}}
+{{- else -}}
+{{- $list = $raw -}}
+{{- end -}}
+{{- $out := list -}}
+{{- range $list -}}
+{{- $e := . | toString | trim | lower -}}
+{{- if $e -}}
+{{- $out = append $out $e -}}
+{{- end -}}
+{{- end -}}
+{{- join "," $out -}}
+{{- end -}}
+
+{{/*
+The LangGraph server's image. It is the API image's build plus langgraph-cli
+(requirements-langgraph-server.txt), published as avaloka-langgraph next to
+avaloka-api; the API image no longer carries the CLI, because the
+langgraph-api it brings caps cryptography below its fixes.
+Unset, the repository is image.repository with avaloka-api replaced by
+avaloka-langgraph (so every overlay that points image.repository at a registry
+gets the matching server image there) and the tag is image.tag. A repository
+that does not name avaloka-api cannot be derived: rendering fails instead of
+starting `langgraph dev` from an image that has no langgraph command.
+*/}}
+{{- define "avaloka.langgraphImage" -}}
+{{- /* dig: an install made before langgraph.image existed must still upgrade with --reuse-values */ -}}
+{{- $lgImage := dig "image" dict (.Values.langgraph | default dict) -}}
+{{- $repo := dig "repository" "" $lgImage -}}
+{{- if not $repo -}}
+{{- if not (contains "avaloka-api" .Values.image.repository) -}}
+{{- fail (printf "langgraph.image.repository must be set: image.repository %q does not name avaloka-api, so the LangGraph server image (avaloka-langgraph) cannot be derived from it" .Values.image.repository) -}}
+{{- end -}}
+{{- $repo = replace "avaloka-api" "avaloka-langgraph" .Values.image.repository -}}
+{{- end -}}
+{{- printf "%s:%s" $repo (default .Values.image.tag (dig "tag" "" $lgImage) | toString) -}}
+{{- end -}}
+
+{{/*
+ray.auth, ray.networkPolicy, mlflow.auth and mlflow.networkPolicy with their
+values.yaml defaults. `helm upgrade --reuse-values` of an install made before
+these keys existed hands the templates the old values only; walking into a
+missing map (`.Values.ray.auth.enabled`) is a nil-pointer error that aborts the
+whole upgrade (tests/contract/test_chart_reuse_values.py). Each prints "true"
+or nothing, for `if`.
+*/}}
+{{- define "avaloka.rayAuthEnabled" -}}
+{{- if dig "auth" "enabled" true (.Values.ray | default dict) }}true{{- end -}}
+{{- end }}
+{{- define "avaloka.rayNetworkPolicyEnabled" -}}
+{{- if dig "networkPolicy" "enabled" true (.Values.ray | default dict) }}true{{- end -}}
+{{- end }}
+{{- define "avaloka.mlflowAuthEnabled" -}}
+{{- if dig "auth" "enabled" true (.Values.mlflow | default dict) }}true{{- end -}}
+{{- end }}
+{{- define "avaloka.mlflowNetworkPolicyEnabled" -}}
+{{- if dig "networkPolicy" "enabled" true (.Values.mlflow | default dict) }}true{{- end -}}
+{{- end }}
+
+{{/*
+Third-party usage beacons off (app/core/thirdparty_optout.py says what each
+one silences: daft -> scarf.sh and osstelemetry.io, mlflow, onnxruntime,
+chroma, HF hub, dvc, Ray usage stats, streamlit, langgraph-cli and its PyPI
+version check). The images bake the same values; this covers an image built
+elsewhere. One list for the ConfigMap and for the pods that read none
+(tests/contract/test_thirdparty_telemetry_optout.py holds every container to it).
+*/}}
+{{- define "avaloka.thirdPartyOptout" -}}
+DO_NOT_TRACK: "true"
+SCARF_NO_ANALYTICS: "true"
+ORT_DISABLE_TELEMETRY: "1"
+ANONYMIZED_TELEMETRY: "False"
+MLFLOW_DISABLE_TELEMETRY: "true"
+HF_HUB_DISABLE_TELEMETRY: "1"
+DVC_NO_ANALYTICS: "1"
+RAY_USAGE_STATS_ENABLED: "0"
+STREAMLIT_BROWSER_GATHER_USAGE_STATS: "false"
+LANGGRAPH_CLI_NO_ANALYTICS: "1"
+LANGGRAPH_NO_VERSION_CHECK: "true"
+{{- end -}}
+
+{{/* The same list as container env entries, for a container that reads no ConfigMap. */}}
+{{- define "avaloka.thirdPartyOptoutEnv" -}}
+{{- range $name, $value := (include "avaloka.thirdPartyOptout" . | fromYaml) }}
+- name: {{ $name }}
+  value: {{ $value | quote }}
+{{- end }}
 {{- end -}}

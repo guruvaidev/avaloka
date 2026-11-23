@@ -8,12 +8,13 @@ them to the right executor instead of prompting.
 import json, re, sys
 from pathlib import Path
 
-PLAN = Path(__file__).resolve().parents[1] / "avaloka-test-results" / "TEST_PLAN_v4.md"
+REPO = Path(__file__).resolve().parents[2]
+PLAN = REPO / "tests" / "avaloka-test-results" / "TEST_PLAN_v4.md"
 OUT = Path(__file__).resolve().parent / "suites" / "v4_suite.json"
 
 # ---- per-ID overrides -------------------------------------------------------
 # kind: chat | ingest | api | k8s | skip
-# MTA RULE (from Mehebub): registered models are NOT used via prompt — the
+# MTA RULE: registered models are NOT used via prompt — the
 # Inference tab is the door. IN-1/IN-2 therefore run as batch-inference API
 # calls (the tab's backend), never as chat.
 KIND = {
@@ -106,7 +107,7 @@ def main():
             else:
                 item.update(extra)
             cur["items"].append(item)
-    out = {"suite": "v4", "source": str(PLAN), "thread_datasets": THREAD_DATASET, "batches": groups}
+    out = {"suite": "v4", "source": PLAN.relative_to(REPO).as_posix(), "thread_datasets": THREAD_DATASET, "batches": groups}
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(json.dumps(out, indent=1))
     n = sum(len(g["items"]) for g in groups)

@@ -35,6 +35,11 @@ TIER_MISSION_CHARGE = {
 
 DEFAULT_LOADED_HOURLY_RATE = 80.0  # loaded labour cost per the spec's illustration
 
+#: Said beside every manual-effort figure a person reads. The hours are fixed
+#: minutes per firefly (e.g. the Data Scout's 45 + 6 per column) added up; no
+#: customer workflow has calibrated them yet, so they are never "measured".
+MANUAL_EFFORT_CAVEAT = "rough heuristic estimate, not measured"
+
 
 @dataclass
 class EconomicReport:
@@ -68,7 +73,8 @@ class EconomicReport:
         """
         return [
             ("Mission duration", self._duration()),
-            ("Estimated manual effort", f"{self.estimated_manual_effort_hours:,.1f} hours"),
+            ("Estimated manual effort",
+             f"{self.estimated_manual_effort_hours:,.1f} hours ({MANUAL_EFFORT_CAVEAT})"),
             ("Human review required", f"{self.human_review_hours:,.1f} hours"),
             ("Avaloka compute cost", f"${self.compute_cost_usd:,.2f}"),
             ("Avaloka model/API cost", f"${self.model_cost_usd:,.2f}"),
@@ -76,8 +82,9 @@ class EconomicReport:
             ("Total mission cost (Avaloka)", f"${self.total_mission_cost_usd:,.2f}"),
             ("Human review cost", f"${self.human_review_cost_usd:,.2f}"),
             ("Total customer cost", f"${self.total_customer_cost_usd:,.2f}"),
-            ("Estimated labor value created", f"${self.estimated_labor_value_usd:,.0f}"),
-            ("Economic multiplier", f"{self.economic_multiplier:,.1f}x"),
+            ("Estimated labor value created",
+             f"${self.estimated_labor_value_usd:,.0f} (from the manual-effort estimate)"),
+            ("Economic multiplier", f"{self.economic_multiplier:,.1f}x (from the manual-effort estimate)"),
         ]
 
 

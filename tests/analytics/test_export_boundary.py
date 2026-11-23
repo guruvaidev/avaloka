@@ -3,11 +3,10 @@
 Everything here drives the real path -- HTTP in, database, ``export_pending``
 out -- and asserts on the bytes handed to the network function.
 
-Two groups. The first proves what ships: NO question text is exported, whatever
-is configured. The second keeps the disabled question-text path proven on
-constructed data, by flipping ``export.EXPORT_QUESTION_TEXT`` in the test only;
-those tests take the ``text_path`` fixture and describe a capability, not
-production behaviour.
+What ships: NO question text is exported, whatever is configured (owner
+decision D16.5). The question-text export path that used to sit behind
+``export.EXPORT_QUESTION_TEXT`` was removed, and its tests with it;
+``test_no_prompt_egress.py`` holds the decision at the transport.
 """
 import json
 
@@ -19,7 +18,7 @@ from app.analytics import allowlist, export, schema
 from app.analytics.collector import build_router
 from app.analytics.store import PROMOTED, events as events_table
 from tests.analytics.conftest import USER, batch, ev
-from tests.analytics.test_names import NAMES, PLANTED
+from tests.analytics.test_names import PLANTED
 
 ENDPOINT = "https://ingest.example.test/v1/events"
 
@@ -37,10 +36,9 @@ class Wire:
         return json.dumps(self.records).casefold()
 
 
-def make_client(store, provider):
+def make_client(store):
     app = FastAPI()
-    app.include_router(build_router(lambda r: r.headers.get("X-Test-User"), store=store,
-                                    names_provider=provider))
+    app.include_router(build_router(lambda r: r.headers.get("X-Test-User"), store=store))
     return TestClient(app)
 
 
@@ -48,12 +46,6 @@ def make_client(store, provider):
 def export_on(monkeypatch):
     monkeypatch.setenv("AVALOKA_ANALYTICS_EXPORT", "on")
     monkeypatch.setenv("AVALOKA_ANALYTICS_EXPORT_ENDPOINT", ENDPOINT)
-
-
-@pytest.fixture
-def text_path(monkeypatch):
-    """Open the disabled question-text path. Tests only; nothing in the product does this."""
-    monkeypatch.setattr(export, "EXPORT_QUESTION_TEXT", True)
 
 
 def ask(client, prompt, turn="7" * 16):
@@ -68,77 +60,6 @@ def exported(store):
     return wire
 
 
-@pytest.mark.parametrize("text,gone", PLANTED, ids=[p[0][:36] for p in PLANTED])
-def test_planted_names_never_reach_the_wire_but_stay_in_the_local_store(store, export_on, text_path, text, gone):
-    ask(make_client(store, lambda request, user: NAMES), text)
-    wire = exported(store)
-    # Masked as a name, or already as a quoted literal by the pattern pass.
-    assert len(wire.records) == 1 and "[" in wire.records[0]["prompt_stripped"]
-    for fragment in gone:
-        assert fragment.casefold() not in wire.text
-    # Tier one: the deployment's own copy keeps the question as typed.
-    assert store.all_rows()[0]["prompt"] is not None
-
-
-def test_the_local_store_keeps_names_and_the_wire_does_not(store, export_on, text_path):
-    ask(make_client(store, lambda request, user: NAMES), "average patient_hiv_status by region")
-    assert store.all_rows()[0]["prompt"] == "average patient_hiv_status by region"
-    record = exported(store).records[0]
-    assert record["prompt_stripped"] == "average [name] by [name]" and record["prompt_names_exact"] == 1 and record["prompt_names_common_word"] == 1
-    assert "prompt" not in record and "prompt_export" not in record
-
-
-@pytest.mark.parametrize("provider", [
-    None,                                              # no provider wired
-    lambda request, user: None,                        # schema unavailable
-    lambda request, user: [],                          # analyst has no registered dataset
-    lambda request, user: set(),
-    lambda request, user: ["", "___"],                 # names that normalise to nothing
-    lambda request, user: (_ for _ in ()).throw(RuntimeError("redis down")),
-], ids=["no-provider", "unavailable", "no-datasets", "empty-set", "unusable-names", "provider-raises"])
-def test_fail_closed_no_vocabulary_no_question_text(store, export_on, text_path, provider):
-    ask(make_client(store, provider), "average patient_hiv_status by clinic")
-    wire = exported(store)
-    assert len(wire.records) == 1                       # the behavioural event still goes
-    assert "prompt_stripped" not in wire.records[0]
-    assert "hiv" not in wire.text and "clinic" not in wire.text and "average" not in wire.text
-
-
-def test_async_provider_is_awaited(store, export_on, text_path):
-    async def provider(request, user):
-        return NAMES
-    ask(make_client(store, provider), "average patient_hiv_status")
-    assert exported(store).records[0]["prompt_stripped"] == "average [name]"
-
-
-def test_provider_is_given_the_real_user_and_only_that_users_names_apply(store, export_on, text_path):
-    seen = []
-    def provider(request, user):
-        seen.append(user)
-        return NAMES
-    ask(make_client(store, provider), "status")
-    assert seen == [USER["X-Test-User"]]
-
-
-def test_questions_captured_while_export_was_off_are_never_exported(store, monkeypatch, text_path):
-    calls = []
-    client = make_client(store, lambda request, user: calls.append(user) or NAMES)
-    ask(client, "average patient_hiv_status by clinic")
-    assert calls == []                                  # no vocabulary lookup while export is off
-    monkeypatch.setenv("AVALOKA_ANALYTICS_EXPORT", "on")
-    monkeypatch.setenv("AVALOKA_ANALYTICS_EXPORT_ENDPOINT", ENDPOINT)
-    wire = exported(store)
-    assert len(wire.records) == 1 and "prompt_stripped" not in wire.records[0] and "hiv" not in wire.text
-
-
-def test_pattern_redaction_still_applies_on_the_wire(store, export_on, text_path):
-    ask(make_client(store, lambda request, user: NAMES),
-        "mail ravi@acme.example the region totals from q3.csv, token is hunter2")
-    text = exported(store).text
-    for fragment in ("ravi", "acme", "q3.csv", "hunter2", "region"):
-        assert fragment not in text
-
-
 # -- what ships: no question text, whatever is configured ------------------------
 
 from tests.analytics.test_redaction import KEPT
@@ -150,13 +71,15 @@ def _content_words(question):
     return {w for w in __import__("re").findall(r"[a-z_]{4,}", question.casefold())}
 
 
-def test_question_text_export_is_off_in_code():
-    assert export.EXPORT_QUESTION_TEXT is False
+def test_there_is_no_question_text_switch_in_code():
+    # D16.5: the path was removed, not switched off.
+    assert not hasattr(export, "EXPORT_QUESTION_TEXT")
+    assert not hasattr(allowlist, "EXPORT_TEXT_KEYS")
 
 
 @pytest.mark.parametrize("question", ALL_QUESTIONS, ids=[q[:36] for q in ALL_QUESTIONS])
 def test_no_question_text_reaches_the_wire(store, export_on, question):
-    ask(make_client(store, lambda request, user: NAMES), question)
+    ask(make_client(store), question)
     wire = exported(store)
     assert len(wire.records) == 1                              # the behavioural event still goes
     record = wire.records[0]
@@ -169,10 +92,10 @@ def test_no_question_text_reaches_the_wire(store, export_on, question):
     assert store.all_rows()[0]["prompt_export"] is None        # no exportable form is even prepared
 
 
-def test_the_name_vocabulary_is_never_looked_up_in_production(store, export_on):
-    calls = []
-    ask(make_client(store, lambda request, user: calls.append(user) or NAMES), "average patient_hiv_status")
-    assert calls == []
+def test_the_collector_takes_no_name_vocabulary():
+    # The vocabulary existed only to prepare an exportable question.
+    import inspect
+    assert "names_provider" not in inspect.signature(build_router).parameters
 
 
 @pytest.mark.parametrize("env", [
@@ -185,12 +108,12 @@ def test_the_name_vocabulary_is_never_looked_up_in_production(store, export_on):
 def test_no_setting_turns_question_text_export_on(store, export_on, monkeypatch, env):
     for k, v in env.items():
         monkeypatch.setenv(k, v)
-    ask(make_client(store, lambda request, user: NAMES), "average revenue by month")
+    ask(make_client(store), "average revenue by month")
     wire = exported(store)
     assert "revenue" not in wire.text and "prompt_stripped" not in wire.records[0]
 
 
-def test_a_stored_exportable_form_is_ignored_while_the_path_is_off():
+def test_a_stored_exportable_form_is_never_read():
     # Even a row that somehow has prompt_export populated exports no text.
     row = _full_row("question.submitted")
     record = export.to_wire(row, "i" * 32)
@@ -210,7 +133,7 @@ def test_export_permit_list_excludes_every_sensitive_stored_field():
     assert "received_at" not in allowlist.EXPORT_KEYS
     # The only prompt-derived key in the exported representation is the length band.
     assert {k for k in allowlist.EXPORT_KEYS if "prompt" in k} == {"prompt_chars_bucket"}
-    assert not (allowlist.EXPORT_KEYS & allowlist.EXPORT_TEXT_KEYS)
+    assert not (allowlist.EXPORT_KEYS & {"prompt_stripped", "prompt_export", "prompt_redactions"})
 
 
 def test_published_schema_states_both_representations():
@@ -245,7 +168,8 @@ def test_exported_projection_never_carries_a_sensitive_or_undeclared_field(event
     dumped = json.dumps(record)
     assert "SENSITIVE stored question" not in dumped and "MARK-prompt-in-props" not in dumped
     assert "MARK-export-in-props" not in dumped and "MARK-received_at" not in dumped
-    assert "stripped question" not in dumped and not (set(record) & allowlist.EXPORT_TEXT_KEYS)
+    assert "stripped question" not in dumped and not any(k.startswith("prompt_") and k != "prompt_chars_bucket"
+                                                         for k in record)
     required, optional = schema.EVENTS[event_type]
     declared = set(required) | set(optional) | set(schema.COMMON_REQUIRED) | set(schema.COMMON_OPTIONAL)
     server_side = {"actor_id", "schema_version", "session_id", "ui_version", "install_id",
@@ -294,7 +218,7 @@ T0 = dt.datetime(2026, 10, 1, tzinfo=dt.timezone.utc)
 
 
 def test_exported_actor_is_not_the_stored_actor_and_the_secret_never_leaves(store, export_on):
-    ask(make_client(store, lambda request, user: NAMES), "status")
+    ask(make_client(store), "status")
     stored = store.all_rows()[0]["actor_id"]
     wire = exported(store)
     assert wire.records[0]["actor_id"] != stored and len(wire.records[0]["actor_id"]) == 32
@@ -323,7 +247,7 @@ def test_same_human_in_two_deployments_gets_unrelated_ids_stored_and_exported(st
 
 
 def test_knowing_the_user_id_and_everything_exported_does_not_yield_the_actor(store, export_on):
-    ask(make_client(store, lambda request, user: NAMES), "status")
+    ask(make_client(store), "status")
     record = exported(store).records[0]
     user = USER["X-Test-User"]
     # Every key an outsider holds: the install id and the other ids on the wire.

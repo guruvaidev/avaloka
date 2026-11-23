@@ -1,7 +1,10 @@
 onnx>=1.15.0
-onnxruntime>=1.16.0
+# 1.31.0 is the build whose 1DS telemetry opt-out (ORT_DISABLE_TELEMETRY, set in
+# this image's ENV) is tested; it ships wheels for Python >= 3.11 only.
+onnxruntime==1.31.0; python_version >= "3.11"
+onnxruntime>=1.16.0; python_version < "3.11"
 onnxscript
-mlflow==3.6.0
+mlflow==3.17.2
 pandas>=2.0.0,<3
 numpy>=1.24.0
 google-cloud-storage>=3.4

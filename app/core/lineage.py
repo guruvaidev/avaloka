@@ -637,6 +637,41 @@ class LineageStore:
                 self.add_node(Node(connection_id, NodeKind.CONNECTION))
                 self.add_edge(Edge(dataset_id, EdgeKind.LOADED_FROM, connection_id))
 
+    def forget(self, dataset_id: str) -> Dict[str, int]:
+        """Remove a dataset from this tenant's graph: the node, its column
+        nodes, their vault rows, and every edge touching any of them.
+
+        The catalog's delete calls this (``app/catalog``): a dataset the user
+        asked Avaloka to forget must not keep answering "where did this come
+        from?" through its column digests. Only this tenant's rows are touched;
+        the same id under another tenant is another dataset. Returns the row
+        counts removed, all zero when the store is off or the id is unknown.
+        """
+        empty = {"nodes": 0, "edges": 0, "vault": 0}
+        if self._backend is None or not dataset_id:
+            return empty
+
+        def remove(conn: Any) -> Dict[str, int]:
+            tenant = self.tenant_id
+            column_ids = [row[0] for row in conn.execute(
+                select(edge_table.c.dst).where(
+                    (edge_table.c.tenant_id == tenant)
+                    & (edge_table.c.src == dataset_id)
+                    & (edge_table.c.kind == EdgeKind.HAS_COLUMN.value))
+            ).fetchall()]
+            ids = [dataset_id, *column_ids]
+            edges = conn.execute(edge_table.delete().where(
+                (edge_table.c.tenant_id == tenant)
+                & (edge_table.c.src.in_(ids) | edge_table.c.dst.in_(ids)))).rowcount
+            vault = conn.execute(vault_table.delete().where(
+                (vault_table.c.tenant_id == tenant) & vault_table.c.id.in_(ids))).rowcount
+            nodes = conn.execute(node_table.delete().where(
+                (node_table.c.tenant_id == tenant) & node_table.c.id.in_(ids))).rowcount
+            conn.commit()
+            return {"nodes": int(nodes or 0), "edges": int(edges or 0), "vault": int(vault or 0)}
+
+        return self._run("forgetting a dataset", remove, empty)
+
     def record_model(self, model_id: str, *, trained_on: str,
                      feature_columns: Sequence[str] = (), **attrs: Any) -> None:
         if feature_columns and self._column_salt() is None:

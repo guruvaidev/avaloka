@@ -1,0 +1,5260 @@
+{
+ "_about": "rc17 (00c0f31b) upload cards from the rweb17 regrade, minimum fields only. Built by ~/avaloka-work/cardtruth/scripts/build_fixture.py from ~/avaloka-work/states/rweb17/<run>/<cell>/upload.json.",
+ "messy_xlsx": {
+  "source": "rw7a/messy_xlsx upload.json profile_response.body.visualization_config",
+  "columns": [
+   "InvoiceNo",
+   "StockCode",
+   "Description",
+   "Quantity",
+   "InvoiceDate",
+   "UnitPrice",
+   "CustomerID",
+   "Country"
+  ],
+  "profiles": [
+   {
+    "name": "InvoiceNo",
+    "dtype": "categorical",
+    "role": "dimension"
+   },
+   {
+    "name": "StockCode",
+    "dtype": "categorical",
+    "role": "dimension"
+   },
+   {
+    "name": "Description",
+    "dtype": "categorical",
+    "role": "dimension"
+   },
+   {
+    "name": "Quantity",
+    "dtype": "numeric",
+    "role": "measure"
+   },
+   {
+    "name": "InvoiceDate",
+    "dtype": "datetime",
+    "role": "time"
+   },
+   {
+    "name": "UnitPrice",
+    "dtype": "numeric",
+    "role": "measure"
+   },
+   {
+    "name": "CustomerID",
+    "dtype": "numeric",
+    "role": "measure"
+   },
+   {
+    "name": "Country",
+    "dtype": "categorical",
+    "role": "dimension"
+   }
+  ],
+  "charts": [
+   {
+    "id": "llm_0",
+    "type": "bar",
+    "intent": "comparison",
+    "encodings": {
+     "x": {
+      "field": "Country",
+      "type": "nominal"
+     },
+     "y": {
+      "field": "Quantity",
+      "type": "quantitative",
+      "aggregate": "rate_negative"
+     }
+    },
+    "config": {
+     "top_k": 15
+    },
+    "llm_title": "Return rate by country",
+    "llm_insight": "The share of returned items (negative quantity) varies noticeably across countries, with some markets showing a much higher return proportion than others."
+   },
+   {
+    "id": "llm_3",
+    "type": "bar",
+    "intent": "comparison",
+    "encodings": {
+     "x": {
+      "field": "Country",
+      "type": "nominal"
+     },
+     "y": {
+      "field": "CustomerID",
+      "type": "quantitative",
+      "aggregate": "missing_rate"
+     }
+    },
+    "config": {
+     "top_k": 15
+    },
+    "llm_title": "Missing CustomerID rate by country",
+    "llm_insight": "Missing customer identifiers are common overall and especially prevalent in certain countries, limiting the ability to analyse repeat buying or segmentation."
+   }
+  ],
+  "shown_insight_facts": {
+   "llm_0": "Rate_negative Quantity by Country: highest is United Kingdom (138,377), lowest is Netherlands (97) in the full file. The top group is 1426.6× the lowest.",
+   "llm_3": "Missing_rate CustomerID by Country: highest is United Kingdom (195.34M), lowest is Netherlands (25,582) in the full file. The top group is 7636.0× the lowest."
+  },
+  "sample_rows": [
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 2.55
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 3.39
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 8,
+    "CustomerID": 17850.0,
+    "UnitPrice": 2.75
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 3.39
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 3.39
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 2,
+    "CustomerID": 17850.0,
+    "UnitPrice": 7.65
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 4.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 1.85
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 1.85
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 32,
+    "CustomerID": 13047.0,
+    "UnitPrice": 1.69
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 13047.0,
+    "UnitPrice": 2.1
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 13047.0,
+    "UnitPrice": 2.1
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 8,
+    "CustomerID": 13047.0,
+    "UnitPrice": 3.75
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 13047.0,
+    "UnitPrice": 1.65
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 13047.0,
+    "UnitPrice": 4.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 3,
+    "CustomerID": 13047.0,
+    "UnitPrice": 4.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 2,
+    "CustomerID": 13047.0,
+    "UnitPrice": 9.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 3,
+    "CustomerID": 13047.0,
+    "UnitPrice": 5.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 3,
+    "CustomerID": 13047.0,
+    "UnitPrice": 5.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 4,
+    "CustomerID": 13047.0,
+    "UnitPrice": 7.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 4,
+    "CustomerID": 13047.0,
+    "UnitPrice": 7.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 13047.0,
+    "UnitPrice": 4.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 3,
+    "CustomerID": 13047.0,
+    "UnitPrice": 4.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 3,
+    "CustomerID": 13047.0,
+    "UnitPrice": 4.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 3,
+    "CustomerID": 13047.0,
+    "UnitPrice": 4.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 3,
+    "CustomerID": 13047.0,
+    "UnitPrice": 5.95
+   },
+   {
+    "Country": "France",
+    "Quantity": 24,
+    "CustomerID": 12583.0,
+    "UnitPrice": 3.75
+   },
+   {
+    "Country": "France",
+    "Quantity": 24,
+    "CustomerID": 12583.0,
+    "UnitPrice": 3.75
+   },
+   {
+    "Country": "France",
+    "Quantity": 12,
+    "CustomerID": 12583.0,
+    "UnitPrice": 3.75
+   },
+   {
+    "Country": "France",
+    "Quantity": 12,
+    "CustomerID": 12583.0,
+    "UnitPrice": 0.85
+   },
+   {
+    "Country": "France",
+    "Quantity": 24,
+    "CustomerID": 12583.0,
+    "UnitPrice": 0.65
+   },
+   {
+    "Country": "France",
+    "Quantity": 48,
+    "CustomerID": 12583.0,
+    "UnitPrice": 0.85
+   },
+   {
+    "Country": "France",
+    "Quantity": 24,
+    "CustomerID": 12583.0,
+    "UnitPrice": 1.25
+   },
+   {
+    "Country": "France",
+    "Quantity": 18,
+    "CustomerID": 12583.0,
+    "UnitPrice": 2.95
+   },
+   {
+    "Country": "France",
+    "Quantity": 24,
+    "CustomerID": 12583.0,
+    "UnitPrice": 2.95
+   },
+   {
+    "Country": "France",
+    "Quantity": 24,
+    "CustomerID": 12583.0,
+    "UnitPrice": 1.95
+   },
+   {
+    "Country": "France",
+    "Quantity": 24,
+    "CustomerID": 12583.0,
+    "UnitPrice": 1.95
+   },
+   {
+    "Country": "France",
+    "Quantity": 24,
+    "CustomerID": 12583.0,
+    "UnitPrice": 1.95
+   },
+   {
+    "Country": "France",
+    "Quantity": 20,
+    "CustomerID": 12583.0,
+    "UnitPrice": 0.85
+   },
+   {
+    "Country": "France",
+    "Quantity": 24,
+    "CustomerID": 12583.0,
+    "UnitPrice": 1.65
+   },
+   {
+    "Country": "France",
+    "Quantity": 24,
+    "CustomerID": 12583.0,
+    "UnitPrice": 2.95
+   },
+   {
+    "Country": "France",
+    "Quantity": 12,
+    "CustomerID": 12583.0,
+    "UnitPrice": 3.75
+   },
+   {
+    "Country": "France",
+    "Quantity": 24,
+    "CustomerID": 12583.0,
+    "UnitPrice": 0.42
+   },
+   {
+    "Country": "France",
+    "Quantity": 24,
+    "CustomerID": 12583.0,
+    "UnitPrice": 0.42
+   },
+   {
+    "Country": "France",
+    "Quantity": 36,
+    "CustomerID": 12583.0,
+    "UnitPrice": 0.65
+   },
+   {
+    "Country": "France",
+    "Quantity": 3,
+    "CustomerID": 12583.0,
+    "UnitPrice": 18.0
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 80,
+    "CustomerID": 13748.0,
+    "UnitPrice": 2.55
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 1.85
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 1.85
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 2.55
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 3.39
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 8,
+    "CustomerID": 17850.0,
+    "UnitPrice": 2.75
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 4.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 1.06
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 1.06
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 1.06
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 1.06
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 2,
+    "CustomerID": 17850.0,
+    "UnitPrice": 4.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 4,
+    "CustomerID": 17850.0,
+    "UnitPrice": 6.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 2.1
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 2.55
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 3.39
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 3.39
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 2,
+    "CustomerID": 17850.0,
+    "UnitPrice": 7.65
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 4.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 32,
+    "CustomerID": 15100.0,
+    "UnitPrice": 10.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 2.55
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 3.39
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 8,
+    "CustomerID": 17850.0,
+    "UnitPrice": 2.75
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 4.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 1.06
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 1.06
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 1.06
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 1.06
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 2,
+    "CustomerID": 17850.0,
+    "UnitPrice": 4.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 4,
+    "CustomerID": 17850.0,
+    "UnitPrice": 6.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 2.1
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 2.55
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 3.39
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 3.39
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 2,
+    "CustomerID": 17850.0,
+    "UnitPrice": 7.65
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 4.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 48,
+    "CustomerID": 15291.0,
+    "UnitPrice": 3.45
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 64,
+    "CustomerID": 15291.0,
+    "UnitPrice": 2.55
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 1.85
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 1.85
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 10,
+    "CustomerID": 14688.0,
+    "UnitPrice": 1.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 10,
+    "CustomerID": 14688.0,
+    "UnitPrice": 1.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 10,
+    "CustomerID": 14688.0,
+    "UnitPrice": 2.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 10,
+    "CustomerID": 14688.0,
+    "UnitPrice": 0.85
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 14688.0,
+    "UnitPrice": 3.75
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 14688.0,
+    "UnitPrice": 3.75
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 14688.0,
+    "UnitPrice": 0.85
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 10,
+    "CustomerID": 14688.0,
+    "UnitPrice": 1.65
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 14688.0,
+    "UnitPrice": 2.55
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 14688.0,
+    "UnitPrice": 2.55
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 120,
+    "CustomerID": 14688.0,
+    "UnitPrice": 0.42
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 24,
+    "CustomerID": 14688.0,
+    "UnitPrice": 0.55
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 24,
+    "CustomerID": 14688.0,
+    "UnitPrice": 0.55
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 24,
+    "CustomerID": 14688.0,
+    "UnitPrice": 0.55
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 14688.0,
+    "UnitPrice": 2.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 48,
+    "CustomerID": 14688.0,
+    "UnitPrice": 1.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 96,
+    "CustomerID": 14688.0,
+    "UnitPrice": 0.38
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 10,
+    "CustomerID": 14688.0,
+    "UnitPrice": 1.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 10,
+    "CustomerID": 14688.0,
+    "UnitPrice": 1.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 24,
+    "CustomerID": 17809.0,
+    "UnitPrice": 1.45
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 23,
+    "CustomerID": 15311.0,
+    "UnitPrice": 4.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 5,
+    "CustomerID": 15311.0,
+    "UnitPrice": 4.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 10,
+    "CustomerID": 15311.0,
+    "UnitPrice": 1.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 2,
+    "CustomerID": 15311.0,
+    "UnitPrice": 2.1
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 15311.0,
+    "UnitPrice": 1.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 24,
+    "CustomerID": 15311.0,
+    "UnitPrice": 1.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 24,
+    "CustomerID": 15311.0,
+    "UnitPrice": 1.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 15311.0,
+    "UnitPrice": 1.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 15311.0,
+    "UnitPrice": 0.85
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 15311.0,
+    "UnitPrice": 2.55
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 10,
+    "CustomerID": 15311.0,
+    "UnitPrice": 1.65
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 3,
+    "CustomerID": 15311.0,
+    "UnitPrice": 1.69
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 15311.0,
+    "UnitPrice": 1.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 2,
+    "CustomerID": 15311.0,
+    "UnitPrice": 2.1
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 15311.0,
+    "UnitPrice": 2.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 15311.0,
+    "UnitPrice": 2.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 4,
+    "CustomerID": 15311.0,
+    "UnitPrice": 2.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 15311.0,
+    "UnitPrice": 2.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 15311.0,
+    "UnitPrice": 0.85
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 3,
+    "CustomerID": 15311.0,
+    "UnitPrice": 1.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 2,
+    "CustomerID": 15311.0,
+    "UnitPrice": 2.55
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 15311.0,
+    "UnitPrice": 0.85
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 15311.0,
+    "UnitPrice": 0.85
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 15311.0,
+    "UnitPrice": 1.45
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 15311.0,
+    "UnitPrice": 4.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 2,
+    "CustomerID": 15311.0,
+    "UnitPrice": 2.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 2,
+    "CustomerID": 15311.0,
+    "UnitPrice": 5.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 2,
+    "CustomerID": 15311.0,
+    "UnitPrice": 5.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 4,
+    "CustomerID": 15311.0,
+    "UnitPrice": 1.45
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 15311.0,
+    "UnitPrice": 2.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 15311.0,
+    "UnitPrice": 1.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 2,
+    "CustomerID": 15311.0,
+    "UnitPrice": 1.65
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 3,
+    "CustomerID": 15311.0,
+    "UnitPrice": 3.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 36,
+    "CustomerID": 15311.0,
+    "UnitPrice": 1.06
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 10,
+    "CustomerID": 15311.0,
+    "UnitPrice": 6.75
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": -1,
+    "CustomerID": 14527.0,
+    "UnitPrice": 27.5
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 16098.0,
+    "UnitPrice": 0.85
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 8,
+    "CustomerID": 16098.0,
+    "UnitPrice": 3.75
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 16098.0,
+    "UnitPrice": 1.65
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 10,
+    "CustomerID": 16098.0,
+    "UnitPrice": 1.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 10,
+    "CustomerID": 16098.0,
+    "UnitPrice": 2.1
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 50,
+    "CustomerID": 16098.0,
+    "UnitPrice": 1.85
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 8,
+    "CustomerID": 16098.0,
+    "UnitPrice": 2.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 4,
+    "CustomerID": 16098.0,
+    "UnitPrice": 3.75
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 16098.0,
+    "UnitPrice": 5.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 2,
+    "CustomerID": 16098.0,
+    "UnitPrice": 14.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 2,
+    "CustomerID": 16098.0,
+    "UnitPrice": 14.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 4,
+    "CustomerID": 16098.0,
+    "UnitPrice": 16.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": -1,
+    "CustomerID": 15311.0,
+    "UnitPrice": 4.65
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 3,
+    "CustomerID": 18074.0,
+    "UnitPrice": 6.45
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 48,
+    "CustomerID": 18074.0,
+    "UnitPrice": 0.65
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 18074.0,
+    "UnitPrice": 1.65
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 18074.0,
+    "UnitPrice": 2.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 18074.0,
+    "UnitPrice": 2.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 40,
+    "CustomerID": 18074.0,
+    "UnitPrice": 1.45
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 40,
+    "CustomerID": 18074.0,
+    "UnitPrice": 2.55
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 18074.0,
+    "UnitPrice": 2.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 2,
+    "CustomerID": 18074.0,
+    "UnitPrice": 12.75
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 4,
+    "CustomerID": 18074.0,
+    "UnitPrice": 3.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 3,
+    "CustomerID": 18074.0,
+    "UnitPrice": 5.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 18074.0,
+    "UnitPrice": 6.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 8,
+    "CustomerID": 18074.0,
+    "UnitPrice": 10.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 17420.0,
+    "UnitPrice": 19.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 17420.0,
+    "UnitPrice": 1.45
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17420.0,
+    "UnitPrice": 4.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 10,
+    "CustomerID": 17420.0,
+    "UnitPrice": 1.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 17420.0,
+    "UnitPrice": 1.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 2,
+    "CustomerID": 17420.0,
+    "UnitPrice": 8.5
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 10,
+    "CustomerID": 17420.0,
+    "UnitPrice": 1.65
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 36,
+    "CustomerID": 16029.0,
+    "UnitPrice": 4.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 100,
+    "CustomerID": 16029.0,
+    "UnitPrice": 1.65
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 100,
+    "CustomerID": 16029.0,
+    "UnitPrice": 1.65
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 192,
+    "CustomerID": 16029.0,
+    "UnitPrice": 3.82
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 192,
+    "CustomerID": 16029.0,
+    "UnitPrice": 3.37
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 192,
+    "CustomerID": 16029.0,
+    "UnitPrice": 3.37
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 432,
+    "CustomerID": 16029.0,
+    "UnitPrice": 1.45
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 432,
+    "CustomerID": 16029.0,
+    "UnitPrice": 1.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 3,
+    "CustomerID": 16250.0,
+    "UnitPrice": 5.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 3,
+    "CustomerID": 16250.0,
+    "UnitPrice": 5.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 2,
+    "CustomerID": 16250.0,
+    "UnitPrice": 7.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 3,
+    "CustomerID": 16250.0,
+    "UnitPrice": 4.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 3,
+    "CustomerID": 16250.0,
+    "UnitPrice": 4.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 16250.0,
+    "UnitPrice": 2.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 16250.0,
+    "UnitPrice": 1.65
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 16250.0,
+    "UnitPrice": 0.42
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 16250.0,
+    "UnitPrice": 0.85
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 16250.0,
+    "UnitPrice": 1.45
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 16250.0,
+    "UnitPrice": 0.85
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 4,
+    "CustomerID": 16250.0,
+    "UnitPrice": 6.75
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 16250.0,
+    "UnitPrice": 1.65
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 16250.0,
+    "UnitPrice": 1.65
+   },
+   {
+    "Country": "Australia",
+    "Quantity": 6,
+    "CustomerID": 12431.0,
+    "UnitPrice": 8.5
+   },
+   {
+    "Country": "Australia",
+    "Quantity": 8,
+    "CustomerID": 12431.0,
+    "UnitPrice": 4.95
+   },
+   {
+    "Country": "Australia",
+    "Quantity": 12,
+    "CustomerID": 12431.0,
+    "UnitPrice": 1.25
+   },
+   {
+    "Country": "Australia",
+    "Quantity": 6,
+    "CustomerID": 12431.0,
+    "UnitPrice": 5.45
+   },
+   {
+    "Country": "Australia",
+    "Quantity": 4,
+    "CustomerID": 12431.0,
+    "UnitPrice": 6.35
+   },
+   {
+    "Country": "Australia",
+    "Quantity": 6,
+    "CustomerID": 12431.0,
+    "UnitPrice": 5.95
+   },
+   {
+    "Country": "Australia",
+    "Quantity": 3,
+    "CustomerID": 12431.0,
+    "UnitPrice": 5.95
+   },
+   {
+    "Country": "Australia",
+    "Quantity": 2,
+    "CustomerID": 12431.0,
+    "UnitPrice": 8.5
+   },
+   {
+    "Country": "Australia",
+    "Quantity": 4,
+    "CustomerID": 12431.0,
+    "UnitPrice": 3.75
+   },
+   {
+    "Country": "Australia",
+    "Quantity": 4,
+    "CustomerID": 12431.0,
+    "UnitPrice": 3.75
+   },
+   {
+    "Country": "Australia",
+    "Quantity": 2,
+    "CustomerID": 12431.0,
+    "UnitPrice": 8.5
+   },
+   {
+    "Country": "Australia",
+    "Quantity": 2,
+    "CustomerID": 12431.0,
+    "UnitPrice": 8.5
+   },
+   {
+    "Country": "Australia",
+    "Quantity": 24,
+    "CustomerID": 12431.0,
+    "UnitPrice": 1.65
+   },
+   {
+    "Country": "Australia",
+    "Quantity": 24,
+    "CustomerID": 12431.0,
+    "UnitPrice": 0.85
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 2,
+    "CustomerID": 17511.0,
+    "UnitPrice": 8.5
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 17511.0,
+    "UnitPrice": 3.75
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 17511.0,
+    "UnitPrice": 1.45
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 48,
+    "CustomerID": 17511.0,
+    "UnitPrice": 0.72
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 48,
+    "CustomerID": 17511.0,
+    "UnitPrice": 0.72
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 8,
+    "CustomerID": 17511.0,
+    "UnitPrice": 8.5
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 144,
+    "CustomerID": 17511.0,
+    "UnitPrice": 0.64
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 40,
+    "CustomerID": 17511.0,
+    "UnitPrice": 2.55
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 288,
+    "CustomerID": 17511.0,
+    "UnitPrice": 0.1
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 64,
+    "CustomerID": 17511.0,
+    "UnitPrice": 2.55
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 100,
+    "CustomerID": 17511.0,
+    "UnitPrice": 0.72
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 50,
+    "CustomerID": 17511.0,
+    "UnitPrice": 1.45
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 17511.0,
+    "UnitPrice": 4.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 96,
+    "CustomerID": 17511.0,
+    "UnitPrice": 0.64
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 96,
+    "CustomerID": 17511.0,
+    "UnitPrice": 0.64
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 48,
+    "CustomerID": 17511.0,
+    "UnitPrice": 0.65
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 144,
+    "CustomerID": 17511.0,
+    "UnitPrice": 0.32
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 40,
+    "CustomerID": 17511.0,
+    "UnitPrice": 4.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 24,
+    "CustomerID": 17511.0,
+    "UnitPrice": 4.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 24,
+    "CustomerID": 17511.0,
+    "UnitPrice": 3.39
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 24,
+    "CustomerID": 17511.0,
+    "UnitPrice": 3.75
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 48,
+    "CustomerID": 17511.0,
+    "UnitPrice": 1.48
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 96,
+    "CustomerID": 17511.0,
+    "UnitPrice": 1.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 100,
+    "CustomerID": 17511.0,
+    "UnitPrice": 1.65
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": -12,
+    "CustomerID": 17548.0,
+    "UnitPrice": 1.65
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": -24,
+    "CustomerID": 17548.0,
+    "UnitPrice": 0.29
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": -24,
+    "CustomerID": 17548.0,
+    "UnitPrice": 0.29
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": -24,
+    "CustomerID": 17548.0,
+    "UnitPrice": 0.29
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": -12,
+    "CustomerID": 17548.0,
+    "UnitPrice": 3.45
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": -12,
+    "CustomerID": 17548.0,
+    "UnitPrice": 1.65
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": -24,
+    "CustomerID": 17548.0,
+    "UnitPrice": 1.65
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 13705.0,
+    "UnitPrice": 1.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 4,
+    "CustomerID": 13705.0,
+    "UnitPrice": 3.75
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 13705.0,
+    "UnitPrice": 1.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 13705.0,
+    "UnitPrice": 1.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 13705.0,
+    "UnitPrice": 165.0
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 13705.0,
+    "UnitPrice": 1.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 13705.0,
+    "UnitPrice": 1.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 4,
+    "CustomerID": 13705.0,
+    "UnitPrice": 5.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 16,
+    "CustomerID": 13705.0,
+    "UnitPrice": 1.69
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 24,
+    "CustomerID": 13705.0,
+    "UnitPrice": 0.65
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 8,
+    "CustomerID": 13747.0,
+    "UnitPrice": 9.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 24,
+    "CustomerID": 13408.0,
+    "UnitPrice": 0.42
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 96,
+    "CustomerID": 13408.0,
+    "UnitPrice": 1.85
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 96,
+    "CustomerID": 13408.0,
+    "UnitPrice": 1.85
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 96,
+    "CustomerID": 13408.0,
+    "UnitPrice": 1.85
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 96,
+    "CustomerID": 13408.0,
+    "UnitPrice": 1.85
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 13408.0,
+    "UnitPrice": 4.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 13408.0,
+    "UnitPrice": 3.75
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 48,
+    "CustomerID": 13408.0,
+    "UnitPrice": 1.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 13408.0,
+    "UnitPrice": 2.1
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 32,
+    "CustomerID": 13408.0,
+    "UnitPrice": 2.55
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 20,
+    "CustomerID": 13408.0,
+    "UnitPrice": 1.65
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 8,
+    "CustomerID": 13767.0,
+    "UnitPrice": 3.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 32,
+    "CustomerID": 13767.0,
+    "UnitPrice": 1.69
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 24,
+    "CustomerID": 13767.0,
+    "UnitPrice": 0.55
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 24,
+    "CustomerID": 13767.0,
+    "UnitPrice": 0.55
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 24,
+    "CustomerID": 13767.0,
+    "UnitPrice": 0.55
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 8,
+    "CustomerID": 13767.0,
+    "UnitPrice": 3.45
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 8,
+    "CustomerID": 13767.0,
+    "UnitPrice": 2.1
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 4,
+    "CustomerID": 13767.0,
+    "UnitPrice": 3.75
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 8,
+    "CustomerID": 13767.0,
+    "UnitPrice": 3.75
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 8,
+    "CustomerID": 13767.0,
+    "UnitPrice": 3.75
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 8,
+    "CustomerID": 13767.0,
+    "UnitPrice": 3.75
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 8,
+    "CustomerID": 13767.0,
+    "UnitPrice": 3.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 48,
+    "CustomerID": 13767.0,
+    "UnitPrice": 2.1
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 48,
+    "CustomerID": 13767.0,
+    "UnitPrice": 2.1
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 2.55
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 3.39
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 8,
+    "CustomerID": 17850.0,
+    "UnitPrice": 2.75
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 4.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 4.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 1.06
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 1.06
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 1.06
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 1.06
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 2,
+    "CustomerID": 17850.0,
+    "UnitPrice": 4.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 4,
+    "CustomerID": 17850.0,
+    "UnitPrice": 6.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 2.1
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 17850.0,
+    "UnitPrice": 2.55
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 3.39
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 3.39
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 2,
+    "CustomerID": 17850.0,
+    "UnitPrice": 7.65
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 2,
+    "CustomerID": 17850.0,
+    "UnitPrice": 35.75
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 4.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 17924.0,
+    "UnitPrice": 4.65
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 48,
+    "CustomerID": 17924.0,
+    "UnitPrice": 4.65
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 24,
+    "CustomerID": 13448.0,
+    "UnitPrice": 0.29
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 13448.0,
+    "UnitPrice": 2.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 4,
+    "CustomerID": 13448.0,
+    "UnitPrice": 6.75
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 8,
+    "CustomerID": 13448.0,
+    "UnitPrice": 2.55
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 13448.0,
+    "UnitPrice": 8.5
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 2,
+    "CustomerID": 13448.0,
+    "UnitPrice": 7.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 13448.0,
+    "UnitPrice": 2.1
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 13448.0,
+    "UnitPrice": 2.1
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 13448.0,
+    "UnitPrice": 2.1
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 13448.0,
+    "UnitPrice": 1.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 13448.0,
+    "UnitPrice": 1.65
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 13448.0,
+    "UnitPrice": 3.35
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 4,
+    "CustomerID": 13448.0,
+    "UnitPrice": 3.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 8,
+    "CustomerID": 13448.0,
+    "UnitPrice": 4.65
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 9,
+    "CustomerID": 13448.0,
+    "UnitPrice": 4.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 4,
+    "CustomerID": 13448.0,
+    "UnitPrice": 3.75
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 9,
+    "CustomerID": 13448.0,
+    "UnitPrice": 4.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 1.85
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 1.85
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 13448.0,
+    "UnitPrice": 1.45
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 15862.0,
+    "UnitPrice": 2.55
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 15862.0,
+    "UnitPrice": 1.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 2,
+    "CustomerID": 15862.0,
+    "UnitPrice": 1.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 15862.0,
+    "UnitPrice": 2.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 15862.0,
+    "UnitPrice": 3.35
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 15862.0,
+    "UnitPrice": 1.45
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 15862.0,
+    "UnitPrice": 1.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 2,
+    "CustomerID": 15862.0,
+    "UnitPrice": 1.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 15862.0,
+    "UnitPrice": 1.65
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 4,
+    "CustomerID": 15862.0,
+    "UnitPrice": 1.45
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 15862.0,
+    "UnitPrice": 1.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 15862.0,
+    "UnitPrice": 4.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 2,
+    "CustomerID": 15862.0,
+    "UnitPrice": 3.75
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 2,
+    "CustomerID": 15862.0,
+    "UnitPrice": 1.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 2,
+    "CustomerID": 15862.0,
+    "UnitPrice": 9.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 15862.0,
+    "UnitPrice": 9.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 15862.0,
+    "UnitPrice": 5.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 15862.0,
+    "UnitPrice": 4.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 3,
+    "CustomerID": 15862.0,
+    "UnitPrice": 4.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 15862.0,
+    "UnitPrice": 2.55
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 15862.0,
+    "UnitPrice": 2.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 2,
+    "CustomerID": 15862.0,
+    "UnitPrice": 1.69
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 15862.0,
+    "UnitPrice": 7.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 15862.0,
+    "UnitPrice": 0.55
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 15862.0,
+    "UnitPrice": 0.55
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 2,
+    "CustomerID": 15862.0,
+    "UnitPrice": 0.55
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 4,
+    "CustomerID": 15862.0,
+    "UnitPrice": 2.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 2,
+    "CustomerID": 15862.0,
+    "UnitPrice": 2.1
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 15862.0,
+    "UnitPrice": 2.1
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 15862.0,
+    "UnitPrice": 1.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 15862.0,
+    "UnitPrice": 0.85
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 3,
+    "CustomerID": 15862.0,
+    "UnitPrice": 0.55
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 15862.0,
+    "UnitPrice": 2.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 15862.0,
+    "UnitPrice": 2.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 2,
+    "CustomerID": 15862.0,
+    "UnitPrice": 1.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 3,
+    "CustomerID": 15862.0,
+    "UnitPrice": 1.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 15862.0,
+    "UnitPrice": 1.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 15862.0,
+    "UnitPrice": 1.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 2,
+    "CustomerID": 15862.0,
+    "UnitPrice": 1.65
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 2,
+    "CustomerID": 15862.0,
+    "UnitPrice": 2.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 2,
+    "CustomerID": 15862.0,
+    "UnitPrice": 2.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 15862.0,
+    "UnitPrice": 5.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 15862.0,
+    "UnitPrice": 1.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 2,
+    "CustomerID": 15862.0,
+    "UnitPrice": 2.55
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 9,
+    "CustomerID": 15862.0,
+    "UnitPrice": 0.85
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 15862.0,
+    "UnitPrice": 1.65
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 4,
+    "CustomerID": 15862.0,
+    "UnitPrice": 2.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 3,
+    "CustomerID": 15862.0,
+    "UnitPrice": 2.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 15862.0,
+    "UnitPrice": 5.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 15862.0,
+    "UnitPrice": 7.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 15862.0,
+    "UnitPrice": 1.65
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 2,
+    "CustomerID": 15862.0,
+    "UnitPrice": 1.65
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 15862.0,
+    "UnitPrice": 1.65
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 15862.0,
+    "UnitPrice": 1.65
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 5,
+    "CustomerID": 15862.0,
+    "UnitPrice": 2.55
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 3,
+    "CustomerID": 15862.0,
+    "UnitPrice": 2.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 3,
+    "CustomerID": 15862.0,
+    "UnitPrice": 2.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 9,
+    "CustomerID": 15862.0,
+    "UnitPrice": 2.55
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 15862.0,
+    "UnitPrice": 16.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 4,
+    "CustomerID": 15862.0,
+    "UnitPrice": 2.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 15862.0,
+    "UnitPrice": 10.65
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 15862.0,
+    "UnitPrice": 4.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 2,
+    "CustomerID": 15862.0,
+    "UnitPrice": 6.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 2,
+    "CustomerID": 15862.0,
+    "UnitPrice": 5.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 40,
+    "CustomerID": 15513.0,
+    "UnitPrice": 2.55
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 40,
+    "CustomerID": 15513.0,
+    "UnitPrice": 2.55
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 36,
+    "CustomerID": 15513.0,
+    "UnitPrice": 4.25
+   },
+   {
+    "Country": "Netherlands",
+    "Quantity": 96,
+    "CustomerID": 12791.0,
+    "UnitPrice": 1.85
+   },
+   {
+    "Country": "Netherlands",
+    "Quantity": 1,
+    "CustomerID": 12791.0,
+    "UnitPrice": 15.0
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 24,
+    "CustomerID": 16218.0,
+    "UnitPrice": 1.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 16218.0,
+    "UnitPrice": 1.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 16218.0,
+    "UnitPrice": 1.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 16218.0,
+    "UnitPrice": 1.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 16218.0,
+    "UnitPrice": 1.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 16218.0,
+    "UnitPrice": 1.65
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 36,
+    "CustomerID": 16218.0,
+    "UnitPrice": 0.85
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 16218.0,
+    "UnitPrice": 1.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 16218.0,
+    "UnitPrice": 1.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 16218.0,
+    "UnitPrice": 1.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 16218.0,
+    "UnitPrice": 1.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 16218.0,
+    "UnitPrice": 1.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 16218.0,
+    "UnitPrice": 1.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 16218.0,
+    "UnitPrice": 0.85
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 16218.0,
+    "UnitPrice": 0.85
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 16218.0,
+    "UnitPrice": 0.85
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 16218.0,
+    "UnitPrice": 1.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 16218.0,
+    "UnitPrice": 1.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 16218.0,
+    "UnitPrice": 2.1
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 24,
+    "CustomerID": 16218.0,
+    "UnitPrice": 0.55
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 24,
+    "CustomerID": 16218.0,
+    "UnitPrice": 0.55
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 24,
+    "CustomerID": 16218.0,
+    "UnitPrice": 0.55
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 24,
+    "CustomerID": 16218.0,
+    "UnitPrice": 0.55
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 24,
+    "CustomerID": 16218.0,
+    "UnitPrice": 0.55
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 10,
+    "CustomerID": 16218.0,
+    "UnitPrice": 1.65
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 10,
+    "CustomerID": 16218.0,
+    "UnitPrice": 1.65
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 10,
+    "CustomerID": 16218.0,
+    "UnitPrice": 1.65
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 24,
+    "CustomerID": 16218.0,
+    "UnitPrice": 1.65
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 128,
+    "CustomerID": 14045.0,
+    "UnitPrice": 2.55
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 8,
+    "CustomerID": 17850.0,
+    "UnitPrice": 2.55
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 8,
+    "CustomerID": 17850.0,
+    "UnitPrice": 3.39
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 8,
+    "CustomerID": 17850.0,
+    "UnitPrice": 2.75
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 4.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 1.06
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 1.06
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 1.06
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 1.06
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 4,
+    "CustomerID": 17850.0,
+    "UnitPrice": 4.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 4,
+    "CustomerID": 17850.0,
+    "UnitPrice": 6.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 2.1
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 2.55
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 3.39
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 3.39
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 2,
+    "CustomerID": 17850.0,
+    "UnitPrice": 7.65
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 2,
+    "CustomerID": 17850.0,
+    "UnitPrice": 35.75
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 4.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 1.85
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 17850.0,
+    "UnitPrice": 1.85
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 24,
+    "CustomerID": 14307.0,
+    "UnitPrice": 0.42
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 24,
+    "CustomerID": 14307.0,
+    "UnitPrice": 0.42
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 14307.0,
+    "UnitPrice": 0.85
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 14307.0,
+    "UnitPrice": 1.65
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 14307.0,
+    "UnitPrice": 1.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 14307.0,
+    "UnitPrice": 1.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 14307.0,
+    "UnitPrice": 0.85
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 14307.0,
+    "UnitPrice": 1.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 4,
+    "CustomerID": 14307.0,
+    "UnitPrice": 3.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 4,
+    "CustomerID": 14307.0,
+    "UnitPrice": 3.75
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 4,
+    "CustomerID": 14307.0,
+    "UnitPrice": 3.75
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 14307.0,
+    "UnitPrice": 2.1
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 14307.0,
+    "UnitPrice": 2.1
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 24,
+    "CustomerID": 14307.0,
+    "UnitPrice": 0.85
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 14307.0,
+    "UnitPrice": 1.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 14307.0,
+    "UnitPrice": 0.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 14307.0,
+    "UnitPrice": 2.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 14307.0,
+    "UnitPrice": 1.65
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 14307.0,
+    "UnitPrice": 1.65
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 2,
+    "CustomerID": 14307.0,
+    "UnitPrice": 7.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 2,
+    "CustomerID": 14307.0,
+    "UnitPrice": 7.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 14307.0,
+    "UnitPrice": 1.65
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 14307.0,
+    "UnitPrice": 0.85
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 8,
+    "CustomerID": 14307.0,
+    "UnitPrice": 1.69
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 3,
+    "CustomerID": 14307.0,
+    "UnitPrice": 5.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 3,
+    "CustomerID": 14307.0,
+    "UnitPrice": 5.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 8,
+    "CustomerID": 14307.0,
+    "UnitPrice": 2.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 36,
+    "CustomerID": 14307.0,
+    "UnitPrice": 0.85
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 14307.0,
+    "UnitPrice": 0.42
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 25,
+    "CustomerID": 14307.0,
+    "UnitPrice": 0.42
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 4,
+    "CustomerID": 14307.0,
+    "UnitPrice": 4.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 3,
+    "CustomerID": 14307.0,
+    "UnitPrice": 5.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 3,
+    "CustomerID": 14307.0,
+    "UnitPrice": 5.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 14307.0,
+    "UnitPrice": 3.75
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 24,
+    "CustomerID": 14307.0,
+    "UnitPrice": 0.55
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 14307.0,
+    "UnitPrice": 1.45
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 3,
+    "CustomerID": 14307.0,
+    "UnitPrice": 4.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 14307.0,
+    "UnitPrice": 1.65
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 30,
+    "CustomerID": 14307.0,
+    "UnitPrice": 0.21
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 14307.0,
+    "UnitPrice": 0.42
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 14307.0,
+    "UnitPrice": 1.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 6,
+    "CustomerID": 14307.0,
+    "UnitPrice": 2.55
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 14307.0,
+    "UnitPrice": 2.55
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 10,
+    "CustomerID": 14307.0,
+    "UnitPrice": 1.65
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 36,
+    "CustomerID": 14307.0,
+    "UnitPrice": 0.65
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 14307.0,
+    "UnitPrice": 1.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 4,
+    "CustomerID": 14307.0,
+    "UnitPrice": 3.75
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 12,
+    "CustomerID": 14307.0,
+    "UnitPrice": 1.65
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 3,
+    "CustomerID": 17908.0,
+    "UnitPrice": 6.35
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 17908.0,
+    "UnitPrice": 3.75
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 17908.0,
+    "UnitPrice": 4.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 17908.0,
+    "UnitPrice": 6.75
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 17908.0,
+    "UnitPrice": 1.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 17908.0,
+    "UnitPrice": 1.65
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 17908.0,
+    "UnitPrice": 2.1
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 17908.0,
+    "UnitPrice": 3.75
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 17908.0,
+    "UnitPrice": 2.1
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 17908.0,
+    "UnitPrice": 2.1
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 17908.0,
+    "UnitPrice": 2.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 17908.0,
+    "UnitPrice": 1.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 17908.0,
+    "UnitPrice": 1.25
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 17908.0,
+    "UnitPrice": 2.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 17908.0,
+    "UnitPrice": 2.95
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 17908.0,
+    "UnitPrice": 6.35
+   },
+   {
+    "Country": "United Kingdom",
+    "Quantity": 1,
+    "CustomerID": 17908.0,
+    "UnitPrice": 7.95
+   }
+  ],
+  "full_file": {
+   "rows": 20000,
+   "groups": {
+    "Australia": {
+     "rows": 22,
+     "negative": 0,
+     "missing": 0
+    },
+    "Belgium": {
+     "rows": 12,
+     "negative": 0,
+     "missing": 0
+    },
+    "EIRE": {
+     "rows": 145,
+     "negative": 2,
+     "missing": 11
+    },
+    "France": {
+     "rows": 197,
+     "negative": 3,
+     "missing": 0
+    },
+    "Germany": {
+     "rows": 256,
+     "negative": 17,
+     "missing": 0
+    },
+    "Iceland": {
+     "rows": 31,
+     "negative": 0,
+     "missing": 0
+    },
+    "Italy": {
+     "rows": 25,
+     "negative": 1,
+     "missing": 0
+    },
+    "Japan": {
+     "rows": 17,
+     "negative": 0,
+     "missing": 0
+    },
+    "Lithuania": {
+     "rows": 35,
+     "negative": 0,
+     "missing": 0
+    },
+    "Netherlands": {
+     "rows": 2,
+     "negative": 0,
+     "missing": 0
+    },
+    "Norway": {
+     "rows": 147,
+     "negative": 0,
+     "missing": 0
+    },
+    "Poland": {
+     "rows": 8,
+     "negative": 0,
+     "missing": 0
+    },
+    "Portugal": {
+     "rows": 80,
+     "negative": 0,
+     "missing": 0
+    },
+    "Spain": {
+     "rows": 5,
+     "negative": 0,
+     "missing": 0
+    },
+    "Switzerland": {
+     "rows": 6,
+     "negative": 0,
+     "missing": 0
+    },
+    "United Kingdom": {
+     "rows": 19012,
+     "negative": 286,
+     "missing": 6642
+    }
+   },
+   "source": "ecommerce_messy.xlsx sheet '2010 Q4' (the uploaded CSV), per-Country counts"
+  },
+  "profile_overview": {
+   "rw7a": {
+    "domain": "retail",
+    "readiness_score": 78
+   },
+   "rw7b": {
+    "domain": "retail",
+    "readiness_score": 78
+   },
+   "rw7c": {
+    "domain": "retail",
+    "readiness_score": 85
+   }
+  }
+ },
+ "stroke": {
+  "source": "rw7a/stroke upload.json profile_response.body.visualization_config",
+  "profiles": [
+   {
+    "name": "avg_glucose_level",
+    "dtype": "numeric",
+    "role": "measure"
+   },
+   {
+    "name": "stroke",
+    "dtype": "numeric",
+    "role": "measure"
+   }
+  ],
+  "chart": {
+   "id": "llm_4",
+   "type": "bar",
+   "intent": "comparison",
+   "encodings": {
+    "x": {
+     "field": "stroke",
+     "type": "nominal"
+    },
+    "y": {
+     "field": "avg_glucose_level",
+     "type": "quantitative",
+     "aggregate": "mean"
+    }
+   },
+   "config": {
+    "top_k": 15
+   },
+   "llm_title": "Glucose level by stroke outcome",
+   "llm_insight": "Patients who had a stroke tend to have higher average glucose levels than those who did not.",
+   "insight_source": "llm"
+  },
+  "shown_insight_facts": "Average avg_glucose_level by stroke: highest is 1 (132.54), lowest is 0 (104.80) in the sample. The gap between groups is small (26% from lowest to highest).",
+  "sample_rows": [
+   {
+    "stroke": 1,
+    "avg_glucose_level": 228.69
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 202.21
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 105.92
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 171.23
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 174.12
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 186.21
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 70.09
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 94.39
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 76.15
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 58.57
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 80.43
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 120.46
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 104.51
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 219.84
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 214.09
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 167.41
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 191.61
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 221.29
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 89.22
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 217.08
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 193.94
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 233.29
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 228.7
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 208.3
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 102.87
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 104.12
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 100.98
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 189.84
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 195.23
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 211.78
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 212.08
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 83.41
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 196.92
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 252.72
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 84.2
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 84.03
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 219.72
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 74.63
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 92.62
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 60.91
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 78.03
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 71.22
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 144.9
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 90.9
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 213.03
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 243.58
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 109.78
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 107.26
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 99.33
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 58.09
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 89.96
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 75.32
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 127.29
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 124.13
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 197.54
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 196.71
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 59.32
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 237.75
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 194.99
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 180.93
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 185.17
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 74.9
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 61.94
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 93.72
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 104.72
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 113.01
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 221.58
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 104.47
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 86.23
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 72.67
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 62.57
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 179.12
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 116.55
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 228.56
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 96.59
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 66.72
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 240.09
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 110.85
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 165.31
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 143.43
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 96.16
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 101.45
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 88.92
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 79.79
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 71.2
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 96.97
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 111.81
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 59.35
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 86.94
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 98.55
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 226.98
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 72.81
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 68.02
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 68.56
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 64.14
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 235.63
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 76.34
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 240.59
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 78.92
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 82.81
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 74.1
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 190.32
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 231.61
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 78.7
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 110.52
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 82.3
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 73.18
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 191.82
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 93.05
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 64.17
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 129.98
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 68.53
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 106.41
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 224.1
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 82.1
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 216.94
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 76.11
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 72.96
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 82.28
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 105.22
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 59.86
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 62.55
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 259.63
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 249.31
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 219.91
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 131.41
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 93.13
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 73.54
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 200.59
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 62.48
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 190.14
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 130.54
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 182.99
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 101.45
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 206.09
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 263.32
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 140.1
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 207.28
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 194.37
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 199.2
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 103.68
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 116.44
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 70.28
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 72.17
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 221.79
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 151.16
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 68.43
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 67.29
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 67.41
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 239.07
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 169.67
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 223.83
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 76.57
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 77.82
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 92.98
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 231.56
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 102.16
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 221.89
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 195.71
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 74.02
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 57.92
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 81.76
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 70.37
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 203.87
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 89.13
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 133.19
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 162.23
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 75.02
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 98.02
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 91.54
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 111.98
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 60.94
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 97.43
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 91.02
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 60.67
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 185.49
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 64.44
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 56.11
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 110.66
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 213.22
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 78.18
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 111.04
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 76.13
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 81.32
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 112.24
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 137.3
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 116.69
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 215.94
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 86.62
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 209.86
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 205.77
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 112.16
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 118.03
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 271.74
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 97.92
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 200.62
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 242.52
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 93.81
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 114.77
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 74.96
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 167.13
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 175.29
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 90.0
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 109.47
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 87.85
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 106.74
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 80.13
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 90.19
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 134.8
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 106.58
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 83.24
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 103.43
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 208.65
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 74.11
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 95.84
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 205.33
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 116.1
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 210.4
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 199.86
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 219.73
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 250.89
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 72.73
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 205.35
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 70.3
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 104.86
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 216.58
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 184.4
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 60.98
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 97.76
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 66.03
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 81.95
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 97.73
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 70.94
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 199.84
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 218.46
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 211.06
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 86.3
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 162.14
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 88.2
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 91.92
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 76.46
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 197.28
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 233.94
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 247.51
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 84.96
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 57.93
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 78.8
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 87.8
+   },
+   {
+    "stroke": 1,
+    "avg_glucose_level": 78.81
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 95.12
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 87.96
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 110.89
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 69.04
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 161.28
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 210.95
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 77.59
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 243.53
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 77.67
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 205.84
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 77.08
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 57.08
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 162.96
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 73.5
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 95.04
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 85.37
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 84.62
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 82.67
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 57.33
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 67.84
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 75.7
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 129.54
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 60.22
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 198.21
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 109.82
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 60.84
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 94.61
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 97.49
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 206.72
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 214.45
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 82.9
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 103.26
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 55.78
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 73.74
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 149.75
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 82.34
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 62.6
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 94.09
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 55.42
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 82.18
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 117.92
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 114.84
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 79.17
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 110.63
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 190.7
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 79.81
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 113.63
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 141.24
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 56.96
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 203.04
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 94.3
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 81.51
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 137.74
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 81.84
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 242.3
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 102.64
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 146.01
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 75.42
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 220.49
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 61.45
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 88.19
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 115.22
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 97.93
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 85.6
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 79.83
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 218.46
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 62.2
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 69.15
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 127.71
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 216.7
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 71.89
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 103.56
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 79.03
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 69.94
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 90.12
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 95.1
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 234.58
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 235.85
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 78.05
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 89.44
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 111.38
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 243.5
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 182.2
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 229.92
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 82.24
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 89.84
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 90.69
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 84.38
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 215.6
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 91.61
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 138.16
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 75.23
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 75.18
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 106.23
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 239.64
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 58.95
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 99.92
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 116.23
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 118.82
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 66.3
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 101.41
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 200.28
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 136.8
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 96.57
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 66.42
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 98.09
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 205.23
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 86.78
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 126.82
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 78.4
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 63.69
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 209.58
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 89.86
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 110.99
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 83.82
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 137.96
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 210.78
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 118.89
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 72.55
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 107.41
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 93.25
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 74.91
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 80.05
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 99.8
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 91.97
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 64.4
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 73.02
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 88.11
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 138.29
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 72.36
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 68.76
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 106.22
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 101.52
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 109.51
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 85.84
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 110.15
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 91.72
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 251.6
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 123.1
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 97.4
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 68.34
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 80.81
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 120.31
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 83.51
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 74.09
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 91.6
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 87.52
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 213.37
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 75.39
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 122.41
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 223.36
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 84.59
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 70.16
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 107.52
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 80.88
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 93.48
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 70.21
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 86.67
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 101.37
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 105.22
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 70.31
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 64.06
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 178.29
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 81.6
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 147.48
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 86.86
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 71.16
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 73.2
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 203.81
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 82.0
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 97.55
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 94.29
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 75.22
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 90.07
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 73.73
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 79.58
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 77.88
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 205.26
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 58.63
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 139.9
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 211.03
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 72.79
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 91.65
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 79.92
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 225.47
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 94.48
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 82.34
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 180.63
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 92.48
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 116.66
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 112.09
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 130.34
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 82.59
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 123.87
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 98.7
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 227.1
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 55.39
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 66.07
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 104.21
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 145.15
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 68.19
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 97.53
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 122.31
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 83.51
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 86.46
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 112.06
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 92.14
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 201.76
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 74.44
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 95.93
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 87.51
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 72.35
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 113.47
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 103.78
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 115.43
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 95.59
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 101.52
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 170.05
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 217.3
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 196.01
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 92.21
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 100.09
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 93.88
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 75.05
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 70.08
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 74.2
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 69.01
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 96.17
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 184.15
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 87.24
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 198.69
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 82.58
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 96.88
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 73.32
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 94.59
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 132.08
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 98.99
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 104.48
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 98.01
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 79.14
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 89.32
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 65.24
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 80.98
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 186.17
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 69.24
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 111.19
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 93.28
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 122.19
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 129.53
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 114.53
+   },
+   {
+    "stroke": 0,
+    "avg_glucose_level": 93.73
+   }
+  ]
+ },
+ "nullxlsx": {
+  "source": "rw7a/nullxlsx upload.json (Records by Outcome points) and swarm.json shown_text",
+  "n_rows": 60,
+  "outcome_counts": {
+   "Recovered": 20,
+   "RECOVERED": 20,
+   "Readmitted": 20
+  },
+  "shown_swarm_finding": "Outcome is most often “Recovered” (20 of 60 rows, 33.3%)",
+  "reply_claim": "Readmission is slightly associated with higher average glucose (113 vs 110.6) and a higher maximum (174 vs 168), but the correlations with glucose, visit date, and notes are identical and very weak (≈ –0.045, –0.00008, –0.031).",
+  "question": "What drives Outcome?"
+ }
+}

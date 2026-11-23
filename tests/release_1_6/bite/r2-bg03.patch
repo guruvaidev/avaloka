@@ -1,0 +1,13 @@
+diff --git a/ui/src/components/dashboard/AutoInsightsModal.tsx b/ui/src/components/dashboard/AutoInsightsModal.tsx
+index 345e6f4b..35dcea2e 100644
+--- a/ui/src/components/dashboard/AutoInsightsModal.tsx
++++ b/ui/src/components/dashboard/AutoInsightsModal.tsx
+@@ -302,7 +302,7 @@ function InsightCard({ slide, config, outputRows, samples, defaultView = "chart"
+   const takeaway = stripMarkdown(slide.headline || slide.subtitle || slide.insights[0] || "");
+   return <section {...avatar.bindChart(chartId)} className={"ai-chart-card ai-surface " + (avatar.isHighlighted(chartId) ? HIGHLIGHT_CLASS : "")}>
+     <div className="ai-card-heading"><div className="ai-chart-title"><h3>{slide.title}</h3>{takeaway && <div className="ai-takeaway"><p className={expanded ? "" : "line-clamp-2"}>{takeaway}</p>{takeaway.length > 100 && <Button color="link-gray" className="ai-more" onPress={() => setExpanded((value) => !value)}>{expanded ? "Less" : "More"}</Button>}</div>}</div>
+-      <div className="ai-card-tools"><div className="ai-view-toggle">{(['table', 'chart'] as const).map((mode) => <Button key={mode} color="tertiary" className={`ai-control ${view === mode ? 'ai-view-active' : ''}`} isDisabled={mode === 'table' && !tableRows?.length} onPress={() => setView(mode)}>{mode === 'table' ? 'Data table' : 'Chart'}</Button>)}</div><ExplainChartButton chartId={chartId} /></div>
++      <div className="ai-card-tools"><div className="ai-view-toggle">{(['table', 'chart'] as const).map((mode) => <Button key={mode} color="tertiary" className={`ai-control ${view === mode ? 'ai-view-active' : ''}`} isDisabled={mode === 'table' && !tableRows?.length} onPress={() => setView(mode)}>{mode === 'table' ? 'Data table' : 'Chart'}</Button>)}</div><ExplainChartButton chartId={chartId} /><button type="button">Explore More</button></div>
+     </div>
+     <ChartScopeStrip dataset={config?.dataset} />
+     <div ref={setPlotNode} className="ai-plot">{view === 'table' && tableRows?.length ? <div className="ai-data-table"><AnalysisOutputTable rows={tableRows} title="Output" filename={`${slugify(slide.title || 'output')}.csv`} /></div> : <DynamicChart key={chartId} slide={slide} height={plotHeight} stackPresentation chartKey={chartId} />}</div>

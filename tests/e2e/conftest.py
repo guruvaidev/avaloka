@@ -24,7 +24,7 @@ from __future__ import annotations
 import os
 import time
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple
 
 import jwt
 import pytest
@@ -34,12 +34,37 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEPLOYED_URL = (os.getenv("AVALOKA_API_URL") or "").rstrip("/")
 MODE = "deployed" if DEPLOYED_URL else "hermetic"
 
+# Not set here: MEMORY_WARMUP. app.services.memory_plane reads it once, at import
+# (memory_plane.py, `if os.environ.get("MEMORY_WARMUP", "1") != "0"`), to decide
+# whether to spawn a warm-up thread that loads the embedding model. Setting it
+# from this conftest leaked into the whole session -- pytest imports every
+# conftest during collection -- and a fixture would run after that import, so
+# would change nothing. Whether the test session warms up is a gate-wide choice
+# (scripts/ci.sh or the root conftest), not this pack's.
+# tests/test_conftest_env_hygiene.py fails if a conftest writes os.environ.
+
 # Hermetic mode signs with the same constant tests/test_server_unit.py
 # patches into the server; deployed mode must use the cluster's real secret.
 HERMETIC_SECRET = "test-jwt-secret"
 JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET") if MODE == "deployed" else HERMETIC_SECRET
 
 UNAUTH_MESSAGE = "Missing or invalid auth token"
+
+# Hermetic mode answers every upload-limit plan lookup (server.resolve_plan) with
+# this plan, instead of a Supabase lookup that fails and falls back to Free
+# with an error per request. Tests that depend on a plan's limits say so.
+# Feature gates (check_feature / try_resolve_plan) are not pinned: they fail open.
+HERMETIC_PLAN = "free"
+
+# Fake mcp_connections table, keyed by connection id; reset per hermetic client.
+MCP_CONNECTIONS: Dict[str, Dict[str, Any]] = {}
+
+# mcp_connections.id is a uuid column, and the server answers 404 for any
+# connection id that is not a uuid before it looks anything up. Fixed uuids, so
+# a probe reaches the lookup and the ownership check rather than that pre-check.
+# OWNED is user A's row (foreign from user B's side); MISSING matches no row.
+MCP_CONNECTION_OWNED = "5e3c1f2a-7b4d-4e6f-9a1b-0c2d3e4f5a01"
+MCP_CONNECTION_MISSING = "5e3c1f2a-7b4d-4e6f-9a1b-0c2d3e4f5a02"
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -70,6 +95,16 @@ def mint_token(
 
 def auth_headers(user_id: str, **kw: Any) -> Dict[str, str]:
     return {"Authorization": f"Bearer {mint_token(user_id, **kw)}"}
+
+
+# The identity every schema read uses. Nothing in the pack reads /openapi.json
+# without a token, so the sweep and the surface checks keep working wherever the
+# schema sits behind authentication.
+SCHEMA_READER = "e2-schema-reader"
+
+
+def schema_headers() -> Dict[str, str]:
+    return auth_headers(SCHEMA_READER)
 
 
 class ApiClient:
@@ -153,9 +188,27 @@ def _hermetic_transport(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(server, "TMP_ROOT", tmp_root, raising=False)
     monkeypatch.setenv("TMP_ROOT", str(tmp_root))
 
-    session_service.cache = si.FakeCache()  # type: ignore[attr-defined]
+    fake_cache = si.FakeCache()
+    session_service.cache = fake_cache  # type: ignore[attr-defined]
     fake_store = si.FakeBlobStore(bucket="fake-bucket", prefix="test")
     storage_service.blob_store = fake_store  # type: ignore[attr-defined]
+
+    # The fixture enters the client with `with`, which runs the app's lifespan,
+    # and app/api/config.py's lifespan reassigns both of the fakes above:
+    # `session_service.cache = await _init_cache()` (None when no Redis URL is
+    # set) and `blob_store = storage_service.init_blob_store()`. Every handler
+    # that checks the cache then answered 503 "Session storage (Redis) is not
+    # available" -- the fake stack this pack claims to run over was never the
+    # one it ran over. Hand the lifespan the same fakes instead.
+    async def _init_cache_fake():
+        return fake_cache
+
+    monkeypatch.setattr(session_service, "_init_cache", _init_cache_fake)
+    monkeypatch.setattr(storage_service, "init_blob_store", lambda: fake_store)
+
+    # The lifespan also warms the local embedding model, which downloads it from
+    # huggingface.co on a cold cache. Hermetic means no network.
+    monkeypatch.setenv("AVALOKA_EMBED_WARMUP", "0")
 
     def _store_and_key_from_uri_fake(uri: str, object_name: Optional[str]):
         return fake_store, object_name or Path(uri).name
@@ -168,6 +221,9 @@ def _hermetic_transport(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     async def get_cloud_connection_fake(connection_id: str) -> Dict[str, Any]:
         return {}
 
+    def _resolve_plan_fake(user_id: Optional[str]) -> str:
+        return HERMETIC_PLAN
+
     def sample_data_from_source_fake(path, source_type, stratify_by=None, sample_size: float = 1.0):
         return {
             "schema": {"a": "int", "b": "int"},
@@ -175,8 +231,35 @@ def _hermetic_transport(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             "ddl_schema": "CREATE TABLE t(a int, b int);",
         }
 
+    MCP_CONNECTIONS.clear()
+
+    def _owned_row_fake(connection_id: str, user_id: str) -> Optional[Dict[str, Any]]:
+        # Stands in for the saved-connections lookup the MCP credential routes
+        # make on 1.7 (app.api.db_connections.owned_row: the caller's own row,
+        # else None, so another user's row and a missing one are the same 404).
+        # Without it every MCP route answered 500 "Connection lookup failed" (no
+        # store) and the ownership check behind it was never reached.
+        row = MCP_CONNECTIONS.get(connection_id)
+        return dict(row) if row and str(row.get("user_id")) == str(user_id) else None
+
+    monkeypatch.setattr(server._db_connections, "owned_row", _owned_row_fake)
+
+    def _resolve_plan_fake(user_id: Optional[str]) -> str:
+        return HERMETIC_PLAN
+
     for name, value in [
         ("save_session", si.save_session_fake),
+        # Must pair with save_session: the upload rollback calls delete_session,
+        # and against the real one it deleted from the cache while the session
+        # lived in the fake store -- a rolled-back upload looked half-kept.
+        ("delete_session", si.delete_session_fake),
+        ("resolve_plan", _resolve_plan_fake),
+        # Would post upload profiles to a real Supabase project if real
+        # credentials were loaded (e.g. a developer's .env); in CI none are set
+        # and the call ends at "Supabase env vars not set". Stubbed in
+        # test_e3_ingestion.py before; every module here uploads, so it
+        # belongs in the shared harness.
+        ("_schedule_small_file_persistence", lambda **kw: None),
         ("update_session", si.update_session_fake),
         ("get_session", si.get_session_fake),
         ("refresh_session_ttl", si.refresh_session_ttl_fake),
@@ -194,6 +277,7 @@ def _hermetic_transport(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         ("GRAPH", si.FakeGraph()),
         ("GRAPH_READY", True),
         ("read_thread_msgs", si.read_thread_msgs_fake),
+        ("resolve_plan", _resolve_plan_fake),
     ]:
         monkeypatch.setattr(server, name, value, raising=False)
 
@@ -240,7 +324,14 @@ def requires_deployed(reason: str = "needs a running deployment") -> None:
 # ---------------------------------------------------------------------------
 
 # Public by design; everything else must reject an anonymous caller.
-PUBLIC_ROUTES = {("GET", "/health"), ("GET", "/version"), ("GET", "/debug/whoami")}
+PUBLIC_ROUTES = {
+    ("GET", "/health"),
+    ("GET", "/version"),
+    ("GET", "/debug/whoami"),
+    # The analytics collector answers an anonymous browser 200 with
+    # enabled=false, reason="unauthenticated" by design (app/analytics/collector.py).
+    ("GET", "/analytics/config"),
+}
 
 # Placeholder values used when a swept path has parameters. They must not exist,
 # so an authenticated probe lands on the ownership check rather than real data.
@@ -249,9 +340,25 @@ PATH_PARAM_SAMPLE = {
     "task_id": "task-does-not-exist",
     "dataset_id": "dataset-does-not-exist",
     "run_id": "run-does-not-exist",
+    "job_id": "job-does-not-exist",
+    "submission_id": "submission-does-not-exist",
     "session_id": "session-does-not-exist",
+    "connection_id": MCP_CONNECTION_OWNED,
     "index": "0",
 }
+
+# Feature discovery answers an anonymous caller with the least-privileged plan's
+# limits by design (server._caller_edition). Kept apart from the set above so the
+# included-router inventory hunk stays identical to the trainfer branch's.
+PUBLIC_ROUTES |= {("GET", "/api/capabilities")}
+
+# On the hosted deployment /debug/whoami needs a login (server.AUTH_GATE_EXEMPT_UNLESS_HOSTED),
+# so it is swept like any other route. Declare the target with AVALOKA_DEPLOYMENT, as the
+# deployment itself does; hermetically that is this process's own value.
+from app.core.editions import normalize_deployment as _normalize_deployment  # noqa: E402
+
+if _normalize_deployment(os.getenv("AVALOKA_DEPLOYMENT")) == "avaloka_hosted":
+    PUBLIC_ROUTES -= {("GET", "/debug/whoami")}
 
 
 def _fill(path: str) -> str:
@@ -273,7 +380,14 @@ def route_inventory() -> List[Tuple[str, str, str]]:
     if MODE == "deployed":
         import httpx
 
-        spec = httpx.get(f"{DEPLOYED_URL}/openapi.json", timeout=30).json()
+        resp = httpx.get(f"{DEPLOYED_URL}/openapi.json", headers=schema_headers(), timeout=30)
+        if resp.status_code != 200:
+            # An empty inventory would make the sweep pass vacuously; say why instead.
+            raise RuntimeError(
+                f"deployed /openapi.json answered {resp.status_code} to a signed request; "
+                "is SUPABASE_JWT_SECRET the cluster's secret?"
+            )
+        spec = resp.json()
         for path, ops in spec.get("paths", {}).items():
             methods = [m.upper() for m in ops if m.lower() in
                        {"get", "post", "put", "patch", "delete"}]
@@ -282,15 +396,29 @@ def route_inventory() -> List[Tuple[str, str, str]]:
     else:
         import app.api.server as server
 
-        for route in server.app.routes:
-            path = getattr(route, "path", None)
-            methods = getattr(route, "methods", None)
-            if not path or not methods or not path.startswith("/"):
-                continue
-            usable = sorted(m for m in methods if m in
-                            {"GET", "POST", "PUT", "PATCH", "DELETE"})
-            if usable:
-                paths.setdefault(path, []).extend(usable)
+        # Included routers (analytics, Ray jobs, models) sit in app.routes as
+        # ``_IncludedRouter`` entries with no path of their own; a flat walk
+        # skipped every route inside them, so the sweep never saw them. Walk
+        # into them (tests/test_auth_before_body.py does the same), and skip
+        # ``include_in_schema=False`` routes exactly as the deployed branch
+        # does by reading /openapi.json.
+        def _walk(routes: Iterable[Any]) -> None:
+            for route in routes:
+                path = getattr(route, "path", None)
+                methods = getattr(route, "methods", None)
+                if hasattr(route, "effective_candidates"):  # FastAPI's _IncludedRouter
+                    _walk(route.effective_candidates())
+                    continue
+                if not path or not methods or not path.startswith("/"):
+                    continue
+                if getattr(route, "include_in_schema", True) is False:
+                    continue
+                usable = sorted(m for m in methods if m in
+                                {"GET", "POST", "PUT", "PATCH", "DELETE"})
+                if usable:
+                    paths.setdefault(path, []).extend(usable)
+
+        _walk(server.app.routes)
 
     inventory: List[Tuple[str, str, str]] = []
     for path, methods in sorted(paths.items()):

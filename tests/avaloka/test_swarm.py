@@ -116,3 +116,55 @@ def test_swarm_progress_dispatch_count_matches_fireflies(churn_csv, tmp_path):
     ctx = _ctx(MissionKind.ANALYZE, churn_csv, tmp_path / "out", goal="g")
     run_analyze(ctx, on_progress)
     assert sum("sets off" in e for e in events) == len(analyze_fireflies())
+# --- the count she announces is the count that comes back -------------------
+
+def test_narrator_announces_a_specialist_that_joins_after_the_count():
+    """announce(2), then three dispatches: the third says one more is coming and
+    corrects the count, so what she announced is what converge() reports back."""
+    events = []
+    n = SwarmNarrator(events.append)
+    n.announce(2)
+    for f in ("scout", "profiler", "conformal_calibrator"):
+        n.dispatch(f)
+    joined = [e for e in events if "copies in all" in e]
+    assert len(joined) == 1 and "3 copies in all" in joined[0], events
+    assert n._announced == 3 == n._dispatched
+    n.dispatch("scout")   # a copy within the announced count says nothing extra
+    assert sum("copies in all" in e for e in events) == 2   # 4 > 3: corrected again
+    assert "4 copies in all" in events[-2]
+
+_PROVIDER_KEYS = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY", "GROQ_API_KEY",
+                  "GEMINI_API_KEY", "INFERENCE_PROVIDER", "AVALOKA_LLM_MODEL")
+
+
+def test_train_announces_the_number_of_copies_that_come_back(churn_csv, tmp_path):
+    """`avaloka train` said "10 focused copies" and then "All 11 copies are back".
+
+    The planner slots in a specialist (here the conformal calibrator) while the
+    mission is running, after the up-front announcement. Runs the real CLI with
+    the deterministic voice (no model, no network) and checks the last count she
+    announced, the count she says came back and the clones that actually set off
+    are one number.
+    """
+    import os
+    import re
+    import subprocess
+    import sys
+
+    env = {k: v for k, v in os.environ.items() if k not in _PROVIDER_KEYS}
+    env["COLUMNS"] = "400"  # one narration line per console line
+    res = subprocess.run(
+        [sys.executable, "-m", "avaloka", "train", str(churn_csv), "--target", "churned",
+         "-o", str(tmp_path / "out")],
+        capture_output=True, text=True, env=env, timeout=600)
+    assert res.returncode == 0, f"STDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}"
+    out = " ".join(res.stdout.split())
+
+    assert "Ava-conformal_calibrator sets off" in out, "fixture no longer triggers a mid-run specialist"
+    announced = [int(n) for n in re.findall(r"Cloning myself into (\d+) focused copies", out)]
+    announced += [int(n) for n in re.findall(r"(\d+) copies in all", out)]
+    returned = [int(n) for n in re.findall(r"All (\d+) copies are back", out)]
+    set_off = out.count(" sets off")
+    assert announced and returned == [set_off], (announced, returned, set_off)
+    assert announced[-1] == returned[0] == set_off, (
+        f"announced {announced}, said {returned[0]} came back, {set_off} set off")

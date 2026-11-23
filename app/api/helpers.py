@@ -76,6 +76,44 @@ def _normalize_schema_for_state(
     return {}
 
 
+def _schema_from_db_rows(columns: List[str], rows: List[Dict[str, Any]]) -> Dict[str, str]:
+    """Column dtypes for a database table, from the typed values its sample came back with.
+
+    The database-table paths typed every column "string", so on a PostgreSQL
+    thread an INTEGER column like ``stroke`` reached the validator as a string
+    and ``df['stroke'] == 1`` was blocked (rc9: 4 of 5 runs failed). The query
+    tool returns JSON-typed values (ints, floats, bools, strings, nulls), so the
+    sample says what each column holds. A column with mixed or no values stays
+    "string", as before.
+    """
+    from decimal import Decimal
+
+    schema: Dict[str, str] = {}
+    for col in columns:
+        kinds = set()
+        for row in rows:
+            v = row.get(col)
+            if v is None:
+                continue
+            if isinstance(v, bool):
+                kinds.add("bool")
+            elif isinstance(v, int):
+                kinds.add("int")
+            elif isinstance(v, (float, Decimal)):
+                kinds.add("float")
+            else:
+                kinds.add("other")
+        if kinds == {"bool"}:
+            schema[col] = "bool"
+        elif kinds == {"int"}:
+            schema[col] = "int64"
+        elif kinds and kinds <= {"int", "float"}:
+            schema[col] = "float64"
+        else:
+            schema[col] = "string"
+    return schema
+
+
 # NEW: tiny-sample -> CSV writer
 def _write_rows_to_csv(rows: List[Dict[str, Any]], path: Path) -> None:
     """Write a list[dict] to CSV with header based on keys of first row."""
@@ -99,9 +137,9 @@ def _ddl_from_schema(table_name: str, schema: Dict[str, str]) -> str:
 
     def map_type(t: str) -> str:
         t = (t or "string").lower()
-        if t in ("int", "integer", "bigint", "smallint"):
+        if t in ("int", "integer", "bigint", "smallint") or re.fullmatch(r"u?int\d+", t):
             return "INTEGER"
-        if t in ("float", "double", "number", "numeric", "real", "decimal"):
+        if t in ("float", "double", "number", "numeric", "real", "decimal") or re.fullmatch(r"float\d+", t):
             return "DOUBLE"
         if t in ("bool", "boolean"):
             return "BOOLEAN"
@@ -296,10 +334,21 @@ async def read_thread_msgs(thread_id: str) -> List[Dict[str, str]]:
     a simple {role, content} list for the /threads/{id}/messages endpoint.
     """
     m = THREAD_META.get(thread_id, {}).get("lc_msgs", [])
-    out: List[Dict[str, str]] = []
+    out: List[Dict[str, Any]] = []
     for x in m:
         role = "user" if isinstance(x, HumanMessage) else "assistant"
-        out.append({"role": role, "content": x.content})
+        item: Dict[str, Any] = {"role": role, "content": x.content}
+        segs = (getattr(x, "additional_kwargs", None) or {}).get("reply_segments")
+        if role == "assistant" and isinstance(segs, list) and segs:
+            # Only segments that still render to the stored text are served
+            # (app/api/reply_segments.py); otherwise the text stands alone.
+            from app.api import reply_segments
+            if reply_segments.render(segs) == x.content:
+                item["reply_segments"] = segs
+        ak = getattr(x, "additional_kwargs", None) or {}
+        if ak.get("avaloka_job_note"):
+            item["job_note"] = {"job_ids": list(ak.get("job_ids") or []), "batch_id": ak.get("batch_id")}
+        out.append(item)
     return out
 
 
@@ -321,12 +370,29 @@ def _k_thread_history(thread_id: str) -> str:
     return f"thread:{thread_id}:history"
 
 
+def _redacted_segments(value: Any) -> Any:
+    """A reply's segments as Redis stores them: every string credential-redacted."""
+    from app.core.typed_secrets import redact_typed_secrets
+    if isinstance(value, str):
+        return redact_typed_secrets(value)[0]
+    if isinstance(value, list):
+        return [_redacted_segments(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _redacted_segments(v) for k, v in value.items()}
+    return value
+
+
 def _lc_msgs_to_jsonable(msgs: List[Any]) -> List[Dict[str, Any]]:
     """
     Serialize LC messages for Redis. Superset of app.utils' role format
     (human/ai/system) plus a "pinned" flag so avaloka_pinned survives the
     round trip; unknown message types are skipped.
+
+    Credentials typed into chat (and any reply quoting one) are stored redacted:
+    the in-process copy keeps the sealed token the data transfer agent opens,
+    Redis keeps "[redacted]".
     """
+    from app.core.typed_secrets import REDACTED, TOKEN_RE, redact_typed_secrets
     out: List[Dict[str, Any]] = []
     for m in msgs:
         if isinstance(m, HumanMessage):
@@ -337,10 +403,20 @@ def _lc_msgs_to_jsonable(msgs: List[Any]) -> List[Dict[str, Any]]:
             role = "system"
         else:
             continue
-        item: Dict[str, Any] = {"role": role, "content": m.content}
+        content = m.content
+        if isinstance(content, str):
+            content = redact_typed_secrets(content)[0] if role in ("human", "ai") else TOKEN_RE.sub(REDACTED, content)
+        item: Dict[str, Any] = {"role": role, "content": content}
         ak = getattr(m, "additional_kwargs", None) or {}
         if ak.get("avaloka_pinned"):
             item["pinned"] = True
+        if role == "ai" and ak.get("reply_segments"):
+            # A reopened thread renders each sentence as it was first shown.
+            item["reply_segments"] = _redacted_segments(ak["reply_segments"])
+        if ak.get("avaloka_job_note"):
+            # A code-written background-job note (app/core/job_notes.py): the
+            # tag must survive the round trip so learners keep skipping it.
+            item["job_note"] = {"job_ids": list(ak.get("job_ids") or []), "batch_id": ak.get("batch_id")}
         out.append(item)
     return out
 
@@ -356,9 +432,20 @@ def _jsonable_to_lc_msgs(items: Any) -> List[Any]:
         role = it.get("role") or it.get("type")
         content = it.get("content", "")
         kwargs = {"avaloka_pinned": True} if it.get("pinned") else {}
+        note = it.get("job_note")
+        if isinstance(note, dict):
+            kwargs.update({"avaloka_job_note": True, "avaloka_system_context": True,
+                           "job_ids": list(note.get("job_ids") or []), "batch_id": note.get("batch_id")})
         if role in ("human", "user"):
+            # History written before typed credentials were sealed still holds
+            # them as typed; they are sealed here, as it is read back.
+            if isinstance(content, str):
+                from app.core.typed_secrets import seal_typed_secrets
+                content, _ = seal_typed_secrets(content)
             msgs.append(HumanMessage(content=content, additional_kwargs=kwargs))
         elif role in ("ai", "assistant"):
+            if isinstance(it.get("reply_segments"), list):
+                kwargs = {**kwargs, "reply_segments": it["reply_segments"]}
             msgs.append(AIMessage(content=content, additional_kwargs=kwargs))
         elif role == "system":
             msgs.append(SystemMessage(content=content, additional_kwargs=kwargs))
@@ -465,6 +552,10 @@ async def delete_thread_history(thread_id: str) -> None:
         await cache.delete(_k_thread_history(thread_id))
     except Exception as e:
         session_service._note_cache_failure(f"delete_thread_history({thread_id})", e)
+    # The agent trace is the same thread's analysis; it goes with it.
+    from app.trace.store import delete_trace
+
+    await delete_trace(thread_id)
 
 
 # ---------- Dataset helpers ----------

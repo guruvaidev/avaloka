@@ -10,6 +10,7 @@ Responsibilities:
 from __future__ import annotations
 
 import os
+import re
 from typing import List, Optional
 
 from app.infra.providers.base import run_command
@@ -33,6 +34,10 @@ DOCKER_DIR = os.path.join(_DEPLOY, "docker")
 HELM_VALUES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "manifests", "helm-values")
 
 API_IMAGE = "avaloka-api:latest"      # FastAPI backend — the chart's primary workload (R1)
+# The chart's langgraph pod (`langgraph dev`): Dockerfile.api built with
+# requirements-langgraph-server.txt. The chart derives its name from API_IMAGE
+# (avaloka-api -> avaloka-langgraph, same tag), so nothing extra is --set.
+LANGGRAPH_IMAGE = "avaloka-langgraph:latest"
 RAY_IMAGE = "avaloka-ray:latest"      # Ray head/worker + Serve image
 UI_IMAGE = "avaloka:latest"           # optional Streamlit UI (built only when with_ui)
 WEBUI_IMAGE = "avaloka-ui:latest"    # 1.6 TanStack SSR UI (chart 'webui.enabled')
@@ -49,6 +54,27 @@ DATA_STACK = {
     "opensearch": ("opensearch", "https://opensearch-project.github.io/helm-charts/", "opensearch/opensearch", "avaloka-opensearch"),
 }
 
+# One address as Helm's --set list syntax can carry it: no commas, braces,
+# brackets, "=" or whitespace.
+_ADMIN_EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+'-]+@[A-Za-z0-9.-]+$")
+
+
+def admin_emails_set_args(raw: str) -> List[str]:
+    """Helm args carrying ADMIN_EMAILS (comma-separated) into admin.emails.
+
+    Empty means no admin, and no argument is passed: the chart's default is an
+    empty list, with no fallback address. A malformed entry fails the deploy
+    rather than being dropped, so a typo cannot silently leave a site without
+    the administrator the operator asked for.
+    """
+    emails = [e.strip().lower() for e in (raw or "").split(",") if e.strip()]
+    bad = [e for e in emails if not _ADMIN_EMAIL_RE.match(e)]
+    if bad:
+        raise ValueError(f"ADMIN_EMAILS has {len(bad)} malformed entr{'y' if len(bad) == 1 else 'ies'}")
+    if not emails:
+        return []
+    return ["--set", "admin.emails={" + ",".join(emails) + "}"]
+
 
 def build_images(
     load_into_kind: bool = False,
@@ -59,7 +85,8 @@ def build_images(
 ) -> List[dict]:
     """Build the avaloka images; optionally side-load them into kind.
 
-    Builds the API image (chart's primary workload) and the Ray image by default.
+    Builds the API image (chart's primary workload), the LangGraph server image
+    (the chart's langgraph pod) and the Ray image by default.
     The Streamlit UI image (``avaloka:latest``) is built only when ``with_ui`` — the
     UI is opt-in (chart ``ui.enabled``), so most deploys don't need it.
     """
@@ -70,6 +97,13 @@ def build_images(
         "Build avaloka-api image",
     ))
     built.append(API_IMAGE)
+    outcomes.append(run_command(
+        ["docker", "build", "-f", os.path.join(DOCKER_DIR, "Dockerfile.api"),
+         "--build-arg", "REQUIREMENTS=requirements-langgraph-server.txt",
+         "-t", LANGGRAPH_IMAGE, _REPO_ROOT],
+        "Build avaloka-langgraph image",
+    ))
+    built.append(LANGGRAPH_IMAGE)
     outcomes.append(run_command(
         ["docker", "build", "-f", os.path.join(DOCKER_DIR, "Dockerfile.ray"), "-t", RAY_IMAGE, _REPO_ROOT],
         "Build avaloka-ray image",
@@ -171,6 +205,11 @@ def deploy_avaloka(
     elif provider == "azure":
         cmd += ["-f", os.path.join(AVALOKA_CHART, "values", "values-aks.yaml")]
 
+    # This is the self-hosted provisioner (`make up`). The GKE overlay above is
+    # also the hosted sites' overlay and declares avaloka_hosted; an install made
+    # here is the operator's own, so say so over whatever the overlay says.
+    cmd += ["--set-string", "config.deployment=self_hosted"]
+
     if connect_existing and ray_address:
         cmd += ["--set-string", f"ray.address={ray_address}"]
     if service_type:
@@ -214,6 +253,10 @@ def deploy_avaloka(
             value = (os.environ.get(env_var) or "").strip()
             if value:
                 cmd += ["--set-string", f"{flag}={value}"]
+
+    # Administrators come from configuration only (the chart's admin.emails).
+    # Unset means no admin; nothing is defaulted.
+    cmd += admin_emails_set_args(os.environ.get("ADMIN_EMAILS", ""))
 
     # Provision mode installs ``deploy/helm/ray/raycluster.yaml`` immediately
     # after this Helm release. Point all Ray Jobs clients at that shared,
@@ -301,6 +344,7 @@ def deploy_avaloka(
     # resolution. A raw PostgreSQL backend URI cannot serve registry/artifact APIs.
     inference_env_overrides = (
         ("INFERENCE_BACKEND", "config.inferenceBackend"),
+        ("MODEL_SERVER_URL", "config.modelServerUrl"),
         ("MLFLOW_TRACKING_URI", "mlflow.trackingUri"),
         ("MLFLOW_REGISTRY_URI", "mlflow.registryUri"),
         ("MLFLOW_DEFAULT_ARTIFACT_ROOT", "mlflow.defaultArtifactRoot"),

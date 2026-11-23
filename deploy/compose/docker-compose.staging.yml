@@ -4,6 +4,9 @@ services:
   chromadb:
     image: chromadb/chroma:latest
     container_name: staging-chromadb
+    environment:
+      # chroma's product telemetry, off (app/core/thirdparty_optout.py).
+      ANONYMIZED_TELEMETRY: "False"
     ports:
       - "8000:8000"
     volumes:

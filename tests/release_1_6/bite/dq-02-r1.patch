@@ -1,0 +1,14 @@
+diff --git a/app/agents/mta_v2/local_trainer.py b/app/agents/mta_v2/local_trainer.py
+index e8251ae0..bf186db6 100644
+--- a/app/agents/mta_v2/local_trainer.py
++++ b/app/agents/mta_v2/local_trainer.py
+@@ -908,9 +908,6 @@ def training_main(
+     if identifier_matches:
+         raise ValueError(identifier_features_error(identifier_matches))
+ 
+-    leakage_matches = find_target_leakage(df, target_col, feature_cols)
+-    if leakage_matches:
+-        raise ValueError(target_leakage_error(target_col, leakage_matches))
+ 
+     # ---- Validate + prepare feature columns ----
+     feature_cols = validate_feature_columns(df, feature_cols, target_col)

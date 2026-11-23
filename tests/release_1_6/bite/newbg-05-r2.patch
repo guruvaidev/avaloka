@@ -1,0 +1,26 @@
+diff --git a/deploy/helm/avaloka/files/supabase-migrations/20261103150000_bg05_bg06_roles_departments.sql b/deploy/helm/avaloka/files/supabase-migrations/20261103150000_bg05_bg06_roles_departments.sql
+index 4b5239b4..c4e26245 100644
+--- a/deploy/helm/avaloka/files/supabase-migrations/20261103150000_bg05_bg06_roles_departments.sql
++++ b/deploy/helm/avaloka/files/supabase-migrations/20261103150000_bg05_bg06_roles_departments.sql
+@@ -82,7 +82,7 @@ WHERE nullif(btrim(au.role), '') IS NOT NULL AND nullif(btrim(au.department), ''
+ ORDER BY au.organization_id, lower(au.role), lower(au.department), au.created_at;
+ ALTER TABLE public.config_roles ADD COLUMN IF NOT EXISTS department_id uuid REFERENCES public.departments(id) ON DELETE CASCADE;
+ ALTER TABLE public.app_users ADD COLUMN IF NOT EXISTS department_id uuid REFERENCES public.departments(id) ON DELETE SET NULL;
+-ALTER TABLE public.app_users ADD COLUMN IF NOT EXISTS role_id uuid REFERENCES public.config_roles(id) ON DELETE SET NULL;
++ALTER TABLE public.app_users ADD COLUMN IF NOT EXISTS role_id uuid;
+ CREATE INDEX IF NOT EXISTS config_roles_department_id_idx ON public.config_roles (department_id);
+ CREATE INDEX IF NOT EXISTS app_users_department_id_idx ON public.app_users (department_id);
+ CREATE INDEX IF NOT EXISTS app_users_role_id_idx ON public.app_users (role_id);
+diff --git a/ui/supabase/migrations/20261103150000_bg05_bg06_roles_departments.sql b/ui/supabase/migrations/20261103150000_bg05_bg06_roles_departments.sql
+index 4b5239b4..c4e26245 100644
+--- a/ui/supabase/migrations/20261103150000_bg05_bg06_roles_departments.sql
++++ b/ui/supabase/migrations/20261103150000_bg05_bg06_roles_departments.sql
+@@ -82,7 +82,7 @@ WHERE nullif(btrim(au.role), '') IS NOT NULL AND nullif(btrim(au.department), ''
+ ORDER BY au.organization_id, lower(au.role), lower(au.department), au.created_at;
+ ALTER TABLE public.config_roles ADD COLUMN IF NOT EXISTS department_id uuid REFERENCES public.departments(id) ON DELETE CASCADE;
+ ALTER TABLE public.app_users ADD COLUMN IF NOT EXISTS department_id uuid REFERENCES public.departments(id) ON DELETE SET NULL;
+-ALTER TABLE public.app_users ADD COLUMN IF NOT EXISTS role_id uuid REFERENCES public.config_roles(id) ON DELETE SET NULL;
++ALTER TABLE public.app_users ADD COLUMN IF NOT EXISTS role_id uuid;
+ CREATE INDEX IF NOT EXISTS config_roles_department_id_idx ON public.config_roles (department_id);
+ CREATE INDEX IF NOT EXISTS app_users_department_id_idx ON public.app_users (department_id);
+ CREATE INDEX IF NOT EXISTS app_users_role_id_idx ON public.app_users (role_id);

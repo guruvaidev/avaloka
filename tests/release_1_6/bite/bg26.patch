@@ -1,0 +1,13 @@
+diff --git a/ui/src/components/dashboard/UploadModal.tsx b/ui/src/components/dashboard/UploadModal.tsx
+index 20abbbef..353038d2 100644
+--- a/ui/src/components/dashboard/UploadModal.tsx
++++ b/ui/src/components/dashboard/UploadModal.tsx
+@@ -745,7 +745,7 @@ export function UploadModal({
+             <div className="flex min-w-0 items-center gap-2"><UploadCloud02 className="size-5 shrink-0 text-tertiary" /><DialogTitle className="text-sm font-semibold text-primary">Select File &amp; Start Analysis</DialogTitle></div>
+             <ReviewButton variant="ghost" size="icon" aria-label="Close" onClick={() => handleClose(false)}><X className="size-4" /></ReviewButton>
+           </div>
+-          <p className="mt-2 text-xs text-tertiary" aria-label={`Step ${step} of 2`}><span className={step === 1 ? "font-semibold text-brand-secondary" : ""}>1 Upload</span><span className="mx-2">·</span><span className={step === 2 ? "font-semibold text-brand-secondary" : ""}>2 Review</span></p>
++          <p className="mt-2 text-xs text-tertiary" aria-label="Upload"><span className={step === 1 ? "font-semibold text-brand-secondary" : ""}>1 Upload</span><span className="mx-2">·</span><span className={step === 2 ? "font-semibold text-brand-secondary" : ""}>2 Review</span></p>
+           <DialogDescription className="sr-only">Upload your files, then review dataset details and start analysis.</DialogDescription>
+         </header>
+         <input ref={inputRef} type="file" multiple accept={ACCEPTED.join(",")} className="hidden" onChange={(event) => chooseFiles(Array.from(event.target.files ?? []))} />

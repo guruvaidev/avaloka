@@ -1,0 +1,11 @@
+{
+  "question": "What drove the change in revenue last month by region?",
+  "recipe": "compare_periods",
+  "params": {
+    "measure": "revenue",
+    "time": "date",
+    "dimension": "region"
+  },
+  "confidence": 1.0,
+  "source": "fixture"
+}

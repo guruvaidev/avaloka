@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import base64
 
+from app.agents import visualization_agent as va
 from app.agents.visualization_agent import profile_columns, visualization_agent_node
 
 
@@ -127,7 +128,10 @@ def test_a_single_row_result_is_profiled_from_the_result_not_the_upload():
     out = visualization_agent_node(_state("num_countries\n49\n"))
 
     config = out.get("visualization_config") or {}
-    assert out.get("visualization_status") == "ready"
+    # "ready" only with a chart to show; an empty list says so (no success word).
+    assert out.get("visualization_status") == (
+        "ready" if config.get("charts") else va.NO_CHARTS_STATUS
+    )
     assert {c["name"] for c in config.get("columns") or []} == {"num_countries"}, (
         "the config profiles a table other than the result"
     )

@@ -1,6 +1,8 @@
 import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/primary-auth-middleware";
+import { findTeamInvitee } from "@/lib/team-invitation.server";
 import { safeRedirectOrigin } from "@/lib/auth-redirect";
+import { assertPlanFeature, assertTeamMembersAllowed } from "@/lib/org-features";
 
 
 // ---- Invitation delivery over SMTP -------------------------------------
@@ -11,6 +13,7 @@ async function sendInviteEmailViaSmtp(opts: {
   email: string;
   redirectTo?: string;
   data?: Record<string, unknown>;
+  teamName?: string;
   /** Existing platform accounts cannot be "invited" again — send a magic link. */
   existingUser?: boolean;
 }): Promise<{ userId: string | null; error: string | null }> {
@@ -23,8 +26,10 @@ async function sendInviteEmailViaSmtp(opts: {
     });
 
 
-  let link = await buildLink(opts.existingUser ? "magiclink" : "invite");
+  let existingUser = Boolean(opts.existingUser);
+  let link = await buildLink(existingUser ? "magiclink" : "invite");
   if (link.error && /already.*registered|already.*exists|exists/i.test(link.error.message ?? "")) {
+    existingUser = true;
     link = await buildLink("magiclink");
   }
   if (link.error) {
@@ -48,6 +53,20 @@ async function sendInviteEmailViaSmtp(opts: {
 
   const logo = "https://storage.googleapis.com/avaloka-public-assets/Logo.svg";
   const safeActionLink = actionLink.replace(/&/g, "&amp;").replace(/\"/g, "&quot;");
+  const escapeHtml = (value: string) => value.replace(/[&<>\"']/g, (char) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" } as Record<string, string>)[char] ?? char,
+  );
+  const safeTeamName = opts.teamName ? escapeHtml(opts.teamName) : null;
+  const subject = safeTeamName ? `Join ${opts.teamName} on Avaloka` : "You've been invited to Avaloka";
+  const title = safeTeamName ? `You've been invited to join ${safeTeamName}` : "You've been invited to Avaloka";
+  const description = safeTeamName
+    ? existingUser
+      ? `Join the ${safeTeamName} team on Avaloka and collaborate with its members.`
+      : `Create your Avaloka account to join the ${safeTeamName} team and collaborate with its members.`
+    : "You have been invited to collaborate in Avaloka. Accept the invitation to join and access the shared workspace.";
+  const buttonLabel = safeTeamName
+    ? existingUser ? "Join the team" : "Sign up and join the team"
+    : "Accept Invitation";
   const html = `
 <!doctype html>
 <html>
@@ -74,25 +93,25 @@ async function sendInviteEmailViaSmtp(opts: {
         </tr>
         <tr>
           <td style="padding-top:24px;font-size:22px;font-weight:700;color:#111">
-            You've been invited to Avaloka
+            ${title}
           </td>
         </tr>
         <tr>
           <td style="padding-top:20px;font-size:15px;line-height:24px;color:#374151">
-            You have been invited to collaborate in Avaloka. Accept the invitation to join and access the shared workspace.
+            ${description}
           </td>
         </tr>
         <tr>
           <td style="padding-top:24px">
             <a href="${safeActionLink}"
               style="display:inline-block;background:#1565ef;color:#ffffff;text-decoration:none;padding:12px 20px;border-radius:6px;font-weight:600;font-size:14px">
-              Accept Invitation
+              ${buttonLabel}
             </a>
           </td>
         </tr>
         <tr>
           <td style="padding-top:32px;font-size:12px;color:#6b7280">
-            This email was sent because someone invited you to collaborate on Avaloka.
+            This email was sent because someone invited you to Avaloka${safeTeamName ? ` and the ${safeTeamName} team` : ""}.
           </td>
         </tr>
         <tr>
@@ -128,7 +147,7 @@ async function sendInviteEmailViaSmtp(opts: {
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${serviceKey}` },
     body: JSON.stringify({
       to: opts.email,
-      subject: "You've been invited to Avaloka",
+      subject,
       html,
     }),
   });
@@ -541,6 +560,7 @@ export const upsertDepartment = createServerFn({ method: "POST" })
     employees?: number;
   }) => input)
   .handler(async ({ data, context }) => {
+    await assertPlanFeature(context.supabase, "enterprise", "upsertDepartment");
     const { id, ...rest } = data;
     const orgId = await getOrgId(context.supabase, context.userId);
 
@@ -580,6 +600,7 @@ export const bulkUpsertDepartments = createServerFn({ method: "POST" })
     }>;
   }) => input)
   .handler(async ({ data, context }) => {
+    await assertPlanFeature(context.supabase, "enterprise", "bulkUpsertDepartments");
     if (!data.rows?.length) return { inserted: 0 };
     const orgId = await getOrgId(context.supabase, context.userId);
 
@@ -659,6 +680,7 @@ export const upsertConfigRole = createServerFn({ method: "POST" })
     permissions: string[];
   }) => input)
   .handler(async ({ data, context }) => {
+    await assertPlanFeature(context.supabase, "enterprise", "upsertConfigRole");
     const { id, ...rest } = data;
     const orgId = await getOrgId(context.supabase, context.userId);
     const payload = { ...rest, organization_id: orgId };
@@ -689,6 +711,7 @@ export const bulkUpsertConfigRoles = createServerFn({ method: "POST" })
     }>;
   }) => input)
   .handler(async ({ data, context }) => {
+    await assertPlanFeature(context.supabase, "enterprise", "bulkUpsertConfigRoles");
     if (!data.rows?.length) return { inserted: 0 };
     const orgId = await getOrgId(context.supabase, context.userId);
     const payload = data.rows.map((r) => ({
@@ -761,6 +784,7 @@ export const upsertBranch = createServerFn({ method: "POST" })
     employees?: number;
   }) => input)
   .handler(async ({ data, context }) => {
+    await assertPlanFeature(context.supabase, "enterprise", "upsertBranch");
     const { id, head_profile_id, ...rest } = data;
     const orgId = await getOrgId(context.supabase, context.userId);
     const headProfileId = await resolveHeadProfileId(head_profile_id ?? null, orgId);
@@ -793,6 +817,7 @@ export const bulkUpsertBranches = createServerFn({ method: "POST" })
     }>;
   }) => input)
   .handler(async ({ data, context }) => {
+    await assertPlanFeature(context.supabase, "enterprise", "bulkUpsertBranches");
     if (!data.rows?.length) return { inserted: 0 };
     const orgId = await getOrgId(context.supabase, context.userId);
 
@@ -921,6 +946,7 @@ export const upsertAppUser = createServerFn({ method: "POST" })
     permissions?: Record<string, Record<string, boolean>>;
   }) => input)
   .handler(async ({ data, context }) => {
+    await assertPlanFeature(context.supabase, "enterprise", "upsertAppUser");
     const { id, name: _name, avatar: _avatar, ...rest } = data;
     const orgId = await getOrgId(context.supabase, context.userId);
     const payload = { ...rest, organization_id: orgId };
@@ -981,6 +1007,7 @@ export const inviteAppUser = createServerFn({ method: "POST" })
     redirectTo?: string;
   }) => input)
   .handler(async ({ data, context }) => {
+    await assertPlanFeature(context.supabase, "enterprise", "inviteAppUser");
     const email = data.email.trim().toLowerCase();
     if (!email) throw new Error("Email is required");
 
@@ -1221,6 +1248,7 @@ export const resendAppUserInvite = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((input: { id: string; redirectTo?: string }) => input)
   .handler(async ({ data, context }) => {
+    await assertPlanFeature(context.supabase, "enterprise", "resendAppUserInvite");
     const orgId = await getOrgId(context.supabase, context.userId);
 
     const { data: row, error: rowErr } = await context.supabase
@@ -1532,6 +1560,36 @@ async function enrichAppUsers(
   return map;
 }
 
+/**
+ * May each of these app users join a Professional team? Owner ruling: any plan
+ * may; true when the person has an Avaloka account. Only
+ * members of the caller's own organisation are answered, and only with a
+ * boolean -- never the member's plan. Unknown ids are false (fail closed). The
+ * database enforces the same rule on write.
+ */
+export const getTeamMemberEligibility = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: { appUserIds: string[] }) => input)
+  .handler(async ({ data, context }) => {
+    const ids = Array.from(new Set((data.appUserIds ?? []).filter((x) => typeof x === "string" && x)));
+    const out: Record<string, boolean> = Object.fromEntries(ids.map((id) => [id, false]));
+    if (!ids.length) return out;
+    const orgId = await getOrgIdSoft(context.supabase, context.userId);
+    if (!orgId) return out;
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data: rows } = await (supabaseAdmin as any)
+      .from("app_users")
+      .select("id, auth_user_id")
+      .eq("organization_id", orgId)
+      .in("id", ids);
+    // Any plan may join a Professional team (owner ruling); the member needs an
+    // Avaloka account, as public.team_member_allowed checks.
+    for (const r of (rows ?? []) as Array<{ id: string; auth_user_id: string | null }>) {
+      out[r.id] = Boolean(r.auth_user_id);
+    }
+    return out;
+  });
+
 export const listTeams = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .handler(async ({ context }) => {
@@ -1541,7 +1599,102 @@ export const listTeams = createServerFn({ method: "GET" })
       .order("created_at", { ascending: false });
     if (error) throw new Error(error.message);
     const rows = teams ?? [];
-    if (!rows.length) return [];
+    // Professional teams live in the profile-owned `teams` table (with a
+    // customer-account fallback for databases before the ownership migration). Include
+    // those rows in the same configuration list, without inventing branch or
+    // lead data that the Professional table does not store.
+    let professionalTeams: any[] = [];
+    const profileId = await getProfileIdForAuthUser(context.supabase, context.userId);
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    if (profileId) {
+      let { data, error: professionalTeamsError } = await (supabaseAdmin as any)
+        .from("teams")
+        .select("*")
+        .eq("owner_profile_id", profileId)
+        .order("created_at", { ascending: false });
+      if (professionalTeamsError && /owner_profile_id|column .* does not exist|schema cache/i.test(professionalTeamsError.message ?? "")) {
+        const { data: account } = await (supabaseAdmin as any)
+          .from("customer_accounts")
+          .select("id")
+          .eq("owner_user_id", profileId)
+          .maybeSingle();
+        if (account?.id) {
+          ({ data, error: professionalTeamsError } = await (supabaseAdmin as any)
+            .from("teams")
+            .select("id,name,description,member_emails,organization_id,lead_profile_id,created_at")
+            .eq("customer_account_id", account.id)
+            .order("created_at", { ascending: false }));
+        } else {
+          data = [];
+          professionalTeamsError = null;
+        }
+      }
+      if (professionalTeamsError) throw new Error(professionalTeamsError.message);
+      const ownerTeams = data ?? [];
+      const { data: memberships, error: membershipsReadError } = await (supabaseAdmin as any)
+        .from("team_memberships")
+        .select("team_id,user_id")
+        .eq("user_id", profileId);
+      if (membershipsReadError) throw new Error(membershipsReadError.message);
+      const memberTeamIds = Array.from(new Set((memberships ?? []).map((membership: any) => membership.team_id)));
+      const { data: memberTeams, error: memberTeamsError } = memberTeamIds.length
+        ? await (supabaseAdmin as any).from("teams").select("*").in("id", memberTeamIds)
+        : { data: [], error: null };
+      if (memberTeamsError) throw new Error(memberTeamsError.message);
+      const teamById = new Map<string, any>();
+      for (const team of [...ownerTeams, ...(memberTeams ?? [])]) teamById.set(team.id, team);
+      data = Array.from(teamById.values());
+      const leadProfileIds = Array.from(new Set((data ?? []).map((t: any) => t.lead_profile_id).filter(Boolean)));
+      const leadProfiles = new Map<string, any>();
+      const teamIds = (data ?? []).map((t: any) => t.id);
+      const { data: membershipRows, error: membershipsError } = teamIds.length
+        ? await (supabaseAdmin as any)
+            .from("team_memberships")
+            .select("team_id,user_id")
+            .in("team_id", teamIds)
+        : { data: [], error: null };
+      if (membershipsError) throw new Error(membershipsError.message);
+      const membershipProfileIds = Array.from(new Set((membershipRows ?? []).map((m: any) => m.user_id)));
+      const profileIds = Array.from(new Set([...leadProfileIds, ...membershipProfileIds]));
+      if (profileIds.length) {
+        const { data: profiles } = await (supabaseAdmin as any)
+          .from("profiles")
+          .select("id,full_name,avatar_url,user_id")
+          .in("id", profileIds);
+        for (const profile of profiles ?? []) {
+          let email: string | null = null;
+          if (profile.user_id) {
+            const { data: authUser } = await (supabaseAdmin as any).auth.admin.getUserById(profile.user_id);
+            email = authUser?.user?.email ?? null;
+          }
+          leadProfiles.set(profile.id, { ...profile, email });
+        }
+      }
+      const membershipsByTeam = new Map<string, string[]>();
+      for (const membership of membershipRows ?? []) {
+        const teamMemberships = membershipsByTeam.get(membership.team_id) ?? [];
+        teamMemberships.push(membership.user_id);
+        membershipsByTeam.set(membership.team_id, teamMemberships);
+      }
+      professionalTeams = (data ?? []).map((t: any) => ({
+        ...t,
+        lead_user_id: null,
+        lead_name: leadProfiles.get(t.lead_profile_id)?.full_name ?? null,
+        lead_email: leadProfiles.get(t.lead_profile_id)?.email ?? null,
+        lead_avatar: leadProfiles.get(t.lead_profile_id)?.avatar_url ?? null,
+        member_ids: membershipsByTeam.get(t.id) ?? [],
+        user_avatars: (membershipsByTeam.get(t.id) ?? [])
+          .map((id) => leadProfiles.get(id)?.avatar_url)
+          .filter(Boolean),
+        user_count: (membershipsByTeam.get(t.id) ?? []).length,
+        branch: "—",
+        status: "Active",
+        is_professional_team: true,
+        can_delete: t.owner_profile_id === profileId,
+      }));
+    }
+
+    if (!rows.length && !professionalTeams.length) return [];
 
     const { data: users } = await (context.supabase as any)
       .from("app_users")
@@ -1559,7 +1712,7 @@ export const listTeams = createServerFn({ method: "GET" })
       membersByTeam.set(u.team_id, list);
     }
 
-    return rows.map((t: any) => {
+    const enterpriseTeams = rows.map((t: any) => {
       const lead = t.lead_user_id ? userMap.get(t.lead_user_id) ?? null : null;
       const members = membersByTeam.get(t.id) ?? [];
       return {
@@ -1576,6 +1729,468 @@ export const listTeams = createServerFn({ method: "GET" })
         user_count: members.length,
       };
     });
+    return [...professionalTeams, ...enterpriseTeams].sort(
+      (a: any, b: any) => Date.parse(b.created_at ?? "") - Date.parse(a.created_at ?? ""),
+    );
+  });
+
+/** Loads members and pending invitations for a Professional team. */
+export const getProfessionalTeamDetails = createServerFn({ method: "GET" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: { teamId: string }) => input)
+  .handler(async ({ data, context }) => {
+    const profileId = await getProfileIdForAuthUser(context.supabase, context.userId);
+    if (!profileId) throw new Error("Could not find your profile.");
+
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const admin = supabaseAdmin as any;
+    const { data: team, error: teamError } = await admin
+      .from("teams")
+      .select("*")
+      .eq("id", data.teamId)
+      .maybeSingle();
+    if (teamError) throw new Error(teamError.message);
+    if (!team) throw new Error("Team not found.");
+
+    let ownerProfileId = team.owner_profile_id ?? null;
+    if (!ownerProfileId && team.customer_account_id) {
+      const { data: account, error: accountError } = await admin
+        .from("customer_accounts")
+        .select("owner_user_id")
+        .eq("id", team.customer_account_id)
+        .maybeSingle();
+      if (accountError) throw new Error(accountError.message);
+      ownerProfileId = account?.owner_user_id ?? null;
+    }
+
+    const { data: ownMembership, error: ownMembershipError } = await admin
+      .from("team_memberships")
+      .select("id")
+      .eq("team_id", data.teamId)
+      .eq("user_id", profileId)
+      .maybeSingle();
+    if (ownMembershipError) throw new Error(ownMembershipError.message);
+    const isManager = ownerProfileId === profileId || team.lead_profile_id === profileId;
+    if (!isManager && !ownMembership) throw new Error("You are not a member of this team.");
+
+    const { data: memberships, error: membershipsError } = await admin
+      .from("team_memberships")
+      .select("user_id,joined_at")
+      .eq("team_id", data.teamId)
+      .order("joined_at", { ascending: true });
+    if (membershipsError) throw new Error(membershipsError.message);
+    const leadProfileId = team.lead_profile_id ?? null;
+    const profileIds = Array.from(new Set([
+      ...(memberships ?? []).map((row: any) => row.user_id),
+      ...(leadProfileId ? [leadProfileId] : []),
+      ...(ownerProfileId ? [ownerProfileId] : []),
+    ]));
+    const { data: profiles, error: profilesError } = profileIds.length
+      ? await admin.from("profiles").select("id,user_id,full_name,avatar_url").in("id", profileIds)
+      : { data: [], error: null };
+    if (profilesError) throw new Error(profilesError.message);
+
+    const membershipByProfileId = new Map((memberships ?? []).map((row: any) => [row.user_id, row]));
+    const members = await Promise.all(profileIds.map(async (memberProfileId) => {
+      const membership = membershipByProfileId.get(memberProfileId) as any;
+      const profile = (profiles ?? []).find((row: any) => row.id === memberProfileId);
+      let email: string | null = null;
+      if (profile?.user_id) {
+        const { data: authUser } = await admin.auth.admin.getUserById(profile.user_id);
+        email = authUser?.user?.email ?? null;
+      }
+      const isLead = memberProfileId === leadProfileId;
+      const isOwner = memberProfileId === ownerProfileId;
+      return {
+        id: memberProfileId,
+        name: profile?.full_name ?? email?.split("@")[0] ?? "Team member",
+        email,
+        avatar: profile?.avatar_url ?? null,
+        joinedAt: membership?.joined_at ?? null,
+        role: isLead && isOwner ? "Team Lead · Owner" : isLead ? "Team Lead" : isOwner ? "Owner" : "Member",
+        isMember: Boolean(membership),
+        isLead,
+        isOwner,
+      };
+    }));
+    members.sort((a: any, b: any) => {
+      const rank = (role: string) => role.includes("Team Lead") ? 0 : role === "Owner" ? 1 : 2;
+      return rank(a.role) - rank(b.role) || a.name.localeCompare(b.name);
+    });
+
+    let pendingInvitations: Array<{ id: string; email: string; createdAt: string }> = [];
+    if (isManager) {
+      const { data: pending, error: pendingError } = await admin
+        .from("team_invitations")
+        .select("id,invited_email,created_at")
+        .eq("team_id", data.teamId)
+        .eq("status", "pending")
+        .order("created_at", { ascending: false });
+      if (pendingError) throw new Error(pendingError.message);
+      pendingInvitations = (pending ?? []).map((row: any) => ({
+        id: row.id,
+        email: row.invited_email,
+        createdAt: row.created_at,
+      }));
+    }
+    return { members, pendingInvitations, canInvite: isManager, viewerProfileId: profileId };
+  });
+
+/** Assign a current team member as lead. Owners and current leads can manage the team. */
+export const assignProfessionalTeamLead = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: { teamId: string; profileId: string }) => input)
+  .handler(async ({ data, context }) => {
+    const actorProfileId = await getProfileIdForAuthUser(context.supabase, context.userId);
+    if (!actorProfileId) throw new Error("Could not find your profile.");
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const admin = supabaseAdmin as any;
+    const { data: team, error: teamError } = await admin.from("teams").select("*").eq("id", data.teamId).maybeSingle();
+    if (teamError) throw new Error(teamError.message);
+    if (!team) throw new Error("Team not found.");
+
+    let ownerProfileId = team.owner_profile_id ?? null;
+    if (!ownerProfileId && team.customer_account_id) {
+      const { data: account, error } = await admin.from("customer_accounts").select("owner_user_id").eq("id", team.customer_account_id).maybeSingle();
+      if (error) throw new Error(error.message);
+      ownerProfileId = account?.owner_user_id ?? null;
+    }
+    if (actorProfileId !== ownerProfileId && actorProfileId !== team.lead_profile_id) {
+      throw new Error("Only the team owner or current lead can assign a new lead.");
+    }
+
+    const { data: membership, error: membershipError } = await admin
+      .from("team_memberships")
+      .select("id")
+      .eq("team_id", data.teamId)
+      .eq("user_id", data.profileId)
+      .maybeSingle();
+    if (membershipError) throw new Error(membershipError.message);
+    if (!membership && data.profileId !== ownerProfileId) {
+      throw new Error("The new lead must be a member of this team.");
+    }
+
+    const { error: updateError } = await admin
+      .from("teams")
+      .update({ lead_profile_id: data.profileId })
+      .eq("id", data.teamId);
+    if (updateError) throw new Error(updateError.message);
+    return { ok: true, leadProfileId: data.profileId };
+  });
+
+/** Remove a team member. The owner and current lead must be reassigned first. */
+export const removeProfessionalTeamMember = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: { teamId: string; profileId: string }) => input)
+  .handler(async ({ data, context }) => {
+    const actorProfileId = await getProfileIdForAuthUser(context.supabase, context.userId);
+    if (!actorProfileId) throw new Error("Could not find your profile.");
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const admin = supabaseAdmin as any;
+    const { data: team, error: teamError } = await admin.from("teams").select("*").eq("id", data.teamId).maybeSingle();
+    if (teamError) throw new Error(teamError.message);
+    if (!team) throw new Error("Team not found.");
+
+    let ownerProfileId = team.owner_profile_id ?? null;
+    if (!ownerProfileId && team.customer_account_id) {
+      const { data: account, error } = await admin.from("customer_accounts").select("owner_user_id").eq("id", team.customer_account_id).maybeSingle();
+      if (error) throw new Error(error.message);
+      ownerProfileId = account?.owner_user_id ?? null;
+    }
+    if (actorProfileId !== ownerProfileId && actorProfileId !== team.lead_profile_id) {
+      throw new Error("Only the team owner or current lead can remove members.");
+    }
+    if (data.profileId === ownerProfileId) throw new Error("The team owner cannot be removed.");
+    if (data.profileId === team.lead_profile_id) throw new Error("Assign another team lead before removing the current lead.");
+
+    const { data: membership, error: membershipError } = await admin
+      .from("team_memberships")
+      .select("id")
+      .eq("team_id", data.teamId)
+      .eq("user_id", data.profileId)
+      .maybeSingle();
+    if (membershipError) throw new Error(membershipError.message);
+    if (!membership) throw new Error("Team member not found.");
+    const { error: removeError } = await admin
+      .from("team_memberships")
+      .delete()
+      .eq("id", membership.id);
+    if (removeError) throw new Error(removeError.message);
+    return { ok: true, removedProfileId: data.profileId };
+  });
+
+/** Create the profile-owned team row used by Professional plans. */
+export const createProfessionalTeam = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: { name: string; description?: string | null; lead_user_id?: string | null; member_ids?: string[] }) => input)
+  .handler(async ({ data, context }) => {
+    await assertPlanFeature(context.supabase, "professional", "createProfessionalTeam");
+    const orgId = await getOrgIdSoft(context.supabase, context.userId);
+    const profileId = await getProfileIdForAuthUser(context.supabase, context.userId);
+    if (!profileId) throw new Error("Could not find your profile.");
+
+    const memberIds = Array.from(new Set(data.member_ids ?? []));
+    const appUserIds = Array.from(new Set([...memberIds, ...(data.lead_user_id ? [data.lead_user_id] : [])]));
+    let users: any[] = [];
+    let leadProfileId: string | null = null;
+    let leadAuthUserId: string | null = null;
+    if (appUserIds.length) {
+      if (!orgId) throw new Error("Team members are unavailable without an organization.");
+      await assertTeamMembersAllowed(context.supabase, appUserIds);
+      const { data: appUserRows, error: usersError } = await (context.supabase as any)
+        .from("app_users")
+        .select("id,email,profile_id,auth_user_id")
+        .eq("organization_id", orgId)
+        .in("id", appUserIds);
+      if (usersError) throw new Error(usersError.message);
+      if ((appUserRows ?? []).length !== appUserIds.length) {
+        throw new Error("One or more selected team members are unavailable.");
+      }
+      users = appUserRows ?? [];
+      const lead = users.find((u: any) => u.id === data.lead_user_id);
+      leadProfileId = lead?.profile_id ?? null;
+      leadAuthUserId = lead?.auth_user_id ?? null;
+    }
+
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    if (!leadProfileId && leadAuthUserId) {
+      const { data: profile } = await (supabaseAdmin as any)
+        .from("profiles")
+        .select("id")
+        .or(`id.eq.${leadAuthUserId},user_id.eq.${leadAuthUserId}`)
+        .maybeSingle();
+      leadProfileId = profile?.id ?? null;
+    }
+    if (data.lead_user_id && !leadProfileId) {
+      throw new Error("Could not resolve the selected team lead's profile.");
+    }
+    const effectiveLeadProfileId = leadProfileId ?? profileId;
+
+    const memberEmails = users.filter((u: any) => memberIds.includes(u.id)).map((u: any) => u.email).filter(Boolean);
+    let { data: team, error } = await (supabaseAdmin as any)
+      .from("teams")
+      .insert({
+        owner_profile_id: profileId,
+        lead_profile_id: effectiveLeadProfileId,
+        organization_id: orgId,
+        name: data.name.trim(),
+        description: data.description?.trim() || null,
+        member_emails: memberEmails,
+      })
+      .select("id,name,description,member_emails,organization_id,owner_profile_id,lead_profile_id,created_at")
+      .single();
+    if (error && /owner_profile_id|column .* does not exist|schema cache/i.test(error.message ?? "")) {
+      let { data: account, error: accountError } = await (supabaseAdmin as any)
+        .from("customer_accounts")
+        .select("id")
+        .eq("owner_user_id", profileId)
+        .maybeSingle();
+      if (accountError) throw new Error(accountError.message);
+      if (!account?.id) {
+        const { data: createdAccount, error: createAccountError } = await (supabaseAdmin as any)
+          .from("customer_accounts")
+          .insert({ owner_user_id: profileId, plan_type: "professional" })
+          .select("id")
+          .single();
+        if (createAccountError) throw new Error(createAccountError.message);
+        account = createdAccount;
+      }
+      ({ data: team, error } = await (supabaseAdmin as any)
+        .from("teams")
+        .insert({
+          customer_account_id: account.id,
+          lead_profile_id: effectiveLeadProfileId,
+          organization_id: orgId,
+          name: data.name.trim(),
+          description: data.description?.trim() || null,
+          member_emails: memberEmails,
+        })
+        .select("id,name,description,member_emails,organization_id,lead_profile_id,created_at")
+        .single());
+    }
+    if (error) throw new Error(error.message);
+    return team;
+  });
+
+/** Invite an existing Avaloka account to a Professional team. */
+export const inviteProfessionalTeamMember = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: { teamId: string; email: string; redirectTo?: string }) => input)
+  .handler(async ({ data, context }) => {
+    await assertPlanFeature(context.supabase, "professional", "inviteProfessionalTeamMember");
+    const inviterProfileId = await getProfileIdForAuthUser(context.supabase, context.userId);
+    if (!inviterProfileId) throw new Error("Could not find your profile.");
+
+    const email = data.email.trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error("Enter a valid email address.");
+
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const admin = supabaseAdmin as any;
+    const { data: team, error: teamError } = await admin
+      .from("teams")
+      .select("*")
+      .eq("id", data.teamId)
+      .maybeSingle();
+    if (teamError) throw new Error(teamError.message);
+    if (!team) throw new Error("Team not found.");
+
+    let ownerProfileId = team.owner_profile_id ?? null;
+    if (!ownerProfileId && team.customer_account_id) {
+      const { data: account } = await admin
+        .from("customer_accounts")
+        .select("owner_user_id")
+        .eq("id", team.customer_account_id)
+        .maybeSingle();
+      ownerProfileId = account?.owner_user_id ?? null;
+    }
+    if (ownerProfileId !== inviterProfileId && team.lead_profile_id !== inviterProfileId) {
+      throw new Error("Only the team owner or lead can invite members.");
+    }
+
+    const inviteeAuthUser = await findTeamInvitee(admin, email);
+    const inviteeAuthId = inviteeAuthUser?.id as string | undefined;
+
+    const profileId = inviteeAuthId
+      ? await ensureProfileForAuthUser(admin, inviteeAuthId)
+      : undefined;
+
+    if (profileId) {
+      // The invitee may be on any plan (owner ruling).
+      if (profileId === inviterProfileId) throw new Error("You are already the owner of this team.");
+
+      const { data: membership, error: membershipError } = await admin
+        .from("team_memberships")
+        .select("id")
+        .eq("team_id", data.teamId)
+        .eq("user_id", profileId)
+        .maybeSingle();
+      if (membershipError) throw new Error(membershipError.message);
+      if (membership) throw new Error("This user is already a member of the team.");
+    }
+
+    const { data: pendingInvite, error: pendingError } = await admin
+      .from("team_invitations")
+      .select("id,invited_profile_id")
+      .eq("team_id", data.teamId)
+      .eq("invited_email", email)
+      .eq("status", "pending")
+      .maybeSingle();
+    if (pendingError) throw new Error(pendingError.message);
+    if (pendingInvite) {
+      if (profileId && !pendingInvite.invited_profile_id) {
+        const { error } = await admin.from("team_invitations")
+          .update({ invited_profile_id: profileId }).eq("id", pendingInvite.id).eq("status", "pending");
+        if (error) throw new Error(error.message);
+      }
+      const delivery = await sendInviteEmailViaSmtp({
+        admin,
+        email,
+        redirectTo: data.redirectTo,
+        existingUser: Boolean(inviteeAuthId),
+        teamName: team.name,
+        data: { team_invitation_id: pendingInvite.id, team_id: data.teamId },
+      });
+      if (delivery.error) throw new Error(delivery.error);
+      return { ...pendingInvite, status: "pending", signupRequired: !profileId };
+    }
+
+    const { data: invitation, error: inviteError } = await admin
+      .from("team_invitations")
+      .insert({
+        team_id: data.teamId,
+        invited_profile_id: profileId ?? null,
+        invited_email: email,
+        invited_by: inviterProfileId,
+        status: "pending",
+      })
+      .select("id,team_id,invited_profile_id,invited_email,invited_by,status,created_at")
+      .single();
+    if (inviteError) throw new Error(inviteError.message);
+
+    const delivery = await sendInviteEmailViaSmtp({
+      admin,
+      email,
+      redirectTo: data.redirectTo,
+      existingUser: Boolean(inviteeAuthId),
+      teamName: team.name,
+      data: { team_invitation_id: invitation.id, team_id: data.teamId },
+    });
+    if (delivery.error) throw new Error(delivery.error);
+    return { ...invitation, status: "pending", signupRequired: !profileId };
+  });
+
+/** Attach verified email invitations to the recipient; acceptance is always explicit. */
+export const claimPendingProfessionalTeamInvitations = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }) => {
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const admin = supabaseAdmin as any;
+    const { data: authUser, error: authUserError } = await admin.auth.admin.getUserById(context.userId);
+    if (authUserError) throw new Error(authUserError.message);
+    const email = String(authUser?.user?.email ?? "").trim().toLowerCase();
+    // Never claim an email invitation until Auth has verified that email.
+    if (!email || !authUser?.user?.email_confirmed_at) return { accepted: 0 };
+
+    const { data: invitations, error: invitationsError } = await admin
+      .from("team_invitations")
+      .select("id,invited_profile_id")
+      .ilike("invited_email", email.replace(/[\\%_]/g, "\\$&"))
+      .eq("status", "pending");
+    if (invitationsError) throw new Error(invitationsError.message);
+    if (!invitations?.length) return { accepted: 0 };
+
+    // Signup can reach the app before profile provisioning has completed.
+    // Ensure the profile instead of silently dropping the claim.
+    const profileId = await ensureProfileForAuthUser(admin, context.userId);
+    let attached = 0;
+    for (const invitation of invitations ?? []) {
+      if (invitation.invited_profile_id && invitation.invited_profile_id !== profileId) continue;
+      const { data: updated, error } = await admin
+        .from("team_invitations")
+        .update({ invited_profile_id: profileId })
+        .eq("id", invitation.id)
+        .eq("status", "pending")
+        .or(`invited_profile_id.is.null,invited_profile_id.eq.${profileId}`)
+        .select("id")
+        .maybeSingle();
+      if (error) throw new Error(error.message);
+      if (updated) attached += 1;
+    }
+    return { accepted: 0, attached };
+  });
+
+/** Accept or decline an invitation; acceptance creates team_memberships via trigger. */
+export const respondToProfessionalTeamInvitation = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: { invitationId: string; response: "accepted" | "declined" }) => input)
+  .handler(async ({ data, context }) => {
+    const inviteeProfileId = await getProfileIdForAuthUser(context.supabase, context.userId);
+    if (!inviteeProfileId) throw new Error("Could not find your profile.");
+
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const admin = supabaseAdmin as any;
+    const { data: invitation, error: invitationError } = await admin
+      .from("team_invitations")
+      .select("id,team_id,invited_profile_id,status")
+      .eq("id", data.invitationId)
+      .maybeSingle();
+    if (invitationError) throw new Error(invitationError.message);
+    if (!invitation || invitation.invited_profile_id !== inviteeProfileId) {
+      throw new Error("Invitation not found.");
+    }
+    if (invitation.status !== "pending") throw new Error("This invitation is no longer pending.");
+
+    const { data: updated, error: updateError } = await admin
+      .from("team_invitations")
+      .update({ status: data.response })
+      .eq("id", data.invitationId)
+      .eq("invited_profile_id", inviteeProfileId)
+      .eq("status", "pending")
+      .select("id,status")
+      .maybeSingle();
+    if (updateError) throw new Error(updateError.message);
+    if (!updated) throw new Error("This invitation has already been answered.");
+    return updated;
   });
 
 export const upsertTeam = createServerFn({ method: "POST" })
@@ -1590,6 +2205,8 @@ export const upsertTeam = createServerFn({ method: "POST" })
     status?: "Active" | "Inactive";
   }) => input)
   .handler(async ({ data, context }) => {
+    await assertPlanFeature(context.supabase, "professional", "upsertTeam");
+    if (Array.isArray(data.member_ids)) await assertTeamMembersAllowed(context.supabase, data.member_ids);
     const { id, member_ids, ...rest } = data;
     const orgId = await getOrgId(context.supabase, context.userId);
     const payload = { ...rest, organization_id: orgId };
@@ -1629,10 +2246,17 @@ export const upsertTeam = createServerFn({ method: "POST" })
 
 export const deleteTeam = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { id: string }) => input)
+  .inputValidator((input: { id: string; isProfessionalTeam?: boolean }) => input)
   .handler(async ({ data, context }) => {
-    const { error } = await (context.supabase as any).from("organization_teams").delete().eq("id", data.id);
+    // Use the authenticated client so each table's deletion policies apply.
+    const { data: deleted, error } = await (context.supabase as any)
+      .from(data.isProfessionalTeam ? "teams" : "organization_teams")
+      .delete()
+      .eq("id", data.id)
+      .select("id")
+      .maybeSingle();
     if (error) throw new Error(error.message);
+    if (!deleted) throw new Error("Team not found or you do not have permission to delete it.");
     return { ok: true };
   });
 

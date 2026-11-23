@@ -20,6 +20,7 @@ from rich.console import Console
 from rich.panel import Panel
 
 from avaloka import workload
+from avaloka.domains import classify as classify_domain
 from avaloka.io import load_dataset
 from avaloka.mission.budget import Budget
 from avaloka.mission.context import MissionContext, MissionKind
@@ -116,6 +117,7 @@ def quick_profile(source: str, sample_rows: int = 100_000) -> dict:
         "columns": cols,
         "quality": quality_report(df, cols),
         "correlations": correlation_pairs(df),
+        "domain": classify_domain([c["name"] for c in cols]),
     }
 
 
@@ -130,6 +132,9 @@ def _greet_dataset(console: Console, ava: Avaloka, source: str) -> dict | None:
     console.print(ava.workload_read(wl))
     for line in ava.observe(profile):
         console.print("  " + line)
+    domain = profile.get("domain") or {}
+    if domain.get("domain") and domain["domain"] != "generic":
+        console.print(ava.say(f"This reads like {domain['label'].lower()} data. {domain['questions'][0]}"))
     # a light, plausible plan (no target known yet)
     console.print(ava.propose({"task": "exploratory_analysis", "split": {"strategy": "none"}}))
     ideas = suggest_next_steps(profile)
@@ -155,11 +160,12 @@ def _run_mission(console: Console, ava: Avaloka, ctx: MissionContext, fireflies,
     console.print(ava.say("Ask me something else, say `suggest` for ideas, or `quit`."))
 
 
-def run_chat(console: Console, data: str | None = None, llm: bool = False) -> None:
-    ava = Avaloka(llm=llm)
+def run_chat(console: Console, data: str | None = None, llm: bool = False,
+             provider: str | None = None, model: str | None = None, notify=None) -> None:
+    # An unusable provider is reported by the client itself, in one line that
+    # names the provider and the fix and says the deterministic wording is used.
+    ava = Avaloka(llm=llm, provider=provider, model=model, notify=notify)
     console.print(ava.greet())
-    if llm and not ava._client.available:  # type: ignore[union-attr]
-        console.print("[dim](No ANTHROPIC_API_KEY found — I'll still be myself, just without the polish.)[/dim]")
     # Escaped: rich reads a bare [goal] as a markup tag and prints nothing,
     # so the banner was advertising "analyze , train <target>".
     console.print("[dim]Commands: <dataset path>, a number, analyze \\[goal], "

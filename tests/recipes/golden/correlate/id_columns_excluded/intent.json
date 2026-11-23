@@ -1,0 +1,7 @@
+{
+  "question": "Which measures move together?",
+  "recipe": "correlate",
+  "params": {},
+  "confidence": 1.0,
+  "source": "fixture"
+}

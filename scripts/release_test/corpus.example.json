@@ -1,0 +1,6 @@
+[
+  {"name": "stroke", "path": "/corpus/stroke/healthcare-dataset-stroke-data.csv", "format": "csv",
+   "domain": "healthcare", "notes": "'N/A' as text in bmi; text target", "goal": "what predicts a stroke?"},
+  {"name": "taxi_partitioned", "path": "/corpus/nyc_taxi_partitioned/trips", "format": "parquet-dir",
+   "domain": "transport", "notes": "hive-partitioned directory", "goal": "what drives trip fare?"}
+]

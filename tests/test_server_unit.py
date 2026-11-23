@@ -2,6 +2,7 @@ import os
 import io
 import csv
 import json
+import re
 import time
 import base64
 import asyncio
@@ -256,14 +257,16 @@ def test_upload_caps_response_and_session_rows(client: TestClient, monkeypatch):
 def test_upload_viz_is_built_from_the_profile(client: TestClient, monkeypatch):
     """The viz step waits for the profile and is handed it, so Auto Insights
     are written in the dataset's domain terms. (It used to run beside the
-    profile; that ordering was changed on purpose.)"""
+    profile; that ordering was changed on purpose.) The data-only charts the
+    route builds meanwhile never call the insight model."""
     seen = {}
 
     def profile_stub(**kw):
         return {"full_profiling_result": dict(PROFILE_RESULT)}
 
     def viz_stub(**kw):
-        seen["profiling_result"] = kw.get("profiling_result")
+        key = "profiling_result" if kw.get("use_llm", True) else "data_only"
+        seen[key] = kw.get("profiling_result")
         return {"visualization_status": "ready"}
 
     monkeypatch.setattr(server, "profile_full", profile_stub, raising=False)
@@ -276,8 +279,10 @@ def test_upload_viz_is_built_from_the_profile(client: TestClient, monkeypatch):
 
     out = _do_upload(client, user_id="profile-then-viz-user")
     assert out["profiling_result"] == PROFILE_RESULT
+    assert out["profiling_status"] == "full_profile"
     assert out["visualization_status"] == "ready"
     assert seen["profiling_result"] == PROFILE_RESULT
+    assert seen["data_only"] is None
 
 
 def test_upload_profile_failure_is_non_fatal(client: TestClient, monkeypatch):
@@ -294,6 +299,9 @@ def test_upload_profile_failure_is_non_fatal(client: TestClient, monkeypatch):
     out = _do_upload(client, user_id="profile-fail")
     assert out["profiling_result"] is None
     assert out["visualization_status"] == "ready"
+    # Non-fatal, but not silent: the response says so in plain words.
+    assert out["profiling_status"] == "failed"
+    assert "could not be built" in out["profiling_error"]
 
 
 def test_upload_viz_failure_marks_status_error(client: TestClient, monkeypatch):
@@ -606,8 +614,17 @@ def test_preview_rebuilds_missing_local_file_from_blobstore(client: TestClient):
 
     sid = data.get("session_id") or session_id
     assert sid in SESSIONS
-    restored = Path(SESSIONS[sid]["work_local_input"])
-    assert restored.exists()
+    # Preview must not repoint the working input at the sample: that made every
+    # later "Full dataset" run use sample_input.csv (issue 1, 29 Oct).
+    work_input = SESSIONS[sid]["work_local_input"]
+    assert not str(work_input).endswith("sample_input.csv")
+    assert Path(work_input) == local_input_path
+
+    # The full file comes back on the next full run.
+    import asyncio
+    from app.api import server
+    asyncio.run(server._ensure_local_inputs(SESSIONS[sid], need_full=True))
+    assert Path(SESSIONS[sid]["work_local_input"]).exists()
 
 
 # ======================================================================================
@@ -822,7 +839,8 @@ def test_threads_create_and_message_roundtrip(client: TestClient):
 
 
 def test_thread_message_without_session_returns_400(client: TestClient):
-    resp = client.post("/threads", json={"metadata": {"note": "no-session"}})
+    resp = client.post("/threads", json={"metadata": {"note": "no-session"}},
+                       headers=make_auth_headers("user-no-session"))
     assert resp.status_code == 200
     thread_id = resp.json()["thread_id"]
 
@@ -929,6 +947,35 @@ def test_thread_code_hidden_from_other_users(client: TestClient):
     assert resp.status_code == 404
 
 
+def test_create_thread_requires_auth(client: TestClient):
+    """POST /threads had no auth check: an anonymous caller got 200 and a thread."""
+    resp = client.post("/threads", json={"metadata": {}})
+    assert resp.status_code == 401, resp.text
+    resp = client.post("/threads", json={"metadata": {}},
+                       headers={"Authorization": "Bearer not-a-valid-token"})
+    assert resp.status_code == 401, resp.text
+    resp = client.post("/threads", json={"metadata": {}}, headers=make_auth_headers("u-create"))
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["thread_id"]
+
+
+def test_create_thread_binds_only_the_callers_own_session(client: TestClient):
+    owner = _do_upload(client, user_id="bind-owner")
+    sid = owner["session_id"]
+
+    anon = client.post("/threads", json={}, headers={"X-Avaloka-Session": sid})
+    assert anon.status_code == 401, anon.text
+
+    foreign = client.post("/threads", json={},
+                          headers={**make_auth_headers("bind-intruder"), "X-Avaloka-Session": sid})
+    assert foreign.status_code == 403, foreign.text
+
+    own = client.post("/threads", json={},
+                      headers={**make_auth_headers("bind-owner"), "X-Avaloka-Session": sid})
+    assert own.status_code == 200, own.text
+    assert _run(server.get_thread_session(own.json()["thread_id"])) == sid
+
+
 def test_list_threads_requires_auth(client: TestClient):
     resp = client.get("/threads")
     assert resp.status_code == 401
@@ -958,7 +1005,8 @@ def test_list_threads_scoped_to_caller(client: TestClient, monkeypatch):
 
 
 def test_delete_thread_soft_success(client: TestClient):
-    resp = client.post("/threads", json={"metadata": {"foo": "bar"}})
+    resp = client.post("/threads", json={"metadata": {"foo": "bar"}},
+                       headers=make_auth_headers("user-del-thread"))
     assert resp.status_code == 200
     thread_id = resp.json()["thread_id"]
 
@@ -1055,6 +1103,10 @@ def test_database_connect_creates_session(client: TestClient, monkeypatch):
     assert data["customer_id"] == "cust-1"
     assert data["tables_available"] == 2
     assert data["database_type"] == "postgres"
+    # #248: the legacy (1.5.2) UI reads thread_id and expires_in from connect.
+    assert data["thread_id"]
+    assert data["thread_id"] != data["session_id"]
+    assert data["expires_in"] > 0
     # The raw api_key must not be persisted (nothing reads it back).
     stored = [s for s in SESSIONS.values() if s.get("type") == "database"]
     assert stored and all("api_key" not in s for s in stored)
@@ -1090,14 +1142,23 @@ def test_database_connect_propagates_error(client: TestClient, monkeypatch):
 
 
 # ---- /api/database/connect binds a customer to its user, on proof of the key --
+# (develop-1.7 #618, ported from tests/test_server_integration.py, which this
+# line renamed to this file.)
 
 @pytest.fixture()
 def onboarding(tmp_path, monkeypatch):
-    """The real onboarding router over a customers.json, reached by server's httpx."""
+    """The real onboarding router over a sealed customers.json, reached by server's httpx."""
+    import hashlib
     import secrets
+    import types
     from fastapi import FastAPI
+    import app.api.cloud_connections as cc
     import app.mcp_server.customer_dbs as cdb
 
+    # The registry is sealed at rest under DB_ENCRYPTION_KEY (a throwaway here).
+    test_key = secrets.token_hex(16)
+    monkeypatch.setattr(cc, "DB_ENCRYPTION_KEY", test_key, raising=False)
+    monkeypatch.setattr(cc, "_AESGCM_KEY", hashlib.sha256(test_key.encode()).digest(), raising=False)
     token = secrets.token_urlsafe(24)
     monkeypatch.setenv("MCP_SERVICE_TOKEN", token)
     keys = {cid: "ak_" + secrets.token_hex(16) for cid in ("cust_legacy", "cust_other", "cust_taken")}
@@ -1118,6 +1179,7 @@ def onboarding(tmp_path, monkeypatch):
     monkeypatch.setattr(mgr, "customers_file", str(path))
     monkeypatch.setattr(mgr, "customers", {})
     mgr.load_customers()
+    monkeypatch.setattr(cdb, "create_engine", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no db in tests")))
     onboarding_app = FastAPI()
     onboarding_app.include_router(cdb.router)
     onboarding_client = TestClient(onboarding_app)
@@ -1279,7 +1341,11 @@ def test_database_connect_then_query_reuses_session(client: TestClient, monkeypa
         headers=make_auth_headers("db-user"),
     )
     assert resp.status_code == 200, resp.text
-    assert resp.json()["database_info"]["customer_id"] == "cust-1"
+    query_data = resp.json()
+    assert query_data["database_info"]["customer_id"] == "cust-1"
+    # #248: a query on the connect session keeps the connect thread.
+    assert query_data["session_id"] == session_id
+    assert query_data["thread_id"] == conn_data["thread_id"]
 
 
 def test_database_query_foreign_session_not_used(client: TestClient, monkeypatch):
@@ -1349,8 +1415,16 @@ def test_database_query_creates_dataset_and_session(client: TestClient, monkeypa
 
     assert data["query_result"]["columns"] == ["id", "name"]
     assert data["query_result"]["rows"][0] == [1, "Alice"]
+    # #248: the legacy UI reads results/schema/row_count, not query_result.
+    assert data["results"][0] == {"id": 1, "name": "Alice"}
+    assert data["schema"] == [
+        {"name": "id", "type": "integer"},
+        {"name": "name", "type": "string"},
+    ]
+    assert data["row_count"] == 2
     assert data["dataset_id"]
     assert data["session_id"]
+    assert data["thread_id"]
 
 
 def test_database_query_http_error_returns_error_message(client: TestClient, monkeypatch):
@@ -1442,6 +1516,47 @@ def test_tables_to_analysis_creates_datasets(client: TestClient, monkeypatch):
     assert len(out["datasets"]) == 2
     aliases = {d["alias"] for d in out["datasets"]}
     assert "users" in aliases and "orders" in aliases
+
+
+def test_tables_to_analysis_types_columns_from_the_rows(client: TestClient, monkeypatch):
+    # rc9: every database column was typed "string", so an INTEGER `stroke`
+    # compared to 1 was blocked by the static check as a string comparison.
+    async def run_mcp_fake(customer_id, api_key, sql):
+        return {"columns": ["id", "age", "stroke", "gender", "bmi"],
+                "rows": [[9046, 67.0, 1, "Male", 36.6], [51676, 61.0, 0, "Female", None]]}
+
+    monkeypatch.setattr(server, "_run_mcp_db_query", run_mcp_fake, raising=False)
+    resp = client.post(
+        "/api/database/tables-to-analysis",
+        json={"tables": ["patients"], "customer_id": "c1", "api_key": "k1"},
+        headers=make_auth_headers("tta-typed"),
+    )
+    assert resp.status_code == 200, resp.text
+    sess = SESSIONS[resp.json()["session_id"]]
+    schema = sess["schema"] if isinstance(sess["schema"], dict) else json.loads(sess["schema"])
+    assert schema == {"id": "int64", "age": "float64", "stroke": "int64",
+                      "gender": "string", "bmi": "float64"}, schema
+    assert '"stroke" INTEGER' in sess["ddl_schema"], sess["ddl_schema"]
+
+
+def test_db_query_sample_session_types_columns_from_the_rows(client: TestClient, monkeypatch):
+    # "Average age of patients who had a stroke" on a database table: the DB
+    # sample typed every column "string", so an INTEGER `stroke` compared to 1
+    # was blocked by the static check as a string comparison (2.0 #571).
+    _mock_mcp(monkeypatch, {"columns": ["id", "age", "stroke", "gender", "bmi"],
+                            "rows": [[9046, 67.0, 1, "Male", 36.6], [51676, 61.0, 0, "Female", None]]})
+    resp = client.post(
+        "/api/v1/database/query",
+        json={"content": "SELECT * FROM patients", "customer_id": "cust-1",
+              "metadata": {"api_key": "secret"}},
+        headers=make_auth_headers("db-typed"),
+    )
+    assert resp.status_code == 200, resp.text
+    sess = SESSIONS[resp.json()["session_id"]]
+    schema = sess["schema"] if isinstance(sess["schema"], dict) else json.loads(sess["schema"])
+    assert schema == {"id": "int64", "age": "float64", "stroke": "int64",
+                      "gender": "string", "bmi": "float64"}, schema
+    assert '"stroke" INTEGER' in sess["ddl_schema"], sess["ddl_schema"]
 
 
 def test_tables_to_analysis_rejects_invalid_table_name(client: TestClient):
@@ -1890,8 +2005,16 @@ def test_assistant_messages_from_task_state_supports_chat_results():
         {"role": "ai", "content": "Prediction: survived"},
     ]
 
+    # No record of what wrote it: commentary, marked (app/api/reply_segments.py).
     assert server._assistant_messages_from_state({"messages": messages}) == [
-        {"role": "assistant", "content": "Prediction: survived"}
+        {"role": "assistant", "content": "Prediction: survived (commentary — not checked)",
+         "reply_segments": [{"text": "Prediction: survived", "kind": "commentary"}]}
+    ]
+    # Written by code and carried through the result store: plain, unmarked.
+    messages[-1]["reply_segments"] = [{"text": "Prediction: survived", "kind": "plain"}]
+    assert server._assistant_messages_from_state({"messages": messages}) == [
+        {"role": "assistant", "content": "Prediction: survived",
+         "reply_segments": [{"text": "Prediction: survived", "kind": "plain"}]}
     ]
 
 
@@ -1915,7 +2038,8 @@ def test_mta_task_completion_message_uses_assistant_result():
 
 def test_scheduled_task_completion_message_falls_back_to_success_message():
     metadata = {"task_type": "execute", "success_message": "Done."}
-    assert server._scheduled_task_completion_message({}, [], metadata) == "Done."
+    final = {"execution_result": {"status": "success"}}
+    assert server._scheduled_task_completion_message(final, [], metadata) == "Done."
 
 
 def test_scheduled_training_completion_message_hides_details_and_shows_actions():
@@ -4319,10 +4443,15 @@ def test_read_version_env_override(monkeypatch):
 
 
 def test_read_version_oss_edition(monkeypatch):
+    """From 2.0 the public release is the internal version: the OSS edition
+    reads VERSION like every other build, and AVALOKA_OSS_VERSION is only an
+    explicit override."""
     monkeypatch.delenv("APP_VERSION", raising=False)
     monkeypatch.setenv("AVALOKA_EDITION", "oss")
     monkeypatch.delenv("AVALOKA_OSS_VERSION", raising=False)
-    assert server._read_version() == "1.0.0"
+    on_disk = (Path(server.__file__).resolve().parents[2] / "VERSION").read_text().strip()
+    assert server._read_version() == on_disk
+    assert server._read_version() != "1.0.0", "the OSS edition must not report the 1.0 line any more"
     monkeypatch.setenv("AVALOKA_OSS_VERSION", "1.0.3")
     assert server._read_version() == "1.0.3"
 
@@ -4587,9 +4716,21 @@ def test_assets_manifest_hidden_from_other_user(client: TestClient):
 # ======================================================================================
 
 
-def test_resolve_aid_supabase_credential_failure_is_503(client: TestClient, monkeypatch):
+def test_resolve_aid_supabase_credentials_unset_is_503_and_says_unset(client: TestClient, monkeypatch):
+    # Unset is not rejected: no key was offered, so none was turned down.
     def _bad_client():
         raise RuntimeError("Supabase env vars not set")
+
+    monkeypatch.setattr(server, "get_supabase_client", _bad_client, raising=False)
+    resp = client.get("/analysis/aid-1/code", headers=make_auth_headers("aid-user"))
+    assert resp.status_code == 503
+    assert "credentials are not set" in resp.json()["detail"]
+    assert "rejected" not in resp.json()["detail"]
+
+
+def test_resolve_aid_supabase_credential_rejection_is_503(client: TestClient, monkeypatch):
+    def _bad_client():
+        raise RuntimeError('{"message":"Invalid API key","hint":"Double check your Supabase key."}')
 
     monkeypatch.setattr(server, "get_supabase_client", _bad_client, raising=False)
     resp = client.get("/analysis/aid-1/code", headers=make_auth_headers("aid-user"))
@@ -4761,6 +4902,57 @@ def test_save_and_execute_rejects_empty_code(client: TestClient):
     assert resp.status_code == 422
 
 
+class _ExecutorReached(Exception):
+    """Raised by a stub executor: the edited code got as far as running."""
+
+
+def _save_and_execute(client, monkeypatch, code, *, run_validation):
+    _patch_aid(monkeypatch, {"session_id": "s-sae"})
+    SESSIONS["s-sae"] = {"user_id": "sae-user", "schema": {"id": "int64", "age": "float64"}}
+    monkeypatch.setattr(server, "review_edited_code",
+                        lambda state, code, user_intent="": {"code": code, "status": "approved"},
+                        raising=False)
+    if not run_validation:
+        def _full_validator(*a, **k):
+            raise AssertionError("run_validation=false must still skip the full validator")
+        monkeypatch.setattr(server, "run_code_validation", _full_validator, raising=False)
+    ran = []
+
+    def _executor(state):
+        ran.append(state["generated_code"])
+        raise _ExecutorReached
+
+    monkeypatch.setattr(server, "execution_agent_node_local", _executor, raising=False)
+    return ran, lambda: client.post("/analysis/aid-1/save-and-execute",
+                                    json={"code": code, "run_validation": run_validation},
+                                    headers=make_auth_headers("sae-user"))
+
+
+@pytest.mark.parametrize("run_validation", [False, True])
+def test_save_and_execute_never_runs_code_that_imports_a_database_driver(
+        client: TestClient, monkeypatch, run_validation):
+    # run_validation=false skipped the whole validator, NoDatabaseWrites with it.
+    code = ("import pandas as pd\nimport psycopg2\n\n"
+            "def main(df):\n    psycopg2.connect(host='db')\n    return df\n")
+    ran, post = _save_and_execute(client, monkeypatch, code, run_validation=run_validation)
+    resp = post()
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "validation_failed", body
+    assert body["validation_passed"] is False
+    assert "[NoDatabaseWrites]" in body["validation_feedback"], body["validation_feedback"]
+    assert "psycopg2" in body["validation_feedback"]
+    assert ran == [], "the code reached the executor"
+
+
+def test_save_and_execute_without_validation_still_runs_clean_code(client: TestClient, monkeypatch):
+    code = "import pandas as pd\n\ndef main(df):\n    return df[df['age'] > 50]\n"
+    ran, post = _save_and_execute(client, monkeypatch, code, run_validation=False)
+    with pytest.raises(_ExecutorReached):
+        post()
+    assert ran == [code.strip()]
+
+
 def test_analysis_feedback_invalid_type_422(client: TestClient):
     resp = client.post(
         "/analysis/aid-1/feedback",
@@ -4775,40 +4967,67 @@ def test_analysis_feedback_invalid_type_422(client: TestClient):
 # ======================================================================================
 
 
+MCP_CONN_ID = "0b6f7c2e-3d1a-4e5f-9a8b-7c6d5e4f3a21"
+MCP_MISSING_ID = "9f8e7d6c-5b4a-4392-8170-6f5e4d3c2b1a"
+
+
+class _McpConnStore:
+    """A fake db_connections store. Like PostgREST on the uuid id column, a
+    non-uuid id is an error, not an empty result. Writes are recorded."""
+
+    def __init__(self, rows: Optional[Dict[str, Dict[str, Any]]] = None):
+        self.rows = rows or {}
+        self.updates: List[Tuple[str, Dict[str, Any]]] = []
+
+    def get(self, connection_id: str) -> Optional[Dict[str, Any]]:
+        from postgrest.exceptions import APIError
+        import uuid as _uuid
+
+        try:
+            _uuid.UUID(connection_id)
+        except ValueError:
+            raise APIError({"code": "22P02",
+                            "message": f'invalid input syntax for type uuid: "{connection_id}"'})
+        row = self.rows.get(connection_id)
+        return dict(row) if row else None
+
+    def update(self, connection_id: str, patch: Dict[str, Any]) -> None:
+        self.updates.append((connection_id, dict(patch)))
+        self.rows[connection_id].update(patch)
+
+
+def _patch_mcp_store(monkeypatch, store: Any) -> Any:
+    monkeypatch.setattr(server._db_connections, "connection_store", lambda: store)
+    return store
+
+
 def _patch_mcp_row(monkeypatch, row):
-    monkeypatch.setattr(server, "_mcp_conn_select", lambda cid: row, raising=False)
+    return _patch_mcp_store(monkeypatch, _McpConnStore({MCP_CONN_ID: row} if row else {}))
 
 
 def test_mcp_encrypt_unknown_connection_404(client: TestClient, monkeypatch):
     _patch_mcp_row(monkeypatch, None)
-    resp = client.post("/api/mcp-connections/c1/encrypt", json={"apiKey": "k"},
+    resp = client.post(f"/api/mcp-connections/{MCP_CONN_ID}/encrypt", json={"apiKey": "k"},
                        headers=make_auth_headers("mcp-user"))
     assert resp.status_code == 404
 
 
-def test_mcp_encrypt_foreign_connection_403(client: TestClient, monkeypatch):
-    _patch_mcp_row(monkeypatch, {"id": "c1", "user_id": "other"})
-    resp = client.post("/api/mcp-connections/c1/encrypt", json={"apiKey": "k"},
-                       headers=make_auth_headers("mcp-user"))
-    assert resp.status_code == 403
-
-
 def test_mcp_encrypt_requires_a_field(client: TestClient, monkeypatch):
-    _patch_mcp_row(monkeypatch, {"id": "c1", "user_id": "mcp-user"})
-    resp = client.post("/api/mcp-connections/c1/encrypt", json={},
+    _patch_mcp_row(monkeypatch, {"id": MCP_CONN_ID, "user_id": "mcp-user"})
+    resp = client.post(f"/api/mcp-connections/{MCP_CONN_ID}/encrypt", json={},
                        headers=make_auth_headers("mcp-user"))
     assert resp.status_code == 422
 
 
 def test_mcp_encrypt_stores_ciphertext_and_blanks_plaintext(client: TestClient, monkeypatch):
-    _patch_mcp_row(monkeypatch, {"id": "c1", "user_id": "mcp-user"})
+    _patch_mcp_row(monkeypatch, {"id": MCP_CONN_ID, "user_id": "mcp-user"})
     monkeypatch.setattr(server, "encrypt_secret",
                         lambda v: {"ciphertext": f"ct({len(v)})", "iv": "iv"}, raising=False)
     updates: List[Dict[str, Any]] = []
     monkeypatch.setattr(server, "_mcp_conn_update", lambda cid, patch: updates.append(patch),
                         raising=False)
 
-    resp = client.post("/api/mcp-connections/c1/encrypt", json={"apiKey": "secret-key"},
+    resp = client.post(f"/api/mcp-connections/{MCP_CONN_ID}/encrypt", json={"apiKey": "secret-key"},
                        headers=make_auth_headers("mcp-user"))
     assert resp.status_code == 200, resp.text
     assert resp.json()["encrypted"] == ["api_key"]
@@ -4817,23 +5036,23 @@ def test_mcp_encrypt_stores_ciphertext_and_blanks_plaintext(client: TestClient, 
 
 
 def test_mcp_encrypt_without_key_configured_500(client: TestClient, monkeypatch):
-    _patch_mcp_row(monkeypatch, {"id": "c1", "user_id": "mcp-user"})
+    _patch_mcp_row(monkeypatch, {"id": MCP_CONN_ID, "user_id": "mcp-user"})
     monkeypatch.setattr(server, "encrypt_secret", lambda v: None, raising=False)
-    resp = client.post("/api/mcp-connections/c1/encrypt", json={"username": "bob"},
+    resp = client.post(f"/api/mcp-connections/{MCP_CONN_ID}/encrypt", json={"username": "bob"},
                        headers=make_auth_headers("mcp-user"))
     assert resp.status_code == 500
     assert "DB_ENCRYPTION_KEY" in resp.json()["detail"]
 
 
 def test_mcp_decrypt_success(client: TestClient, monkeypatch):
-    _patch_mcp_row(monkeypatch, {"id": "c1", "user_id": "mcp-user",
+    _patch_mcp_row(monkeypatch, {"id": MCP_CONN_ID, "user_id": "mcp-user",
                                  "api_key_ciphertext": "CT", "api_key_iv": "IV"})
     monkeypatch.setattr(
         server, "decrypt_secret",
         lambda blob: f"plain:{blob['ciphertext']}" if blob.get("ciphertext") else None,
         raising=False,
     )
-    resp = client.post("/api/mcp-connections/c1/decrypt", headers=make_auth_headers("mcp-user"))
+    resp = client.post(f"/api/mcp-connections/{MCP_CONN_ID}/decrypt", headers=make_auth_headers("mcp-user"))
     assert resp.status_code == 200, resp.text
     assert resp.json() == {"apiKey": "plain:CT", "username": None}
 
@@ -4842,7 +5061,7 @@ def test_mcp_decrypt_success(client: TestClient, monkeypatch):
 def test_mcp_credentials_bind_the_customer_to_the_verified_user(client: TestClient, monkeypatch, route, body):
     """The onboarding API releases a password to the planner only for a customer
     bound to the user it names; encrypt/decrypt are where that binding happens."""
-    _patch_mcp_row(monkeypatch, {"id": "c1", "user_id": "mcp-user", "customer_id": "cust_1",
+    _patch_mcp_row(monkeypatch, {"id": MCP_CONN_ID, "user_id": "mcp-user", "customer_id": "cust_1",
                                  "api_key_ciphertext": "CT", "api_key_iv": "IV"})
     monkeypatch.setattr(server, "encrypt_secret", lambda v: {"ciphertext": "x", "iv": "y"}, raising=False)
     monkeypatch.setattr(server, "_mcp_conn_update", lambda cid, patch: None, raising=False)
@@ -4868,7 +5087,7 @@ def test_mcp_credentials_bind_the_customer_to_the_verified_user(client: TestClie
             return types.SimpleNamespace(status_code=200)
 
     monkeypatch.setattr(server.httpx, "AsyncClient", _Client)
-    resp = client.post(f"/api/mcp-connections/c1/{route}", json=body,
+    resp = client.post(f"/api/mcp-connections/{MCP_CONN_ID}/{route}", json=body,
                        headers=make_auth_headers("mcp-user"))
     assert resp.status_code == 200, resp.text
     assert len(posts) == 1
@@ -4881,20 +5100,113 @@ def test_mcp_credentials_bind_the_customer_to_the_verified_user(client: TestClie
 
 
 def test_mcp_decrypt_key_mismatch_409(client: TestClient, monkeypatch):
-    _patch_mcp_row(monkeypatch, {"id": "c1", "user_id": "mcp-user",
+    _patch_mcp_row(monkeypatch, {"id": MCP_CONN_ID, "user_id": "mcp-user",
                                  "api_key_ciphertext": "CT", "api_key_iv": "IV"})
     monkeypatch.setattr(server, "decrypt_secret", lambda blob: None, raising=False)
-    resp = client.post("/api/mcp-connections/c1/decrypt", headers=make_auth_headers("mcp-user"))
+    resp = client.post(f"/api/mcp-connections/{MCP_CONN_ID}/decrypt", headers=make_auth_headers("mcp-user"))
     assert resp.status_code == 409
 
 
 def test_mcp_lookup_failure_500(client: TestClient, monkeypatch):
-    def _boom(cid):
-        raise RuntimeError("supabase down")
+    class _Down:
+        def get(self, cid):
+            raise RuntimeError("supabase down")
 
-    monkeypatch.setattr(server, "_mcp_conn_select", _boom, raising=False)
-    resp = client.post("/api/mcp-connections/c1/decrypt", headers=make_auth_headers("mcp-user"))
+    _patch_mcp_store(monkeypatch, _Down())
+    resp = client.post(f"/api/mcp-connections/{MCP_CONN_ID}/decrypt", headers=make_auth_headers("mcp-user"))
     assert resp.status_code == 500
+    # A genuine backend failure stays a 500, with a body that names nothing.
+    assert resp.json() == {"detail": "Connection lookup failed"}
+
+
+# Ownership. The service role bypasses RLS, so the handler is the only owner
+# check: another user's connection must look exactly like one that does not
+# exist (same status, same body), and nothing may be decrypted, written,
+# bound or returned for it.
+
+_MCP_OWNER = "mcp-owner"
+_MCP_INTRUDER = "mcp-intruder"
+_MCP_OWNER_ROW = {
+    "id": MCP_CONN_ID, "user_id": _MCP_OWNER, "customer_id": "cust_owner",
+    "api_key_ciphertext": "OWNER-API-CT", "api_key_iv": "OWNER-API-IV",
+    "username_ciphertext": "OWNER-USER-CT", "username_iv": "OWNER-USER-IV",
+}
+_MCP_ROUTES = [("encrypt", {"apiKey": "intruder-key", "username": "intruder"}), ("decrypt", None)]
+
+
+def _mcp_store(monkeypatch) -> Tuple[_McpConnStore, Dict[str, List[Any]]]:
+    """One row owned by _MCP_OWNER; every write, encrypt, decrypt and owner bind is recorded."""
+    store = _patch_mcp_store(monkeypatch, _McpConnStore({MCP_CONN_ID: dict(_MCP_OWNER_ROW)}))
+    calls: Dict[str, List[Any]] = {"encrypt": [], "decrypt": [], "bind": []}
+
+    def _encrypt(value):
+        calls["encrypt"].append(value)
+        return {"ciphertext": f"ct({value})", "iv": "iv"}
+
+    def _decrypt(blob):
+        calls["decrypt"].append(dict(blob))
+        return f"plain:{blob['ciphertext']}" if blob.get("ciphertext") else None
+
+    async def _bind(customer_id, user_id, api_key):
+        calls["bind"].append((customer_id, user_id, api_key))
+
+    monkeypatch.setattr(server, "encrypt_secret", _encrypt, raising=False)
+    monkeypatch.setattr(server, "decrypt_secret", _decrypt, raising=False)
+    monkeypatch.setattr(server, "_bind_mcp_customer_owner", _bind, raising=False)
+    return store, calls
+
+
+@pytest.mark.parametrize("route,body", _MCP_ROUTES, ids=[r for r, _ in _MCP_ROUTES])
+def test_mcp_foreign_connection_is_404(client: TestClient, monkeypatch, route, body):
+    _mcp_store(monkeypatch)
+    resp = client.post(f"/api/mcp-connections/{MCP_CONN_ID}/{route}", json=body,
+                       headers=make_auth_headers(_MCP_INTRUDER))
+    assert resp.status_code == 404, resp.text
+    assert resp.json() == {"detail": "Connection not found"}
+
+
+@pytest.mark.parametrize("missing_id", [MCP_MISSING_ID, "not-a-uuid"], ids=["well-formed", "malformed"])
+@pytest.mark.parametrize("route,body", _MCP_ROUTES, ids=[r for r, _ in _MCP_ROUTES])
+def test_mcp_foreign_and_missing_connection_answer_identically(
+    client: TestClient, monkeypatch, route, body, missing_id
+):
+    """The response must not say whether another user's id exists."""
+    _mcp_store(monkeypatch)
+    headers = make_auth_headers(_MCP_INTRUDER)
+    foreign = client.post(f"/api/mcp-connections/{MCP_CONN_ID}/{route}", json=body, headers=headers)
+    missing = client.post(f"/api/mcp-connections/{missing_id}/{route}", json=body, headers=headers)
+    assert (foreign.status_code, foreign.content) == (missing.status_code, missing.content)
+    assert missing.status_code == 404
+
+
+@pytest.mark.parametrize("route,body", _MCP_ROUTES, ids=[r for r, _ in _MCP_ROUTES])
+def test_mcp_owner_still_succeeds(client: TestClient, monkeypatch, route, body):
+    store, calls = _mcp_store(monkeypatch)
+    resp = client.post(f"/api/mcp-connections/{MCP_CONN_ID}/{route}", json=body,
+                       headers=make_auth_headers(_MCP_OWNER))
+    assert resp.status_code == 200, resp.text
+    if route == "encrypt":
+        assert resp.json()["encrypted"] == ["api_key", "username"]
+        assert store.rows[MCP_CONN_ID]["api_key_ciphertext"] == "ct(intruder-key)"
+    else:
+        assert resp.json() == {"apiKey": "plain:OWNER-API-CT", "username": "plain:OWNER-USER-CT"}
+    assert calls["bind"] and calls["bind"][0][:2] == ("cust_owner", _MCP_OWNER)
+
+
+@pytest.mark.parametrize("route,body", _MCP_ROUTES, ids=[r for r, _ in _MCP_ROUTES])
+def test_mcp_cross_user_attempt_touches_nothing(client: TestClient, monkeypatch, caplog, route, body):
+    store, calls = _mcp_store(monkeypatch)
+    with caplog.at_level("WARNING"):
+        resp = client.post(f"/api/mcp-connections/{MCP_CONN_ID}/{route}", json=body,
+                           headers=make_auth_headers(_MCP_INTRUDER))
+    assert resp.status_code == 404, resp.text
+    assert store.updates == [] and calls == {"encrypt": [], "decrypt": [], "bind": []}
+    assert store.rows == {MCP_CONN_ID: _MCP_OWNER_ROW}
+    for owner_value in ("OWNER-", "cust_owner", _MCP_OWNER):
+        assert owner_value not in resp.text
+    # The attempt is still logged server-side, without naming the owner.
+    assert f"not found for requester {_MCP_INTRUDER}" in caplog.text
+    assert _MCP_OWNER not in caplog.text
 
 
 # ======================================================================================
@@ -5002,13 +5314,10 @@ def test_tables_to_analysis_duplicate_tables_get_unique_aliases(client: TestClie
 
 
 def test_tables_to_analysis_mcp_error_rolls_back(client: TestClient, monkeypatch):
-    calls = {"n": 0}
-
     async def _mcp(customer_id, api_key, sql):
-        calls["n"] += 1
-        if calls["n"] == 1:
-            return {"columns": ["id"], "rows": [[1]]}
-        return {"error": "permission denied"}
+        if "locked_table" in sql:
+            return {"error": "permission denied"}
+        return {"columns": ["id"], "rows": [[1]]}
 
     monkeypatch.setattr(server, "_run_mcp_db_query", _mcp, raising=False)
     resp = client.post(
@@ -5023,6 +5332,8 @@ def test_tables_to_analysis_mcp_error_rolls_back(client: TestClient, monkeypatch
 
 def test_tables_to_analysis_empty_table_422(client: TestClient, monkeypatch):
     async def _mcp(customer_id, api_key, sql):
+        if sql.startswith("SELECT COUNT(*)"):
+            return {"columns": ["row_count"], "rows": [[0]]}
         return {"columns": ["id"], "rows": []}
 
     monkeypatch.setattr(server, "_run_mcp_db_query", _mcp, raising=False)
@@ -5045,11 +5356,16 @@ def test_tables_to_analysis_too_many_tables_413(client: TestClient, monkeypatch)
 
 
 def test_tables_to_analysis_caps_limit(client: TestClient, monkeypatch):
+    # A cap below the table's 50,000 rows, so the read must be a sample.
+    monkeypatch.setattr(server, "MAX_DB_SAMPLE_ROWS", 1000, raising=False)
     seen_sql: List[str] = []
 
     async def _mcp(customer_id, api_key, sql):
         seen_sql.append(sql)
-        return {"columns": ["id"], "rows": [[1]]}
+        meta = {"database_type": "postgresql"}
+        if sql.startswith("SELECT COUNT(*)"):
+            return {"columns": ["row_count"], "rows": [[50_000]], "meta": meta}
+        return {"columns": ["id"], "rows": [[1]], "meta": meta}
 
     monkeypatch.setattr(server, "_run_mcp_db_query", _mcp, raising=False)
     resp = client.post(
@@ -5058,4 +5374,93 @@ def test_tables_to_analysis_caps_limit(client: TestClient, monkeypatch):
         headers=make_auth_headers("tta-limit"),
     )
     assert resp.status_code == 200, resp.text
-    assert seen_sql == [f"SELECT * FROM t LIMIT {server.MAX_DB_SAMPLE_ROWS}"]
+    # The cap still bounds the read, but as a random sample, never the head.
+    assert seen_sql[-1] == f"SELECT * FROM t ORDER BY random() LIMIT {server.MAX_DB_SAMPLE_ROWS}"
+    assert f"SELECT * FROM t LIMIT {server.MAX_DB_SAMPLE_ROWS}" not in seen_sql
+
+# ---- DB analysis is honest about sampling (web e2e, 2.0) -------------------------
+# The e2e answer was a LIMIT-1000 head of a table stored positives-first. These run
+# the real endpoint and chat route against a real SQLite table of that shape, through
+# an MCP-shaped runner that wraps every statement as the MCP server does.
+
+try:
+    from tests.test_db_sampling_honesty import make_sorted_patients, mcp_runner, QUESTION, N_ROWS
+except ImportError:
+    from test_db_sampling_honesty import make_sorted_patients, mcp_runner, QUESTION, N_ROWS
+
+
+def _db_table_session(client, monkeypatch, tmp_path, user):
+    # The analysis cap below the table's size, so these are about a sample.
+    monkeypatch.setattr(server, "MAX_DB_SAMPLE_ROWS", 1000, raising=False)
+    path = tmp_path / "clinic.db"
+    truth = make_sorted_patients(path)
+    seen: List[str] = []
+    run = mcp_runner(path, seen)
+
+    async def _mcp(customer_id, api_key, sql):
+        assert (customer_id, api_key) == ("clinic", "k-clinic")
+        return await run(sql)
+
+    monkeypatch.setattr(server, "_run_mcp_db_query", _mcp, raising=False)
+    resp = client.post(
+        "/api/database/tables-to-analysis",
+        json={"tables": ["patients"], "customer_id": "clinic", "api_key": "k-clinic"},
+        headers=make_auth_headers(user),
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json(), truth, seen
+
+
+def test_tables_to_analysis_stores_a_random_sample_labelled_n_of_m(client: TestClient, monkeypatch, tmp_path):
+    out, truth, seen = _db_table_session(client, monkeypatch, tmp_path, "tta-honest")
+    for sql in seen:
+        assert not re.match(r"^\s*SELECT \* FROM patients LIMIT \d+\s*$", sql), sql
+    sess = SESSIONS[out["session_id"]]
+    meta = sess["db_sample"]
+    assert (meta["method"], meta["n"], meta["total"]) == ("random", server.MAX_DB_SAMPLE_ROWS, N_ROWS)
+    rows = out["datasets"][0]["rows"]
+    rate = sum(int(r["stroke"]) for r in rows) / len(rows)
+    assert abs(rate - truth["overall"]) < 0.035, f"sample rate {rate} (head would be 0.25)"
+
+
+def test_db_rate_question_is_answered_exactly_by_the_database(client: TestClient, monkeypatch, tmp_path):
+    _quiet_send(monkeypatch)
+    monkeypatch.setattr(server, "GRAPH", _MustNotRunGraph(), raising=False)
+    out, truth, _seen = _db_table_session(client, monkeypatch, tmp_path, "tta-push")
+
+    async def _handle(user_id, customer_id):
+        return "sealed-k" if (user_id, customer_id) == ("tta-push", "clinic") else None
+
+    monkeypatch.setattr(server, "db_credential_handle_for_user", _handle, raising=False)
+    monkeypatch.setattr(server, "decrypt_secret", lambda h: "k-clinic" if h == "sealed-k" else None, raising=False)
+    upload = {"dataset_id": out["datasets"][0]["dataset_id"], "thread_id": out["thread_id"]}
+    resp = _send(client, upload, QUESTION, "tta-push")
+    assert resp.status_code == 200, resp.text
+    text = _last_assistant(resp.json())
+    assert f"{truth['rate'][1]:.4f}" in text and f"{truth['rate'][0]:.4f}" in text, text
+    assert "0.50" not in text
+    assert f"all {N_ROWS:,} rows" in text
+
+
+def test_db_pushdown_needs_the_callers_own_handle(client: TestClient, monkeypatch, tmp_path):
+    out, _truth, seen = _db_table_session(client, monkeypatch, tmp_path, "tta-owner")
+    sess = SESSIONS[out["session_id"]]
+
+    async def _no_handle(user_id, customer_id):
+        return None
+
+    monkeypatch.setattr(server, "db_credential_handle_for_user", _no_handle, raising=False)
+    before = len(seen)
+    assert _run(server._db_pushdown_answer("someone-else", sess, QUESTION)) is None
+    assert len(seen) == before, "no query may run without the caller's own handle"
+
+
+def test_db_sampled_answer_says_random_sample_of_n_of_m(client: TestClient, monkeypatch, tmp_path):
+    _quiet_send(monkeypatch)
+    monkeypatch.setattr(server, "GRAPH", _OutputGraph(), raising=False)
+    out, _truth, _seen = _db_table_session(client, monkeypatch, tmp_path, "tta-note")
+    upload = {"dataset_id": out["datasets"][0]["dataset_id"], "thread_id": out["thread_id"]}
+    resp = _send(client, upload, "describe how bmi relates to smoking", "tta-note")
+    assert resp.status_code == 200, resp.text
+    text = _last_assistant(resp.json())
+    assert f"from a random sample of {server.MAX_DB_SAMPLE_ROWS:,} of {N_ROWS:,} rows" in text, text

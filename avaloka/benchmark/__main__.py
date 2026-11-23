@@ -83,15 +83,17 @@ def main() -> None:
                      help="Include the real SEC EDGAR filing task (network; "
                           "needs AVALOKA_EDGAR_USER_AGENT).")
     run.add_argument("--family", choices=["data_engineering", "data_science",
-                                          "format_comprehension", "conversational_scorers"],
+                                          "format_comprehension", "conversational_scorers",
+                                          "conversational_product"],
                      help="Only run one family.")
     run.add_argument("--out", default=None, help="Artifacts directory (default: a temp dir).")
     run.add_argument("--json", default=None, help="Write the scorecard JSON here.")
     run.add_argument("--html", default=None,
                      help="Write a self-contained HTML scorecard here.")
     run.add_argument("--live", action="store_true",
-                     help="Run the conversational family against a real provider "
-                          "(local model first, then Groq; never Anthropic).")
+                     help="Run the conversational families against a real provider "
+                          "(local model first, then Groq; never Anthropic). Without it "
+                          "the product family replays its recorded cassette.")
     run.add_argument("--quiet", action="store_true", help="Suppress per-task progress.")
     run.add_argument("--strict", action="store_true",
                      help="Exit 1 on any failed run, including the known defects "
@@ -117,13 +119,15 @@ def main() -> None:
     print(f"Running {len(tasks)} tasks → {base}")
     card = runner.run(tasks)
 
-    # The conversational family is a scored line in the same scorecard rather
+    # The conversational families are scored lines in the same scorecard rather
     # than a separate pytest-only pass/fail, which is what made conversational
-    # quality invisible here.
-    if args.family in (None, "conversational_scorers"):
+    # quality invisible here. Both come from one call: the measurement check
+    # (a conversational_scorers task) reads the product run.
+    if args.family in (None, "conversational_scorers", "conversational_product"):
         from avaloka.benchmark.conversational import conversational_results
         for result in conversational_results(live=args.live):
-            card.add(result)
+            if args.family in (None, result.family):
+                card.add(result)
 
     _print_scorecard(card)
     verdict = gate(card.results)

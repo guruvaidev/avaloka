@@ -1,0 +1,38 @@
+{
+  "environment": {
+    "runtime": "local SQLite in-memory",
+    "rows_per_dataset": 100000,
+    "repeats": 5,
+    "cpu_metric": "median process CPU seconds",
+    "work_metric": "median SQLite virtual-machine steps",
+    "scope": "repository-local smoke data; Kaggle cases run when downloaded"
+  },
+  "results": [
+    {
+      "dataset": "2021-2022 Football Team Stats.csv",
+      "rows_returned": 1020,
+      "baseline_wall_seconds": 0.946759083,
+      "optimized_wall_seconds": 0.003056542,
+      "baseline_cpu_seconds": 0.932545,
+      "optimized_cpu_seconds": 0.003035,
+      "baseline_vm_steps": 2200006,
+      "optimized_vm_steps": 7150,
+      "wall_speedup": 309.7484,
+      "cpu_speedup": 307.2636,
+      "vm_step_reduction_pct": 99.6750
+    },
+    {
+      "dataset": "salaries.csv",
+      "rows_returned": 16666,
+      "baseline_wall_seconds": 0.304561125,
+      "optimized_wall_seconds": 0.042854917,
+      "baseline_cpu_seconds": 0.301803,
+      "optimized_cpu_seconds": 0.042731,
+      "baseline_vm_steps": 700006,
+      "optimized_vm_steps": 116672,
+      "wall_speedup": 7.1068,
+      "cpu_speedup": 7.0629,
+      "vm_step_reduction_pct": 83.3327
+    }
+  ]
+}

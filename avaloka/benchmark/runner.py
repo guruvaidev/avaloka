@@ -141,7 +141,10 @@ class BenchmarkRunner:
             (run_train if kind is MissionKind.TRAIN else run_analyze)(ctx)
 
             # source-connector correctness: profile must reflect the real data
-            handle = load_dataset(local)
+            # Graded on the read the mission made: the same reader, given the
+            # same question, so a sheet chosen by the question is the sheet
+            # graded (fireflies/data_scout.py passes the goal the same way).
+            handle = load_dataset(local, question=task.goal or None)
             frame = handle.frame
 
             checks += scoring.score_workload(out, task.expectations)
@@ -214,9 +217,15 @@ class BenchmarkRunner:
             cols = task.expectations.exact_columns or \
                 [c for c in frame.columns if pd.api.types.is_numeric_dtype(frame[c])][:3]
             checks += scoring.score_exact_convergence(cr.converged_profile, frame, cols)
+            # The edition may cap the fleet; the check is that the coordinator
+            # dispatched exactly what it granted and said so.
+            granted = cr.execution.get("swarm") or {}
+            expected = granted.get("clones", task.coordinate_workers or 4)
+            detail = f"dispatched {cr.workers} sub-Avalokas"
+            if granted.get("message"):
+                detail += f" ({granted['message']})"
             checks.append(CheckResult(
-                "coordination_workers", cr.workers == (task.coordinate_workers or 4),
-                f"dispatched {cr.workers} sub-Avalokas"))
+                "coordination_workers", cr.workers == expected, detail))
             valid_verdicts = {"pass", "warn", "fail"}
             checks.append(CheckResult("coordination_verdict", cr.verdict in valid_verdicts,
                                       f"converged verdict '{cr.verdict}'"))

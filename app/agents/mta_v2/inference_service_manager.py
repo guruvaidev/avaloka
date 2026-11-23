@@ -38,10 +38,28 @@ GCP_SA_JSON_PATH = os.getenv("GCP_SERVICE_ACCOUNT_JSON_PATH", "~/Templates/gcp-b
 # August 2026, each holding a pod and a LoadBalancer, none serving traffic. It is
 # retained only for recovering those deployments and now requires an explicit
 # opt-in via AVALOKA_ALLOW_LEGACY_GATEWAY=1.
-INFERENCE_BACKEND = os.getenv("INFERENCE_BACKEND", "rayserve").strip().lower()
+# "modelserver" (default since 2026-11): one FastAPI Deployment serving many
+# models from the MLflow registry, scaled 0<->1 by the infra layer and 1<->N by
+# an HPA (app/serve/model_server.py, app/infra/model_server_scaler.py). Idle
+# cost is zero pods. "rayserve" stays as the opt-in for GPU-heavy or very
+# high-QPS installs; it keeps a Ray head running.
+INFERENCE_BACKEND = os.getenv("INFERENCE_BACKEND", "modelserver").strip().lower()
 ALLOW_LEGACY_GATEWAY = os.getenv("AVALOKA_ALLOW_LEGACY_GATEWAY", "").strip() in {"1", "true", "yes"}
 RAY_SERVE_URL = os.getenv("RAY_SERVE_URL", "http://avaloka-inference-serve-svc:8000")
 RAYSERVICE_NAME = os.getenv("RAY_SERVICE_NAME", "avaloka-inference")
+MODEL_SERVER_URL = os.getenv("MODEL_SERVER_URL", "http://avaloka-model-server:8000")
+MODEL_SERVER_TIMEOUT_S = int(os.getenv("MODEL_SERVER_TIMEOUT_S", "30"))
+
+
+class ServingAsleep(RuntimeError):
+    """The serving backend is scaled to zero and is being woken.
+
+    The API answers 503 with ``Retry-After`` instead of holding the request.
+    Raised by the model-server backend (PR-1b); defined here so the API's
+    contract is in place.
+    """
+
+    retry_after = 15
 
 
 class InferenceServiceManager:
@@ -57,9 +75,9 @@ class InferenceServiceManager:
 
     @staticmethod
     def _backend() -> str:
-        if INFERENCE_BACKEND not in {"rayserve", "gateway"}:
+        if INFERENCE_BACKEND not in {"modelserver", "rayserve", "gateway"}:
             raise ValueError(
-                f"Unsupported INFERENCE_BACKEND {INFERENCE_BACKEND!r}; expected 'rayserve' or 'gateway'."
+                f"Unsupported INFERENCE_BACKEND {INFERENCE_BACKEND!r}; expected 'modelserver', 'rayserve' or 'gateway'."
             )
         if INFERENCE_BACKEND == "gateway" and not ALLOW_LEGACY_GATEWAY:
             raise RuntimeError(
@@ -77,19 +95,202 @@ class InferenceServiceManager:
         return RayServiceScaler(name=RAYSERVICE_NAME, policy=policy_from_env())
 
     def configure_inference_service(self, mlflow_run_id: str) -> Dict[str, Any]:
-        if self._backend() == "rayserve":
+        backend = self._backend()
+        if backend == "modelserver":
+            return self._configure_modelserver(mlflow_run_id)
+        if backend == "rayserve":
             return self._configure_rayserve(mlflow_run_id)
         return self._configure_gateway(mlflow_run_id)
 
+    def prepare_inference_service(self, mlflow_run_id: str) -> Dict[str, Any]:
+        """Make a run servable without warming anything (ready-on-demand).
+
+        Validates and, if needed, repairs the ONNX artifact and records the
+        service details, but does not load the model into the serving backend:
+        the first prediction does that. Used by the auto-deploy after training
+        so that nothing stays warm (owner ruling: idle cost ~ 0).
+        """
+        backend = self._backend()
+        if backend == "modelserver":
+            return self._prepare_modelserver(mlflow_run_id)
+        if backend == "rayserve":
+            self._ensure_self_contained_onnx(mlflow_run_id)
+            model_uri = self._resolve_model_uri(mlflow_run_id)
+            details = {
+                "backend": "rayserve",
+                "endpoint": RAY_SERVE_URL,
+                "model_uri": model_uri,
+                "run_id": mlflow_run_id,
+                "rayservice": RAYSERVICE_NAME,
+                "warm": False,
+            }
+            self._persist_details(mlflow_run_id, details)
+            return details
+        # The legacy gateway has no "prepared but cold" state: configuring is deploying.
+        return self._configure_gateway(mlflow_run_id)
+
     def inference(self, mlflow_run_id: str, input_data: Dict[str, Any] | List[Dict[str, Any]]) -> Any:
-        if self._backend() == "rayserve":
+        backend = self._backend()
+        if backend == "modelserver":
+            return self._inference_modelserver(mlflow_run_id, input_data)
+        if backend == "rayserve":
             return self._inference_rayserve(mlflow_run_id, input_data)
         return self._inference_gateway(mlflow_run_id, input_data)
 
     def stop_inference_service(self, mlflow_run_id: str) -> None:
-        if self._backend() == "rayserve":
+        backend = self._backend()
+        if backend == "modelserver":
+            return self._stop_modelserver(mlflow_run_id)
+        if backend == "rayserve":
             return self._stop_rayserve(mlflow_run_id)
         return self._stop_gateway(mlflow_run_id)
+
+    # ---- modelserver backend (default) -------------------------------------------
+
+    def _scaler_for(self, mlflow_run_id: str):
+        from app.infra.model_server_scaler import GPU_DEPLOYMENT, DEPLOYMENT, ModelServerScaler
+
+        name = DEPLOYMENT
+        try:
+            from app.core.ml_store import get_ml_store
+
+            ep = get_ml_store().get_endpoint(mlflow_run_id)
+            if ep is not None and ep.server == "gpu":
+                name = GPU_DEPLOYMENT
+        except Exception:  # noqa: BLE001 - default to the CPU server
+            pass
+        return ModelServerScaler(name)
+
+    def _registry_hint(self, mlflow_run_id: str) -> Dict[str, Any]:
+        """The registry record, so the server loads models:/{name}/{version}."""
+        try:
+            from app.core.ml_store import get_ml_store
+
+            rec = get_ml_store().get_model(mlflow_run_id)
+            if rec is not None:
+                return {"registered_name": rec.registered_name, "version": rec.version}
+        except Exception:  # noqa: BLE001
+            pass
+        return {}
+
+    def _modelserver_url(self, mlflow_run_id: str, action: str) -> str:
+        return f"{MODEL_SERVER_URL.rstrip('/')}/models/{mlflow_run_id}/{action}"
+
+    def _post_modelserver(self, mlflow_run_id: str, action: str, payload: Dict[str, Any],
+                          timeout: int = MODEL_SERVER_TIMEOUT_S) -> Dict[str, Any]:
+        """POST to the server; translate "nobody is listening" into ServingAsleep
+        after asking the infra layer to wake the Deployment."""
+        url = self._modelserver_url(mlflow_run_id, action)
+        try:
+            resp = requests.post(url, json=payload, timeout=timeout)
+        except requests.ConnectionError as exc:
+            scaler = self._scaler_for(mlflow_run_id)
+            replicas = scaler.replicas()
+            if replicas == 0 or replicas is None:
+                scaler.wake()
+                raise ServingAsleep(f"model server is scaled to zero; waking ({exc.__class__.__name__})") from exc
+            raise
+        if resp.status_code == 503:
+            raise ServingAsleep("model server is starting")
+        if resp.status_code == 422:
+            detail = resp.json().get("detail") if resp.headers.get("content-type", "").startswith("application/json") else {}
+            raise RuntimeError(f"model server could not load the model: {(detail or {}).get('error', resp.text[:200])}")
+        resp.raise_for_status()
+        result = resp.json()
+        if not isinstance(result, dict):
+            raise RuntimeError(f"model server returned an invalid response: {result!r}")
+        return result
+
+    def _run_algorithm(self, mlflow_run_id: str) -> str:
+        """The model family the run trained (``algorithm`` run param on 1.7); ``mlp`` when unknown."""
+        try:
+            import mlflow
+            from mlflow.tracking import MlflowClient
+
+            from app.agents.mta_v2.tracking import resolve_tracking_uri
+
+            mlflow.set_tracking_uri(resolve_tracking_uri(None))
+            return str(MlflowClient().get_run(mlflow_run_id).data.params.get("algorithm") or "mlp").lower()
+        except Exception:  # noqa: BLE001 - an unreadable run is treated as the MLP it always was
+            return "mlp"
+
+    def _prepare_modelserver(self, mlflow_run_id: str) -> Dict[str, Any]:
+        """Ready-on-demand: validate the artifact, record the details, load nothing.
+
+        1.7's scikit-learn families (gradient_boosting, random_forest, linear) have
+        no ONNX graph: they are logged with mlflow.sklearn under ``model`` and the
+        model server loads them through mlflow.pyfunc, so the ONNX self-containment
+        check applies to the MLP only and the fallback URI is the model directory.
+        """
+        algorithm = self._run_algorithm(mlflow_run_id)
+        if algorithm == "mlp":
+            self._ensure_self_contained_onnx(mlflow_run_id)
+        hint = self._registry_hint(mlflow_run_id)
+        if hint:
+            model_uri = f"models:/{hint['registered_name']}/{hint['version']}"
+        elif algorithm == "mlp":
+            model_uri = self._resolve_model_uri(mlflow_run_id)
+        else:
+            model_uri = f"runs:/{mlflow_run_id}/model"
+        details = {"backend": "modelserver", "endpoint": MODEL_SERVER_URL, "model_uri": model_uri,
+                   "run_id": mlflow_run_id, "warm": False, "algorithm": algorithm, **hint}
+        self._persist_details(mlflow_run_id, details)
+        return details
+
+    def _configure_modelserver(self, mlflow_run_id: str) -> Dict[str, Any]:
+        """Warm: wake the Deployment if asleep, wait for readiness, load the model."""
+        details = self._prepare_modelserver(mlflow_run_id)
+        scaler = self._scaler_for(mlflow_run_id)
+        if scaler.replicas() == 0:
+            scaler.wake()
+            scaler.wait_ready(timeout_s=int(os.getenv("MODEL_SERVER_WAKE_TIMEOUT_S", "180")))
+        payload = {k: details[k] for k in ("registered_name", "version") if k in details}
+        if not payload:
+            payload = {"model_uri": details["model_uri"]}
+        loaded = self._post_modelserver(mlflow_run_id, "load", payload, timeout=120)
+        details.update({"warm": True, "bytes": loaded.get("bytes"), "flavor": loaded.get("flavor")})
+        self._persist_details(mlflow_run_id, details)
+        logger.info("[inference] model server warmed run '%s' (%s)", mlflow_run_id, details["model_uri"])
+        return details
+
+    def _inference_modelserver(self, mlflow_run_id: str, input_data: Dict[str, Any] | List[Dict[str, Any]]) -> Any:
+        from app.agents.mta_v2.inference import InferenceInterface
+
+        features = input_data.get("features", input_data) if isinstance(input_data, dict) else input_data
+        rows = features if isinstance(features, list) else [features]
+        if not rows:
+            raise ValueError("Inference input must contain at least one row.")
+        is_single_vector = isinstance(rows[0], (int, float))
+        is_batch = isinstance(features, list) and not is_single_vector
+        if is_single_vector:
+            rows = [rows]
+
+        config = MLflowManager().get_model_config(mlflow_run_id)
+        if config is None:
+            raise ValueError(f"Model config not found for MLflow run id '{mlflow_run_id}'")
+        hint = self._registry_hint(mlflow_run_id)
+        results = []
+        for row in rows:
+            if isinstance(row, dict):
+                vector = InferenceInterface._model_feature_values(row, config)
+            elif isinstance(row, (list, tuple)):
+                vector = [float(value) for value in row]
+            else:
+                raise ValueError("Each inference row must be an object or numeric feature vector.")
+            service_result = self._post_modelserver(mlflow_run_id, "predict", {"features": vector, **hint})
+            if not service_result.get("model_loaded"):
+                raise RuntimeError(f"model server did not load run {mlflow_run_id}: {service_result.get('error') or 'unknown'}")
+            results.append(self._format_rayserve_prediction(mlflow_run_id, config, service_result))
+        return results if is_batch else results[0]
+
+    def _stop_modelserver(self, mlflow_run_id: str) -> None:
+        """Unload (best effort: an asleep server has nothing loaded) and clear the details."""
+        try:
+            requests.post(self._modelserver_url(mlflow_run_id, "unload"), timeout=10)
+        except requests.RequestException as exc:
+            logger.info("[inference] unload skipped for %s (%s)", mlflow_run_id, exc.__class__.__name__)
+        self._persist_details(mlflow_run_id, None)  # type: ignore[arg-type]
+        logger.info("[inference] model server endpoint stopped for run '%s'.", mlflow_run_id)
 
     # ---- rayserve backend ------------------------------------------------------
 

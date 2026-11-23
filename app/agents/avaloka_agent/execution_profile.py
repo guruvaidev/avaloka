@@ -17,6 +17,10 @@ _KB = 1024
 _MB = 1024 * _KB
 _GB = 1024 * _MB
 
+#: What a local run is told to expect; the profile's own words, reused wherever
+#: the product says how long work will take.
+LOCAL_ETA_TEXT = "seconds to minutes"
+
 SMALL_THRESHOLD = 100 * _MB
 MEDIUM_THRESHOLD = 1 * _GB
 LARGE_THRESHOLD = 10 * _GB
@@ -142,7 +146,7 @@ def decide_execution_profile(
         "size_class": _size_class(size),
         "fidelity": fidelity,
         "execution_mode": exec_mode,
-        "eta_text": _runtime_hint(size) if exec_mode == "k8s-ray" else "seconds to minutes",
+        "eta_text": _runtime_hint(size) if exec_mode == "k8s-ray" else LOCAL_ETA_TEXT,
         "cost_note": (
             "k8s-ray runs incur cluster compute time; entire-dataset analyses "
             "are scheduled via Celery and may take "
@@ -156,5 +160,12 @@ def decide_execution_profile(
         "confirm_before_full_run": bool(
             fidelity == FIDELITY_ENTIRE and size > LARGE_THRESHOLD),
     }
-    updates["avaloka_recommendation"] = recommendation
+    # Merged into what the turn already carries, never put in its place. The
+    # field is forwarded to the reply as <recommendation>, and it can hold
+    # verified analysis results ("results", "source") beside this profile;
+    # replacing it dropped them the moment a dataset was bound. The profile's
+    # own keys are this turn's and win; a key it does not write is kept.
+    existing = state.get("avaloka_recommendation")
+    updates["avaloka_recommendation"] = (
+        {**existing, **recommendation} if isinstance(existing, dict) else recommendation)
     return updates

@@ -8,6 +8,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from app.catalog import hooks as catalog_hooks
 from app.core.lineage import Edge, EdgeKind, LineageStore
 
 logger = logging.getLogger(__name__)
@@ -221,6 +222,12 @@ def record_analysis_lineage(state: Dict[str, Any], output_data: Any) -> Optional
                 for parent_id in parents[1:]:
                     store.add_edge(Edge(output_id, EdgeKind.DERIVED_FROM, parent_id,
                                         {"analysis_id": analysis_id}))
+            # The catalog hears about the same event: the inputs this analysis
+            # used (pinning their versions to it) and the output it produced.
+            # Best-effort, like everything above; it never raises.
+            catalog_hooks.record_analysis(state, output_data, output_id=output_id,
+                                          analysis_id=analysis_id, parents=parents,
+                                          metadata_by_id=metadata_by_id)
             return output_id
         finally:
             store.close()

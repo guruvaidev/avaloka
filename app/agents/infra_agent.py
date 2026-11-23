@@ -124,7 +124,10 @@ def infra_agent_node(state: ETLState) -> ETLState:
             if outcome["status"] == "FAILED":
                 overall_status = "failed"
 
-    #  Non-ray path: deploy app + verify + service IP
+    #  Non-ray path: deploy app + verify. For python-docker both look up the
+    #  chart-deployed execute service (k8s_invoker.locate_execute_service, then
+    #  its /health); nothing is built or applied, and there is no LoadBalancer
+    #  IP to wait for any more.
     if overall_status == "provisioned" and not use_ray:
         outcome = k8s_invoker.deploy_application(app_type, platform)
         provisioning_outcomes.append(outcome)
@@ -133,12 +136,6 @@ def infra_agent_node(state: ETLState) -> ETLState:
 
     if overall_status == "provisioned" and not use_ray:
         outcome = k8s_invoker.verify_application_status(app_type)
-        provisioning_outcomes.append(outcome)
-        if outcome["status"] == "FAILED":
-            overall_status = "failed"
-
-    if overall_status == "provisioned" and not use_ray:
-        outcome = k8s_invoker.get_service_ip_and_port("infra-agent-service")
         provisioning_outcomes.append(outcome)
         if outcome["status"] == "FAILED":
             overall_status = "failed"

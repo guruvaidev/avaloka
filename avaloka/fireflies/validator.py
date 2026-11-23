@@ -13,18 +13,188 @@ from __future__ import annotations
 import math
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from avaloka.fireflies.base import Firefly
+from avaloka.goal_analysis import apply_filters
+from avaloka.mission.context import MissionKind
 from avaloka.stats import detect_target_leakage
 from avaloka.util import write_json
 
 PASS, WARN, FAIL = "pass", "warn", "fail"
 
+#: How close a reported figure must be to its recomputation. Figures are
+#: stored to six decimals, so anything wider than rounding is a real mismatch.
+RECONCILE_REL_TOL = 1e-4
+RECONCILE_ABS_TOL = 1e-5
+
+
+# --- reconciliation ---------------------------------------------------------
+# Every figure a goal answer reports carries how to recompute it. The code
+# below recomputes it from the rows with numpy, separately from the pandas
+# path that produced it, so a figure that does not follow from the data --
+# a sum printed as a mean, the wrong group, a stale number -- fails here.
+def _numbers(frame: pd.DataFrame, expr: dict[str, Any] | None) -> np.ndarray:
+    if expr is None:
+        return np.ones(len(frame))
+    if "column" in expr:
+        return pd.to_numeric(frame[expr["column"]], errors="coerce").to_numpy(dtype="float64")
+    if "indicator" in expr:
+        spec = expr["indicator"]
+        raw = frame[spec["column"]]
+        present = raw.notna().to_numpy()
+        if pd.api.types.is_numeric_dtype(raw):
+            hit = pd.to_numeric(raw, errors="coerce").to_numpy(dtype="float64") == float(spec["equals"])
+        else:
+            hit = np.array([str(v).lower() == str(spec["equals"]).lower() for v in raw.to_numpy()])
+        return np.where(present, hit.astype("float64"), np.nan)
+    left, right = expr["product"]
+    return _numbers(frame, {"column": left}) * _numbers(frame, {"column": right})
+
+
+def _text(frame: pd.DataFrame, column: str, missing: str, cache: dict) -> np.ndarray:
+    """Each cell as the text a reported group key was written with: ``str()``."""
+    key = (column, missing)
+    if key not in cache:
+        raw = frame[column]
+        cache[key] = np.where(raw.isna().to_numpy(), missing, raw.map(str).to_numpy())
+    return cache[key]
+
+
+def _where(frame: pd.DataFrame, conditions: list[dict[str, Any]], cache: dict) -> np.ndarray:
+    keep = np.ones(len(frame), dtype=bool)
+    for cond in conditions:
+        if "equals_text" in cond:
+            keep &= _text(frame, cond["column"], cond.get("missing_as", "nan"), cache) == cond["equals_text"]
+            continue
+        dates = pd.to_datetime(frame[cond["column"]], errors="coerce", dayfirst=bool(cond.get("dayfirst")),
+                               utc=bool(cond.get("utc")))
+        if "month" in cond:
+            keep &= (dates.dt.strftime("%Y-%m") == cond["month"]).to_numpy()
+        elif "hour" in cond:
+            keep &= (dates.dt.hour == float(cond["hour"])).to_numpy()
+        elif "weekday" in cond:
+            keep &= (dates.dt.day_name() == cond["weekday"]).to_numpy()
+    return keep
+
+
+def _eta(values: np.ndarray, groups: np.ndarray) -> float:
+    ok = ~np.isnan(values)
+    values, groups = values[ok], groups[ok]
+    mean = values.mean()
+    _, inverse = np.unique(groups, return_inverse=True)
+    sums, counts = np.bincount(inverse, weights=values), np.bincount(inverse)
+    between = float(np.sum(counts * (sums / counts - mean) ** 2))
+    return math.sqrt(between / float(np.sum((values - mean) ** 2)))
+
+
+def recompute_figure(frame: pd.DataFrame, check: dict[str, Any], cache: dict | None = None) -> float:
+    """The figure ``check`` describes, recomputed from ``frame``."""
+    cache = {} if cache is None else cache
+    op = check["op"]
+    if op == "missing":
+        return float(frame[check["column"]].isna().to_numpy().sum())
+    if op == "agg":
+        keep = _where(frame, check.get("where") or [], cache)
+        values = _numbers(frame, check.get("value"))[keep]
+        if check["agg"] == "count":
+            return float(keep.sum()) if check.get("value") is None else float((~np.isnan(values)).sum())
+        values = values[~np.isnan(values)]
+        return float({"mean": np.mean, "sum": np.sum, "median": np.median,
+                      "max": np.max, "min": np.min}[check["agg"]](values))
+    if op == "pearson":
+        x, y = _numbers(frame, check["x"]), _numbers(frame, check["y"])
+        ok = ~np.isnan(x) & ~np.isnan(y)
+        return float(np.corrcoef(x[ok], y[ok])[0, 1])
+    if op == "eta":
+        return _eta(_numbers(frame, check["y"]), _text(frame, check["groups"], "<missing>", cache))
+    if op == "cramers_v":
+        a = _text(frame, check["a"], "<missing>", cache)
+        present = frame[check["b"]].notna().to_numpy()
+        a, b = a[present], _text(frame, check["b"], "<missing>", cache)[present]
+        _, ia = np.unique(a, return_inverse=True)
+        _, ib = np.unique(b, return_inverse=True)
+        table = np.zeros((ia.max() + 1, ib.max() + 1))
+        np.add.at(table, (ia, ib), 1)
+        n = table.sum()
+        expected = np.outer(table.sum(axis=1), table.sum(axis=0)) / n
+        chi2 = float(np.sum((table - expected) ** 2 / np.where(expected > 0, expected, 1)))
+        return math.sqrt(chi2 / (n * (min(table.shape) - 1)))
+    raise ValueError(f"no recomputation for {op!r}")
+
+
+def reconcile_figures(figures: list[dict[str, Any]], frame: pd.DataFrame) -> list[dict[str, Any]]:
+    """The figures whose reported value differs from their recomputation."""
+    mismatches, cache = [], {}
+    for figure in figures:
+        try:
+            again = recompute_figure(frame, figure["check"], cache)
+        except Exception as exc:  # noqa: BLE001 - an unrecomputable figure is itself a mismatch
+            mismatches.append({"label": figure["label"], "reported": figure["value"],
+                               "recomputed": None, "error": type(exc).__name__})
+            continue
+        if figure["check"]["op"] == "pearson" and figure["check"].get("absolute"):
+            again = abs(again)
+        # A figure at the file's stated scale ("£ thousands") is the recomputed
+        # figure times that factor (goal_analysis._with_units).
+        again *= figure["check"].get("scale", 1)
+        if not math.isclose(float(figure["value"]), again, rel_tol=RECONCILE_REL_TOL,
+                            abs_tol=RECONCILE_ABS_TOL):
+            mismatches.append({"label": figure["label"], "reported": figure["value"], "recomputed": again})
+    return mismatches
+
 
 class Validator(Firefly):
     name = "validator"
     human_role = "Model-risk specialist"
+
+    def _goal_checks(self) -> list[dict[str, Any]]:
+        bb = self.ctx.blackboard
+        goal = bb.get("goal_analysis")
+        if self.ctx.kind != MissionKind.ANALYZE or goal is None:
+            return []
+        if goal.get("status") != "answered" or not goal.get("figures"):
+            reason = (goal.get("findings") or ["no goal-specific figure was produced"])[0]
+            return [{"name": "goal_answered", "status": WARN, "severity": "high",
+                     "detail": f"Not answered: {reason}"}]
+        out = [{"name": "goal_answered", "status": PASS, "severity": "high",
+                "detail": f"Answered by a {goal['kind'].replace('_', ' ')} calculation."}]
+        basis = goal.get("basis") or {}
+        frame = bb.get("working_frame") if basis.get("sampled") else bb.get("frame", bb.get("working_frame"))
+        if frame is None:
+            out.append({"name": "goal_reconciliation", "status": WARN, "severity": "high",
+                        "detail": "The rows behind the answer were not available to recompute its figures."})
+            return out
+        rows = apply_filters(frame, goal.get("filters") or [])
+        figures = list(goal["figures"])
+        mismatches = reconcile_figures(figures, rows)
+        statistic, plan = bb.get("statistical_result"), bb.get("statistical_plan")
+        source = bb.get("transformed_frame")
+        if (bb.get("statistical_basis") or {}).get("full_pass") and bb.get("frame") is not None:
+            # The Statistician answered from every row: reconcile against them.
+            source = apply_filters(bb["frame"], ((bb.get("workload_optimization") or {})
+                                                 .get("applied") or {}).get("filters_applied") or [])
+        if statistic is not None and isinstance(plan, dict) and source is not None \
+                and plan.get("method") in {"mean", "median"} and isinstance(statistic.estimate, (int, float)):
+            stat_figure = {"label": plan.get("estimand") or plan["method"], "value": statistic.estimate,
+                           "check": {"op": "agg", "agg": plan["method"],
+                                     "value": {"column": plan["variables"][0]}, "where": []}}
+            figures.append(stat_figure)
+            mismatches += reconcile_figures([stat_figure], source)
+        if mismatches:
+            shown = "; ".join(
+                f"{m['label']}: reported {m['reported']}, recomputed "
+                + (f"{m['recomputed']:.6g}" if m["recomputed"] is not None else f"nothing ({m.get('error')})")
+                for m in mismatches[:3])
+            out.append({"name": "goal_reconciliation", "status": FAIL, "severity": "high",
+                        "detail": f"{len(mismatches)} of {len(figures)} reported figure(s) do not match a "
+                                  f"recomputation from the data: {shown}."})
+        else:
+            out.append({"name": "goal_reconciliation", "status": PASS, "severity": "high",
+                        "detail": f"All {len(figures)} reported figure(s) match an independent "
+                                  f"recomputation over {len(rows):,} rows."})
+        return out
 
     def perform(self) -> tuple[str, float, dict[str, Any]]:
         profile = self.ctx.blackboard["profile"]
@@ -133,6 +303,15 @@ class Validator(Firefly):
             max_level = min(max_level, 2)
             checks.append({"name": "data_quality", "status": WARN, "severity": "medium",
                            "detail": f"Data quality score {q}/100; clean before production use."})
+
+        # --- the goal: answered, and do its numbers follow from the data -----
+        # An analysis is only a PASS when it answered the question asked and
+        # every figure it printed comes back the same when recomputed. A
+        # general profile in place of an answer used to read PASS.
+        goal_checks = self._goal_checks()
+        checks += goal_checks
+        if any(c["status"] != PASS for c in goal_checks):
+            max_level = min(max_level, 1)
 
         # The Validator sets the *technical* safety ceiling. A clean model is
         # certified up to Level 4; the human-approval governance gate for

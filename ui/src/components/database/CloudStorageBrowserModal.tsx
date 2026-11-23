@@ -19,6 +19,7 @@ import {
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { backendApi, type UploadLimits } from "@/lib/api/backendApi";
+import { PLAN_CHECK_UNAVAILABLE_MESSAGE, PLAN_CHECK_UNAVAILABLE_TITLE } from "@/lib/plan-check";
 import { supabase } from "@/integrations/supabase/client";
 import { createAnalysis as persistCreateAnalysis } from "@/lib/analysis-messages";
 import type { StorageConnection, StorageProvider } from "./CloudStorageConnectModal";
@@ -110,9 +111,15 @@ export function CloudStorageBrowserModal({
     queryKey: ["upload-limits"],
     queryFn: () => backendApi.getUploadLimits(),
     enabled: open,
-    staleTime: 5 * 60 * 1000,
+    // An unchecked plan is never cached: the next attempt asks again.
+    staleTime: (query) => (query.state.data?.plan_check_unavailable ? 0 : 5 * 60 * 1000),
     retry: false,
   });
+  /** The plan could not be checked: a limit hit is not an upgrade case. */
+  const planCheckUnavailable = limits?.plan_check_unavailable === true;
+  useEffect(() => {
+    if (planLimitMsg && planCheckUnavailable) void queryClient.invalidateQueries({ queryKey: ["upload-limits"] });
+  }, [planLimitMsg, planCheckUnavailable, queryClient]);
 
 
   const { bucket, prefix } = useMemo(
@@ -285,7 +292,9 @@ export function CloudStorageBrowserModal({
         const maxMb =
           typeof limits?.max_total_mb === "number" ? limits.max_total_mb : Math.round(maxTotal / 1048576);
         setPlanLimitMsg(
-          `Your selection totals ${(totalBytes / 1048576).toFixed(1)} MB, which exceeds the Free plan limit of ${maxMb} MB of data per analysis.`,
+          planCheckUnavailable
+            ? PLAN_CHECK_UNAVAILABLE_MESSAGE
+            : `Your selection totals ${(totalBytes / 1048576).toFixed(1)} MB, which exceeds the Free plan limit of ${maxMb} MB of data per analysis.`,
         );
         return;
       }
@@ -1033,13 +1042,15 @@ export function CloudStorageBrowserModal({
           >
             <X className="h-4 w-4" />
           </button>
-          <h2 className="text-lg font-semibold text-foreground">Free plan limit reached</h2>
+          <h2 className="text-lg font-semibold text-foreground">
+            {planCheckUnavailable ? PLAN_CHECK_UNAVAILABLE_TITLE : "Free plan limit reached"}
+          </h2>
           <p className="mt-1.5 text-sm text-muted-foreground">{planLimitMsg}</p>
           <div className="mt-6 flex justify-end gap-2">
             <Button variant="outline" onClick={() => setPlanLimitMsg(null)}>
-              Reduce file size
+              {planCheckUnavailable ? "Close" : "Reduce file size"}
             </Button>
-            <Button
+            {!planCheckUnavailable && <Button
               onClick={() => {
                 setPlanLimitMsg(null);
                 onOpenChange(false);
@@ -1047,7 +1058,7 @@ export function CloudStorageBrowserModal({
               }}
             >
               Upgrade to Professional
-            </Button>
+            </Button>}
           </div>
         </DialogContent>
       </Dialog>

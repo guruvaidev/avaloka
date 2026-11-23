@@ -8,6 +8,7 @@ import { Button } from "@/components/base/buttons/button";
 import { ButtonUtility } from "@/components/base/buttons/button-utility";
 import { cx } from "@/lib/utils/cx";
 import { backendApi } from "@/lib/api/backendApi";
+import { scrubLogLines, userFacingError } from "@/lib/user-facing-error";
 
 export type TaskRun = {
   run_id?: string;
@@ -104,15 +105,17 @@ function Spinner() {
 }
 
 function RunLogs({ run }: { run: TaskRun }) {
+  // A traceback in a run's log or error never reaches the screen; the server
+  // log has it.
   const lines = useMemo(() => {
     const raw = run.result?.logs;
     if (Array.isArray(raw)) {
       const arr = raw.map((l) => (typeof l === "string" ? l : JSON.stringify(l)));
-      if (arr.length > 0) return arr;
+      if (arr.length > 0) return scrubLogLines(arr);
     } else if (typeof raw === "string" && raw.trim()) {
-      return raw.split("\n");
+      return scrubLogLines([raw]);
     }
-    if (run.error) return String(run.error).split("\n");
+    if (run.error) return [userFacingError(String(run.error), "The scheduled run failed.")];
     return [];
   }, [run]);
 

@@ -3,8 +3,6 @@ import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { normalizeRedirectOrigin } from "@/lib/auth-redirect";
 
 
-const ADMIN_EMAIL = "kishan.kumar@guruvaisciences.org";
-
 export const DEACTIVATED_MESSAGE =
   "Your account has been deactivated. Please contact your organization administrator.";
 

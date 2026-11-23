@@ -590,6 +590,13 @@ def _cap_session_previews(data: Dict[str, Any]) -> Dict[str, Any]:
     pending = out.get("pending_turn")
     if isinstance(pending, dict) and isinstance(pending.get("result"), dict):
         out["pending_turn"] = {**pending, "result": _cap_rows(pending["result"], _PREVIEW_MAX_ROWS)}
+    turns = out.get("pending_turns")
+    if isinstance(turns, dict):
+        out["pending_turns"] = {
+            tid: ({**rec, "result": _cap_rows(rec["result"], _PREVIEW_MAX_ROWS)}
+                  if isinstance(rec, dict) and isinstance(rec.get("result"), dict) else rec)
+            for tid, rec in turns.items()
+        }
     return out
 
 
@@ -857,6 +864,103 @@ async def find_active_db_customer_for_user(user_id: Optional[str]):
     except Exception:
         logger.exception("find_active_db_customer_for_user failed (uid=%s)", user_id)
         return None
+
+
+def _saved_connection_handles(user_id: str) -> Dict[str, Any]:
+    """``{customer_id: (created_at, sealed api_key)}`` from the user's saved connections.
+
+    A connection the user saved through /api/connections is a connection they
+    made: its api_key is stored sealed under the same DB_ENCRYPTION_KEY as a
+    connect session's ``api_key_enc``, so the stored ciphertext IS the handle.
+    Only rows whose ``user_id`` is the caller's, and not marked inactive. A
+    hosted row that still holds a plaintext api_key is sealed here, in process.
+    """
+    from app.api import db_connections
+    from app.api.cloud_connections import encrypt_secret
+
+    out: Dict[str, Any] = {}
+    for row in db_connections.connection_store().list_for(user_id):
+        if str(row.get("user_id") or "") != str(user_id):
+            continue
+        if str(row.get("status") or "active").lower() == "inactive":
+            continue
+        customer_id = str(row.get("customer_id") or "").strip()
+        if not customer_id:
+            continue
+        if row.get("api_key_ciphertext") and row.get("api_key_iv"):
+            handle = {"ciphertext": row["api_key_ciphertext"], "iv": row["api_key_iv"]}
+        else:
+            handle = encrypt_secret(str(row.get("api_key") or "").strip())
+        if not handle:
+            continue
+        created = str(row.get("created_at") or "")
+        if customer_id not in out or created > out[customer_id][0]:
+            out[customer_id] = (created, handle)
+    return out
+
+
+async def db_credential_handles_for_user(user_id: Optional[str]) -> Dict[str, Any]:
+    """``{customer_id: sealed api_key_enc}`` for every database ``user_id`` connected.
+
+    What the planner presents to the onboarding API's credential routes, which
+    answer 401 to anyone else. Each handle is ciphertext under DB_ENCRYPTION_KEY
+    and is opened only in the process that calls the route.
+
+    "Connected" has one meaning: a database the caller saved through
+    /api/connections (what the UI does), or connected with a
+    ``type:"database"`` connect session (/api/database/connect, the API and
+    CLI path). Nothing else: a session whose ``user_id`` is not the caller's is
+    skipped even when the caller's session index lists it, and a saved row is
+    read only from the caller's own rows, so another user's customer_id never
+    maps to a handle. The newest wins when a database was connected twice.
+    """
+    if not user_id:
+        return {}
+    best: Dict[str, Any] = {}   # customer_id -> (created_at, handle)
+    try:
+        best.update(await asyncio.to_thread(_saved_connection_handles, user_id))
+    except Exception:
+        logger.exception("saved connection handles failed (uid=%s)", user_id)
+    if not cache:
+        return {cid: handle for cid, (_created, handle) in best.items()}
+    try:
+        sids = list(await cache.smembers(_k_user_sessions(user_id)))
+        sids = [s.decode() if isinstance(s, (bytes, bytearray)) else str(s) for s in sids]
+        # The small summaries pick the candidates; only those full blobs are read.
+        candidates = [
+            sid for sid, meta in zip(sids, await _load_metas(sids))
+            if meta and meta.get("user_id") == user_id and meta.get("type") == "database"
+            and (meta.get("customer_id") or "").strip()
+        ]
+        for blob in await _mget_safe([_k_session(s) for s in candidates]):
+            if not blob:
+                continue
+            try:
+                data = json.loads(blob)
+            except Exception:
+                continue
+            if data.get("user_id") != user_id or data.get("type") != "database":
+                continue
+            customer_id = (data.get("customer_id") or "").strip()
+            if not customer_id or not data.get("api_key_enc"):
+                continue
+            created = str(data.get("created_at") or "")
+            if customer_id not in best or created > best[customer_id][0]:
+                best[customer_id] = (created, data["api_key_enc"])
+    except Exception:
+        logger.exception("db_credential_handles_for_user failed (uid=%s)", user_id)
+    return {cid: handle for cid, (_created, handle) in best.items()}
+
+
+async def db_credential_handle_for_user(user_id: Optional[str], customer_id: Optional[str]):
+    """The sealed api_key of the user's own saved connection or connect session for ``customer_id``.
+
+    ``None`` when the user never connected or saved that database (so another
+    user's customer_id resolves to nothing). See :func:`db_credential_handles_for_user`.
+    """
+    if not customer_id:
+        return None
+    return (await db_credential_handles_for_user(user_id)).get(customer_id)
 
 # ---------- Thread helpers ----------
 def _k_session_threads(sid: str) -> str: return f"sess:{sid}:threads"

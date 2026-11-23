@@ -17,6 +17,9 @@ import pandas as pd
 from avaloka.fireflies.base import Firefly
 from avaloka.goal_analysis import analyze_goal
 from avaloka.mission.context import MissionKind
+from avaloka.specialist_plans import (conformal_config_for,
+                                      experiment_plan_from_goal,
+                                      statistical_plan_from_goal)
 from avaloka.util import write_json
 
 
@@ -80,10 +83,15 @@ class AnalysisPlanner(Firefly):
             "regression": ["linear_regression", "random_forest", "gradient_boosting"],
         }.get(task, [])
 
-        # Budget-aware compute plan: how many candidates can we justify?
+        # Budget-aware compute plan: how many candidates can we justify? The
+        # ensemble counts as one more candidate -- it refits every member per
+        # fold, so it costs about as much as the panel it votes over -- and it
+        # is the last one a stated budget pays for. With no budget stated it
+        # does not run; a user can force it either way with --ensemble/--no-ensemble.
         remaining = self.ctx.budget.remaining()
         if remaining == float("inf"):
             max_candidates = len(algos)
+            affordable = None
             budget_note = "Unconstrained budget; all candidate algorithms considered."
         else:
             affordable = int(remaining // COST_PER_CANDIDATE_USD)
@@ -93,6 +101,7 @@ class AnalysisPlanner(Firefly):
                 f"at ~${COST_PER_CANDIDATE_USD:.2f}/candidate on local CPU."
             )
         selected_algos = algos[:max_candidates]
+        ensemble, ensemble_reason = self._ensemble_decision(selected_algos, affordable)
 
         # Data sufficiency for the chosen task.
         n_rows = profile["dataset"]["n_rows"]
@@ -100,6 +109,12 @@ class AnalysisPlanner(Firefly):
 
         # Hypotheses worth testing, grounded in measured correlations.
         hypotheses = self._hypotheses(profile, target)
+
+        # Which analytical specialists the goal and the task call for. The
+        # plans go on the blackboard, where the mission slots the Statistician,
+        # Experimenter and ConformalCalibrator in ahead of the Validator; a
+        # plan a caller seeded beforehand is kept as is.
+        specialists = self._specialists(frame, task)
 
         # Human approval gates — the system never silently ships to production.
         gates = ["Confirm the target and metric match the intended decision."]
@@ -126,8 +141,11 @@ class AnalysisPlanner(Firefly):
                 "max_candidates": max_candidates,
                 "cost_per_candidate_usd": COST_PER_CANDIDATE_USD,
                 "budget_note": budget_note,
+                "ensemble": ensemble,
+                "ensemble_reason": ensemble_reason,
             },
             "data_sufficiency": sufficiency,
+            "workload_optimization": self.ctx.blackboard.get("workload_optimization", {}),
             "hypotheses": hypotheses,
             "human_approval_gates": gates,
             "refuse_if": [
@@ -135,14 +153,27 @@ class AnalysisPlanner(Firefly):
                 "Data is insufficient for a stable estimate of the chosen metric.",
                 "A requested deployment latency cannot be met by any candidate.",
             ],
-            "execution_graph": self._graph(task),
+            "specialists": specialists,
+            "execution_graph": self._graph(task, specialists),
         }
 
         self.ctx.blackboard["plan"] = plan
         if self.ctx.kind == MissionKind.ANALYZE:
+            # The answer is calculated over the rows the goal named: the same
+            # predicates the Data Engineer applied, so the figure and the
+            # prepared data agree.
+            # When every source row is already in memory the figures are
+            # computed over all of them; a sample is only the fallback, and
+            # the result says which it used.
+            applied = (self.ctx.blackboard.get("workload_optimization") or {}).get("applied") or {}
+            whole = self.ctx.blackboard.get("frame")
+            if whole is not None and len(whole) != int(profile["dataset"].get("n_rows") or -1):
+                whole = None
             goal_result = analyze_goal(
                 self.ctx.blackboard["working_frame"], self.ctx.goal, profile,
                 sampled=bool(sampling.get("sampled")),
+                filters=applied.get("filters_applied") or None,
+                population=whole,
             )
             self.ctx.blackboard["goal_analysis"] = goal_result
             plan["goal_analysis_status"] = goal_result["status"]
@@ -156,6 +187,65 @@ class AnalysisPlanner(Firefly):
             60.0,
             {"task": task, "n_candidates": len(selected_algos)},
         )
+
+    def _ensemble_decision(self, selected_algos: list[str],
+                           affordable: int | None) -> tuple[bool, str]:
+        """Whether the panel also votes as an ensemble, and why.
+
+        The ensemble roughly doubles a train mission (every member is refit
+        per fold), which is a cost on a laptop as much as in dollars. So the
+        default path -- no --max-cost, no flag -- skips it; it runs when the
+        user says --ensemble, or when a stated budget has room for one more
+        candidate after the panel. ``affordable`` is None for no budget.
+        """
+        forced = self.ctx.ensemble
+        if len(selected_algos) < 2:
+            return False, "An ensemble needs at least two candidates to vote."
+        if forced is False:
+            return False, "Disabled by --no-ensemble."
+        if forced is True:
+            return True, "Requested with --ensemble."
+        if affordable is None:
+            return False, ("No budget was stated, and the ensemble roughly doubles training "
+                           "time; pass --ensemble, or a --max-cost with room for it, to train it.")
+        if affordable >= len(selected_algos) + 1:
+            return True, ("The budget has room for one more candidate after the panel, so the "
+                          "panel also votes as an ensemble (roughly doubles training time).")
+        return False, (f"The budget pays for {affordable} candidate(s), not the panel plus an "
+                       "ensemble; pass --ensemble to train it anyway.")
+
+    def _specialists(self, frame: pd.DataFrame, task: str) -> dict[str, Any]:
+        """Decide, and write, the specialist plans the goal and task call for.
+
+        Each entry records whether a specialist was planned and why, so the
+        planner graph says "no experiment: no arm column" rather than
+        silently running without one.
+        """
+        bb = self.ctx.blackboard
+        out: dict[str, Any] = {}
+
+        plan, rationale = experiment_plan_from_goal(self.ctx.goal, frame)
+        if plan is not None and bb.get("experiment_plan") is None:
+            bb["experiment_plan"] = plan
+        out["experiment"] = {**rationale, "plan": bb.get("experiment_plan") if plan else None}
+
+        plan, rationale = statistical_plan_from_goal(self.ctx.goal, frame)
+        if plan is not None and bb.get("statistical_plan") is None:
+            bb["statistical_plan"] = plan
+        out["statistic"] = {**rationale, "plan": bb.get("statistical_plan") if plan else None}
+
+        config = conformal_config_for(task) if self.ctx.kind == MissionKind.TRAIN else None
+        if config is not None and bb.get("conformal_config") is None:
+            bb["conformal_config"] = config
+        out["conformal"] = {
+            "planned": config is not None,
+            "reason": (f"Every train mission calibrates a {config['target_coverage']:.0%} "
+                       f"{'interval' if config['task'] == 'regression' else 'label set'} "
+                       "on the winner's holdout." if config else
+                       "Conformal calibration needs a trained model."),
+            "config": ({k: v for k, v in config.items()} if config else None),
+        }
+        return out
 
     def _sufficiency(self, task: str, n_rows: int, frame: pd.DataFrame, target: str | None) -> dict[str, Any]:
         if task == "exploratory_analysis":
@@ -193,36 +283,54 @@ class AnalysisPlanner(Firefly):
             hyps.append("No strong linear relationships detected; explore non-linear structure.")
         return hyps
 
-    def _graph(self, task: str) -> dict[str, Any]:
+    def _graph(self, task: str, specialists: dict[str, Any] | None = None) -> dict[str, Any]:
         nodes = [
             {"id": "data_scout", "role": "Data analyst", "produces": "data_quality.json"},
             {"id": "sampling_specialist", "role": "Data scientist", "produces": "working sample"},
+            {"id": "workload_optimizer", "role": "Query optimization engineer", "produces": "workload_optimization.json"},
             {"id": "data_engineer", "role": "Data engineer", "produces": "transformed_dataset.parquet"},
             {"id": "analysis_planner", "role": "Senior data scientist", "produces": "planner_graph.json"},
         ]
         edges = [
             {"from": "data_scout", "to": "sampling_specialist"},
-            {"from": "sampling_specialist", "to": "data_engineer"},
+            {"from": "sampling_specialist", "to": "workload_optimizer"},
+            {"from": "workload_optimizer", "to": "data_engineer"},
             {"from": "data_engineer", "to": "analysis_planner"},
         ]
+        # The specialists sit between the planner (or the model scientist,
+        # whose holdout the calibrator needs) and the validator.
+        specialists = specialists or {}
+        before_validator = "analysis_planner"
+        if task != "exploratory_analysis":
+            nodes.append({"id": "model_scientist", "role": "ML scientist", "produces": "model + experiments"})
+            edges.append({"from": "analysis_planner", "to": "model_scientist"})
+            before_validator = "model_scientist"
+        for key, node in (
+            ("statistic", {"id": "statistician", "role": "Statistical analysis specialist",
+                           "produces": "statistical_result.json"}),
+            ("experiment", {"id": "experimenter", "role": "Experimentation scientist",
+                            "produces": "experiment_result.json"}),
+            ("conformal", {"id": "conformal_calibrator", "role": "Predictive uncertainty specialist",
+                           "produces": "conformal_result.json"}),
+        ):
+            if specialists.get(key, {}).get("planned"):
+                nodes.append(node)
+                edges.append({"from": before_validator, "to": node["id"]})
+                before_validator = node["id"]
+        nodes.append({"id": "validator", "role": "Model-risk specialist",
+                      "produces": "validation_report.json"})
+        edges.append({"from": before_validator, "to": "validator"})
         if task != "exploratory_analysis":
             nodes += [
-                {"id": "model_scientist", "role": "ML scientist", "produces": "model + experiments"},
-                {"id": "validator", "role": "Model-risk specialist", "produces": "validation_report.json"},
                 {"id": "finops", "role": "Infrastructure engineer", "produces": "cost-quality options"},
                 {"id": "ml_engineer", "role": "ML platform engineer", "produces": "deployment package"},
             ]
             edges += [
-                {"from": "analysis_planner", "to": "model_scientist"},
-                {"from": "model_scientist", "to": "validator"},
                 {"from": "validator", "to": "finops"},
                 {"from": "finops", "to": "ml_engineer"},
                 {"from": "ml_engineer", "to": "reporter"},
             ]
         else:
-            nodes.append({"id": "validator", "role": "Model-risk specialist",
-                          "produces": "validation_report.json"})
-            edges.append({"from": "analysis_planner", "to": "validator"})
             edges.append({"from": "validator", "to": "reporter"})
         nodes.append({"id": "reporter", "role": "Analyst / consultant",
                       "produces": "executive & technical reports"})

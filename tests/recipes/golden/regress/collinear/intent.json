@@ -1,0 +1,14 @@
+{
+  "question": "How much of sales do ad spend, impressions and discount account for?",
+  "recipe": "regress",
+  "params": {
+    "outcome": "sales",
+    "measures": [
+      "ad_spend",
+      "impressions",
+      "discount"
+    ]
+  },
+  "confidence": 1.0,
+  "source": "fixture"
+}

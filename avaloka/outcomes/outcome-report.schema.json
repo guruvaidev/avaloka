@@ -1,0 +1,1512 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://avaloka.ai/schemas/outcome-report/1.1",
+  "title": "Avaloka Outcome Report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "report_id",
+    "kind",
+    "domain",
+    "template",
+    "created_at",
+    "analysis",
+    "headline",
+    "figures",
+    "kpis",
+    "charts",
+    "method",
+    "caveats",
+    "steps",
+    "completion",
+    "evidence",
+    "provenance"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.1"
+    },
+    "report_id": {
+      "type": "string",
+      "pattern": "^rpt_[0-9a-f]{16}$"
+    },
+    "kind": {
+      "enum": [
+        "analysis",
+        "what_if",
+        "model",
+        "mission"
+      ]
+    },
+    "domain": {
+      "enum": [
+        "healthcare",
+        "finance",
+        "personal_finance",
+        "stock_market",
+        "retail",
+        "telecom",
+        "genomics",
+        "robotics",
+        "astronomy",
+        "manufacturing",
+        "hr",
+        "education",
+        "logistics",
+        "marketing",
+        "public_sector",
+        "generic"
+      ]
+    },
+    "template": {
+      "enum": [
+        "fintech_credit",
+        "adtech_performance",
+        "marketing_performance",
+        "retail_performance",
+        "generic"
+      ]
+    },
+    "audience": {
+      "enum": [
+        "executive",
+        "analyst"
+      ]
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "analysis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "analysis_id",
+        "thread_id",
+        "turn_id",
+        "version"
+      ],
+      "properties": {
+        "analysis_id": {
+          "type": "string"
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "turn_id": {
+          "type": "string"
+        },
+        "mission_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "parent_version": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "dataset_ids": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "headline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "text",
+        "bullets"
+      ],
+      "properties": {
+        "text": {
+          "$ref": "#/$defs/slot160"
+        },
+        "bullets": {
+          "type": "array",
+          "maxItems": 3,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "so_what",
+              "now_what"
+            ],
+            "properties": {
+              "so_what": {
+                "$ref": "#/$defs/slot140"
+              },
+              "now_what": {
+                "$ref": "#/$defs/slot140"
+              }
+            }
+          }
+        }
+      }
+    },
+    "figures": {
+      "type": "array",
+      "maxItems": 400,
+      "items": {
+        "$ref": "#/$defs/figure"
+      }
+    },
+    "kpis": {
+      "type": "array",
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "label",
+          "value",
+          "direction_good"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/id"
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 40
+          },
+          "value": {
+            "$ref": "#/$defs/fref"
+          },
+          "baseline": {
+            "$ref": "#/$defs/fref"
+          },
+          "delta": {
+            "$ref": "#/$defs/fref"
+          },
+          "delta_kind": {
+            "enum": [
+              "abs",
+              "pct",
+              "pp"
+            ]
+          },
+          "baseline_label": {
+            "type": "string",
+            "maxLength": 40
+          },
+          "direction_good": {
+            "enum": [
+              "up",
+              "down",
+              "neutral"
+            ]
+          },
+          "spark_chart": {
+            "$ref": "#/$defs/id"
+          }
+        }
+      }
+    },
+    "charts": {
+      "type": "array",
+      "maxItems": 12,
+      "items": {
+        "$ref": "#/$defs/chart"
+      }
+    },
+    "maps": {
+      "type": "array",
+      "maxItems": 4,
+      "items": {
+        "$ref": "#/$defs/map"
+      }
+    },
+    "whatif": {
+      "type": "array",
+      "maxItems": 3,
+      "items": {
+        "$ref": "#/$defs/whatif"
+      }
+    },
+    "strategies": {
+      "type": "array",
+      "maxItems": 3,
+      "items": {
+        "$ref": "#/$defs/strategy"
+      }
+    },
+    "scenario": {
+      "$ref": "#/$defs/scenario"
+    },
+    "steps": {
+      "type": "array",
+      "maxItems": 12,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "order",
+          "title",
+          "status"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/id"
+          },
+          "order": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 80
+          },
+          "status": {
+            "enum": [
+              "done",
+              "needs_data",
+              "needs_decision",
+              "next"
+            ]
+          },
+          "detail": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "needs": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "evidence": {
+            "$ref": "#/$defs/trace_ref"
+          }
+        }
+      },
+      "minItems": 1
+    },
+    "completion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "answered",
+            "partial",
+            "open"
+          ]
+        },
+        "missing": {
+          "type": "array",
+          "maxItems": 6,
+          "items": {
+            "type": "string",
+            "maxLength": 140
+          }
+        },
+        "open_questions": {
+          "type": "array",
+          "maxItems": 4,
+          "items": {
+            "type": "string",
+            "maxLength": 140
+          }
+        }
+      }
+    },
+    "follow_ups": {
+      "type": "array",
+      "maxItems": 4,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "label",
+          "prompt"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/id"
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 40
+          },
+          "prompt": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "step": {
+            "$ref": "#/$defs/id"
+          }
+        }
+      }
+    },
+    "join_proposals": {
+      "type": "array",
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "left",
+          "right",
+          "keys",
+          "match_rate",
+          "rows_left",
+          "rows_after",
+          "fanout",
+          "verdict",
+          "status"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/id"
+          },
+          "left": {
+            "type": "string"
+          },
+          "right": {
+            "type": "string"
+          },
+          "keys": {
+            "type": "array",
+            "maxItems": 3,
+            "items": {
+              "type": "array",
+              "maxItems": 2,
+              "items": {
+                "type": "string"
+              },
+              "minItems": 2
+            }
+          },
+          "match_rate": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "sample_rows": {
+            "type": "integer"
+          },
+          "rows_left": {
+            "type": "integer"
+          },
+          "rows_right": {
+            "type": "integer"
+          },
+          "rows_after": {
+            "type": "integer"
+          },
+          "fanout": {
+            "type": "number",
+            "minimum": 0
+          },
+          "verdict": {
+            "enum": [
+              "safe",
+              "low_overlap",
+              "fanout",
+              "type_mismatch"
+            ]
+          },
+          "status": {
+            "enum": [
+              "proposed",
+              "accepted",
+              "declined"
+            ]
+          }
+        }
+      }
+    },
+    "learned": {
+      "type": "array",
+      "maxItems": 5,
+      "items": {
+        "type": "string",
+        "maxLength": 200
+      }
+    },
+    "side_notes": {
+      "type": "array",
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "what",
+          "why",
+          "dismissable"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^sn_[a-z0-9_]{1,40}$"
+          },
+          "what": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "why": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "connector": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dismissable": {
+            "const": true
+          }
+        }
+      }
+    },
+    "method": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "summary",
+        "sample"
+      ],
+      "properties": {
+        "summary": {
+          "$ref": "#/$defs/slot400"
+        },
+        "steps": {
+          "type": "array",
+          "maxItems": 12,
+          "items": {
+            "type": "string",
+            "maxLength": 200
+          }
+        },
+        "model": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "family": {
+              "type": "string"
+            },
+            "metric": {
+              "type": "string"
+            },
+            "score": {
+              "$ref": "#/$defs/fref"
+            },
+            "baseline_score": {
+              "$ref": "#/$defs/fref"
+            },
+            "beats_baseline": {
+              "type": "boolean"
+            }
+          }
+        },
+        "sample": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "rows_analyzed",
+            "total_rows",
+            "is_sampled"
+          ],
+          "properties": {
+            "rows_analyzed": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "total_rows": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "is_sampled": {
+              "type": "boolean"
+            },
+            "mode": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "caveats": {
+      "type": "array",
+      "maxItems": 12,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "text"
+        ],
+        "properties": {
+          "kind": {
+            "enum": [
+              "sampling",
+              "associational",
+              "additive_model",
+              "independence",
+              "extrapolation",
+              "clamped",
+              "small_n",
+              "suppressed_geo",
+              "missing_template_data",
+              "currency_unstated",
+              "data_quality",
+              "other"
+            ]
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 300
+          }
+        }
+      }
+    },
+    "data_checks": {
+      "type": "array",
+      "maxItems": 24,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "gate",
+          "status"
+        ],
+        "properties": {
+          "gate": {
+            "type": "string",
+            "pattern": "^[a-z_]+$",
+            "maxLength": 40
+          },
+          "status": {
+            "enum": [
+              "passed",
+              "qualified",
+              "failed"
+            ]
+          },
+          "figure": {
+            "$ref": "#/$defs/fref"
+          },
+          "caveat_kind": {
+            "enum": [
+              "sampling",
+              "associational",
+              "additive_model",
+              "independence",
+              "extrapolation",
+              "clamped",
+              "small_n",
+              "suppressed_geo",
+              "missing_template_data",
+              "currency_unstated",
+              "data_quality",
+              "other"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "pattern": "^[a-z_]+$"
+          }
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "x-evidence": true,
+      "description": "Numeric snapshot the figures point into; values copied from persisted analysis artifacts. A leaf is a number in the citing figure's unit, or an evidence_leaf."
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "generator",
+        "generator_version",
+        "llm_used",
+        "verifier"
+      ],
+      "properties": {
+        "generator": {
+          "const": "avaloka"
+        },
+        "generator_version": {
+          "type": "string"
+        },
+        "llm_used": {
+          "type": "boolean"
+        },
+        "llm_model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "recipe": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "version"
+          ],
+          "properties": {
+            "id": {
+              "type": "string",
+              "pattern": "^[a-z_]+$"
+            },
+            "version": {
+              "type": "string",
+              "pattern": "^\\d+\\.\\d+$"
+            }
+          }
+        },
+        "engine": {
+          "type": "object",
+          "additionalProperties": false,
+          "maxProperties": 8,
+          "patternProperties": {
+            "^[a-z_]+$": {
+              "type": "string"
+            }
+          }
+        },
+        "verifier": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "passed",
+            "rejections"
+          ],
+          "properties": {
+            "passed": {
+              "type": "boolean"
+            },
+            "rejections": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "slot",
+                  "rule"
+                ],
+                "properties": {
+                  "slot": {
+                    "type": "string"
+                  },
+                  "rule": {
+                    "enum": [
+                      "schema",
+                      "free_number",
+                      "number_word",
+                      "unresolved_figure",
+                      "value_mismatch",
+                      "unit_mismatch",
+                      "range_order",
+                      "causal_wording",
+                      "future_certainty",
+                      "length",
+                      "chart_shape",
+                      "geo_unresolved",
+                      "whatif_bounds",
+                      "export_size",
+                      "export_sandbox",
+                      "telemetry_names"
+                    ]
+                  },
+                  "action": {
+                    "enum": [
+                      "repaired",
+                      "dropped",
+                      "labelled"
+                    ]
+                  }
+                }
+              }
+            },
+            "attempts": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{0,31}$"
+    },
+    "fref": {
+      "type": "string",
+      "pattern": "^f[0-9]{1,3}$"
+    },
+    "slot140": {
+      "type": "string",
+      "maxLength": 140
+    },
+    "slot160": {
+      "type": "string",
+      "maxLength": 160
+    },
+    "slot400": {
+      "type": "string",
+      "maxLength": 400
+    },
+    "figure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "value",
+        "unit",
+        "decimals",
+        "evidence_ref"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/fref"
+        },
+        "value": {
+          "type": "number"
+        },
+        "unit": {
+          "enum": [
+            "count",
+            "currency",
+            "percent",
+            "pp",
+            "ratio",
+            "days",
+            "unitless"
+          ]
+        },
+        "currency": {
+          "type": "string",
+          "pattern": "^[A-Z]{3}$"
+        },
+        "decimals": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4
+        },
+        "compact": {
+          "type": "boolean"
+        },
+        "evidence_ref": {
+          "type": "string",
+          "pattern": "^/"
+        }
+      }
+    },
+    "evidence_leaf": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "value",
+        "unit"
+      ],
+      "properties": {
+        "value": {
+          "type": "number"
+        },
+        "unit": {
+          "enum": [
+            "count",
+            "currency",
+            "percent",
+            "pp",
+            "ratio",
+            "days",
+            "unitless",
+            "fraction"
+          ]
+        },
+        "currency": {
+          "type": "string",
+          "pattern": "^[A-Z]{3}$"
+        }
+      }
+    },
+    "trace_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "turn_id"
+      ],
+      "properties": {
+        "turn_id": {
+          "type": "string"
+        },
+        "step_no": {
+          "type": "integer"
+        },
+        "agent": {
+          "type": "string"
+        },
+        "artifact": {
+          "type": "string"
+        }
+      }
+    },
+    "chart": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "title",
+        "chart_kind",
+        "question_type",
+        "option",
+        "alt_text",
+        "data_table"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "caption": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "question_type": {
+          "enum": [
+            "trend",
+            "composition",
+            "distribution",
+            "relationship",
+            "funnel",
+            "cohort",
+            "geo",
+            "bridge",
+            "flow",
+            "ranking"
+          ]
+        },
+        "chart_kind": {
+          "enum": [
+            "line",
+            "area",
+            "bar",
+            "stacked_bar",
+            "pie",
+            "histogram",
+            "boxplot",
+            "scatter",
+            "heatmap",
+            "funnel",
+            "sankey",
+            "waterfall",
+            "cohort_heatmap",
+            "vintage_lines",
+            "choropleth",
+            "point_map",
+            "kpi_spark"
+          ]
+        },
+        "option": {
+          "type": "object",
+          "x-inert": true,
+          "description": "ECharts option. JSON only: no functions; no key or string value may contain 'function', '=>' or '<'."
+        },
+        "alt_text": {
+          "type": "string",
+          "minLength": 20,
+          "maxLength": 400
+        },
+        "data_table": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "columns",
+            "rows"
+          ],
+          "properties": {
+            "columns": {
+              "type": "array",
+              "maxItems": 12,
+              "items": {
+                "type": "string"
+              }
+            },
+            "rows": {
+              "type": "array",
+              "maxItems": 500,
+              "items": {
+                "type": "array"
+              }
+            }
+          }
+        },
+        "evidence": {
+          "$ref": "#/$defs/trace_ref"
+        }
+      }
+    },
+    "map": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "title",
+        "chart_kind",
+        "question_type",
+        "option",
+        "alt_text",
+        "data_table",
+        "geo_kind",
+        "asset",
+        "suppressed_regions",
+        "k_floor"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "caption": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "question_type": {
+          "enum": [
+            "trend",
+            "composition",
+            "distribution",
+            "relationship",
+            "funnel",
+            "cohort",
+            "geo",
+            "bridge",
+            "flow",
+            "ranking"
+          ]
+        },
+        "chart_kind": {
+          "enum": [
+            "line",
+            "area",
+            "bar",
+            "stacked_bar",
+            "pie",
+            "histogram",
+            "boxplot",
+            "scatter",
+            "heatmap",
+            "funnel",
+            "sankey",
+            "waterfall",
+            "cohort_heatmap",
+            "vintage_lines",
+            "choropleth",
+            "point_map",
+            "kpi_spark"
+          ]
+        },
+        "option": {
+          "type": "object",
+          "x-inert": true,
+          "description": "ECharts option. JSON only: no functions; no key or string value may contain 'function', '=>' or '<'."
+        },
+        "alt_text": {
+          "type": "string",
+          "minLength": 20,
+          "maxLength": 400
+        },
+        "data_table": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "columns",
+            "rows"
+          ],
+          "properties": {
+            "columns": {
+              "type": "array",
+              "maxItems": 12,
+              "items": {
+                "type": "string"
+              }
+            },
+            "rows": {
+              "type": "array",
+              "maxItems": 500,
+              "items": {
+                "type": "array"
+              }
+            }
+          }
+        },
+        "evidence": {
+          "$ref": "#/$defs/trace_ref"
+        },
+        "geo_kind": {
+          "enum": [
+            "country",
+            "us_state",
+            "latlon",
+            "geohash",
+            "h3",
+            "us_zip"
+          ]
+        },
+        "asset": {
+          "enum": [
+            "world_110m",
+            "us_states_20m",
+            "none"
+          ]
+        },
+        "suppressed_regions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "k_floor": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "driver": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "label",
+        "unit",
+        "baseline",
+        "lo",
+        "hi",
+        "form"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "unit": {
+          "enum": [
+            "count",
+            "currency",
+            "percent",
+            "ratio",
+            "days",
+            "unitless"
+          ]
+        },
+        "baseline": {
+          "type": "number"
+        },
+        "lo": {
+          "type": "number"
+        },
+        "hi": {
+          "type": "number"
+        },
+        "step": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "form": {
+          "enum": [
+            "linear",
+            "piecewise",
+            "elasticity",
+            "step"
+          ]
+        },
+        "beta": {
+          "type": "number"
+        },
+        "se": {
+          "type": "number",
+          "minimum": 0
+        },
+        "elasticity": {
+          "type": "number"
+        },
+        "knots": {
+          "type": "array",
+          "maxItems": 24,
+          "items": {
+            "type": "array",
+            "minItems": 4,
+            "maxItems": 4,
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "description": "[x, g, g_lo, g_hi], x strictly increasing"
+          },
+          "minItems": 2
+        },
+        "levels": {
+          "type": "array",
+          "maxItems": 2,
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "whatif": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kpi",
+        "y0",
+        "drivers",
+        "evidence_kind",
+        "evidence"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "kpi": {
+          "$ref": "#/$defs/id"
+        },
+        "y0": {
+          "type": "number"
+        },
+        "z": {
+          "const": 1.96
+        },
+        "conformal_q": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "drivers": {
+          "type": "array",
+          "maxItems": 5,
+          "items": {
+            "$ref": "#/$defs/driver"
+          },
+          "minItems": 1
+        },
+        "evidence_kind": {
+          "enum": [
+            "associational",
+            "experimental",
+            "causal_estimated"
+          ]
+        },
+        "evidence": {
+          "$ref": "#/$defs/trace_ref"
+        }
+      }
+    },
+    "strategy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "rank",
+        "action",
+        "text",
+        "impact",
+        "confidence",
+        "evidence_kind",
+        "evidence",
+        "verified"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "rank": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3
+        },
+        "tier": {
+          "enum": [
+            "immediate",
+            "intermediate",
+            "complex"
+          ]
+        },
+        "downgraded_from": {
+          "enum": [
+            "immediate",
+            "intermediate"
+          ]
+        },
+        "design": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "metric"
+          ],
+          "properties": {
+            "type": {
+              "enum": [
+                "ab_test",
+                "holdout",
+                "threshold_rule",
+                "staged",
+                "data_needed"
+              ]
+            },
+            "metric": {
+              "enum": [
+                "proportion",
+                "mean",
+                "rmse",
+                "auc",
+                "uplift"
+              ]
+            },
+            "alpha": {
+              "type": "number"
+            },
+            "power": {
+              "type": "number"
+            },
+            "mde": {
+              "$ref": "#/$defs/fref"
+            },
+            "n_required": {
+              "$ref": "#/$defs/fref"
+            },
+            "n_available": {
+              "$ref": "#/$defs/fref"
+            },
+            "duration_days": {
+              "type": "integer"
+            },
+            "cv": {
+              "enum": [
+                "kfold5",
+                "stratified5",
+                "timeseries5",
+                "none"
+              ]
+            },
+            "reason": {
+              "type": "string",
+              "maxLength": 200
+            }
+          }
+        },
+        "step": {
+          "$ref": "#/$defs/id"
+        },
+        "side_note": {
+          "type": "string"
+        },
+        "action": {
+          "$ref": "#/$defs/slot140"
+        },
+        "text": {
+          "$ref": "#/$defs/slot400"
+        },
+        "impact": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kpi",
+            "low",
+            "mid",
+            "high"
+          ],
+          "properties": {
+            "kpi": {
+              "$ref": "#/$defs/id"
+            },
+            "low": {
+              "$ref": "#/$defs/fref"
+            },
+            "mid": {
+              "$ref": "#/$defs/fref"
+            },
+            "high": {
+              "$ref": "#/$defs/fref"
+            }
+          }
+        },
+        "confidence": {
+          "enum": [
+            "high",
+            "medium",
+            "low"
+          ]
+        },
+        "score": {
+          "type": "number",
+          "minimum": 0
+        },
+        "evidence_kind": {
+          "enum": [
+            "associational",
+            "experimental",
+            "causal_estimated"
+          ]
+        },
+        "evidence": {
+          "$ref": "#/$defs/trace_ref"
+        },
+        "whatif": {
+          "$ref": "#/$defs/id"
+        },
+        "verified": {
+          "type": "boolean"
+        }
+      }
+    },
+    "scenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "whatif",
+        "base_version",
+        "values",
+        "applied",
+        "clamped",
+        "evidence_kind",
+        "result"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "maxLength": 60
+        },
+        "whatif": {
+          "$ref": "#/$defs/id"
+        },
+        "base_version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "values": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "number"
+          }
+        },
+        "applied": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "number"
+          }
+        },
+        "clamped": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "driver",
+              "requested",
+              "applied",
+              "bound"
+            ],
+            "properties": {
+              "driver": {
+                "type": "string"
+              },
+              "requested": {
+                "type": "number"
+              },
+              "applied": {
+                "type": "number"
+              },
+              "bound": {
+                "enum": [
+                  "lo",
+                  "hi"
+                ]
+              }
+            }
+          }
+        },
+        "evidence_kind": {
+          "enum": [
+            "associational",
+            "experimental",
+            "causal_estimated"
+          ]
+        },
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "y",
+            "lo",
+            "hi",
+            "sure"
+          ],
+          "properties": {
+            "y": {
+              "type": "number"
+            },
+            "lo": {
+              "type": "number"
+            },
+            "hi": {
+              "type": "number"
+            },
+            "sure": {
+              "enum": [
+                "fairly_sure",
+                "direction_only",
+                "either_way"
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

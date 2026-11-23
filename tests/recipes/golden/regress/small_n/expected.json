@@ -1,0 +1,17 @@
+{
+  "recipe": "regress",
+  "version_major": 1,
+  "verdict": "refuse",
+  "reason": "insufficient_rows",
+  "figures": [],
+  "caveats": [],
+  "must_not_say": [
+    "cause",
+    "causes",
+    "drives",
+    "because",
+    "effect of",
+    "leads to"
+  ],
+  "note": "18 rows is fewer than the 30 the recipe needs."
+}

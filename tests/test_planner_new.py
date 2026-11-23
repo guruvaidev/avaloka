@@ -31,8 +31,16 @@ def test_planner_deploy_infrastructure(mock_llm):
     mock_llm.invoke.return_value = PlannerOutput(
         tool_call=ToolCall(name="deploy_infrastructure", parameters=DeployInfrastructureParams(platform="gcp", app_type="python-docker"))
     )
-    state = ETLState(messages=[HumanMessage(content="deploy on gcp")])
-    result = plan_etl_job(state)
+    # Not "deploy on gcp": that explicit request is confirmed before the model
+    # is asked (test_execute_service_safe). This exercises the tool path.
+    state = ETLState(messages=[HumanMessage(content="get this running in the cloud")])
+    first = plan_etl_job(state)
+    assert not first.get("infrastructure_request")
+    pending = first["pending_clarification"]
+    assert pending["type"] == "infrastructure_confirmation"
+    assert pending["infrastructure_request"]["type"] == "gcp"
+    result = plan_etl_job(ETLState(messages=first["messages"] + [HumanMessage(content="yes")],
+                                   pending_clarification=pending))
     assert result["infrastructure_request"]["type"] == "gcp"
     assert result["infrastructure_request"]["app_type"] == "python-docker"
 

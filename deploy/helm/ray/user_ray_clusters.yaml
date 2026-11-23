@@ -1,0 +1,119 @@
+# Per-user Ray clusters (app/infra/user_ray_clusters.py).
+#
+# 1. The namespace the clusters live in.
+# 2. The right for the backend and Celery to manage RayClusters and their
+#    NetworkPolicies there -- and nowhere else (no cluster-wide rights).
+# 3. Network isolation (PR #733 review): Ray's dashboard port runs any job it
+#    is sent, so nothing may reach a user's cluster except
+#      - the platform: backend, Celery, the /ray proxy, the KubeRay operator
+#        (dashboard port 8265 on head pods only), and
+#      - that cluster's own pods (a per-cluster policy the backend creates
+#        with each cluster, owned by it; see build_network_policy()).
+#    Everything else -- including another user's cluster -- is denied.
+#
+# NetworkPolicy is enforced only by a CNI that supports it: GKE with
+# Dataplane V2 (or Calico). kind's default CNI (kindnet) ignores it, so on
+# kind these objects are accepted but have no effect.
+#
+# BEFORE APPLYING: check the pod labels of the platform deployments and fix
+# the "CHANGE ME" selectors below so each matches exactly one of them:
+#   kubectl get deploy avaloka avaloka-celery avaloka-celery-executor \
+#     avaloka-celery-redbeat ray-dashboard-proxy kuberay-operator \
+#     -o jsonpath='{range .items[*]}{.metadata.name}{"  "}{.spec.template.metadata.labels}{"\n"}{end}'
+# and the two ServiceAccount subjects (backend, Celery):
+#   kubectl get deploy -o custom-columns=NAME:.metadata.name,SA:.spec.template.spec.serviceAccountName
+#
+# KubeRay must watch this namespace (the default install watches all).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ray-users
+  labels:
+    app.kubernetes.io/managed-by: avaloka
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: avaloka-user-ray-clusters
+  namespace: ray-users
+rules:
+  - apiGroups: ["ray.io"]
+    resources: ["rayclusters"]
+    verbs: ["get", "list", "create", "patch", "delete"]
+  # One "same cluster" policy per RayCluster, created with it. Deleted by
+  # Kubernetes with its owner; delete is here for manual clean-up only.
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "create", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: avaloka-user-ray-clusters
+  namespace: ray-users
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: avaloka-user-ray-clusters
+subjects:
+  - kind: ServiceAccount
+    name: avaloka            # backend and redbeat (CHANGE ME if different)
+    namespace: default
+  - kind: ServiceAccount
+    name: avaloka-celery     # Celery worker (CHANGE ME if different)
+    namespace: default
+---
+# Nothing reaches any pod in ray-users unless a policy below allows it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: ray-users
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress"]
+---
+# The platform may reach the Ray dashboard / Jobs API on head pods. Nothing
+# else: no GCS (6379), no Ray Client (10001), no worker pods.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-platform-to-ray-dashboards
+  namespace: ray-users
+spec:
+  podSelector:
+    matchLabels:
+      avaloka.ai/user-cluster: "true"
+      ray.io/node-type: head
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: default
+          podSelector:
+            matchLabels:                         # backend
+              app.kubernetes.io/name: avaloka
+              app.kubernetes.io/component: api
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: default
+          podSelector:
+            matchLabels:                         # Celery worker: submits jobs, runs the idle clean-up
+              app.kubernetes.io/name: avaloka
+              app.kubernetes.io/component: celery
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: default
+          podSelector:
+            matchLabels:
+              app: ray-dashboard-proxy           # /ray proxy (#734)
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: default
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: kuberay-operator
+      ports:
+        - protocol: TCP
+          port: 8265

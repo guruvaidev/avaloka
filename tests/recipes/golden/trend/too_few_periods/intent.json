@@ -1,0 +1,11 @@
+{
+  "question": "How has revenue moved month by month?",
+  "recipe": "trend",
+  "params": {
+    "measure": "revenue",
+    "time": "date",
+    "grain": "month"
+  },
+  "confidence": 1.0,
+  "source": "fixture"
+}

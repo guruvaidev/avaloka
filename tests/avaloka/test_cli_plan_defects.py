@@ -97,11 +97,8 @@ def test_f3_generated_script_writes_its_output_into_the_bundle(churn_csv, tmp_pa
         "the script wrote into the working directory"
 
 
-@pytest.mark.xfail(strict=True,
-                   reason="F4: analyze/train --llm with no ANTHROPIC_API_KEY degrades "
-                          "silently; only chat prints a notice")
 def test_f4_llm_flag_without_a_key_says_so(churn_csv, tmp_path):
-    """F4 — asking for Claude and not getting it must be visible.
+    """F4 — asking for a model and not getting it must be visible.
 
     ``avaloka chat --llm`` prints "(No ANTHROPIC_API_KEY found ...)". The
     mission commands accept ``--llm`` and say nothing, so a user with a typo in
@@ -112,7 +109,9 @@ def test_f4_llm_flag_without_a_key_says_so(churn_csv, tmp_path):
     result = runner.invoke(app, ["analyze", str(churn_csv), "--goal", "x",
                                  "-o", str(tmp_path / "out"), "--llm"])
     assert result.exit_code == 0, result.output
-    assert "ANTHROPIC_API_KEY" in result.output
+    # Fixed: one line naming the missing configuration and what happens instead.
+    assert "LLM error (none)" in result.output and "GROQ_API_KEY" in result.output
+    assert "deterministic wording" in result.output
 
 
 @pytest.mark.xfail(strict=True,

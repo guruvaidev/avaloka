@@ -1,0 +1,6 @@
+*.json
+*.md
+*.jsonl
+!.gitkeep
+!2.0/
+!2.0/**

@@ -53,7 +53,7 @@ function buildPageList(current: number, total: number): (number | "...")[] {
 
 const categoryStyles: Record<ReportCategory, string> = {
   "Revenue Dataset":
-    "bg-success-secondary text-fg-success-primary ring-success-subtle",
+    "bg-success-secondary text-fg-success-primary ring-success-subtle dark:bg-green-500/15 dark:text-green-300 dark:ring-green-500/25",
   "Finance Dataset":
     "bg-brand-secondary text-fg-brand-secondary ring-brand-subtle",
   "Accounts Dataset":
@@ -139,8 +139,8 @@ export function ReportsView({
 
 
   return (
-    <div className="flex h-full flex-col">
-      <header className="flex items-center gap-2 border-b border-secondary bg-primary px-6 py-4">
+    <div className="flex h-full flex-col bg-primary dark:bg-[#111418]">
+      <header className="flex items-center gap-2 border-b border-secondary bg-primary px-6 py-4 dark:border-white/10 dark:bg-[#111418]">
         <File02 className="size-5 text-fg-quaternary" />
         <h2 className="text-md font-semibold text-primary">Reports</h2>
       </header>
@@ -178,7 +178,7 @@ export function ReportsView({
       </div>
 
       <div className="flex-1 overflow-y-auto px-6 py-5">
-        <div className="overflow-hidden rounded-xl border border-secondary bg-primary shadow-xs">
+        <div className="overflow-hidden rounded-xl border border-secondary bg-primary shadow-xs dark:border-white/10 dark:bg-[#15191f]">
           <table className="w-full">
             <thead className="border-b border-secondary bg-secondary/40">
               <tr className="text-left">
@@ -287,7 +287,7 @@ export function ReportsView({
         </div>
       </div>
 
-      <footer className="flex items-center justify-between border-t border-secondary bg-primary px-6 py-3">
+      <footer className="flex items-center justify-between border-t border-secondary bg-primary px-6 py-3 dark:border-white/10 dark:bg-[#111418]">
         <Button
           color="secondary"
           size="sm"

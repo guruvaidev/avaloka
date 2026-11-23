@@ -1,0 +1,10 @@
+{
+  "question": "Which arm converted best against control?",
+  "recipe": "ab_test",
+  "params": {
+    "arm": "arm",
+    "outcome": "converted"
+  },
+  "confidence": 1.0,
+  "source": "fixture"
+}

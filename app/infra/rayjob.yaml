@@ -10,18 +10,30 @@ spec:
   ttlSecondsAfterFinished: 600
   backoffLimit: 3
 
+  # No credential is ever rendered into this CR. __CLOUD_SECRET_NAME__ is the
+  # job's own Secret (<rayjob>-env) holding only its connection's keys, which
+  # app/infra/ray_job_runner.py creates owned by this RayJob right after it is
+  # applied and deletes when the job ends. The pods wait for it on their own.
+  #
+  # Installed on top of the Ray image for every job, so every entry is pinned.
+  # The image (rayproject/ray:2.56.0-py311) ships fsspec 2023.12, pyarrow 19.0.1
+  # and no s3fs/gcsfs; these bring the job to the app's own versions (pandas, numpy,
+  # daft as resolved from requirements.txt) and to fsspec-family and pyarrow
+  # releases with no known critical or high advisory. daft is listed without
+  # its [ray] extra so it cannot replace the image's Ray. The 2.10-era pins
+  # requests==2.26.0 and pendulum==2.1.2 are gone: nothing the job runs imports
+  # either, and pendulum 2.1.2 has no wheel for the image's Python 3.11.
+  # tests/test_ray_version_alignment.py holds these pins.
   runtimeEnvYAML: |
     pip:
-      - requests==2.26.0
-      - pendulum==2.1.2
-      - pandas
-      - numpy
-      - fsspec
-      - s3fs
-      - gcsfs
-      - adlfs
-      - pyarrow
-      - getdaft[ray]==0.2.27
+      - pandas==2.3.3
+      - numpy==2.4.6
+      - pyarrow==23.0.1
+      - fsspec==2026.6.0
+      - s3fs==2026.6.0
+      - gcsfs==2026.6.0
+      - adlfs==2026.8.0
+      - daft==0.7.26
     env_vars:
       DATA_SOURCE_URI: "__DATA_SOURCE_URI__"
       OUTPUT_ARTIFACT_URI: "__OUTPUT_ARTIFACT_URI__"
@@ -29,7 +41,16 @@ spec:
       EXPECTED_WORKERS: "2"
 
   rayClusterSpec:
-    rayVersion: "2.10.0"
+    rayVersion: "2.56.0"
+    # ray-auth:begin  Ray enforces the token through RAY_AUTH_MODE/RAY_AUTH_TOKEN on
+    # every container; authOptions lets the KubeRay operator (1.6+) read this
+    # job's status with the same token, from the job's own Secret. Needs Ray
+    # >= 2.52 in the image. The runner removes every ray-auth block when the
+    # app runs without RAY_AUTH_MODE=token (chart ray.auth.enabled=false).
+    authOptions:
+      mode: token
+      secretName: __CLOUD_SECRET_NAME__
+    # ray-auth:end
 
     # AUTOSCALING: Ray autoscaler sidecar on head pod
     enableInTreeAutoscaling: true
@@ -46,6 +67,17 @@ spec:
       env:
         - name: AUTOSCALER_UPDATE_INTERVAL_S
           value: "5"                # check cluster state every 5s
+        # ray-auth:begin  Ray token authentication (RAY_AUTH_MODE=token). The token
+        # is this job's copy in its own Secret (key auth_token), put there by
+        # app/infra/ray_job_runner.py from the app's RAY_AUTH_TOKEN.
+        - name: RAY_AUTH_MODE
+          value: token
+        - name: RAY_AUTH_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: __CLOUD_SECRET_NAME__
+              key: auth_token
+        # ray-auth:end
 
     headGroupSpec:
       rayStartParams:
@@ -60,7 +92,7 @@ spec:
         spec:
           containers:
             - name: ray-head
-              image: rayproject/ray:2.10.0
+              image: rayproject/ray:2.56.0-py311
               imagePullPolicy: IfNotPresent
               ports:
                 - containerPort: 6379
@@ -87,6 +119,17 @@ spec:
                   value: /var/secrets/cloud/GCP_SERVICE_ACCOUNT_JSON
                 - name: RAY_SCHEDULER_EVENTS
                   value: "0"
+                # ray-auth:begin  Ray token authentication (RAY_AUTH_MODE=token). The token
+                # is this job's copy in its own Secret (key auth_token), put there by
+                # app/infra/ray_job_runner.py from the app's RAY_AUTH_TOKEN.
+                - name: RAY_AUTH_MODE
+                  value: token
+                - name: RAY_AUTH_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: __CLOUD_SECRET_NAME__
+                      key: auth_token
+                # ray-auth:end
                 - name: RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO
                   value: "0"
                 - name: K8S_NODE_NAME
@@ -132,7 +175,7 @@ spec:
     workerGroupSpecs:
       - groupName: small-group
         replicas: 2           # start with 2 workers
-        minReplicas: 1        # scale DOWN to 1 when idle
+        minReplicas: 0        # scale DOWN to 0 when idle (K8-11)
         maxReplicas: 10       # scale UP to 10 for large datasets
         rayStartParams:
           num-cpus: "2"
@@ -155,7 +198,7 @@ spec:
                           ray-node-type: worker
             containers:
               - name: ray-worker
-                image: rayproject/ray:2.10.0
+                image: rayproject/ray:2.56.0-py311
                 imagePullPolicy: IfNotPresent
                 resources:
                   limits:
@@ -173,6 +216,17 @@ spec:
                     value: /var/secrets/cloud/GCP_SERVICE_ACCOUNT_JSON
                   - name: RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO
                     value: "0"
+                  # ray-auth:begin  Ray token authentication (RAY_AUTH_MODE=token). The token
+                  # is this job's copy in its own Secret (key auth_token), put there by
+                  # app/infra/ray_job_runner.py from the app's RAY_AUTH_TOKEN.
+                  - name: RAY_AUTH_MODE
+                    value: token
+                  - name: RAY_AUTH_TOKEN
+                    valueFrom:
+                      secretKeyRef:
+                        name: __CLOUD_SECRET_NAME__
+                        key: auth_token
+                  # ray-auth:end
                   - name: K8S_NODE_NAME
                     valueFrom:
                       fieldRef:

@@ -9,6 +9,7 @@ integration test by name while sitting in the gate's blind spot unnoticed.
 import pathlib
 import subprocess
 import sys
+from typing import List
 
 import pytest
 
@@ -19,11 +20,10 @@ REPO = pathlib.Path(__file__).resolve().parent.parent
 
 @pytest.mark.parametrize("path", [
     "tests/test_scheduler_integration.py",
-    "tests/e2e/test_e2_auth.py",
     "tests/k8s/helpers/test_anything.py",
     "tests/infra/test_ray_manager.py",
     "tests/containers/test_lineage_postgres.py",
-    "tests\\e2e\\test_e2_auth.py",
+    "tests\\k8s\\test_t2_cluster_deployment.py",
 ])
 def test_integration_suites_are_marked(path):
     assert _wants_integration_marker(path) is True
@@ -32,6 +32,9 @@ def test_integration_suites_are_marked(path):
 @pytest.mark.parametrize("path", [
     "tests/test_server_unit.py",
     "tests/test_lineage.py",
+    # The e2e pack is hermetic by default and gated; see tests/conftest.py.
+    "tests/e2e/test_e2_auth.py",
+    "tests\\e2e\\test_e2_auth.py",
     # Outside tests/: a suffix or a directory name is not enough.
     "app/agents/mta/mlflow_integration.py",
     "app/agents/mta/test_mlflow_integration.py",
@@ -109,3 +112,44 @@ def test_the_container_suite_is_all_integration_when_collected():
     assert stray.returncode == 5 and stray_ids == [], (
         f"tests carrying `containers` without `integration` (exit {stray.returncode}): "
         f"{stray_ids[:5]}\n{stray.stdout[-400:]}")
+
+
+# ---------------------------------------------------------------------------
+# The e2e pack is in the hermetic gate -- and only its hermetic part
+# ---------------------------------------------------------------------------
+# From 2026-09-24 to this change, tests/e2e/ was marked `integration` by
+# directory, so the gate selected none of it and 500+ hermetic tests rotted.
+# These pin both halves: the gate's expression selects the pack, and the files
+# that need cloud data or a model provider stay out of it.
+
+HERMETIC_EXPRESSION = "not cluster and not cloud and not integration"
+# Files whose every test needs something outside the process.
+E2E_OUT_OF_GATE = ("tests/e2e/test_e3_real_dataset_gcs.py", "tests/e2e/test_e5_golden_missions.py")
+
+
+def _collect_e2e(marker_expression: str) -> List[str]:
+    done = subprocess.run(
+        [sys.executable, "-m", "pytest", "tests/e2e", "--collect-only", "-q",
+         "-p", "no:cacheprovider", "-m", marker_expression],
+        cwd=REPO, capture_output=True, text=True, timeout=300)
+    assert done.returncode == 0, f"collection failed ({done.returncode}):\n{done.stdout[-800:]}{done.stderr[-800:]}"
+    return [line for line in done.stdout.splitlines() if "::" in line]
+
+
+def test_the_hermetic_gate_selects_the_e2e_pack():
+    selected = _collect_e2e(HERMETIC_EXPRESSION)
+    # 520 at the time of writing; the floor catches the directory being
+    # deselected wholesale again, not ordinary growth or pruning.
+    assert len(selected) >= 400, f"the hermetic gate selects only {len(selected)} e2e tests"
+    files = {nodeid.split("::")[0] for nodeid in selected}
+    for name in ("test_e2_auth.py", "test_e2_contract.py", "test_e2_hygiene.py",
+                 "test_e3_ingestion.py", "test_e7_inference.py"):
+        assert f"tests/e2e/{name}" in files, f"tests/e2e/{name} is not in the hermetic gate"
+
+
+def test_the_out_of_process_e2e_files_stay_out_of_the_gate():
+    selected = _collect_e2e(HERMETIC_EXPRESSION)
+    leaked = [nodeid for nodeid in selected if nodeid.startswith(E2E_OUT_OF_GATE)]
+    assert leaked == [], f"tests that need cloud data or a provider are in the gate: {leaked[:5]}"
+    # And they exist: an empty file would make the check above pass vacuously.
+    assert _collect_e2e("cloud or integration"), "no cloud/integration e2e tests collected at all"

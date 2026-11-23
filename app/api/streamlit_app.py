@@ -272,7 +272,7 @@ if prompt := st.chat_input("Describe your ETL job..."):
     else:
         input_state = create_cloud_execution_state(input_state)
 
-        logger.info(f"Input State: {input_state}")
+        logger.info("Input State keys: %s", sorted(input_state))
 
     with st.spinner("Thinking..."):
         try:

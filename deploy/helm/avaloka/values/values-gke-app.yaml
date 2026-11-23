@@ -58,6 +58,9 @@ celery:
 # Production data and MLflow artifacts live in their own bucket, never the test
 # one inherited from values-gke.yaml. Only avaloka-celery@ is granted on it.
 config:
+  # Repeated from values-gke.yaml so this instance stays hosted even if that
+  # file changes (app/core/editions.declared_deployment).
+  deployment: "avaloka_hosted"
   gcsBucket: "avaloka-app-user-filestore"
 mlflow:
   artifactsDestination: "gs://avaloka-app-user-filestore/mlflow-artifacts"

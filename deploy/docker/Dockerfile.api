@@ -12,6 +12,24 @@
 
 # ---------- builder: compile/install everything into a venv ----------
 FROM python:3.11-slim AS builder
+# Third-party usage beacons, and botocore's instance-metadata credential probe,
+# off by default (app/core/thirdparty_optout.py says what each one silences:
+# daft -> scarf.sh, onnxruntime -> events.data.microsoft.com, chroma, mlflow,
+# HF hub, dvc, Ray usage stats, streamlit, langgraph-cli and its PyPI version check; 169.254.169.254). A deployment opts
+# back in by setting the variable itself, e.g. AWS_EC2_METADATA_DISABLED=false
+# to use the VM's instance credentials.
+ENV DO_NOT_TRACK=true \
+    SCARF_NO_ANALYTICS=true \
+    ORT_DISABLE_TELEMETRY=1 \
+    ANONYMIZED_TELEMETRY=False \
+    MLFLOW_DISABLE_TELEMETRY=true \
+    HF_HUB_DISABLE_TELEMETRY=1 \
+    DVC_NO_ANALYTICS=1 \
+    RAY_USAGE_STATS_ENABLED=0 \
+    STREAMLIT_BROWSER_GATHER_USAGE_STATS=false \
+    LANGGRAPH_CLI_NO_ANALYTICS=1 \
+    LANGGRAPH_NO_VERSION_CHECK=true \
+    AWS_EC2_METADATA_DISABLED=true
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential libpq-dev curl \
@@ -48,13 +66,20 @@ RUN pip install --no-cache-dir --prefer-binary \
         --index-url https://download.pytorch.org/whl/cpu \
         "torch>=2.0.0" torchvision
 
-COPY requirements.txt /tmp/requirements.txt
+# Which requirements file this image installs. The API image (avaloka-api) takes
+# the default. The LangGraph server's image (avaloka-langgraph, the chart's
+# langgraph pod running `langgraph dev`) is this same Dockerfile built with
+#   --build-arg REQUIREMENTS=requirements-langgraph-server.txt
+# which is requirements.txt plus langgraph-cli[inmem]. The CLI stays out of the
+# API image because its langgraph-api 0.5.x caps cryptography <45; see that file.
+ARG REQUIREMENTS=requirements.txt
+COPY requirements.txt requirements-langgraph-server.txt /tmp/
 # --extra-index-url keeps any torch-family resolutions on the CPU index too.
 # --prefer-binary: see the Rust note above. This is what keeps the build from
 # silently turning into a compile.
 RUN pip install --no-cache-dir --prefer-binary \
         --extra-index-url https://download.pytorch.org/whl/cpu \
-        -r /tmp/requirements.txt
+        -r "/tmp/${REQUIREMENTS}"
 
 # No langchain-google-vertexai here. Installed unpinned after the requirements,
 # it upgraded what they pin -- langchain-core to 1.x against a <0.4 cap, pyarrow
@@ -79,10 +104,39 @@ RUN pip check
 # ~90 MB for all-MiniLM-L6-v2.
 ARG SENTENCE_TRANSFORMER_MODEL=all-MiniLM-L6-v2
 ENV HF_HOME=/opt/hf
+# The rest of what the stack embeds with, so the image runs with no network
+# at all (scripts/prefetch_models.py lists who needs which): the data-transfer
+# agent's mxbai-embed-large-v1 (~670 MB; it was downloaded at TRANSFER time),
+# and chroma's ONNX model (it was fetched from chroma-onnx-models.s3.amazonaws.com
+# on the first query). Build with --build-arg AVALOKA_PREFETCH_DTA_MODEL=0 to
+# leave mxbai out; a transfer then runs without retrieved Daft docs.
+ARG AVALOKA_PREFETCH_DTA_MODEL=1
+ENV CHROMA_ONNX_MODEL_DIR=/opt/chroma/onnx_models/all-MiniLM-L6-v2
+COPY scripts/prefetch_models.py /tmp/prefetch_models.py
+RUN AVALOKA_PREFETCH_DTA_MODEL=$AVALOKA_PREFETCH_DTA_MODEL python /tmp/prefetch_models.py \
+    && AVALOKA_PREFETCH_DTA_MODEL=$AVALOKA_PREFETCH_DTA_MODEL python /tmp/prefetch_models.py --check
 RUN python -c "import os; from sentence_transformers import SentenceTransformer; n=os.environ.get('SENTENCE_TRANSFORMER_MODEL','all-MiniLM-L6-v2'); SentenceTransformer(n); print('baked embedding model:', n)"
 
 # ---------- runtime: slim, no build toolchain ----------
 FROM python:3.11-slim AS runtime
+# Third-party usage beacons, and botocore's instance-metadata credential probe,
+# off by default (app/core/thirdparty_optout.py says what each one silences:
+# daft -> scarf.sh, onnxruntime -> events.data.microsoft.com, chroma, mlflow,
+# HF hub, dvc, Ray usage stats, streamlit, langgraph-cli and its PyPI version check; 169.254.169.254). A deployment opts
+# back in by setting the variable itself, e.g. AWS_EC2_METADATA_DISABLED=false
+# to use the VM's instance credentials.
+ENV DO_NOT_TRACK=true \
+    SCARF_NO_ANALYTICS=true \
+    ORT_DISABLE_TELEMETRY=1 \
+    ANONYMIZED_TELEMETRY=False \
+    MLFLOW_DISABLE_TELEMETRY=true \
+    HF_HUB_DISABLE_TELEMETRY=1 \
+    DVC_NO_ANALYTICS=1 \
+    RAY_USAGE_STATS_ENABLED=0 \
+    STREAMLIT_BROWSER_GATHER_USAGE_STATS=false \
+    LANGGRAPH_CLI_NO_ANALYTICS=1 \
+    LANGGRAPH_NO_VERSION_CHECK=true \
+    AWS_EC2_METADATA_DISABLED=true
 
 WORKDIR /app
 
@@ -104,10 +158,21 @@ COPY --from=builder /opt/venv /opt/venv
 # The model cache baked in the builder stage. Without this the runtime
 # image goes back to fetching from huggingface.co on the first query.
 COPY --from=builder /opt/hf /opt/hf
+COPY --from=builder /opt/chroma /opt/chroma
+# Offline by default: every model is baked above, so nothing may be fetched at
+# runtime. Without HF_HUB_OFFLINE, huggingface_hub asks huggingface.co whether
+# each cached model is current on every load (409 requests in one trial run);
+# with it, a missing model fails at once with a plain error (app/core/offline.py).
+# A deployment that wants downloads sets HF_HUB_OFFLINE=0. ANONYMIZED_TELEMETRY
+# is chroma's own usage beacon (posthog), off.
 ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    HF_HOME=/opt/hf
+    HF_HOME=/opt/hf \
+    HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1 \
+    CHROMA_ONNX_MODEL_DIR=/opt/chroma/onnx_models/all-MiniLM-L6-v2 \
+    ANONYMIZED_TELEMETRY=False
 
 COPY . /app
 
@@ -115,4 +180,13 @@ EXPOSE 9000
 
 # /health returns 200 with {status, redis_connected, graph_ready} even when Redis
 # is down, so it is a valid readiness signal for the chart's probes.
-CMD ["uvicorn", "app.api.server:app", "--host", "0.0.0.0", "--port", "9000"]
+#
+# --loop asyncio, not uvicorn[standard]'s default uvloop. Sync LangGraph nodes
+# run on worker threads and some still open private loops (asyncio.run); under
+# uvloop any object of the main loop they touch is driven from a foreign thread,
+# which libuv does not survive: the API segfaulted (exit 139, main thread in
+# uvloop) five times in 2.5 h of e2e. The stdlib loop turns the same mistake
+# into a Python exception. app/core/cache.py fixes the Redis instance of it;
+# this keeps the next one from killing the process.
+# tests/contract/test_api_server_loop.py pins this.
+CMD ["uvicorn", "app.api.server:app", "--host", "0.0.0.0", "--port", "9000", "--loop", "asyncio"]
